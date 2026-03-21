@@ -1,2 +1,2 @@
-# hello-world
+# HarderWare
 This is my first github repo.
