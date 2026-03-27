@@ -1,0 +1,14 @@
+# Build output
+bin/
+obj/
+
+# Visual Studio local cache
+.vs/
+
+# Runtime-generated local configuration (contains resolved airport coordinates).
+# This file is written by the program into the output directory and must not
+# be committed to source control.
+**/appsettings.local.json
+
+# Scratch files
+test_reports.txt
