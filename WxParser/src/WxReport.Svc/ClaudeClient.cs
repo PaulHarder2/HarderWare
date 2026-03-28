@@ -34,9 +34,9 @@ public sealed class ClaudeClient
     /// </summary>
     public async Task<string?> GenerateReportAsync(
         WeatherSnapshot snapshot, string language, string recipientName,
-        bool isFirstReport = false, int scheduledHour = 7)
+        TimeZoneInfo tz, bool isFirstReport = false, int scheduledHour = 7)
     {
-        var weatherData = SnapshotDescriber.Describe(snapshot);
+        var weatherData = SnapshotDescriber.Describe(snapshot, tz);
 
         var welcomeInstruction = isFirstReport
             ? $"This is the recipient's very first report. " +

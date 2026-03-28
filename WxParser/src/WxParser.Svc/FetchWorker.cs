@@ -59,39 +59,22 @@ public sealed class FetchWorker : BackgroundService
 
             if (homeLat is null || homeLon is null)
             {
-                var homeAddress = _config["Fetch:HomeAddress"];
-
-                if (!string.IsNullOrWhiteSpace(homeAddress))
+                if (string.IsNullOrWhiteSpace(homeIcao))
                 {
-                    Logger.Info($"Coordinates not cached. Geocoding home address via Nominatim...");
-                    var result = await AddressGeocoder.LookupAsync(homeAddress, _http);
-                    if (result is null)
-                    {
-                        Logger.Error("Address geocoding failed. Skipping fetch cycle.");
-                        return;
-                    }
-                    (homeLat, homeLon) = (result.Value.Latitude, result.Value.Longitude);
-                    Logger.Info($"Resolved address: lat={homeLat:F4}  lon={homeLon:F4}  locality={result.Value.LocalityName}");
-                    SaveLocalCoordinates(homeLat.Value, homeLon.Value, result.Value.LocalityName);
-                }
-                else if (!string.IsNullOrWhiteSpace(homeIcao))
-                {
-                    Logger.Info($"Coordinates for {homeIcao} not found in configuration. Looking up...");
-                    var coords = await AirportLocator.LookupAsync(homeIcao, _http);
-                    if (coords is null)
-                    {
-                        Logger.Error($"Airport lookup for '{homeIcao}' failed. Skipping fetch cycle.");
-                        return;
-                    }
-                    (homeLat, homeLon) = coords.Value;
-                    Logger.Info($"Resolved {homeIcao}: lat={homeLat:F4}  lon={homeLon:F4}");
-                    SaveLocalCoordinates(homeLat.Value, homeLon.Value, localityName: null);
-                }
-                else
-                {
-                    Logger.Error("No HomeAddress or HomeIcao configured. Skipping fetch cycle.");
+                    Logger.Error("Fetch:HomeLatitude/HomeLongitude not set and no HomeIcao to fall back on. Skipping fetch cycle.");
                     return;
                 }
+
+                Logger.Info($"Coordinates not configured. Looking up {homeIcao}...");
+                var coords = await AirportLocator.LookupAsync(homeIcao, _http);
+                if (coords is null)
+                {
+                    Logger.Error($"Airport lookup for '{homeIcao}' failed. Skipping fetch cycle.");
+                    return;
+                }
+                (homeLat, homeLon) = coords.Value;
+                Logger.Info($"Resolved {homeIcao}: lat={homeLat:F4}  lon={homeLon:F4}");
+                SaveLocalCoordinates(homeLat.Value, homeLon.Value);
             }
 
             if (string.IsNullOrWhiteSpace(homeIcao))
@@ -150,15 +133,13 @@ public sealed class FetchWorker : BackgroundService
         Logger.Info($"HomeIcao '{homeIcao}' saved to local settings.");
     }
 
-    private void SaveLocalCoordinates(double lat, double lon, string? localityName)
+    private void SaveLocalCoordinates(double lat, double lon)
     {
         var path = Path.Combine(AppContext.BaseDirectory, "appsettings.local.json");
 
-        JsonNode root;
-        if (File.Exists(path))
-            root = JsonNode.Parse(File.ReadAllText(path)) ?? new JsonObject();
-        else
-            root = new JsonObject();
+        JsonNode root = File.Exists(path)
+            ? JsonNode.Parse(File.ReadAllText(path)) ?? new JsonObject()
+            : new JsonObject();
 
         if (root["Fetch"] is not JsonObject fetch)
         {
@@ -168,8 +149,6 @@ public sealed class FetchWorker : BackgroundService
 
         fetch["HomeLatitude"]  = lat;
         fetch["HomeLongitude"] = lon;
-        if (localityName is not null)
-            fetch["HomeLocationName"] = localityName;
 
         File.WriteAllText(path, root.ToJsonString(
             new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));

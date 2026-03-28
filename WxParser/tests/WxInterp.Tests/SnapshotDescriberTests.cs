@@ -36,18 +36,18 @@ public class SnapshotDescriberTests
     [Fact]
     public void Describe_IncludesStationAndLocality()
     {
-        var text = SnapshotDescriber.Describe(Base());
+        var text = SnapshotDescriber.Describe(Base(), TimeZoneInfo.Utc);
         Assert.Contains("KDWH", text);
         Assert.Contains("Spring", text);
     }
 
     [Fact]
     public void Describe_IncludesObservationDate()
-        => Assert.Contains("2026-03-27", SnapshotDescriber.Describe(Base()));
+        => Assert.Contains("2026-03-27", SnapshotDescriber.Describe(Base(), TimeZoneInfo.Utc));
 
     [Fact]
     public void Describe_AutomatedStation_IncludesAutomatedTag()
-        => Assert.Contains("automated", SnapshotDescriber.Describe(Base()));
+        => Assert.Contains("automated", SnapshotDescriber.Describe(Base(), TimeZoneInfo.Utc));
 
     [Fact]
     public void Describe_ManualStation_DoesNotIncludeAutomatedTag()
@@ -63,20 +63,20 @@ public class SnapshotDescriberTests
             WeatherPhenomena       = [],
             ForecastPeriods        = [],
         };
-        Assert.DoesNotContain("automated", SnapshotDescriber.Describe(snap));
+        Assert.DoesNotContain("automated", SnapshotDescriber.Describe(snap, TimeZoneInfo.Utc));
     }
 
     [Fact]
     public void Describe_IncludesCurrentDateTime()
         // Current date/time line is essential so Claude knows what day it is
-        => Assert.Contains("Current date/time:", SnapshotDescriber.Describe(Base()));
+        => Assert.Contains("Current date/time:", SnapshotDescriber.Describe(Base(), TimeZoneInfo.Utc));
 
     // ── wind ─────────────────────────────────────────────────────────────────
 
     [Fact]
     public void Describe_Wind_IncludesDirectionAndSpeed()
     {
-        var text = SnapshotDescriber.Describe(Base());
+        var text = SnapshotDescriber.Describe(Base(), TimeZoneInfo.Utc);
         Assert.Contains("180", text);
         Assert.Contains("12 kt", text);
     }
@@ -96,7 +96,7 @@ public class SnapshotDescriberTests
             WeatherPhenomena       = [],
             ForecastPeriods        = [],
         };
-        Assert.Contains("gusting 22 kt", SnapshotDescriber.Describe(snap));
+        Assert.Contains("gusting 22 kt", SnapshotDescriber.Describe(snap, TimeZoneInfo.Utc));
     }
 
     [Fact]
@@ -113,7 +113,7 @@ public class SnapshotDescriberTests
             WeatherPhenomena       = [],
             ForecastPeriods        = [],
         };
-        Assert.Contains("variable", SnapshotDescriber.Describe(snap));
+        Assert.Contains("variable", SnapshotDescriber.Describe(snap, TimeZoneInfo.Utc));
     }
 
     [Fact]
@@ -129,7 +129,7 @@ public class SnapshotDescriberTests
             WeatherPhenomena       = [],
             ForecastPeriods        = [],
         };
-        Assert.Contains("calm", SnapshotDescriber.Describe(snap));
+        Assert.Contains("calm", SnapshotDescriber.Describe(snap, TimeZoneInfo.Utc));
     }
 
     // ── visibility ────────────────────────────────────────────────────────────
@@ -137,7 +137,7 @@ public class SnapshotDescriberTests
     [Fact]
     public void Describe_Visibility_IncludesValueAndUnit()
     {
-        var text = SnapshotDescriber.Describe(Base());
+        var text = SnapshotDescriber.Describe(Base(), TimeZoneInfo.Utc);
         Assert.Contains("10", text);
         Assert.Contains("SM", text);
     }
@@ -154,7 +154,7 @@ public class SnapshotDescriberTests
             WeatherPhenomena   = [],
             ForecastPeriods    = [],
         };
-        Assert.Contains("CAVOK", SnapshotDescriber.Describe(snap));
+        Assert.Contains("CAVOK", SnapshotDescriber.Describe(snap, TimeZoneInfo.Utc));
     }
 
     [Fact]
@@ -170,14 +170,14 @@ public class SnapshotDescriberTests
             WeatherPhenomena       = [],
             ForecastPeriods        = [],
         };
-        Assert.Contains("<", SnapshotDescriber.Describe(snap));
+        Assert.Contains("<", SnapshotDescriber.Describe(snap, TimeZoneInfo.Utc));
     }
 
     // ── sky ───────────────────────────────────────────────────────────────────
 
     [Fact]
     public void Describe_NoLayers_SaysClear()
-        => Assert.Contains("clear", SnapshotDescriber.Describe(Base()), StringComparison.OrdinalIgnoreCase);
+        => Assert.Contains("clear", SnapshotDescriber.Describe(Base(), TimeZoneInfo.Utc), StringComparison.OrdinalIgnoreCase);
 
     [Fact]
     public void Describe_BrokenLayer_IncludesHeightAndCoverage()
@@ -191,7 +191,7 @@ public class SnapshotDescriberTests
             WeatherPhenomena       = [],
             ForecastPeriods        = [],
         };
-        var text = SnapshotDescriber.Describe(snap);
+        var text = SnapshotDescriber.Describe(snap, TimeZoneInfo.Utc);
         Assert.Contains("Broken", text);
         Assert.Contains("2500", text);
     }
@@ -208,7 +208,7 @@ public class SnapshotDescriberTests
             WeatherPhenomena       = [],
             ForecastPeriods        = [],
         };
-        Assert.Contains("Cumulonimbus", SnapshotDescriber.Describe(snap));
+        Assert.Contains("Cumulonimbus", SnapshotDescriber.Describe(snap, TimeZoneInfo.Utc));
     }
 
     // ── temperature ───────────────────────────────────────────────────────────
@@ -216,7 +216,7 @@ public class SnapshotDescriberTests
     [Fact]
     public void Describe_IncludesFahrenheitAndCelsius()
     {
-        var text = SnapshotDescriber.Describe(Base());
+        var text = SnapshotDescriber.Describe(Base(), TimeZoneInfo.Utc);
         Assert.Contains("°F", text);
         Assert.Contains("°C", text);
     }
@@ -224,7 +224,7 @@ public class SnapshotDescriberTests
     [Fact]
     public void Describe_IncludesDewPoint()
     {
-        var text = SnapshotDescriber.Describe(Base());
+        var text = SnapshotDescriber.Describe(Base(), TimeZoneInfo.Utc);
         Assert.Contains("Dew point", text);
         Assert.Contains("15", text);
     }
@@ -234,7 +234,7 @@ public class SnapshotDescriberTests
     [Fact]
     public void Describe_IncludesAltimeterInHg()
     {
-        var text = SnapshotDescriber.Describe(Base());
+        var text = SnapshotDescriber.Describe(Base(), TimeZoneInfo.Utc);
         Assert.Contains("29.98", text);
         Assert.Contains("inHg", text);
     }
@@ -254,7 +254,7 @@ public class SnapshotDescriberTests
             WeatherPhenomena       = [],
             ForecastPeriods        = [],
         };
-        Assert.Contains("not available", SnapshotDescriber.Describe(snap));
+        Assert.Contains("not available", SnapshotDescriber.Describe(snap, TimeZoneInfo.Utc));
     }
 
     [Fact]
@@ -282,7 +282,7 @@ public class SnapshotDescriberTests
                 },
             ],
         };
-        var text = SnapshotDescriber.Describe(snap);
+        var text = SnapshotDescriber.Describe(snap, TimeZoneInfo.Utc);
         Assert.Contains("KIAH", text);
         Assert.Contains("Base", text);
     }
@@ -311,7 +311,7 @@ public class SnapshotDescriberTests
                 },
             ],
         };
-        var text = SnapshotDescriber.Describe(snap);
+        var text = SnapshotDescriber.Describe(snap, TimeZoneInfo.Utc);
         Assert.Contains("2026-03-27", text);
         Assert.Contains("2026-03-28", text);
     }

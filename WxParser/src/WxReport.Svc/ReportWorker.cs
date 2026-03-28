@@ -76,48 +76,62 @@ public sealed class ReportWorker : BackgroundService
             return;
         }
 
-        // Build snapshot once for all recipients.
-        var homeIcao = _config["Fetch:HomeIcao"]      ?? "";
-        var homeLat  = double.TryParse(_config["Fetch:HomeLatitude"],  out var lat) ? lat : 0.0;
-        var homeLon  = double.TryParse(_config["Fetch:HomeLongitude"], out var lon) ? lon : 0.0;
-        var locality = _config["Fetch:HomeLocationName"] ?? _config["Fetch:HomeAddress"] ?? homeIcao;
+        var duplicateIds = cfg.Recipients
+            .Where(r => r.Id is not null)
+            .GroupBy(r => r.Id)
+            .Where(g => g.Count() > 1)
+            .Select(g => g.Key!)
+            .ToHashSet();
 
-        if (string.IsNullOrWhiteSpace(homeIcao))
-        {
-            Logger.Warn("Fetch:HomeIcao is not set — skipping report cycle.");
-            return;
-        }
+        foreach (var id in duplicateIds)
+            Logger.Error($"Duplicate recipient Id '{id}' — all entries with this Id will be skipped.");
 
-        var snapshot = await WxInterpreter.GetSnapshotAsync(
-            homeIcao, homeLat, homeLon, locality, _dbOptions, _httpClient);
-
-        if (snapshot is null)
-        {
-            Logger.Warn("No METAR data available — skipping report cycle.");
-            return;
-        }
-
-        var fingerprint  = SnapshotFingerprint.Compute(snapshot, cfg.SignificantChange);
-        var claude       = new ClaudeClient(_httpClient, cfg.Claude.ApiKey, cfg.Claude.Model);
-        var emailer      = new EmailSender(cfg.Smtp);
-        var now          = DateTime.UtcNow;
-        var reportsSent  = 0;
+        var claude      = new ClaudeClient(_httpClient, cfg.Claude.ApiKey, cfg.Claude.Model);
+        var emailer     = new EmailSender(cfg.Smtp);
+        var resolver    = new RecipientResolver(_dbOptions, _httpClient);
+        var now         = DateTime.UtcNow;
+        var reportsSent = 0;
 
         await using var ctx = new WeatherDataContext(_dbOptions);
 
         foreach (var recipient in cfg.Recipients)
         {
             if (string.IsNullOrWhiteSpace(recipient.Email)) continue;
+            if (string.IsNullOrWhiteSpace(recipient.Id))
+            {
+                Logger.Warn($"{recipient.Email}: no Id configured — skipping. Add a unique Id to appsettings.local.json.");
+                continue;
+            }
+            if (duplicateIds.Contains(recipient.Id)) continue;
+
+            // Ensure the recipient's address has been resolved to station ICAOs.
+            if (!await resolver.EnsureResolvedAsync(recipient)) continue;
 
             var state = await ctx.RecipientStates
-                .FirstOrDefaultAsync(r => r.Email == recipient.Email, ct);
+                .FirstOrDefaultAsync(r => r.RecipientId == recipient.Id, ct);
 
             if (state is null)
             {
-                state = new RecipientState { Email = recipient.Email };
+                state = new RecipientState { RecipientId = recipient.Id! };
                 ctx.RecipientStates.Add(state);
             }
 
+            // Build a snapshot specific to this recipient's nearest stations.
+            var preferredIcaos = ParseIcaoList(recipient.MetarIcao);
+            var localityName   = recipient.LocalityName ?? (preferredIcaos.Count > 0 ? preferredIcaos[0] : recipient.Email);
+            var snapshot = await WxInterpreter.GetSnapshotAsync(
+                preferredIcaos, recipient.TafIcao, localityName, _dbOptions);
+
+            if (snapshot is null)
+            {
+                Logger.Warn($"No METAR data for {recipient.Email} ({recipient.MetarIcao}) — skipping.");
+                continue;
+            }
+
+            if (preferredIcaos.Count > 0 && !preferredIcaos.Contains(snapshot.StationIcao))
+                Logger.Warn($"{recipient.Email}: preferred station(s) [{string.Join(", ", preferredIcaos)}] had no data — fell back to {snapshot.StationIcao}.");
+
+            var fingerprint      = SnapshotFingerprint.Compute(snapshot, cfg.SignificantChange);
             var (shouldSend, reason) = ShouldSend(recipient, state, fingerprint, cfg, now);
 
             if (!shouldSend) continue;
@@ -126,8 +140,9 @@ public sealed class ReportWorker : BackgroundService
 
             var language      = recipient.Language ?? cfg.DefaultLanguage;
             var scheduledHour = recipient.ScheduledSendHour ?? cfg.DefaultScheduledSendHour;
+            var tz            = ResolveTimezone(recipient.Timezone);
             var report        = await claude.GenerateReportAsync(
-                snapshot, language, recipient.Name,
+                snapshot, language, recipient.Name, tz,
                 isFirstReport: reason == "first",
                 scheduledHour: scheduledHour);
 
@@ -137,14 +152,13 @@ public sealed class ReportWorker : BackgroundService
                 continue;
             }
 
-            var subject = BuildSubject(snapshot, language);
+            var subject = BuildSubject(snapshot, language, tz);
             var sent    = await emailer.SendAsync(recipient.Email, recipient.Name, subject, report);
 
             if (!sent) continue;
 
             Logger.Info($"Report sent to {recipient.Email}.");
 
-            // Update state.
             if (reason is "scheduled" or "first")
                 state.LastScheduledSentUtc   = now;
             else
@@ -228,15 +242,22 @@ public sealed class ReportWorker : BackgroundService
 
     // ── helpers ───────────────────────────────────────────────────────────────
 
-    private static string BuildSubject(WeatherSnapshot snap, string language)
+    private static string BuildSubject(WeatherSnapshot snap, string language, TimeZoneInfo tz)
     {
-        var localTime = snap.ObservationTimeUtc.ToString("h:mm tt");
+        var localTime = TimeZoneInfo.ConvertTimeFromUtc(snap.ObservationTimeUtc, tz).ToString("h:mm tt");
         if (language.Equals("Spanish", StringComparison.OrdinalIgnoreCase))
-            return $"Reporte del tiempo — {snap.LocalityName} ({localTime} UTC)";
+            return $"Reporte del tiempo — {snap.LocalityName} ({localTime})";
         if (language.Equals("French", StringComparison.OrdinalIgnoreCase))
-            return $"Bulletin météo — {snap.LocalityName} ({localTime} UTC)";
-        return $"Weather report — {snap.LocalityName} ({localTime} UTC)";
+            return $"Bulletin météo — {snap.LocalityName} ({localTime})";
+        return $"Weather report — {snap.LocalityName} ({localTime})";
     }
+
+    private static IReadOnlyList<string> ParseIcaoList(string? raw) =>
+        string.IsNullOrWhiteSpace(raw)
+            ? []
+            : raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                 .Where(s => !string.IsNullOrWhiteSpace(s))
+                 .ToList();
 
     private ReportConfig LoadConfig()
     {

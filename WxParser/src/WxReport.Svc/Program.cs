@@ -52,6 +52,26 @@ try
     await using (var db = new WeatherDataContext(dbOptions))
     {
         await db.Database.EnsureCreatedAsync();
+
+        // EnsureCreatedAsync only creates the DB when it is entirely absent;
+        // it will not add tables that are missing from an existing database.
+        // Create RecipientStates explicitly so schema changes survive a table drop
+        // without requiring a full database rebuild.
+        await db.Database.ExecuteSqlRawAsync(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'RecipientStates')
+            BEGIN
+                CREATE TABLE [RecipientStates] (
+                    [Id]                      int           NOT NULL IDENTITY,
+                    [RecipientId]             nvarchar(100) NOT NULL,
+                    [LastScheduledSentUtc]    datetime2     NULL,
+                    [LastUnscheduledSentUtc]  datetime2     NULL,
+                    [LastSnapshotFingerprint] nvarchar(200) NULL,
+                    CONSTRAINT [PK_RecipientStates] PRIMARY KEY ([Id])
+                );
+                CREATE UNIQUE INDEX [UX_RecipientStates_RecipientId]
+                    ON [RecipientStates] ([RecipientId]);
+            END");
+
         Logger.Info("Database ready.");
     }
 

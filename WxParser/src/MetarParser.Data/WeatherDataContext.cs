@@ -239,12 +239,12 @@ public sealed class WeatherDataContext : DbContext
             e.ToTable("RecipientStates");
             e.HasKey(x => x.Id);
 
-            e.Property(x => x.Email)                  .HasMaxLength(254).IsRequired();
+            e.Property(x => x.RecipientId)            .HasMaxLength(100).IsRequired();
             e.Property(x => x.LastSnapshotFingerprint).HasMaxLength(200);
 
-            e.HasIndex(x => x.Email)
+            e.HasIndex(x => x.RecipientId)
              .IsUnique()
-             .HasDatabaseName("UX_RecipientStates_Email");
+             .HasDatabaseName("UX_RecipientStates_RecipientId");
         });
     }
 }

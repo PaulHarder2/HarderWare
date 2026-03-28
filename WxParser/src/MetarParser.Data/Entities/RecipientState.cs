@@ -1,7 +1,7 @@
 namespace MetarParser.Data.Entities;
 
 /// <summary>
-/// Persists the report-delivery state for a single email recipient.
+/// Persists the report-delivery state for a single recipient.
 /// Tracks the last time a scheduled report was sent and the last time an
 /// unscheduled (significant-change) report was sent, along with a fingerprint
 /// of the snapshot at the time of the most recent send.  Used by WxReport.Svc
@@ -11,8 +11,8 @@ public class RecipientState
 {
     public int      Id                       { get; set; }
 
-    /// <summary>Recipient email address — uniquely identifies the row.</summary>
-    public string   Email                    { get; set; } = "";
+    /// <summary>Stable recipient identifier matching <c>RecipientConfig.Id</c> in appsettings.local.json.</summary>
+    public string   RecipientId              { get; set; } = "";
 
     /// <summary>UTC time the most recent scheduled report was sent, or null if never sent.</summary>
     public DateTime? LastScheduledSentUtc    { get; set; }

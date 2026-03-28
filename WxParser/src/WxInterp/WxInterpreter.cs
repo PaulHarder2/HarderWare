@@ -11,72 +11,127 @@ namespace WxInterp;
 public static class WxInterpreter
 {
     /// <summary>
-    /// Builds a <see cref="WeatherSnapshot"/> from the most recent METAR for
-    /// <paramref name="homeIcao"/> and the most recent valid TAF from the
-    /// nearest station to (<paramref name="homeLat"/>, <paramref name="homeLon"/>).
-    /// Returns <see langword="null"/> if no METAR is available.
+    /// Builds a <see cref="WeatherSnapshot"/> from the most recent METAR and
+    /// the most recent valid TAF for <paramref name="tafIcao"/> (if provided).
+    /// <para>
+    /// METAR stations are tried in the order given by <paramref name="metarIcaos"/>.
+    /// If none have recent data the method falls back to the most recent METAR
+    /// from any station in the database (last-resort, same cycle only).
+    /// </para>
+    /// Returns <see langword="null"/> if no METAR data is available at all.
     /// </summary>
     public static async Task<WeatherSnapshot?> GetSnapshotAsync(
-        string homeIcao,
-        double homeLat,
-        double homeLon,
+        IReadOnlyList<string> metarIcaos,
+        string? tafIcao,
         string localityName,
-        DbContextOptions<WeatherDataContext> dbOptions,
-        HttpClient httpClient)
+        DbContextOptions<WeatherDataContext> dbOptions)
     {
         await using var ctx = new WeatherDataContext(dbOptions);
 
-        var metar = await ctx.Metars
-            .Include(m => m.SkyConditions)
-            .Include(m => m.WeatherPhenomena)
-            .Where(m => m.StationIcao == homeIcao)
-            .OrderByDescending(m => m.ObservationUtc)
-            .FirstOrDefaultAsync();
+        // Tier 1: try each configured station in preference order.
+        MetarRecord? metar = null;
+        foreach (var icao in metarIcaos)
+        {
+            metar = await ctx.Metars
+                .Include(m => m.SkyConditions)
+                .Include(m => m.WeatherPhenomena)
+                .Where(m => m.StationIcao == icao)
+                .OrderByDescending(m => m.ObservationUtc)
+                .FirstOrDefaultAsync();
+            if (metar is not null) break;
+        }
+
+        // Tier 2: any station in the database with data in the last 3 hours.
+        if (metar is null)
+        {
+            var cutoff = DateTime.UtcNow.AddHours(-3);
+            metar = await ctx.Metars
+                .Include(m => m.SkyConditions)
+                .Include(m => m.WeatherPhenomena)
+                .Where(m => m.ObservationUtc >= cutoff)
+                .OrderByDescending(m => m.ObservationUtc)
+                .FirstOrDefaultAsync();
+        }
 
         if (metar is null) return null;
 
-        var taf = await GetNearestTafAsync(ctx, homeLat, homeLon, httpClient);
+        TafRecord? taf = null;
+        if (tafIcao is not null)
+        {
+            taf = await ctx.Tafs
+                .Include(t => t.ChangePeriods)
+                    .ThenInclude(p => p.SkyConditions)
+                .Include(t => t.ChangePeriods)
+                    .ThenInclude(p => p.WeatherPhenomena)
+                .Where(t => t.StationIcao == tafIcao && t.ValidToUtc >= DateTime.UtcNow)
+                .OrderByDescending(t => t.IssuanceUtc)
+                .FirstOrDefaultAsync();
+        }
 
         return BuildSnapshot(metar, taf, localityName);
     }
 
-    // ── TAF station lookup ────────────────────────────────────────────────────
+    // ── nearest-station resolution ────────────────────────────────────────────
 
-    private static async Task<TafRecord?> GetNearestTafAsync(
-        WeatherDataContext ctx, double homeLat, double homeLon, HttpClient httpClient)
+    /// <summary>
+    /// Finds the ICAO of the METAR station in the database nearest to the given
+    /// coordinates. Uses the Aviation Weather Center airport API to resolve each
+    /// station's coordinates. Returns <see langword="null"/> if no stations are found.
+    /// </summary>
+    public static async Task<string?> FindNearestMetarStationAsync(
+        double lat, double lon,
+        DbContextOptions<WeatherDataContext> dbOptions,
+        HttpClient httpClient)
+    {
+        var cutoff = DateTime.UtcNow.AddHours(-3);
+        await using var ctx = new WeatherDataContext(dbOptions);
+
+        var stations = await ctx.Metars
+            .Where(m => m.ObservationUtc >= cutoff)
+            .Select(m => m.StationIcao)
+            .Distinct()
+            .ToListAsync();
+
+        return await FindNearest(stations, lat, lon, httpClient);
+    }
+
+    /// <summary>
+    /// Finds the ICAO of the TAF station in the database nearest to the given
+    /// coordinates. Returns <see langword="null"/> if no stations are found.
+    /// </summary>
+    public static async Task<string?> FindNearestTafStationAsync(
+        double lat, double lon,
+        DbContextOptions<WeatherDataContext> dbOptions,
+        HttpClient httpClient)
     {
         var cutoff = DateTime.UtcNow.AddHours(-30);
+        await using var ctx = new WeatherDataContext(dbOptions);
+
         var stations = await ctx.Tafs
             .Where(t => t.IssuanceUtc >= cutoff)
             .Select(t => t.StationIcao)
             .Distinct()
             .ToListAsync();
 
-        if (stations.Count == 0) return null;
+        return await FindNearest(stations, lat, lon, httpClient);
+    }
 
-        // Find the station with the smallest squared Euclidean distance.
-        string? nearestIcao  = null;
-        double  nearestDist  = double.MaxValue;
+    private static async Task<string?> FindNearest(
+        IEnumerable<string> icaos, double lat, double lon, HttpClient httpClient)
+    {
+        string? nearestIcao = null;
+        double  nearestDist = double.MaxValue;
 
-        foreach (var icao in stations)
+        foreach (var icao in icaos)
         {
             var coords = await AirportLocator.LookupAsync(icao, httpClient);
             if (coords is null) continue;
-            var dist = Math.Pow(coords.Value.Latitude  - homeLat, 2)
-                     + Math.Pow(coords.Value.Longitude - homeLon, 2);
+            var dist = Math.Pow(coords.Value.Latitude  - lat, 2)
+                     + Math.Pow(coords.Value.Longitude - lon, 2);
             if (dist < nearestDist) { nearestDist = dist; nearestIcao = icao; }
         }
 
-        if (nearestIcao is null) return null;
-
-        return await ctx.Tafs
-            .Include(t => t.ChangePeriods)
-                .ThenInclude(p => p.SkyConditions)
-            .Include(t => t.ChangePeriods)
-                .ThenInclude(p => p.WeatherPhenomena)
-            .Where(t => t.StationIcao == nearestIcao && t.ValidToUtc >= DateTime.UtcNow)
-            .OrderByDescending(t => t.IssuanceUtc)
-            .FirstOrDefaultAsync();
+        return nearestIcao;
     }
 
     // ── snapshot builder ──────────────────────────────────────────────────────

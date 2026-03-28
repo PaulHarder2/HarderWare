@@ -9,21 +9,24 @@ namespace WxReport.Svc;
 /// </summary>
 public static class SnapshotDescriber
 {
-    public static string Describe(WeatherSnapshot snap)
+    public static string Describe(WeatherSnapshot snap, TimeZoneInfo tz)
     {
         var sb = new StringBuilder();
 
-        sb.AppendLine($"Current date/time: {DateTime.UtcNow:dddd, yyyy-MM-dd HH:mm} UTC");
+        var localNow = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, tz);
+        var localObs = TimeZoneInfo.ConvertTimeFromUtc(snap.ObservationTimeUtc, tz);
+
+        sb.AppendLine($"Current date/time: {localNow:dddd, yyyy-MM-dd HH:mm} local / {DateTime.UtcNow:HH:mm} UTC");
         sb.AppendLine($"Station: {snap.StationIcao} ({snap.LocalityName})");
-        sb.AppendLine($"Observed: {snap.ObservationTimeUtc:dddd, yyyy-MM-dd HH:mm} UTC{(snap.IsAutomated ? " (automated)" : "")}");
+        sb.AppendLine($"Observed: {localObs:dddd, yyyy-MM-dd HH:mm} local / {snap.ObservationTimeUtc:HH:mm} UTC{(snap.IsAutomated ? " (automated)" : "")}");
 
         // Wind
         if (snap.WindIsVariable)
-            sb.AppendLine($"Wind: variable at {snap.WindSpeedKt?.ToString() ?? "calm"} kt{GustStr(snap.WindGustKt)}");
+            sb.AppendLine($"Wind: variable at {snap.WindSpeedKt?.ToString() ?? "calm"} kt ({KtToMph(snap.WindSpeedKt)} mph){GustStr(snap.WindGustKt)}");
         else if (snap.WindSpeedKt is 0 or null)
             sb.AppendLine("Wind: calm");
         else
-            sb.AppendLine($"Wind: {snap.WindDirectionDeg:000}° at {snap.WindSpeedKt} kt{GustStr(snap.WindGustKt)}");
+            sb.AppendLine($"Wind: {snap.WindDirectionDeg:000}° at {snap.WindSpeedKt} kt ({KtToMph(snap.WindSpeedKt)} mph){GustStr(snap.WindGustKt)}");
 
         // Visibility
         if (snap.Cavok)
@@ -72,7 +75,10 @@ public static class SnapshotDescriber
     // ── formatting helpers ────────────────────────────────────────────────────
 
     private static string GustStr(int? gust) =>
-        gust.HasValue ? $", gusting {gust} kt" : "";
+        gust.HasValue ? $", gusting {gust} kt ({KtToMph(gust)} mph)" : "";
+
+    private static int KtToMph(int? kt) =>
+        kt.HasValue ? (int)Math.Round(kt.Value * 1.15078) : 0;
 
     private static string FormatCoverage(SkyCoverage c) => c switch
     {
