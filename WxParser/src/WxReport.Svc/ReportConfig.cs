@@ -19,6 +19,9 @@ public class ReportConfig
     /// <summary>Check interval; loaded from appsettings.json (service-specific).</summary>
     public int    IntervalMinutes         { get; set; } = 5;
 
+    /// <summary>Path to the heartbeat file written after each successful report cycle. Read by WxMonitor.Svc.</summary>
+    public string?                 HeartbeatFile     { get; set; }
+
     public SignificantChangeConfig SignificantChange { get; set; } = new();
     public ClaudeConfig            Claude            { get; set; } = new();
     public SmtpConfig              Smtp              { get; set; } = new();

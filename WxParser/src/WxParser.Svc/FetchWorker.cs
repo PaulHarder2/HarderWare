@@ -101,11 +101,19 @@ public sealed class FetchWorker : BackgroundService
             await TafFetcher.FetchAndInsertAsync(homeLat.Value, homeLon.Value, boxDeg, _dbOptions, _http);
 
             Logger.Info("Fetch cycle complete.");
+            WriteHeartbeat(_config["Fetch:HeartbeatFile"]);
         }
         catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
         {
             Logger.Error("Unhandled exception in fetch cycle.", ex);
         }
+    }
+
+    private static void WriteHeartbeat(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return;
+        try   { File.WriteAllText(path, DateTime.UtcNow.ToString("o")); }
+        catch (Exception ex) { Logger.Warn($"Could not write heartbeat to '{path}': {ex.Message}"); }
     }
 
     /// <summary>

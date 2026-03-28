@@ -180,6 +180,8 @@ public sealed class ReportWorker : BackgroundService
         Logger.Info(reportsSent > 0
             ? $"Report cycle complete. {reportsSent} report(s) sent."
             : "Report cycle complete. No reports due.");
+
+        WriteHeartbeat(cfg.HeartbeatFile);
     }
 
     // ── send-decision logic ───────────────────────────────────────────────────
@@ -250,6 +252,13 @@ public sealed class ReportWorker : BackgroundService
         if (language.Equals("French", StringComparison.OrdinalIgnoreCase))
             return $"Bulletin météo — {snap.LocalityName} ({localTime})";
         return $"Weather report — {snap.LocalityName} ({localTime})";
+    }
+
+    private static void WriteHeartbeat(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return;
+        try   { File.WriteAllText(path, DateTime.UtcNow.ToString("o")); }
+        catch (Exception ex) { Logger.Warn($"Could not write heartbeat to '{path}': {ex.Message}"); }
     }
 
     private static IReadOnlyList<string> ParseIcaoList(string? raw) =>
