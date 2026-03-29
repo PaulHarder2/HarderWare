@@ -1,3 +1,5 @@
+using WxParser.Logging;
+
 namespace WxMonitor.Svc;
 
 /// <summary>
@@ -29,7 +31,10 @@ public static class HeartbeatChecker
                 return DateTime.UtcNow - ts.ToUniversalTime();
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            Logger.Warn($"Could not read heartbeat file '{filePath}': {ex.Message}");
+        }
 
         return null;
     }

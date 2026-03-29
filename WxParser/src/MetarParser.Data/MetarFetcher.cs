@@ -1,5 +1,6 @@
 using MetarParser.Data.Entities;
 using Microsoft.EntityFrameworkCore;
+using WxParser.Logging;
 using static MetarParser.MetarParser;
 
 namespace MetarParser.Data;
@@ -20,11 +21,23 @@ public static class MetarFetcher
     /// <paramref name="boxDegrees"/> degrees, then parses, deduplicates, and
     /// inserts any reports not already in the database.
     /// </summary>
+    /// <param name="lat">Centre latitude of the bounding box in decimal degrees.</param>
+    /// <param name="lon">Centre longitude of the bounding box in decimal degrees.</param>
+    /// <param name="boxDegrees">Half-width of the bounding box in degrees (applied in all four directions). Must be &gt; 0.</param>
+    /// <param name="dbOptions">EF Core options for deduplication queries and insertion.</param>
+    /// <param name="httpClient">HTTP client for the Aviation Weather Center API request.</param>
+    /// <sideeffects>Inserts new <see cref="MetarRecord"/> rows into the database. Writes progress and error log entries.</sideeffects>
     public static async Task FetchAndInsertAsync(
         double lat, double lon, double boxDegrees,
         DbContextOptions<WeatherDataContext> dbOptions,
         HttpClient httpClient)
     {
+        if (boxDegrees <= 0)
+        {
+            Logger.Error($"MetarFetcher: boxDegrees must be > 0 (got {boxDegrees}) — skipping fetch.");
+            return;
+        }
+
         var bbox = $"{lat - boxDegrees},{lon - boxDegrees},{lat + boxDegrees},{lon + boxDegrees}";
         var url  = $"{MetarApiBase}?bbox={bbox}&hours=1&format=raw";
         await FetchUrlAndInsertAsync(url, dbOptions, httpClient);
@@ -35,6 +48,10 @@ public static class MetarFetcher
     /// ICAO identifier, then parses, deduplicates, and inserts any reports not
     /// already in the database.
     /// </summary>
+    /// <param name="stationIcao">ICAO identifier of the station to fetch (e.g. <c>"KDWH"</c>).</param>
+    /// <param name="dbOptions">EF Core options for deduplication queries and insertion.</param>
+    /// <param name="httpClient">HTTP client for the Aviation Weather Center API request.</param>
+    /// <sideeffects>Inserts new <see cref="MetarRecord"/> rows into the database. Writes progress and error log entries.</sideeffects>
     public static async Task FetchAndInsertByStationAsync(
         string stationIcao,
         DbContextOptions<WeatherDataContext> dbOptions,
@@ -46,12 +63,22 @@ public static class MetarFetcher
 
     // ── shared fetch/parse/insert logic ──────────────────────────────────────
 
+    /// <summary>
+    /// Downloads METAR/SPECI data from <paramref name="url"/>, parses each line,
+    /// deduplicates against the database, and inserts new records in a single
+    /// <see cref="WeatherDataContext.SaveChanges"/> call.
+    /// Logs parse errors per line but continues processing remaining lines.
+    /// </summary>
+    /// <param name="url">Fully qualified Aviation Weather Center API URL to fetch.</param>
+    /// <param name="dbOptions">EF Core options for the deduplication query and batch insert.</param>
+    /// <param name="httpClient">HTTP client for the GET request.</param>
+    /// <sideeffects>Inserts new <see cref="MetarRecord"/> rows into the database. Writes progress and error log entries.</sideeffects>
     private static async Task FetchUrlAndInsertAsync(
         string url,
         DbContextOptions<WeatherDataContext> dbOptions,
         HttpClient httpClient)
     {
-        Console.WriteLine($"Fetching: {url}");
+        Logger.Info($"Fetching: {url}");
 
         string raw;
         try
@@ -60,7 +87,7 @@ public static class MetarFetcher
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"Fetch failed: {ex.Message}");
+            Logger.Error($"METAR fetch failed: {ex.Message}");
             return;
         }
 
@@ -73,11 +100,11 @@ public static class MetarFetcher
 
         if (lines.Count == 0)
         {
-            Console.WriteLine("No METAR/SPECI reports were returned.");
+            Logger.Warn("No METAR/SPECI reports were returned.");
             return;
         }
 
-        Console.WriteLine($"Received {lines.Count} report(s). Parsing...");
+        Logger.Info($"Received {lines.Count} METAR/SPECI report(s). Parsing...");
 
         var parsed     = new List<(MetarReport Report, MetarRecord Entity)>();
         int parseErrors = 0;
@@ -92,17 +119,14 @@ public static class MetarFetcher
             }
             catch (MetarParseException ex)
             {
-                Console.ForegroundColor = ConsoleColor.Red;
-                Console.Error.WriteLine($"  Parse error: {ex.Message}");
-                Console.Error.WriteLine($"    Input: {line}");
-                Console.ResetColor();
+                Logger.Error($"METAR parse error: {ex.Message} — input: {line}");
                 parseErrors++;
             }
         }
 
         if (parsed.Count == 0)
         {
-            Console.WriteLine($"No reports parsed successfully ({parseErrors} parse error(s)).");
+            Logger.Warn($"No METAR reports parsed successfully ({parseErrors} parse error(s)).");
             return;
         }
 
@@ -133,13 +157,11 @@ public static class MetarFetcher
             try { ctx.SaveChanges(); }
             catch (DbUpdateException ex)
             {
-                Console.ForegroundColor = ConsoleColor.Yellow;
-                Console.Error.WriteLine($"Database error during batch insert: {ex.InnerException?.Message ?? ex.Message}");
-                Console.ResetColor();
+                Logger.Error($"Database error during METAR batch insert: {ex.InnerException?.Message ?? ex.Message}");
                 return;
             }
         }
 
-        Console.WriteLine($"Done.  Inserted: {inserted}  Skipped (already stored): {skipped}  Parse errors: {parseErrors}");
+        Logger.Info($"METAR fetch done. Inserted: {inserted}  Skipped: {skipped}  Parse errors: {parseErrors}");
     }
 }

@@ -9,6 +9,16 @@ namespace WxReport.Svc;
 /// </summary>
 public static class SnapshotDescriber
 {
+    /// <summary>
+    /// Converts <paramref name="snap"/> into a structured plain-text block
+    /// used as the data payload in the Claude API prompt.
+    /// Covers current date/time, station, observation time, wind, visibility,
+    /// sky conditions, weather phenomena, temperature, dew point, altimeter,
+    /// and forecast periods.
+    /// </summary>
+    /// <param name="snap">The weather snapshot to describe.</param>
+    /// <param name="tz">Timezone used to localise the current time and the observation time in the output.</param>
+    /// <returns>A multi-line plain-text string describing all reported conditions.</returns>
     public static string Describe(WeatherSnapshot snap, TimeZoneInfo tz)
     {
         var sb = new StringBuilder();
@@ -21,8 +31,10 @@ public static class SnapshotDescriber
         sb.AppendLine($"Observed: {localObs:dddd, yyyy-MM-dd HH:mm} local / {snap.ObservationTimeUtc:HH:mm} UTC{(snap.IsAutomated ? " (automated)" : "")}");
 
         // Wind
-        if (snap.WindIsVariable)
-            sb.AppendLine($"Wind: variable at {snap.WindSpeedKt?.ToString() ?? "calm"} kt ({KtToMph(snap.WindSpeedKt)} mph){GustStr(snap.WindGustKt)}");
+        if (snap.WindIsVariable && snap.WindSpeedKt is 0 or null)
+            sb.AppendLine("Wind: variable/calm");
+        else if (snap.WindIsVariable)
+            sb.AppendLine($"Wind: variable at {snap.WindSpeedKt} kt ({KtToMph(snap.WindSpeedKt)} mph){GustStr(snap.WindGustKt)}");
         else if (snap.WindSpeedKt is 0 or null)
             sb.AppendLine("Wind: calm");
         else
@@ -74,12 +86,21 @@ public static class SnapshotDescriber
 
     // ── formatting helpers ────────────────────────────────────────────────────
 
+    /// <summary>Returns a formatted gust string to append to a wind line, or an empty string if no gust was reported.</summary>
+    /// <param name="gust">Gust speed in knots, or <see langword="null"/> if not reported.</param>
+    /// <returns>A string such as <c>", gusting 35 kt (40 mph)"</c>, or <c>""</c>.</returns>
     private static string GustStr(int? gust) =>
         gust.HasValue ? $", gusting {gust} kt ({KtToMph(gust)} mph)" : "";
 
+    /// <summary>Converts a wind speed from knots to miles per hour using the factor 1.15078.</summary>
+    /// <param name="kt">Speed in knots, or <see langword="null"/>.</param>
+    /// <returns>Speed rounded to the nearest whole mph, or <c>0</c> if <paramref name="kt"/> is <see langword="null"/>.</returns>
     private static int KtToMph(int? kt) =>
         kt.HasValue ? (int)Math.Round(kt.Value * 1.15078) : 0;
 
+    /// <summary>Returns a human-readable English description of a sky coverage code.</summary>
+    /// <param name="c">The coverage enum value to format.</param>
+    /// <returns>A display string such as <c>"Few"</c>, <c>"Scattered"</c>, or <c>"Overcast"</c>.</returns>
     private static string FormatCoverage(SkyCoverage c) => c switch
     {
         SkyCoverage.Clear               => "Clear",
@@ -93,6 +114,13 @@ public static class SnapshotDescriber
         _                               => c.ToString(),
     };
 
+    /// <summary>
+    /// Formats a weather phenomenon as a space-separated string of its
+    /// intensity, descriptor, precipitation types, obscuration, other, and
+    /// <c>(recent)</c> flag in that order.
+    /// </summary>
+    /// <param name="w">The weather phenomenon to format.</param>
+    /// <returns>A display string such as <c>"Heavy Showers Rain"</c>, or <c>"unknown"</c> if no components are present.</returns>
     private static string FormatPhenomenon(SnapshotWeather w)
     {
         var parts = new List<string>();
@@ -113,6 +141,13 @@ public static class SnapshotDescriber
         return parts.Count > 0 ? string.Join(" ", parts) : "unknown";
     }
 
+    /// <summary>
+    /// Formats a single TAF change period as a one-line string for inclusion
+    /// in the Claude prompt.  Includes the change type, validity window (UTC),
+    /// wind, visibility, sky layers, and weather phenomena.
+    /// </summary>
+    /// <param name="p">The forecast period to format.</param>
+    /// <returns>A compact one-line string representation of the period.</returns>
     private static string FormatForecastPeriod(ForecastPeriod p)
     {
         var sb = new StringBuilder();

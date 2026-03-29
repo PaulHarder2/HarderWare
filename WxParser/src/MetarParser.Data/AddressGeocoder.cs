@@ -1,5 +1,6 @@
 using System.Net.Http.Json;
 using System.Text.Json.Serialization;
+using WxParser.Logging;
 
 namespace MetarParser.Data;
 
@@ -17,9 +18,22 @@ public static class AddressGeocoder
     /// (e.g. "Spring" for an address in Spring, TX).
     /// Returns <see langword="null"/> if the address cannot be resolved.
     /// </summary>
+    /// <param name="address">The street address or place name to geocode.</param>
+    /// <param name="httpClient">HTTP client for the Nominatim API request (must allow outbound HTTPS).</param>
+    /// <returns>
+    /// A tuple of (Latitude, Longitude, LocalityName) if resolved successfully,
+    /// or <see langword="null"/> if the address cannot be geocoded or coordinates are unparseable.
+    /// </returns>
+    /// <sideeffects>Makes an HTTP GET request to the Nominatim OpenStreetMap geocoding API. Writes error log entries on failure.</sideeffects>
     public static async Task<(double Latitude, double Longitude, string LocalityName)?> LookupAsync(
         string address, HttpClient httpClient)
     {
+        if (string.IsNullOrWhiteSpace(address))
+        {
+            Logger.Error("AddressGeocoder.LookupAsync called with null or empty address — returning null.");
+            return null;
+        }
+
         var url = $"{NominatimBase}?q={Uri.EscapeDataString(address)}&format=json&addressdetails=1&limit=1";
 
         NominatimResult[]? results;
@@ -28,19 +42,19 @@ public static class AddressGeocoder
             // Nominatim requires a User-Agent identifying the application.
             using var request = new HttpRequestMessage(HttpMethod.Get, url);
             request.Headers.Add("User-Agent", "WxParser/1.0");
-            var response = await httpClient.SendAsync(request);
+            using var response = await httpClient.SendAsync(request);
             response.EnsureSuccessStatusCode();
             results = await response.Content.ReadFromJsonAsync<NominatimResult[]>();
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"Address geocoding failed: {ex.Message}");
+            Logger.Error($"Address geocoding failed: {ex.Message}");
             return null;
         }
 
         if (results is not { Length: > 0 })
         {
-            Console.Error.WriteLine($"Address '{address}' could not be geocoded.");
+            Logger.Warn($"Address '{address}' could not be geocoded.");
             return null;
         }
 
@@ -52,7 +66,7 @@ public static class AddressGeocoder
             !double.TryParse(r.Lon, System.Globalization.NumberStyles.Float,
                 System.Globalization.CultureInfo.InvariantCulture, out var lon))
         {
-            Console.Error.WriteLine($"Nominatim returned unparseable coordinates: lat='{r.Lat}' lon='{r.Lon}'");
+            Logger.Error($"Nominatim returned unparseable coordinates: lat='{r.Lat}' lon='{r.Lon}'");
             return null;
         }
 
@@ -63,6 +77,11 @@ public static class AddressGeocoder
     /// Extracts the most specific meaningful locality name from a Nominatim
     /// address object, falling back through progressively broader levels.
     /// </summary>
+    /// <param name="addr">The Nominatim address sub-object from the geocoding response, or <see langword="null"/>.</param>
+    /// <returns>
+    /// The most specific available place name in priority order:
+    /// suburb → town → village → city → county → <c>"Unknown"</c>.
+    /// </returns>
     private static string ResolveLocalityName(NominatimAddress? addr)
     {
         if (addr is null) return "Unknown";

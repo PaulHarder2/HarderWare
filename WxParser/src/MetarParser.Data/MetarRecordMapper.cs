@@ -54,6 +54,9 @@ public static class MetarRecordMapper
     /// Copies wind group fields from <paramref name="report"/> to <paramref name="record"/>.
     /// All wind columns remain <see langword="null"/> when no wind group was decoded.
     /// </summary>
+    /// <param name="report">Source parsed report.</param>
+    /// <param name="record">Target entity to populate in place.</param>
+    /// <sideeffects>Mutates wind-related properties of <paramref name="record"/>.</sideeffects>
     private static void MapWind(MetarReport report, MetarRecord record)
     {
         if (report.Wind is not { } w) return;
@@ -70,6 +73,9 @@ public static class MetarRecordMapper
     /// Copies visibility fields from <paramref name="report"/> to <paramref name="record"/>.
     /// All visibility columns remain at their defaults when no visibility group was decoded.
     /// </summary>
+    /// <param name="report">Source parsed report.</param>
+    /// <param name="record">Target entity to populate in place.</param>
+    /// <sideeffects>Mutates visibility-related properties of <paramref name="record"/>.</sideeffects>
     private static void MapVisibility(MetarReport report, MetarRecord record)
     {
         if (report.Visibility is not { } v) return;
@@ -85,6 +91,9 @@ public static class MetarRecordMapper
     /// Dew-point is stored as <see langword="null"/> when it was missing from the report
     /// (represented as <see cref="double.NaN"/> in the parsed model).
     /// </summary>
+    /// <param name="report">Source parsed report.</param>
+    /// <param name="record">Target entity to populate in place.</param>
+    /// <sideeffects>Mutates temperature-related properties of <paramref name="record"/>.</sideeffects>
     private static void MapTemperature(MetarReport report, MetarRecord record)
     {
         if (report.Temperature is not { } t) return;
@@ -96,6 +105,9 @@ public static class MetarRecordMapper
     /// Copies altimeter setting fields from <paramref name="report"/> to <paramref name="record"/>.
     /// All altimeter columns remain <see langword="null"/> when no altimeter group was decoded.
     /// </summary>
+    /// <param name="report">Source parsed report.</param>
+    /// <param name="record">Target entity to populate in place.</param>
+    /// <sideeffects>Mutates altimeter-related properties of <paramref name="record"/>.</sideeffects>
     private static void MapAltimeter(MetarReport report, MetarRecord record)
     {
         if (report.Altimeter is not { } a) return;
@@ -109,6 +121,9 @@ public static class MetarRecordMapper
     /// <see cref="MetarRecord.SkyConditions"/>.
     /// Also stores the raw token string in <see cref="MetarRecord.RawSkyConditions"/>.
     /// </summary>
+    /// <param name="report">Source parsed report.</param>
+    /// <param name="record">Target entity whose <see cref="MetarRecord.SkyConditions"/> collection is populated.</param>
+    /// <sideeffects>Adds <see cref="MetarSkyCondition"/> children to <paramref name="record"/> and sets <see cref="MetarRecord.RawSkyConditions"/>.</sideeffects>
     private static void MapSkyConditions(MetarReport report, MetarRecord record)
     {
         if (report.Sky.Count == 0) return;
@@ -134,6 +149,9 @@ public static class MetarRecordMapper
     /// to <see cref="MetarWeatherPhenomenon"/> child entities.
     /// Also stores the raw token string in <see cref="MetarRecord.RawWeatherPhenomena"/>.
     /// </summary>
+    /// <param name="report">Source parsed report.</param>
+    /// <param name="record">Target entity whose <see cref="MetarRecord.WeatherPhenomena"/> collection is populated.</param>
+    /// <sideeffects>Adds <see cref="MetarWeatherPhenomenon"/> children to <paramref name="record"/> and sets <see cref="MetarRecord.RawWeatherPhenomena"/>.</sideeffects>
     private static void MapWeatherPhenomena(MetarReport report, MetarRecord record)
     {
         var allPhenomena = report.PresentWeather
@@ -170,6 +188,9 @@ public static class MetarRecordMapper
     /// <see cref="MetarRunwayVisualRange"/> child entity.
     /// Also stores the raw token string in <see cref="MetarRecord.RawRunwayVisualRange"/>.
     /// </summary>
+    /// <param name="report">Source parsed report.</param>
+    /// <param name="record">Target entity whose <see cref="MetarRecord.RunwayVisualRanges"/> collection is populated.</param>
+    /// <sideeffects>Adds <see cref="MetarRunwayVisualRange"/> children to <paramref name="record"/> and sets <see cref="MetarRecord.RawRunwayVisualRange"/>.</sideeffects>
     private static void MapRunwayVisualRanges(MetarReport report, MetarRecord record)
     {
         if (report.Rvr.Count == 0) return;

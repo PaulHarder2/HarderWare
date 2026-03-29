@@ -1,6 +1,7 @@
 using MetarParser.Data.Entities;
 using Microsoft.EntityFrameworkCore;
 using TafParser;
+using WxParser.Logging;
 
 namespace MetarParser.Data;
 
@@ -20,15 +21,27 @@ public static class TafFetcher
     /// <paramref name="boxDegrees"/> degrees, then parses, deduplicates, and
     /// inserts any reports not already in the database.
     /// </summary>
+    /// <param name="lat">Centre latitude of the bounding box in decimal degrees.</param>
+    /// <param name="lon">Centre longitude of the bounding box in decimal degrees.</param>
+    /// <param name="boxDegrees">Half-width of the bounding box in degrees (applied in all four directions). Must be &gt; 0.</param>
+    /// <param name="dbOptions">EF Core options for deduplication queries and insertion.</param>
+    /// <param name="httpClient">HTTP client for the Aviation Weather Center API request.</param>
+    /// <sideeffects>Inserts new <see cref="TafRecord"/> rows into the database. Writes progress and error log entries.</sideeffects>
     public static async Task FetchAndInsertAsync(
         double lat, double lon, double boxDegrees,
         DbContextOptions<WeatherDataContext> dbOptions,
         HttpClient httpClient)
     {
+        if (boxDegrees <= 0)
+        {
+            Logger.Error($"TafFetcher: boxDegrees must be > 0 (got {boxDegrees}) — skipping fetch.");
+            return;
+        }
+
         var bbox = $"{lat - boxDegrees},{lon - boxDegrees},{lat + boxDegrees},{lon + boxDegrees}";
         var url  = $"{TafApiBase}?bbox={bbox}&hours=24&format=raw";
 
-        Console.WriteLine($"Fetching: {url}");
+        Logger.Info($"Fetching: {url}");
 
         string raw;
         try
@@ -37,7 +50,7 @@ public static class TafFetcher
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"Fetch failed: {ex.Message}");
+            Logger.Error($"TAF fetch failed: {ex.Message}");
             return;
         }
 
@@ -45,11 +58,11 @@ public static class TafFetcher
 
         if (lines.Count == 0)
         {
-            Console.WriteLine("No TAF reports were returned.");
+            Logger.Warn("No TAF reports were returned.");
             return;
         }
 
-        Console.WriteLine($"Received {lines.Count} TAF(s). Parsing...");
+        Logger.Info($"Received {lines.Count} TAF(s). Parsing...");
 
         var parsed     = new List<(TafReport Report, TafRecord Entity)>();
         int parseErrors = 0;
@@ -64,17 +77,14 @@ public static class TafFetcher
             }
             catch (TafParseException ex)
             {
-                Console.ForegroundColor = ConsoleColor.Red;
-                Console.Error.WriteLine($"  Parse error: {ex.Message}");
-                Console.Error.WriteLine($"    Input: {line}");
-                Console.ResetColor();
+                Logger.Error($"TAF parse error: {ex.Message} — input: {line}");
                 parseErrors++;
             }
         }
 
         if (parsed.Count == 0)
         {
-            Console.WriteLine($"No TAFs parsed successfully ({parseErrors} parse error(s)).");
+            Logger.Warn($"No TAFs parsed successfully ({parseErrors} parse error(s)).");
             return;
         }
 
@@ -105,14 +115,12 @@ public static class TafFetcher
             try { ctx.SaveChanges(); }
             catch (DbUpdateException ex)
             {
-                Console.ForegroundColor = ConsoleColor.Yellow;
-                Console.Error.WriteLine($"Database error during batch insert: {ex.InnerException?.Message ?? ex.Message}");
-                Console.ResetColor();
+                Logger.Error($"Database error during TAF batch insert: {ex.InnerException?.Message ?? ex.Message}");
                 return;
             }
         }
 
-        Console.WriteLine($"Done.  Inserted: {inserted}  Skipped (already stored): {skipped}  Parse errors: {parseErrors}");
+        Logger.Info($"TAF fetch done. Inserted: {inserted}  Skipped: {skipped}  Parse errors: {parseErrors}");
     }
 
     /// <summary>
@@ -124,6 +132,11 @@ public static class TafFetcher
     /// Trailing "=" end-of-message markers are stripped.
     /// The parser normalises all internal whitespace, so newlines are harmless.
     /// </summary>
+    /// <param name="raw">Raw text response from the Aviation Weather Center TAF endpoint.</param>
+    /// <returns>
+    /// A list of strings, each representing one complete TAF in a normalised
+    /// multi-line format (continuation lines indented with two spaces).
+    /// </returns>
     public static List<string> GroupTafLines(string raw)
     {
         var reports = new List<string>();

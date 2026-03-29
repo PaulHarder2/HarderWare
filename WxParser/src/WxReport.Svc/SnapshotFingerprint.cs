@@ -20,6 +20,12 @@ public static class SnapshotFingerprint
     ///   <item>Any precipitation phenomenon appears or disappears.</item>
     /// </list>
     /// </summary>
+    /// <param name="snap">The weather snapshot to fingerprint.</param>
+    /// <param name="cfg">Thresholds that define what constitutes a "significant" condition for each dimension.</param>
+    /// <returns>
+    /// A compact pipe-delimited string encoding five boolean flags, e.g.
+    /// <c>"W:False|V:False|C:True|TS:False|PR:True"</c>.
+    /// </returns>
     public static string Compute(WeatherSnapshot snap, SignificantChangeConfig cfg)
     {
         var windKt   = snap.WindSpeedKt ?? 0;
@@ -42,6 +48,12 @@ public static class SnapshotFingerprint
         return $"W:{windHigh}|V:{visLow}|C:{ceilingLow}|TS:{hasTs}|PR:{hasPrecip}";
     }
 
+    /// <summary>
+    /// Returns the height in feet of the lowest broken, overcast, or vertical-visibility
+    /// sky layer in <paramref name="snap"/>, or <see langword="null"/> if no such layer exists.
+    /// </summary>
+    /// <param name="snap">The snapshot whose sky layers to examine.</param>
+    /// <returns>Height in feet of the lowest significant ceiling layer, or <see langword="null"/>.</returns>
     private static int? LowestSignificantCeilingFt(WeatherSnapshot snap) =>
         snap.SkyLayers
             .Where(l => l.Coverage is SkyCoverage.Broken

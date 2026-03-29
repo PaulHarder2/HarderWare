@@ -4,6 +4,11 @@
 
 namespace WxMonitor.Svc;
 
+/// <summary>
+/// Root configuration model for WxMonitor.Svc.
+/// Bound from the <c>Monitor</c> section of appsettings files at runtime.
+/// Secrets (e.g. SMTP password) must be placed in <c>appsettings.local.json</c>.
+/// </summary>
 public class MonitorConfig
 {
     /// <summary>How often the monitor checks logs and heartbeats (minutes).</summary>
@@ -22,6 +27,7 @@ public class MonitorConfig
     public MonitorSmtpConfig          Smtp            { get; set; } = new();
 }
 
+/// <summary>Configuration for a single service watched by WxMonitor.</summary>
 public class WatchedServiceConfig
 {
     /// <summary>Display name used in alert subjects and log messages.</summary>
@@ -37,6 +43,7 @@ public class WatchedServiceConfig
     public int    HeartbeatMaxAgeMinutes { get; set; } = 30;
 }
 
+/// <summary>SMTP connection and credential settings used by <see cref="AlertEmailSender"/>.</summary>
 public class MonitorSmtpConfig
 {
     public string  Host        { get; set; } = "smtp.gmail.com";

@@ -1,3 +1,5 @@
+using WxParser.Logging;
+
 namespace WxMonitor.Svc;
 
 /// <summary>
@@ -101,9 +103,9 @@ public static class LogScanner
             if (currentLines is not null)
                 entries.Add(new LogEntry(currentTs, currentSev, string.Join(Environment.NewLine, currentLines)));
         }
-        catch
+        catch (Exception ex)
         {
-            // If the file can't be read, return whatever we have so far.
+            Logger.Warn($"Could not read log file '{filePath}': {ex.Message}");
         }
 
         return entries;

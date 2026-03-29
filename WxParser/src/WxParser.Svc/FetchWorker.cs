@@ -15,6 +15,9 @@ public sealed class FetchWorker : BackgroundService
     private readonly DbContextOptions<WeatherDataContext> _dbOptions;
     private readonly HttpClient _http = new();
 
+    /// <summary>Initializes a new instance of <see cref="FetchWorker"/> with the given dependencies.</summary>
+    /// <param name="config">Application configuration used to read <c>Fetch:*</c> settings each cycle.</param>
+    /// <param name="dbOptions">EF Core options for opening a <see cref="WeatherDataContext"/> during fetch cycles.</param>
     public FetchWorker(
         IConfiguration config,
         DbContextOptions<WeatherDataContext> dbOptions)
@@ -23,6 +26,13 @@ public sealed class FetchWorker : BackgroundService
         _dbOptions = dbOptions;
     }
 
+    /// <summary>
+    /// Entry point called by the .NET hosted-service infrastructure.
+    /// Runs <see cref="FetchCycleAsync"/> immediately on start, then sleeps for
+    /// <c>Fetch:IntervalMinutes</c> between iterations until the host requests shutdown.
+    /// </summary>
+    /// <param name="stoppingToken">Cancellation token signalled when the host is shutting down.</param>
+    /// <sideeffects>Writes log entries on start, after each cycle, and on stop.</sideeffects>
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         Logger.Info("FetchWorker started.");
@@ -32,6 +42,11 @@ public sealed class FetchWorker : BackgroundService
             await FetchCycleAsync(stoppingToken);
 
             var intervalMinutes = int.TryParse(_config["Fetch:IntervalMinutes"], out var m) ? m : 10;
+            if (intervalMinutes <= 0)
+            {
+                Logger.Warn($"Fetch:IntervalMinutes is {intervalMinutes} — must be > 0. Using 1 minute.");
+                intervalMinutes = 1;
+            }
             Logger.Info($"Next fetch in {intervalMinutes} minute(s).");
 
             try
@@ -47,6 +62,22 @@ public sealed class FetchWorker : BackgroundService
         Logger.Info("FetchWorker stopped.");
     }
 
+    /// <summary>
+    /// Executes one METAR/TAF fetch cycle: resolves home coordinates if not yet
+    /// cached, then calls <see cref="MetarFetcher"/> and <see cref="TafFetcher"/>
+    /// to download and store reports for the configured bounding box.
+    /// Skips the cycle and logs an error if coordinates cannot be determined.
+    /// </summary>
+    /// <param name="cancellationToken">
+    /// Token checked before waiting on delays; cycle is not interrupted mid-fetch.
+    /// </param>
+    /// <sideeffects>
+    /// Inserts new METAR and TAF records into the database.
+    /// May write resolved coordinates and home ICAO to <c>appsettings.local.json</c> on first run.
+    /// Writes the heartbeat file on success.
+    /// Makes HTTP calls to the Aviation Weather Center API.
+    /// Writes log entries throughout.
+    /// </sideeffects>
     private async Task FetchCycleAsync(CancellationToken cancellationToken)
     {
         try
@@ -109,6 +140,13 @@ public sealed class FetchWorker : BackgroundService
         }
     }
 
+    /// <summary>
+    /// Writes the current UTC timestamp to the heartbeat file so that WxMonitor
+    /// can confirm this service is still running.  Does nothing if
+    /// <paramref name="path"/> is null or whitespace.
+    /// </summary>
+    /// <param name="path">Absolute path to the heartbeat file, or <see langword="null"/> to skip.</param>
+    /// <sideeffects>Creates or overwrites the file at <paramref name="path"/> with an ISO 8601 UTC timestamp.</sideeffects>
     private static void WriteHeartbeat(string? path)
     {
         if (string.IsNullOrWhiteSpace(path)) return;
@@ -117,9 +155,11 @@ public sealed class FetchWorker : BackgroundService
     }
 
     /// <summary>
-    /// Persists resolved airport coordinates to <c>appsettings.local.json</c> so
-    /// subsequent service restarts do not need to call the airport API again.
+    /// Persists the resolved home station ICAO to <c>appsettings.local.json</c> so
+    /// subsequent service restarts do not need to call the nearest-station API again.
     /// </summary>
+    /// <param name="homeIcao">The ICAO identifier to save (e.g. <c>"KDWH"</c>).</param>
+    /// <sideeffects>Creates or updates the <c>Fetch.HomeIcao</c> key in <c>appsettings.local.json</c> alongside the executable.</sideeffects>
     private void SaveLocalHomeIcao(string homeIcao)
     {
         var path = Path.Combine(AppContext.BaseDirectory, "appsettings.local.json");
@@ -141,6 +181,13 @@ public sealed class FetchWorker : BackgroundService
         Logger.Info($"HomeIcao '{homeIcao}' saved to local settings.");
     }
 
+    /// <summary>
+    /// Persists resolved home coordinates to <c>appsettings.local.json</c> so
+    /// subsequent service restarts do not need to call the airport lookup API again.
+    /// </summary>
+    /// <param name="lat">Resolved latitude to cache.</param>
+    /// <param name="lon">Resolved longitude to cache.</param>
+    /// <sideeffects>Creates or updates the <c>Fetch.HomeLatitude</c> and <c>Fetch.HomeLongitude</c> keys in <c>appsettings.local.json</c> alongside the executable.</sideeffects>
     private void SaveLocalCoordinates(double lat, double lon)
     {
         var path = Path.Combine(AppContext.BaseDirectory, "appsettings.local.json");

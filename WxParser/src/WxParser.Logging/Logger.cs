@@ -25,6 +25,11 @@ public static class Logger
     /// directory as the running executable, and watches the file for changes
     /// so the log level can be adjusted at runtime without restarting.
     /// </summary>
+    /// <sideeffects>
+    /// Creates the log directory if it does not exist.
+    /// Initialises and starts watching <c>log4net.config</c> via <see cref="XmlConfigurator"/>.
+    /// Writes a warning to <c>stderr</c> if the log directory cannot be created.
+    /// </sideeffects>
     public static void Initialise()
     {
         var configPath = Path.Combine(AppContext.BaseDirectory, "log4net.config");
@@ -55,6 +60,10 @@ public static class Logger
     }
 
     /// <summary>Logs a DEBUG-level message.</summary>
+    /// <param name="message">The message to log.</param>
+    /// <param name="member">Caller method name — supplied automatically by the compiler.</param>
+    /// <param name="file">Caller source file path — supplied automatically by the compiler.</param>
+    /// <param name="line">Caller line number — supplied automatically by the compiler.</param>
     public static void Debug(
         string message,
         [CallerMemberName] string member = "",
@@ -66,6 +75,10 @@ public static class Logger
     }
 
     /// <summary>Logs an INFO-level message.</summary>
+    /// <param name="message">The message to log.</param>
+    /// <param name="member">Caller method name — supplied automatically by the compiler.</param>
+    /// <param name="file">Caller source file path — supplied automatically by the compiler.</param>
+    /// <param name="line">Caller line number — supplied automatically by the compiler.</param>
     public static void Info(
         string message,
         [CallerMemberName] string member = "",
@@ -77,6 +90,10 @@ public static class Logger
     }
 
     /// <summary>Logs a WARN-level message.</summary>
+    /// <param name="message">The message to log.</param>
+    /// <param name="member">Caller method name — supplied automatically by the compiler.</param>
+    /// <param name="file">Caller source file path — supplied automatically by the compiler.</param>
+    /// <param name="line">Caller line number — supplied automatically by the compiler.</param>
     public static void Warn(
         string message,
         [CallerMemberName] string member = "",
@@ -88,6 +105,11 @@ public static class Logger
     }
 
     /// <summary>Logs a WARN-level message with an exception.</summary>
+    /// <param name="message">The message to log.</param>
+    /// <param name="ex">The exception to attach to the log entry.</param>
+    /// <param name="member">Caller method name — supplied automatically by the compiler.</param>
+    /// <param name="file">Caller source file path — supplied automatically by the compiler.</param>
+    /// <param name="line">Caller line number — supplied automatically by the compiler.</param>
     public static void Warn(
         string message,
         Exception ex,
@@ -100,6 +122,10 @@ public static class Logger
     }
 
     /// <summary>Logs an ERROR-level message.</summary>
+    /// <param name="message">The message to log.</param>
+    /// <param name="member">Caller method name — supplied automatically by the compiler.</param>
+    /// <param name="file">Caller source file path — supplied automatically by the compiler.</param>
+    /// <param name="line">Caller line number — supplied automatically by the compiler.</param>
     public static void Error(
         string message,
         [CallerMemberName] string member = "",
@@ -111,6 +137,11 @@ public static class Logger
     }
 
     /// <summary>Logs an ERROR-level message with an exception.</summary>
+    /// <param name="message">The message to log.</param>
+    /// <param name="ex">The exception to attach to the log entry.</param>
+    /// <param name="member">Caller method name — supplied automatically by the compiler.</param>
+    /// <param name="file">Caller source file path — supplied automatically by the compiler.</param>
+    /// <param name="line">Caller line number — supplied automatically by the compiler.</param>
     public static void Error(
         string message,
         Exception ex,
@@ -123,6 +154,10 @@ public static class Logger
     }
 
     /// <summary>Logs a FATAL-level message.</summary>
+    /// <param name="message">The message to log.</param>
+    /// <param name="member">Caller method name — supplied automatically by the compiler.</param>
+    /// <param name="file">Caller source file path — supplied automatically by the compiler.</param>
+    /// <param name="line">Caller line number — supplied automatically by the compiler.</param>
     public static void Fatal(
         string message,
         [CallerMemberName] string member = "",
@@ -134,6 +169,11 @@ public static class Logger
     }
 
     /// <summary>Logs a FATAL-level message with an exception.</summary>
+    /// <param name="message">The message to log.</param>
+    /// <param name="ex">The exception to attach to the log entry.</param>
+    /// <param name="member">Caller method name — supplied automatically by the compiler.</param>
+    /// <param name="file">Caller source file path — supplied automatically by the compiler.</param>
+    /// <param name="line">Caller line number — supplied automatically by the compiler.</param>
     public static void Fatal(
         string message,
         Exception ex,
@@ -145,6 +185,15 @@ public static class Logger
             _log.Fatal(Format(message, member, file, line), ex);
     }
 
+    /// <summary>
+    /// Formats a log message by prepending a source location prefix
+    /// derived from the CallerInfo attributes.
+    /// </summary>
+    /// <param name="message">The log message text.</param>
+    /// <param name="member">Calling method name.</param>
+    /// <param name="file">Calling source file path (only the filename is used).</param>
+    /// <param name="line">Calling line number.</param>
+    /// <returns>A formatted string such as <c>"[FetchWorker.cs::FetchCycleAsync:97] message"</c>.</returns>
     private static string Format(string message, string member, string file, int line)
         => $"[{Path.GetFileName(file)}::{member}:{line}] {message}";
 }

@@ -20,11 +20,28 @@ public static class WxInterpreter
     /// </para>
     /// Returns <see langword="null"/> if no METAR data is available at all.
     /// </summary>
+    /// <param name="metarIcaos">
+    /// Preferred METAR station ICAOs in priority order.  Tried in sequence;
+    /// if none have data the method falls back to the most recent station in
+    /// the database.  May be empty.
+    /// </param>
+    /// <param name="tafIcao">
+    /// ICAO of the TAF station to include in the snapshot, or
+    /// <see langword="null"/> to omit forecast data.
+    /// </param>
+    /// <param name="localityName">Human-readable location label to embed in the snapshot.</param>
+    /// <param name="dbOptions">EF Core options for opening a <see cref="WeatherDataContext"/>.</param>
+    /// <param name="ct">Cancellation token propagated to all EF Core async queries.</param>
+    /// <returns>
+    /// A populated <see cref="WeatherSnapshot"/>, or <see langword="null"/> if no
+    /// METAR data exists in the database at all.
+    /// </returns>
     public static async Task<WeatherSnapshot?> GetSnapshotAsync(
         IReadOnlyList<string> metarIcaos,
         string? tafIcao,
         string localityName,
-        DbContextOptions<WeatherDataContext> dbOptions)
+        DbContextOptions<WeatherDataContext> dbOptions,
+        CancellationToken ct = default)
     {
         await using var ctx = new WeatherDataContext(dbOptions);
 
@@ -37,7 +54,7 @@ public static class WxInterpreter
                 .Include(m => m.WeatherPhenomena)
                 .Where(m => m.StationIcao == icao)
                 .OrderByDescending(m => m.ObservationUtc)
-                .FirstOrDefaultAsync();
+                .FirstOrDefaultAsync(ct);
             if (metar is not null) break;
         }
 
@@ -50,7 +67,7 @@ public static class WxInterpreter
                 .Include(m => m.WeatherPhenomena)
                 .Where(m => m.ObservationUtc >= cutoff)
                 .OrderByDescending(m => m.ObservationUtc)
-                .FirstOrDefaultAsync();
+                .FirstOrDefaultAsync(ct);
         }
 
         if (metar is null) return null;
@@ -65,7 +82,7 @@ public static class WxInterpreter
                     .ThenInclude(p => p.WeatherPhenomena)
                 .Where(t => t.StationIcao == tafIcao && t.ValidToUtc >= DateTime.UtcNow)
                 .OrderByDescending(t => t.IssuanceUtc)
-                .FirstOrDefaultAsync();
+                .FirstOrDefaultAsync(ct);
         }
 
         return BuildSnapshot(metar, taf, localityName);
@@ -78,6 +95,14 @@ public static class WxInterpreter
     /// coordinates. Uses the Aviation Weather Center airport API to resolve each
     /// station's coordinates. Returns <see langword="null"/> if no stations are found.
     /// </summary>
+    /// <param name="lat">Latitude of the target location in decimal degrees.</param>
+    /// <param name="lon">Longitude of the target location in decimal degrees.</param>
+    /// <param name="dbOptions">EF Core options used to query the list of known stations.</param>
+    /// <param name="httpClient">HTTP client used to resolve each station's coordinates via the AWC airport API.</param>
+    /// <returns>
+    /// The ICAO identifier of the nearest station, or <see langword="null"/> if no
+    /// stations have been observed in the last three hours or no coordinates could be resolved.
+    /// </returns>
     public static async Task<string?> FindNearestMetarStationAsync(
         double lat, double lon,
         DbContextOptions<WeatherDataContext> dbOptions,
@@ -99,6 +124,14 @@ public static class WxInterpreter
     /// Finds the ICAO of the TAF station in the database nearest to the given
     /// coordinates. Returns <see langword="null"/> if no stations are found.
     /// </summary>
+    /// <param name="lat">Latitude of the target location in decimal degrees.</param>
+    /// <param name="lon">Longitude of the target location in decimal degrees.</param>
+    /// <param name="dbOptions">EF Core options used to query the list of known stations.</param>
+    /// <param name="httpClient">HTTP client used to resolve each station's coordinates via the AWC airport API.</param>
+    /// <returns>
+    /// The ICAO identifier of the nearest TAF station, or <see langword="null"/> if no
+    /// TAFs have been issued in the last 30 hours or no coordinates could be resolved.
+    /// </returns>
     public static async Task<string?> FindNearestTafStationAsync(
         double lat, double lon,
         DbContextOptions<WeatherDataContext> dbOptions,
@@ -116,6 +149,21 @@ public static class WxInterpreter
         return await FindNearest(stations, lat, lon, httpClient);
     }
 
+    /// <summary>
+    /// Returns the ICAO from <paramref name="icaos"/> whose airport is closest
+    /// to (<paramref name="lat"/>, <paramref name="lon"/>), using squared Euclidean
+    /// distance (valid approximation over the small geographic ranges involved).
+    /// Stations whose coordinates cannot be resolved via the AWC airport API are
+    /// silently skipped.
+    /// </summary>
+    /// <param name="icaos">Candidate station ICAOs to evaluate.</param>
+    /// <param name="lat">Target latitude in decimal degrees.</param>
+    /// <param name="lon">Target longitude in decimal degrees.</param>
+    /// <param name="httpClient">HTTP client for AWC airport coordinate lookups.</param>
+    /// <returns>
+    /// The ICAO of the nearest resolvable station, or <see langword="null"/> if
+    /// <paramref name="icaos"/> is empty or all coordinate lookups fail.
+    /// </returns>
     private static async Task<string?> FindNearest(
         IEnumerable<string> icaos, double lat, double lon, HttpClient httpClient)
     {
@@ -136,6 +184,17 @@ public static class WxInterpreter
 
     // ── snapshot builder ──────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Constructs a <see cref="WeatherSnapshot"/> from raw database entities,
+    /// converting all values to the snapshot's canonical units:
+    /// wind speed in knots (MPS converted via ×1.94384), visibility in statute miles
+    /// (metres converted via ÷1609.344), altimeter in inHg (hPa converted via ÷33.8639),
+    /// and temperature in both °C and °F.
+    /// </summary>
+    /// <param name="metar">The METAR record to use as the current-conditions source.  Must not be <see langword="null"/>.</param>
+    /// <param name="taf">The TAF record to populate forecast periods, or <see langword="null"/> to omit forecast data.</param>
+    /// <param name="localityName">Human-readable location label to embed in the snapshot.</param>
+    /// <returns>A fully populated <see cref="WeatherSnapshot"/> derived from the given records.</returns>
     private static WeatherSnapshot BuildSnapshot(
         MetarRecord metar, TafRecord? taf, string localityName)
     {
@@ -193,6 +252,9 @@ public static class WxInterpreter
 
     // ── mapping helpers ───────────────────────────────────────────────────────
 
+    /// <summary>Maps a <see cref="MetarSkyCondition"/> database entity to a <see cref="SkyLayer"/> snapshot value.</summary>
+    /// <param name="s">The sky condition entity to map.</param>
+    /// <returns>A new <see cref="SkyLayer"/> with coverage, height, cloud type, and vertical-visibility flag populated.</returns>
     private static SkyLayer MapSkyLayer(MetarSkyCondition s) => new()
     {
         Coverage             = ParseCoverage(s.Cover),
@@ -203,6 +265,9 @@ public static class WxInterpreter
         IsVerticalVisibility = s.IsVerticalVisibility,
     };
 
+    /// <summary>Maps a <see cref="TafChangePeriodSky"/> database entity to a <see cref="SkyLayer"/> snapshot value.</summary>
+    /// <param name="s">The TAF sky condition entity to map.</param>
+    /// <returns>A new <see cref="SkyLayer"/> with coverage, height, cloud type, and vertical-visibility flag populated.</returns>
     private static SkyLayer MapTafSkyLayer(TafChangePeriodSky s) => new()
     {
         Coverage             = ParseCoverage(s.Cover),
@@ -213,6 +278,13 @@ public static class WxInterpreter
         IsVerticalVisibility = s.IsVerticalVisibility,
     };
 
+    /// <summary>Maps a <see cref="MetarWeatherPhenomenon"/> database entity to a <see cref="SnapshotWeather"/> value.</summary>
+    /// <param name="w">The weather phenomenon entity to map.</param>
+    /// <param name="isRecent">
+    /// <see langword="true"/> when the phenomenon is from the recent-weather group (RE prefix);
+    /// <see langword="false"/> for present weather.
+    /// </param>
+    /// <returns>A new <see cref="SnapshotWeather"/> with all decoded weather components populated.</returns>
     private static SnapshotWeather MapWeather(MetarWeatherPhenomenon w, bool isRecent) => new()
     {
         Intensity     = ParseIntensity(w.Intensity),
@@ -223,6 +295,9 @@ public static class WxInterpreter
         IsRecent      = isRecent,
     };
 
+    /// <summary>Maps a <see cref="TafChangePeriodWeather"/> database entity to a <see cref="SnapshotWeather"/> value.</summary>
+    /// <param name="w">The TAF weather phenomenon entity to map.</param>
+    /// <returns>A new <see cref="SnapshotWeather"/> with all decoded weather components populated.</returns>
     private static SnapshotWeather MapTafWeather(TafChangePeriodWeather w) => new()
     {
         Intensity     = ParseIntensity(w.Intensity),
@@ -232,6 +307,9 @@ public static class WxInterpreter
         Other         = ParseOther(w.OtherPhenomenon),
     };
 
+    /// <summary>Maps a <see cref="TafChangePeriodRecord"/> database entity to a <see cref="ForecastPeriod"/> snapshot value.</summary>
+    /// <param name="p">The TAF change period entity to map.</param>
+    /// <returns>A new <see cref="ForecastPeriod"/> with change type, validity window, wind, visibility, sky, and weather populated.</returns>
     private static ForecastPeriod MapForecastPeriod(TafChangePeriodRecord p) => new()
     {
         ChangeType             = ParseChangeType(p.ChangeType),
@@ -250,6 +328,14 @@ public static class WxInterpreter
 
     // ── value parsers ─────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Normalises a wind speed value to knots.
+    /// Values already in knots (unit "KT") are returned unchanged.
+    /// Values in metres per second (unit "MPS") are converted using the factor 1.94384.
+    /// </summary>
+    /// <param name="speed">Raw wind speed in the original unit, or <see langword="null"/> if not reported.</param>
+    /// <param name="unit">Unit string from the decoded report ("KT" or "MPS"); may be <see langword="null"/>.</param>
+    /// <returns>Speed in knots, or <see langword="null"/> if <paramref name="speed"/> is <see langword="null"/>.</returns>
     private static int? NormalizeWindKt(int? speed, string? unit) =>
         speed is null ? null
         : unit == "MPS" ? (int)Math.Round(speed.Value * 1.94384)

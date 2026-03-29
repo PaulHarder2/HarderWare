@@ -242,6 +242,7 @@ graph TD
 
     MDATA --> MP
     MDATA --> TP
+    MDATA --> LOG
     INTERP --> MDATA
     PSVC --> MDATA
     PSVC --> LOG

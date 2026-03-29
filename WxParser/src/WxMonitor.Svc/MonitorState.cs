@@ -8,6 +8,13 @@ public class MonitorState
 {
     public Dictionary<string, ServiceState> Services { get; set; } = new();
 
+    /// <summary>
+    /// Returns the <see cref="ServiceState"/> for the given service name,
+    /// creating and registering a new empty entry if one does not yet exist.
+    /// </summary>
+    /// <param name="serviceName">The service's display name, used as the dictionary key.</param>
+    /// <returns>The existing or newly created <see cref="ServiceState"/> for the service.</returns>
+    /// <sideeffects>May add a new entry to <see cref="Services"/> if the name is not already present.</sideeffects>
     public ServiceState GetOrCreate(string serviceName)
     {
         if (!Services.TryGetValue(serviceName, out var state))

@@ -18,6 +18,10 @@ public sealed class ClaudeClient
     private readonly string     _apiKey;
     private readonly string     _model;
 
+    /// <summary>Initializes a new instance of <see cref="ClaudeClient"/> with the given credentials and model.</summary>
+    /// <param name="http">HTTP client used for all requests to the Anthropic Messages API.</param>
+    /// <param name="apiKey">Anthropic API key; sent as the <c>x-api-key</c> header.</param>
+    /// <param name="model">Claude model ID to use for generation (e.g. <c>"claude-haiku-4-5-20251001"</c>).</param>
     public ClaudeClient(HttpClient http, string apiKey, string model)
     {
         _http   = http;
@@ -32,10 +36,24 @@ public sealed class ClaudeClient
     /// with a brief welcome note explaining the service and its schedule.
     /// Returns the generated text, or null if the API call fails.
     /// </summary>
+    /// <param name="snapshot">The weather snapshot to describe; converted to a structured text prompt via <see cref="SnapshotDescriber"/>.</param>
+    /// <param name="language">Natural language name for the desired output language (e.g. <c>"English"</c>, <c>"Spanish"</c>).</param>
+    /// <param name="recipientName">Recipient's display name, included in the user prompt.</param>
+    /// <param name="tz">Recipient's timezone, used by <see cref="SnapshotDescriber"/> to localise timestamps in the prompt.</param>
+    /// <param name="isFirstReport">When <see langword="true"/>, the system prompt includes a welcome-note instruction.</param>
+    /// <param name="scheduledHour">Daily scheduled send hour (0–23) in the recipient's timezone, included in the welcome note.</param>
+    /// <returns>The generated report text, or <see langword="null"/> if the API call or response parsing fails.</returns>
+    /// <sideeffects>Makes an HTTP POST request to the Anthropic Messages API. Writes error log entries on failure.</sideeffects>
     public async Task<string?> GenerateReportAsync(
         WeatherSnapshot snapshot, string language, string recipientName,
         TimeZoneInfo tz, bool isFirstReport = false, int scheduledHour = 7)
     {
+        if (scheduledHour < 0 || scheduledHour > 23)
+        {
+            Logger.Warn($"scheduledHour {scheduledHour} is outside 0–23; clamping to valid range.");
+            scheduledHour = Math.Clamp(scheduledHour, 0, 23);
+        }
+
         var weatherData = SnapshotDescriber.Describe(snapshot, tz);
 
         var welcomeInstruction = isFirstReport
@@ -86,25 +104,28 @@ public sealed class ClaudeClient
             return null;
         }
 
-        if (!resp.IsSuccessStatusCode)
+        using (resp)
         {
-            var body = await resp.Content.ReadAsStringAsync();
-            Logger.Error($"Claude API returned {(int)resp.StatusCode}: {body}");
-            return null;
-        }
+            if (!resp.IsSuccessStatusCode)
+            {
+                var body = await resp.Content.ReadAsStringAsync();
+                Logger.Error($"Claude API returned {(int)resp.StatusCode}: {body}");
+                return null;
+            }
 
-        ClaudeResponse? parsed;
-        try
-        {
-            parsed = await resp.Content.ReadFromJsonAsync<ClaudeResponse>();
-        }
-        catch (Exception ex)
-        {
-            Logger.Error($"Failed to parse Claude API response: {ex.Message}");
-            return null;
-        }
+            ClaudeResponse? parsed;
+            try
+            {
+                parsed = await resp.Content.ReadFromJsonAsync<ClaudeResponse>();
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"Failed to parse Claude API response: {ex.Message}");
+                return null;
+            }
 
-        return parsed?.Content?.FirstOrDefault(c => c.Type == "text")?.Text;
+            return parsed?.Content?.FirstOrDefault(c => c.Type == "text")?.Text;
+        }
     }
 
     // ── response DTOs ─────────────────────────────────────────────────────────

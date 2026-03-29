@@ -13,6 +13,12 @@ public static class TafRecordMapper
     /// Converts a parsed <see cref="TafReport"/> into a <see cref="TafRecord"/>
     /// with fully populated child collections.
     /// </summary>
+    /// <param name="report">The decoded TAF report to convert.  Must not be <see langword="null"/>.</param>
+    /// <returns>
+    /// A new <see cref="TafRecord"/> whose <see cref="TafRecord.Id"/> is zero (unset)
+    /// and whose <see cref="TafRecord.ReceivedUtc"/> is set to the current UTC time.
+    /// The entity has not been saved to the database.
+    /// </returns>
     public static TafRecord ToEntity(TafReport report)
     {
         var now = DateTime.UtcNow;
@@ -43,6 +49,15 @@ public static class TafRecordMapper
 
     // ── base period ──────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Constructs the BASE (initial conditions) change period for a TAF, covering the full
+    /// validity window.  All fields from the TAF's top-level wind, visibility, sky, and
+    /// weather groups are copied into the returned record.
+    /// </summary>
+    /// <param name="report">The parsed TAF report providing the base-period conditions.</param>
+    /// <param name="validFromUtc">Inferred UTC start of the TAF validity window.</param>
+    /// <param name="validToUtc">Inferred UTC end of the TAF validity window.</param>
+    /// <returns>A new <see cref="TafChangePeriodRecord"/> with <see cref="TafChangePeriodRecord.ChangeType"/> set to <c>"BASE"</c>.</returns>
     private static TafChangePeriodRecord MapBasePeriod(TafReport report, DateTime validFromUtc, DateTime validToUtc)
     {
         var base_ = new TafChangePeriodRecord
@@ -108,6 +123,15 @@ public static class TafRecordMapper
         return base_;
     }
 
+    /// <summary>
+    /// Appends a <see cref="TafChangePeriodRecord"/> to <paramref name="record"/>
+    /// for each BECMG, TEMPO, FM, or PROB change group in the TAF.
+    /// Validity timestamps are inferred relative to <paramref name="issuanceUtc"/>.
+    /// </summary>
+    /// <param name="report">The parsed TAF report whose change groups are mapped.</param>
+    /// <param name="record">The parent TAF entity whose <see cref="TafRecord.ChangePeriods"/> collection receives the new records.</param>
+    /// <param name="issuanceUtc">The inferred UTC issuance time, used as the reference for date inference.</param>
+    /// <sideeffects>Appends <see cref="TafChangePeriodRecord"/> children to <paramref name="record"/>.</sideeffects>
     private static void MapChangePeriods(TafReport report, TafRecord record, DateTime issuanceUtc)
     {
         for (int i = 0; i < report.ChangePeriods.Count; i++)

@@ -17,6 +17,9 @@ public sealed class RecipientResolver
     private readonly DbContextOptions<WeatherDataContext> _dbOptions;
     private readonly HttpClient                           _httpClient;
 
+    /// <summary>Initializes a new instance of <see cref="RecipientResolver"/> with the given dependencies.</summary>
+    /// <param name="dbOptions">EF Core options used to query the database for nearby stations.</param>
+    /// <param name="httpClient">HTTP client used for address geocoding and airport coordinate lookups.</param>
     public RecipientResolver(
         DbContextOptions<WeatherDataContext> dbOptions,
         HttpClient httpClient)
@@ -33,6 +36,20 @@ public sealed class RecipientResolver
     /// Returns <see langword="false"/> if resolution fails and the recipient
     /// cannot be used for report generation.
     /// </summary>
+    /// <param name="recipient">
+    /// The recipient config to resolve in place.  Latitude, longitude, MetarIcao, TafIcao,
+    /// and LocalityName fields are populated on this object as a side effect.
+    /// </param>
+    /// <returns>
+    /// <see langword="true"/> if all required fields are populated (either pre-cached or
+    /// newly resolved); <see langword="false"/> if geocoding or station lookup fails.
+    /// </returns>
+    /// <sideeffects>
+    /// May mutate <paramref name="recipient"/>'s Latitude, Longitude, LocalityName, MetarIcao, and TafIcao fields.
+    /// If any field was newly resolved, writes the updated values back to <c>appsettings.local.json</c>.
+    /// Makes HTTP calls to the Nominatim geocoding API and AWC airport API.
+    /// Writes log entries for each resolution step.
+    /// </sideeffects>
     public async Task<bool> EnsureResolvedAsync(RecipientConfig recipient)
     {
         // .NET's JSON config provider maps JSON null to ""; normalize so null
@@ -114,6 +131,17 @@ public sealed class RecipientResolver
 
     // ── save-back ─────────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Writes the resolved location fields of <paramref name="recipient"/> back to
+    /// <c>appsettings.local.json</c>.  Matches the recipient's entry in the JSON
+    /// array by <c>Id</c> (preferred) or <c>Email</c>.  Logs a warning if no
+    /// matching entry is found — this can happen if the config was modified externally.
+    /// </summary>
+    /// <param name="recipient">Recipient whose resolved fields should be persisted.</param>
+    /// <sideeffects>
+    /// Reads and overwrites <c>appsettings.local.json</c> alongside the executable.
+    /// Writes a log entry on success or when the recipient cannot be located in the file.
+    /// </sideeffects>
     private static void SaveRecipient(RecipientConfig recipient)
     {
         var path = Path.Combine(AppContext.BaseDirectory, "appsettings.local.json");

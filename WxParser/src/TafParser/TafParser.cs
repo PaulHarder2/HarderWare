@@ -95,6 +95,14 @@ public static class TafParser
 
     // ── group consumers ──────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Consumes the report-type token (<c>TAF</c>, <c>TAF AMD</c>, or <c>TAF COR</c>).
+    /// </summary>
+    /// <param name="t">Token stream positioned at the first token of the report.</param>
+    /// <returns>
+    /// The report type string (<c>"TAF"</c>, <c>"TAF AMD"</c>, or <c>"TAF COR"</c>),
+    /// or <see langword="null"/> if the next token is not <c>TAF</c>.
+    /// </returns>
     private static string? ConsumeReportType(TokenStream t)
     {
         if (t.Peek() != "TAF") return null;
@@ -104,6 +112,14 @@ public static class TafParser
         return "TAF";
     }
 
+    /// <summary>
+    /// Consumes the four-character ICAO station identifier.
+    /// </summary>
+    /// <param name="t">Token stream positioned after the report-type token.</param>
+    /// <returns>
+    /// The station identifier string, or <see langword="null"/> if the next token is not
+    /// a valid four-character alphanumeric identifier containing at least one letter.
+    /// </returns>
     private static string? ConsumeStation(TokenStream t)
     {
         if (t.Peek() is not { Length: 4 } s) return null;
@@ -111,8 +127,21 @@ public static class TafParser
         return t.Next();
     }
 
+    /// <summary>Compiled regex matching a six-digit UTC time group with trailing Z (e.g. <c>141600Z</c>).</summary>
     private static readonly Regex IssuanceTimeRe = new(@"^\d{6}Z$", RegexOptions.Compiled);
 
+    /// <summary>
+    /// Consumes the issuance date/time group (DDHHmmZ).
+    /// Validates that day, hour, and minute are within valid ranges.
+    /// Logs a warning and returns <see langword="null"/> for out-of-range values.
+    /// </summary>
+    /// <param name="t">Token stream positioned after the station identifier.</param>
+    /// <param name="raw">The original raw TAF string, used in warning messages.</param>
+    /// <returns>
+    /// A tuple of (day, hour, minute) if the token matches and the values are valid,
+    /// or <see langword="null"/> otherwise.
+    /// </returns>
+    /// <sideeffects>Logs a WARN via <see cref="WxParser.Logging.Logger"/> when an out-of-range time is encountered.</sideeffects>
     private static (int day, int hour, int minute)? ConsumeIssuanceTime(TokenStream t, string raw)
     {
         if (t.Peek() is not { } s || !IssuanceTimeRe.IsMatch(s)) return null;
@@ -131,10 +160,23 @@ public static class TafParser
         return (day, hour, minute);
     }
 
+    /// <summary>Compiled regex matching the TAF validity period group (e.g. <c>1412/1518</c>).</summary>
     private static readonly Regex ValidityRe = new(
         @"^(?<fd>\d{2})(?<fh>\d{2})/(?<td>\d{2})(?<th>\d{2})$",
         RegexOptions.Compiled);
 
+    /// <summary>
+    /// Consumes the validity period group (DDHH/DDHH), validating that all day and
+    /// hour values are within range.
+    /// Logs a warning and returns <see langword="null"/> for out-of-range values.
+    /// </summary>
+    /// <param name="t">Token stream positioned after the issuance time.</param>
+    /// <param name="raw">The original raw TAF string, used in warning messages.</param>
+    /// <returns>
+    /// A tuple of (fromDay, fromHour, toDay, toHour) if the token matches and values are valid,
+    /// or <see langword="null"/> otherwise.
+    /// </returns>
+    /// <sideeffects>Logs a WARN via <see cref="WxParser.Logging.Logger"/> when an out-of-range validity period is encountered.</sideeffects>
     private static (int fromDay, int fromHour, int toDay, int toHour)? ConsumeValidityPeriod(TokenStream t, string raw)
     {
         if (t.Peek() is not { } s) return null;
@@ -156,10 +198,24 @@ public static class TafParser
         return (fd, fh, td, th);
     }
 
+    /// <summary>Compiled regex matching a wind group (e.g. <c>27015G25KT</c> or <c>VRB05KT</c>).</summary>
     private static readonly Regex WindRe = new(
         @"^(?<dir>VRB|\d{3})(?<spd>\d{2,3})(G(?<gst>\d{2,3}))?(?<unit>KT|MPS)$",
         RegexOptions.Compiled);
 
+    /// <summary>
+    /// Consumes a wind group, returning a decoded <see cref="Wind"/> object.
+    /// Logs a warning and adds the token to <paramref name="rejected"/> if the
+    /// direction exceeds 360°.
+    /// </summary>
+    /// <param name="t">Token stream positioned at the expected wind token.</param>
+    /// <param name="raw">The original raw TAF string, used in warning messages.</param>
+    /// <param name="rejected">Optional list to collect tokens that matched the wind pattern but contained invalid values.</param>
+    /// <returns>
+    /// A decoded <see cref="Wind"/>, or <see langword="null"/> if the next token
+    /// does not match the wind regex or contains an invalid direction.
+    /// </returns>
+    /// <sideeffects>Logs a WARN via <see cref="WxParser.Logging.Logger"/> when wind direction exceeds 360°.</sideeffects>
     private static Wind? ConsumeWind(TokenStream t, string raw, List<string>? rejected = null)
     {
         if (t.Peek() is not { } s) return null;
@@ -189,9 +245,18 @@ public static class TafParser
         };
     }
 
+    /// <summary>Compiled regex matching a variable-wind sector token (e.g. <c>210V300</c>).</summary>
     private static readonly Regex VarSectorRe = new(
         @"^(?<from>\d{3})V(?<to>\d{3})$", RegexOptions.Compiled);
 
+    /// <summary>
+    /// Consumes an optional variable-sector token (DDDVddd) that follows a wind group.
+    /// </summary>
+    /// <param name="t">Token stream positioned immediately after a wind group.</param>
+    /// <returns>
+    /// A (from, to) tuple of the variable sector bounds in degrees, or <see langword="null"/>
+    /// if the next token is not a variable-sector group.
+    /// </returns>
     private static (int from, int to)? ConsumeVariableSector(TokenStream t)
     {
         if (t.Peek() is not { } s) return null;
@@ -201,23 +266,34 @@ public static class TafParser
         return (int.Parse(m.Groups["from"].Value), int.Parse(m.Groups["to"].Value));
     }
 
+    /// <summary>Compiled regex matching a four-digit ICAO metric visibility group (e.g. <c>9999</c>, <c>M0100</c>, <c>6000NDV</c>).</summary>
     private static readonly Regex VisRe = new(
         @"^(?<lt>M)?(?<dist>\d{4})(NDV)?$", RegexOptions.Compiled);
 
-    // Matches: [M|P]nSM  e.g. 6SM, M1SM, P6SM
+    /// <summary>Compiled regex matching a whole-number statute-miles visibility (e.g. <c>6SM</c>, <c>M1SM</c>, <c>P6SM</c>).</summary>
     private static readonly Regex VisSmRe = new(
         @"^(?<mod>[MP])?(?<n>\d+)SM$", RegexOptions.Compiled);
 
-    // Matches: n/dSM  e.g. 3/4SM (fractional only)
+    /// <summary>Compiled regex matching a fractional statute-miles visibility expressed as a single token (e.g. <c>3/4SM</c>).</summary>
     private static readonly Regex VisFracSmRe = new(
         @"^(?<n>\d+)/(?<d>\d+)SM$", RegexOptions.Compiled);
 
-    // Matches: w n/dSM  e.g. 1 3/4SM (whole + fraction as two tokens)
+    /// <summary>Compiled regex matching a standalone integer token, used to detect the whole-number part of a two-token visibility (e.g. <c>1</c> in <c>1 3/4SM</c>).</summary>
     private static readonly Regex VisWholeSmRe = new(
         @"^\d+$", RegexOptions.Compiled);
 
+    /// <summary>Compiled regex matching the CAVOK token.</summary>
     private static readonly Regex CavokRe = new(@"^CAVOK$", RegexOptions.Compiled);
 
+    /// <summary>
+    /// Consumes a visibility group in ICAO metric format (e.g. <c>9999</c>), US statute-miles
+    /// format (e.g. <c>6SM</c>, <c>3/4SM</c>, <c>1 3/4SM</c>), or the <c>CAVOK</c> token.
+    /// </summary>
+    /// <param name="t">Token stream positioned at the expected visibility token.</param>
+    /// <returns>
+    /// A decoded <see cref="Visibility"/>, or <see langword="null"/> if the next token
+    /// does not match any known visibility format.
+    /// </returns>
     private static Visibility? ConsumeVisibility(TokenStream t)
     {
         if (t.Peek() is not { } s) return null;
@@ -273,10 +349,27 @@ public static class TafParser
         return null;
     }
 
+    /// <summary>
+    /// Compiled regex matching a weather phenomenon token consisting of optional intensity,
+    /// descriptor, precipitation, obscuration, and other-phenomenon components
+    /// (e.g. <c>-TSRA</c>, <c>+SNDZ</c>, <c>FG</c>).
+    /// Requires at least one substantive capture group to accept a match.
+    /// </summary>
     private static readonly Regex WxRe = new(
         @"^(?<int>\+|-|VC)?(?<desc>MI|PR|BC|DR|BL|SH|TS|FZ)?(?<prec>(?:DZ|RA|SN|SG|IC|PL|GR|GS|UP)+)?(?<obsc>BR|FG|FU|VA|DU|SA|HZ|PY)?(?<other>PO|SQ|FC|SS|DS)?$",
         RegexOptions.Compiled);
 
+    /// <summary>
+    /// Consumes zero or more present-weather phenomenon tokens (WxRe format),
+    /// stopping at the first token that does not match.
+    /// The special token <c>NSW</c> (No Significant Weather) is consumed and
+    /// terminates the loop without adding an entry.
+    /// </summary>
+    /// <param name="t">Token stream positioned after the visibility group.</param>
+    /// <returns>
+    /// A list of decoded <see cref="WeatherPhenomenon"/> objects, which may be empty
+    /// if no weather phenomena are present.
+    /// </returns>
     private static List<WeatherPhenomenon> ConsumeWeatherPhenomena(TokenStream t)
     {
         var result = new List<WeatherPhenomenon>();
@@ -307,10 +400,24 @@ public static class TafParser
         return result;
     }
 
+    /// <summary>
+    /// Compiled regex matching a sky condition token: cover code, optional three-digit
+    /// height in hundreds of feet, and optional cloud type
+    /// (e.g. <c>BKN025</c>, <c>FEW030CB</c>, <c>VV010</c>).
+    /// </summary>
     private static readonly Regex SkyRe = new(
         @"^(?<cov>FEW|SCT|BKN|OVC|SKC|CLR|NSC|NCD|VV)(?<ht>\d{3})?(?<ct>CB|TCU)?$",
         RegexOptions.Compiled);
 
+    /// <summary>
+    /// Consumes zero or more sky-condition tokens (SkyRe format),
+    /// stopping at the first token that does not match.
+    /// </summary>
+    /// <param name="t">Token stream positioned after the weather phenomena.</param>
+    /// <returns>
+    /// A list of decoded <see cref="SkyCondition"/> objects, which may be empty
+    /// if no sky conditions are present.
+    /// </returns>
     private static List<SkyCondition> ConsumeSkyConditions(TokenStream t)
     {
         var result = new List<SkyCondition>();
@@ -332,16 +439,30 @@ public static class TafParser
 
     // ── change period parsing ────────────────────────────────────────────────
 
+    /// <summary>Compiled regex matching a TAF change indicator token: BECMG, TEMPO, FM followed by a six-digit time, or PROB30/PROB40.</summary>
     private static readonly Regex ChangeIndicatorRe = new(
         @"^(BECMG|TEMPO|FM\d{6}|PROB(?:30|40))$", RegexOptions.Compiled);
 
+    /// <summary>Compiled regex matching a DDHH/DDHH validity group within a change period (e.g. <c>1418/1506</c>).</summary>
     private static readonly Regex ValidityGroupRe = new(
         @"^(?<fd>\d{2})(?<fh>\d{2})/(?<td>\d{2})(?<th>\d{2})$",
         RegexOptions.Compiled);
 
+    /// <summary>Compiled regex matching an FM change indicator with embedded timestamp (e.g. <c>FM141800</c>).</summary>
     private static readonly Regex FmTimeRe = new(
         @"^FM(?<d>\d{2})(?<h>\d{2})(?<m>\d{2})$", RegexOptions.Compiled);
 
+    /// <summary>
+    /// Consumes all change-period groups (BECMG, TEMPO, FM, PROB30, PROB40, PROB30 TEMPO,
+    /// PROB40 TEMPO) from the token stream, parsing the wind, visibility, weather, and sky
+    /// conditions for each period.
+    /// </summary>
+    /// <param name="t">Token stream positioned after the base-period sky conditions.</param>
+    /// <param name="raw">The original raw TAF string, passed through to <see cref="ConsumeWind"/> for warning messages.</param>
+    /// <returns>
+    /// A list of <see cref="TafChangePeriod"/> objects in source order, which may be empty
+    /// if the TAF contains no change groups.
+    /// </returns>
     private static List<TafChangePeriod> ConsumeChangePeriods(TokenStream t, string raw)
     {
         var result = new List<TafChangePeriod>();
@@ -432,6 +553,8 @@ internal sealed class TokenStream
     private readonly string[] _tokens;
     private int _pos;
 
+    /// <summary>Initialises the stream over the supplied token array.</summary>
+    /// <param name="tokens">The whitespace-separated tokens produced by splitting the TAF string.</param>
     public TokenStream(string[] tokens) => _tokens = tokens;
 
     /// <summary>Returns the next token without advancing, or <see langword="null"/> if exhausted.</summary>

@@ -17,8 +17,17 @@ public sealed class MonitorWorker : BackgroundService
 {
     private readonly IConfiguration _config;
 
+    /// <summary>Initializes a new instance of <see cref="MonitorWorker"/> with the given configuration.</summary>
+    /// <param name="config">Application configuration used to load the <c>Monitor</c> config section each cycle.</param>
     public MonitorWorker(IConfiguration config) => _config = config;
 
+    /// <summary>
+    /// Entry point called by the .NET hosted-service infrastructure.
+    /// Runs <see cref="RunCycleAsync"/> in a loop, sleeping for
+    /// <c>Monitor:IntervalMinutes</c> between iterations, until the host requests shutdown.
+    /// </summary>
+    /// <param name="stoppingToken">Cancellation token signalled when the host is shutting down.</param>
+    /// <sideeffects>Writes log entries on start, after each cycle, and on stop.</sideeffects>
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         Logger.Info("MonitorWorker started.");
@@ -35,8 +44,14 @@ public sealed class MonitorWorker : BackgroundService
             }
 
             var cfg = LoadConfig();
-            Logger.Info($"Next monitor check in {cfg.IntervalMinutes} minute(s).");
-            try { await Task.Delay(TimeSpan.FromMinutes(cfg.IntervalMinutes), stoppingToken); }
+            var intervalMinutes = cfg.IntervalMinutes;
+            if (intervalMinutes <= 0)
+            {
+                Logger.Warn($"Monitor:IntervalMinutes is {intervalMinutes} — must be > 0. Using 1 minute.");
+                intervalMinutes = 1;
+            }
+            Logger.Info($"Next monitor check in {intervalMinutes} minute(s).");
+            try { await Task.Delay(TimeSpan.FromMinutes(intervalMinutes), stoppingToken); }
             catch (OperationCanceledException) { }
         }
 
@@ -45,6 +60,17 @@ public sealed class MonitorWorker : BackgroundService
 
     // ── cycle ─────────────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Executes one monitor cycle: scans each watched service's log file for new
+    /// high-severity entries and checks each heartbeat file for staleness.
+    /// Sends alert emails for any findings that are not on cooldown.
+    /// </summary>
+    /// <sideeffects>
+    /// Reads log files and heartbeat files from disk.
+    /// Sends alert emails via SMTP for qualifying findings.
+    /// Updates and saves <see cref="MonitorState"/> to <c>wxmonitor-state.json</c> if any state changed.
+    /// Writes log entries throughout.
+    /// </sideeffects>
     private async Task RunCycleAsync()
     {
         var cfg = LoadConfig();
@@ -161,6 +187,13 @@ public sealed class MonitorWorker : BackgroundService
 
     // ── email body builders ───────────────────────────────────────────────────
 
+    /// <summary>
+    /// Builds a plain-text email body listing the new high-severity log entries
+    /// detected for a watched service.
+    /// </summary>
+    /// <param name="serviceName">Display name of the service, used in the introductory line.</param>
+    /// <param name="entries">The new log entries to include, in chronological order.</param>
+    /// <returns>A formatted plain-text alert body ready to send as an email.</returns>
     private static string BuildLogAlertBody(string serviceName, IReadOnlyList<LogEntry> entries)
     {
         var sb = new System.Text.StringBuilder();
@@ -177,6 +210,14 @@ public sealed class MonitorWorker : BackgroundService
         return sb.ToString();
     }
 
+    /// <summary>
+    /// Builds a plain-text email body explaining that a watched service's heartbeat
+    /// has gone stale beyond the configured maximum age.
+    /// </summary>
+    /// <param name="serviceName">Display name of the service whose heartbeat is stale.</param>
+    /// <param name="age">How long ago the last heartbeat was written.</param>
+    /// <param name="maxAgeMinutes">The configured maximum allowed heartbeat age in minutes.</param>
+    /// <returns>A formatted plain-text alert body ready to send as an email.</returns>
     private static string BuildHeartbeatAlertBody(string serviceName, TimeSpan age, int maxAgeMinutes)
     {
         var sb = new System.Text.StringBuilder();
@@ -194,6 +235,13 @@ public sealed class MonitorWorker : BackgroundService
 
     // ── helpers ───────────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Loads and returns the current <see cref="MonitorConfig"/> from the
+    /// <c>Monitor</c> section of the application configuration.
+    /// Called at the start of each cycle so that config changes take effect
+    /// without restarting the service.
+    /// </summary>
+    /// <returns>A freshly bound <see cref="MonitorConfig"/> reflecting the current appsettings.</returns>
     private MonitorConfig LoadConfig()
     {
         var cfg = new MonitorConfig();

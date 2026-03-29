@@ -5,6 +5,11 @@
 
 namespace WxReport.Svc;
 
+/// <summary>
+/// Root configuration model for WxReport.Svc.
+/// Bound from the <c>Report</c> section of appsettings files at runtime.
+/// Secrets (Claude API key, SMTP password) must be placed in <c>appsettings.local.json</c>.
+/// </summary>
 public class ReportConfig
 {
     /// <summary>Language to use when no per-recipient language is specified (e.g. "English", "Spanish").</summary>
@@ -28,6 +33,7 @@ public class ReportConfig
     public List<RecipientConfig>   Recipients        { get; set; } = [];
 }
 
+/// <summary>Thresholds used by <see cref="SnapshotFingerprint"/> to determine whether a weather change is significant enough to trigger an unscheduled report.</summary>
 public class SignificantChangeConfig
 {
     /// <summary>Wind speed at or above this threshold (kt) is considered a significant condition.</summary>
@@ -40,6 +46,7 @@ public class SignificantChangeConfig
     public int    CeilingThresholdFt    { get; set; } = 3000;
 }
 
+/// <summary>Claude API connection settings used by <see cref="ClaudeClient"/>.</summary>
 public class ClaudeConfig
 {
     public string? ApiKey { get; set; }
@@ -48,6 +55,7 @@ public class ClaudeConfig
     public string  Model  { get; set; } = "claude-haiku-4-5-20251001";
 }
 
+/// <summary>SMTP connection and credential settings used by <see cref="EmailSender"/>.</summary>
 public class SmtpConfig
 {
     public string  Host        { get; set; } = "smtp.gmail.com";
@@ -60,6 +68,11 @@ public class SmtpConfig
     public string  FromName    { get; set; } = "WxReport";
 }
 
+/// <summary>
+/// Per-recipient configuration.  Static fields (email, name, language, timezone, schedule)
+/// live in <c>appsettings.json</c>; resolved location fields (coordinates, station ICAOs)
+/// are written by <see cref="RecipientResolver"/> to <c>appsettings.local.json</c>.
+/// </summary>
 public class RecipientConfig
 {
     /// <summary>
