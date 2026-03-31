@@ -144,6 +144,58 @@ public sealed class ForecastPeriod
     public IReadOnlyList<SnapshotWeather> WeatherPhenomena { get; init; } = [];
 }
 
+// ── GFS model forecast ────────────────────────────────────────────────────────
+
+/// <summary>
+/// GFS model-forecast summary for a single calendar day (UTC) at the recipient's
+/// exact location, produced by bilinear interpolation over the four surrounding
+/// GFS 0.25° grid points.
+/// <para>
+/// Temperature high/low span all forecast hours that fall within the UTC calendar
+/// day.  Wind, cloud cover, CAPE, and precipitation represent the maximum value
+/// observed during any forecast hour in the day.
+/// </para>
+/// </summary>
+public sealed class GfsDailyForecast
+{
+    /// <summary>UTC calendar date this summary covers.</summary>
+    public DateOnly Date               { get; init; }
+    /// <summary>Forecast high 2-metre temperature in degrees Celsius, or null if not available.</summary>
+    public float?   HighTempC          { get; init; }
+    /// <summary>Forecast high 2-metre temperature in degrees Fahrenheit, or null if not available.</summary>
+    public float?   HighTempF          { get; init; }
+    /// <summary>Forecast low 2-metre temperature in degrees Celsius, or null if not available.</summary>
+    public float?   LowTempC           { get; init; }
+    /// <summary>Forecast low 2-metre temperature in degrees Fahrenheit, or null if not available.</summary>
+    public float?   LowTempF           { get; init; }
+    /// <summary>Maximum sustained 10-metre wind speed during the day in knots, or null if not available.</summary>
+    public float?   MaxWindSpeedKt     { get; init; }
+    /// <summary>Wind direction in degrees true at the hour of maximum wind speed, or null if not available.</summary>
+    public int?     DominantWindDirDeg { get; init; }
+    /// <summary>Maximum total cloud cover during the day as a percentage (0–100), or null if not available.</summary>
+    public float?   MaxCloudCoverPct   { get; init; }
+    /// <summary>Maximum surface-based CAPE during the day in J/kg, or null if not available.</summary>
+    public float?   MaxCapeJKg         { get; init; }
+    /// <summary>
+    /// Maximum precipitation rate during the day in mm/hr, or null when all forecast
+    /// hours are below the configured threshold or data is unavailable.
+    /// </summary>
+    public float?   MaxPrecipRateMmHr  { get; init; }
+}
+
+/// <summary>
+/// GFS model forecast covering multiple calendar days at the recipient's exact
+/// location, produced by bilinear interpolation over the four surrounding 0.25°
+/// grid points.
+/// </summary>
+public sealed class GfsForecast
+{
+    /// <summary>UTC initialisation time of the GFS model run used to produce this forecast.</summary>
+    public DateTime                        ModelRunUtc { get; init; }
+    /// <summary>Per-day summaries in ascending date order.</summary>
+    public IReadOnlyList<GfsDailyForecast> Days        { get; init; } = [];
+}
+
 // ── snapshot ─────────────────────────────────────────────────────────────────
 
 /// <summary>
@@ -215,4 +267,12 @@ public sealed class WeatherSnapshot
     public string? TafStationIcao { get; init; }
     /// <summary>All TAF periods in order (BASE first, then change groups).</summary>
     public IReadOnlyList<ForecastPeriod> ForecastPeriods { get; init; } = [];
+
+    // ── GFS model forecast ────────────────────────────────────────────────────
+
+    /// <summary>
+    /// GFS model forecast at the recipient's location, or null if GFS data is
+    /// unavailable or coordinates were not provided.
+    /// </summary>
+    public GfsForecast? GfsForecast { get; init; }
 }

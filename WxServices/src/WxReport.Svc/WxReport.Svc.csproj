@@ -8,7 +8,6 @@
     <WindowsService>true</WindowsService>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="MailKit" Version="4.9.0" />
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="8.0.0" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="8.0.0" />
     <PackageReference Include="Microsoft.Extensions.Http" Version="8.0.0" />
@@ -16,6 +15,7 @@
   <ItemGroup>
     <ProjectReference Include="..\MetarParser.Data\MetarParser.Data.csproj" />
     <ProjectReference Include="..\WxInterp\WxInterp.csproj" />
+    <ProjectReference Include="..\WxServices.Common\WxServices.Common.csproj" />
     <ProjectReference Include="..\WxServices.Logging\WxServices.Logging.csproj" />
   </ItemGroup>
   <ItemGroup>

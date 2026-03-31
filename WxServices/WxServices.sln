@@ -5,9 +5,13 @@ VisualStudioVersion = 17.8.0
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MetarParser", "src\MetarParser\MetarParser.csproj", "{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}"
 EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "GribParser", "src\GribParser\GribParser.csproj", "{04A5B6C7-D8E9-0123-CDEF-012345678904}"
+EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MetarParser.Data", "src\MetarParser.Data\MetarParser.Data.csproj", "{D4E5F6A7-B8C9-0123-DEF0-123456789012}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "WxServices.Logging", "src\WxServices.Logging\WxServices.Logging.csproj", "{E5F6A7B8-C9D0-1234-EF01-234567890123}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "WxServices.Common", "src\WxServices.Common\WxServices.Common.csproj", "{03A4B5C6-D7E8-9012-BCDE-F01234567893}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MetarParser.Tests", "tests\MetarParser.Tests\MetarParser.Tests.csproj", "{C3D4E5F6-A7B8-9012-CDEF-012345678902}"
 EndProject
@@ -25,6 +29,8 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "WxInterp.Tests", "tests\WxI
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "WxMonitor.Svc", "src\WxMonitor.Svc\WxMonitor.Svc.csproj", "{F1A2B3C4-D5E6-7890-ABCD-EF1234567891}"
 EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "WxMonitor.Tests", "tests\WxMonitor.Tests\WxMonitor.Tests.csproj", "{02A3B4C5-D6E7-8901-ABCD-EF1234567892}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -33,6 +39,10 @@ Global
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
 		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{04A5B6C7-D8E9-0123-CDEF-012345678904}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{04A5B6C7-D8E9-0123-CDEF-012345678904}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{04A5B6C7-D8E9-0123-CDEF-012345678904}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{04A5B6C7-D8E9-0123-CDEF-012345678904}.Release|Any CPU.Build.0 = Release|Any CPU
 		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Release|Any CPU.Build.0 = Release|Any CPU
 		{C3D4E5F6-A7B8-9012-CDEF-012345678902}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
@@ -45,6 +55,10 @@ Global
 		{E5F6A7B8-C9D0-1234-EF01-234567890123}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{E5F6A7B8-C9D0-1234-EF01-234567890123}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{E5F6A7B8-C9D0-1234-EF01-234567890123}.Release|Any CPU.Build.0 = Release|Any CPU
+		{03A4B5C6-D7E8-9012-BCDE-F01234567893}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{03A4B5C6-D7E8-9012-BCDE-F01234567893}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{03A4B5C6-D7E8-9012-BCDE-F01234567893}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{03A4B5C6-D7E8-9012-BCDE-F01234567893}.Release|Any CPU.Build.0 = Release|Any CPU
 		{C3D4E5F6-A7B8-9012-CDEF-012345678902}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{C3D4E5F6-A7B8-9012-CDEF-012345678902}.Release|Any CPU.Build.0 = Release|Any CPU
 		{F6A7B8C9-D0E1-2345-F012-345678901234}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
@@ -75,6 +89,10 @@ Global
 		{F1A2B3C4-D5E6-7890-ABCD-EF1234567891}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{F1A2B3C4-D5E6-7890-ABCD-EF1234567891}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{F1A2B3C4-D5E6-7890-ABCD-EF1234567891}.Release|Any CPU.Build.0 = Release|Any CPU
+		{02A3B4C5-D6E7-8901-ABCD-EF1234567892}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{02A3B4C5-D6E7-8901-ABCD-EF1234567892}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{02A3B4C5-D6E7-8901-ABCD-EF1234567892}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{02A3B4C5-D6E7-8901-ABCD-EF1234567892}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

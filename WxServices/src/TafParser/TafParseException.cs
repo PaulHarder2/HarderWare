@@ -6,5 +6,7 @@ namespace TafParser;
 /// </summary>
 public sealed class TafParseException : Exception
 {
+    /// <summary>Initializes a new instance with the specified error message.</summary>
+    /// <param name="message">A message describing why parsing failed.</param>
     public TafParseException(string message) : base(message) { }
 }

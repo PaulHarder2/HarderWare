@@ -1,13 +1,19 @@
 // Configuration model for WxMonitor.Svc.
 // Populated from the "Monitor" section of appsettings files.
-// Secrets (Smtp.Password) must be provided in appsettings.local.json.
+// SMTP secrets (Username, Password, FromAddress) come from the top-level "Smtp" section
+// in appsettings.local.json, shared with other services.
+//
+// SmtpConfig is defined in WxServices.Common and bound from the top-level
+// "Smtp" section, shared with other services.
+
+using WxServices.Common;
 
 namespace WxMonitor.Svc;
 
 /// <summary>
 /// Root configuration model for WxMonitor.Svc.
 /// Bound from the <c>Monitor</c> section of appsettings files at runtime.
-/// Secrets (e.g. SMTP password) must be placed in <c>appsettings.local.json</c>.
+/// SMTP credentials are bound separately from the top-level <c>Smtp</c> section.
 /// </summary>
 public class MonitorConfig
 {
@@ -24,7 +30,6 @@ public class MonitorConfig
     public int    AlertCooldownMinutes { get; set; } = 60;
 
     public List<WatchedServiceConfig> WatchedServices { get; set; } = [];
-    public MonitorSmtpConfig          Smtp            { get; set; } = new();
 }
 
 /// <summary>Configuration for a single service watched by WxMonitor.</summary>
@@ -43,13 +48,3 @@ public class WatchedServiceConfig
     public int    HeartbeatMaxAgeMinutes { get; set; } = 30;
 }
 
-/// <summary>SMTP connection and credential settings used by <see cref="AlertEmailSender"/>.</summary>
-public class MonitorSmtpConfig
-{
-    public string  Host        { get; set; } = "smtp.gmail.com";
-    public int     Port        { get; set; } = 587;
-    public string? Username    { get; set; }
-    public string? Password    { get; set; }
-    public string? FromAddress { get; set; }
-    public string  FromName    { get; set; } = "WxMonitor";
-}

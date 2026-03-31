@@ -8,14 +8,18 @@
     <WindowsService>true</WindowsService>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="MailKit" Version="4.9.0" />
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="8.0.0" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="8.0.0" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\WxServices.Common\WxServices.Common.csproj" />
     <ProjectReference Include="..\WxServices.Logging\WxServices.Logging.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <Content Include="..\..\appsettings.shared.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>appsettings.shared.json</Link>
+    </Content>
     <Content Update="appsettings.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>

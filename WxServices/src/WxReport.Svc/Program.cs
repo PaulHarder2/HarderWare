@@ -72,8 +72,44 @@ try
                     ON [RecipientStates] ([RecipientId]);
             END");
 
+        await db.Database.ExecuteSqlRawAsync(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'GfsModelRuns')
+            BEGIN
+                CREATE TABLE [GfsModelRuns] (
+                    [ModelRunUtc] datetime2 NOT NULL,
+                    [IsComplete]  bit       NOT NULL DEFAULT 0,
+                    CONSTRAINT [PK_GfsModelRuns] PRIMARY KEY ([ModelRunUtc])
+                );
+            END");
+
+        await db.Database.ExecuteSqlRawAsync(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'GfsGrid')
+            BEGIN
+                CREATE TABLE [GfsGrid] (
+                    [Id]           int       NOT NULL IDENTITY,
+                    [ModelRunUtc]  datetime2 NOT NULL,
+                    [ForecastHour] int       NOT NULL,
+                    [Lat]          real      NOT NULL,
+                    [Lon]          real      NOT NULL,
+                    [TmpC]         real      NULL,
+                    [DwpC]         real      NULL,
+                    [UGrdMs]       real      NULL,
+                    [VGrdMs]       real      NULL,
+                    [PRateKgM2s]   real      NULL,
+                    [TcdcPct]      real      NULL,
+                    [CapeJKg]      real      NULL,
+                    CONSTRAINT [PK_GfsGrid] PRIMARY KEY ([Id])
+                );
+                CREATE UNIQUE INDEX [UX_GfsGrid_Run_Hour_LatLon]
+                    ON [GfsGrid] ([ModelRunUtc], [ForecastHour], [Lat], [Lon]);
+                CREATE INDEX [IX_GfsGrid_Run_Hour]
+                    ON [GfsGrid] ([ModelRunUtc], [ForecastHour]);
+            END");
+
         Logger.Info("Database ready.");
     }
+
+    ValidateConfig(host.Services.GetRequiredService<IConfiguration>());
 
     await host.RunAsync();
 }
@@ -81,4 +117,22 @@ catch (Exception ex)
 {
     Logger.Error("Fatal error during startup.", ex);
     throw;
+}
+
+static void ValidateConfig(IConfiguration config)
+{
+    var issues = new List<string>();
+
+    if (string.IsNullOrWhiteSpace(config["Smtp:Username"]))    issues.Add("Smtp:Username");
+    if (string.IsNullOrWhiteSpace(config["Smtp:Password"]))    issues.Add("Smtp:Password");
+    if (string.IsNullOrWhiteSpace(config["Smtp:FromAddress"])) issues.Add("Smtp:FromAddress");
+    if (string.IsNullOrWhiteSpace(config["Claude:ApiKey"]))    issues.Add("Claude:ApiKey");
+
+    var recipientCount = config.GetSection("Report:Recipients").GetChildren().Count();
+    if (recipientCount == 0) issues.Add("Report:Recipients (none configured)");
+
+    if (issues.Count > 0)
+        Logger.Warn($"Missing required configuration — reports will not send until resolved: {string.Join(", ", issues)}. Set these in appsettings.local.json.");
+    else
+        Logger.Info("Configuration validated.");
 }

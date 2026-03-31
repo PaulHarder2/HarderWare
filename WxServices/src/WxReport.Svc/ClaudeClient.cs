@@ -42,10 +42,18 @@ public sealed class ClaudeClient
     /// <param name="tz">Recipient's timezone, used by <see cref="SnapshotDescriber"/> to localise timestamps in the prompt.</param>
     /// <param name="isFirstReport">When <see langword="true"/>, the system prompt includes a welcome-note instruction.</param>
     /// <param name="scheduledHour">Daily scheduled send hour (0–23) in the recipient's timezone, included in the welcome note.</param>
-    /// <param name="isChangeAlert">
-    /// When <see langword="true"/>, the system prompt instructs Claude that this is an unscheduled
-    /// alert triggered by a significant weather change, and asks it to open by briefly noting
-    /// that conditions have changed since the last report.
+    /// <param name="units">
+    /// Unit preferences for the recipient.  Controls how temperatures, pressure, and wind speeds
+    /// are formatted in the data payload and instructs Claude to use the same units in its narrative.
+    /// Defaults to US customary when <see langword="null"/>.
+    /// </param>
+    /// <param name="changeSeverity">
+    /// Severity of the change that triggered this unscheduled send.
+    /// <see cref="ChangeSeverity.Alert"/> instructs Claude to open with an urgent notice
+    /// identifying the dangerous condition that appeared.
+    /// <see cref="ChangeSeverity.Update"/> instructs Claude to open with a brief, neutral
+    /// summary of what changed.
+    /// <see cref="ChangeSeverity.None"/> (the default) produces no special opening.
     /// </param>
     /// <param name="ct">Cancellation token propagated to the HTTP request so that host shutdown aborts an in-flight API call.</param>
     /// <returns>The generated report text, or <see langword="null"/> if the API call or response parsing fails.</returns>
@@ -53,7 +61,8 @@ public sealed class ClaudeClient
     public async Task<string?> GenerateReportAsync(
         WeatherSnapshot snapshot, string language, string recipientName,
         TimeZoneInfo tz, bool isFirstReport = false, int scheduledHour = 7,
-        bool isChangeAlert = false, CancellationToken ct = default)
+        UnitPreferences? units = null,
+        ChangeSeverity changeSeverity = ChangeSeverity.None, CancellationToken ct = default)
     {
         if (scheduledHour < 0 || scheduledHour > 23)
         {
@@ -61,7 +70,14 @@ public sealed class ClaudeClient
             scheduledHour = Math.Clamp(scheduledHour, 0, 23);
         }
 
-        var weatherData = SnapshotDescriber.Describe(snapshot, tz);
+        units ??= new UnitPreferences();
+        var weatherData = SnapshotDescriber.Describe(snapshot, tz, units);
+
+        var tempLabel  = units.Temperature == "C" ? "Celsius"    : "Fahrenheit";
+        var pressLabel = units.Pressure    == "kPa" ? "kPa"      : "inches of mercury (inHg)";
+        var windLabel  = units.WindSpeed   == "kph" ? "km/h"     : "mph";
+        var unitInstruction = $"Use {tempLabel} for temperatures, {pressLabel} for pressure, " +
+                              $"and {windLabel} for wind speeds throughout. ";
 
         var welcomeInstruction = isFirstReport
             ? $"This is the recipient's very first report. " +
@@ -72,20 +88,56 @@ public sealed class ClaudeClient
               $"Then continue with the weather report as normal. "
             : "";
 
-        var changeAlertInstruction = isChangeAlert
-            ? "This is an unscheduled alert — conditions have changed significantly since the last report. " +
-              "Open with a brief sentence (one sentence only) noting that the weather has changed, " +
-              "then continue with the full report as normal. "
-            : "";
+        var changeAlertInstruction = changeSeverity switch
+        {
+            ChangeSeverity.Alert =>
+                "This is an unscheduled weather alert — a significant and potentially dangerous change " +
+                "has occurred since the last report. " +
+                "Open with a single clear, direct sentence identifying what changed " +
+                "(for example: 'A thunderstorm has moved into the area' or " +
+                "'Visibility has dropped sharply'). " +
+                "Then continue with the full report as normal. ",
+            ChangeSeverity.Update =>
+                "This is an unscheduled update — conditions have changed since the last report. " +
+                "Open with one or two sentences summarising what has changed " +
+                "(for example: a forecast risk that has appeared, or a significant temperature shift). " +
+                "Then continue with the full report as normal. ",
+            _ => "",
+        };
 
         var systemPrompt =
-            $"You are a weather reporter producing a short, friendly weather summary in {language} " +
-            "for a general (non-specialist) audience, in the style used by local television news. " +
-            "Use only the data provided — do not invent or estimate any conditions. " +
-            "Do not include raw METAR codes or technical jargon. " +
+            $"You are producing a weather report email in HTML format, written in {language}, " +
+            "for a general (non-specialist) audience. " +
+            "Return ONLY the HTML that belongs inside a <body> tag — no <html>, <head>, or <body> " +
+            "tags, no markdown, and no code fences. " +
+            "Use inline CSS throughout (email clients do not reliably support external stylesheets). " +
+            "Maximum content width: 600px, centred, with a clean and professional visual style. " +
+            "Structure the output in this order: " +
+            "(1) A styled header showing the locality name and local observation time. " +
+            "(2) A 'Current Conditions' section as a two-column HTML table (label | value) " +
+            "covering sky, visibility, wind, temperature, relative humidity, and pressure. " +
+            "(3) An 'Extended Forecast' section as a multi-column HTML table with one row per " +
+            "GFS day. Columns: date, high/low temperature, wind, and a brief plain-language " +
+            "conditions description you write from the data (precipitation type, storm risk, cloud cover). " +
+            "Each conditions description must be a single sentence of no more than 15 words — " +
+            "lead with the most important condition and omit anything that can be inferred. " +
+            "(4) A closing of no more than two sentences of plain-language context — " +
+            "headline storm risk, a notable temperature trend, or similar. " +
+            $"{unitInstruction}" +
+            "Rules: use only the data provided — never invent or estimate conditions. " +
+            "Never show raw METAR codes, numeric precipitation rates, or CAPE values to the reader. " +
+            "Never use aviation terminology — no 'ceiling', 'TAF', 'METAR', 'IFR', 'VFR', or similar. " +
+            "Low cloud layers should be described in everyday terms such as 'low clouds', " +
+            "'a thick overcast', or 'clouds hanging low'. " +
+            "You may use TAF forecast data to inform your descriptions, but do not reference it explicitly. " +
+            "Use the CAPE label to describe thunderstorm potential in plain language — " +
+            "low CAPE warrants at most a mention of an isolated storm; " +
+            "significant or extreme CAPE should be described in terms of what the public might " +
+            "experience (strong storms, possible damaging winds or hail). " +
+            "When precipitation is forecast near freezing temperatures, consider whether " +
+            "snow, sleet, or a wintry mix is possible and mention it if so. " +
             $"{welcomeInstruction}" +
-            $"{changeAlertInstruction}" +
-            "The report should be 2–4 short paragraphs.";
+            $"{changeAlertInstruction}";
 
         var userPrompt =
             $"Please write a weather report for {recipientName} based on the following observations:\n\n" +
@@ -94,7 +146,7 @@ public sealed class ClaudeClient
         var request = new
         {
             model    = _model,
-            max_tokens = 1024,
+            max_tokens = 4096,
             system   = systemPrompt,
             messages = new[]
             {
@@ -138,7 +190,21 @@ public sealed class ClaudeClient
                 return null;
             }
 
-            return parsed?.Content?.FirstOrDefault(c => c.Type == "text")?.Text;
+            var bodyContent = parsed?.Content?.FirstOrDefault(c => c.Type == "text")?.Text;
+            if (bodyContent is null) return null;
+
+            return $"""
+                <!DOCTYPE html>
+                <html lang="en">
+                <head>
+                <meta charset="utf-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1">
+                </head>
+                <body style="margin:0;padding:16px;background:#f0f4f8;font-family:Arial,Helvetica,sans-serif;">
+                {bodyContent.Trim()}
+                </body>
+                </html>
+                """;
         }
     }
 

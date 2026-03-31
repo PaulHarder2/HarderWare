@@ -71,6 +71,13 @@ public sealed class WeatherDataContext : DbContext
     public DbSet<GfsGridPoint> GfsGrid => Set<GfsGridPoint>();
 
     /// <summary>
+    /// The <c>GfsModelRuns</c> table — one row per GFS model run, tracking whether
+    /// ingestion is complete.  Consumers should only read from <c>GfsGrid</c> for
+    /// runs whose <see cref="GfsModelRun.IsComplete"/> flag is <see langword="true"/>.
+    /// </summary>
+    public DbSet<GfsModelRun> GfsModelRuns => Set<GfsModelRun>();
+
+    /// <summary>
     /// Configures the EF Core model: table names, column types, indexes,
     /// and relationships between entities.
     /// </summary>
@@ -252,6 +259,15 @@ public sealed class WeatherDataContext : DbContext
             e.HasIndex(x => x.RecipientId)
              .IsUnique()
              .HasDatabaseName("UX_RecipientStates_RecipientId");
+        });
+
+        // ── GfsModelRuns ─────────────────────────────────────────────────────
+
+        modelBuilder.Entity<GfsModelRun>(e =>
+        {
+            e.ToTable("GfsModelRuns");
+            e.HasKey(x => x.ModelRunUtc);
+            e.Property(x => x.IsComplete).IsRequired();
         });
 
         // ── GfsGrid ──────────────────────────────────────────────────────────

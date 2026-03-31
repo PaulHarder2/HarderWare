@@ -7,6 +7,7 @@
 // Start:     sc.exe start WxMonitorSvc
 // Stop:      sc.exe stop WxMonitorSvc
 
+using Microsoft.Extensions.Configuration;
 using WxMonitor.Svc;
 using WxServices.Logging;
 
@@ -21,7 +22,8 @@ var host = Host.CreateDefaultBuilder(args)
     .ConfigureAppConfiguration((_, cfg) =>
     {
         cfg.SetBasePath(AppContext.BaseDirectory)
-           .AddJsonFile("appsettings.json",       optional: false, reloadOnChange: true)
+           .AddJsonFile("appsettings.shared.json", optional: false, reloadOnChange: true)
+           .AddJsonFile("appsettings.json",        optional: false, reloadOnChange: true)
            .AddJsonFile("appsettings.local.json",  optional: true,  reloadOnChange: true);
     })
     .ConfigureServices((_, services) =>
@@ -29,6 +31,8 @@ var host = Host.CreateDefaultBuilder(args)
         services.AddHostedService<MonitorWorker>();
     })
     .Build();
+
+ValidateConfig(host.Services.GetRequiredService<IConfiguration>());
 
 try
 {
@@ -38,4 +42,19 @@ catch (Exception ex)
 {
     Logger.Error("Fatal error during startup.", ex);
     throw;
+}
+
+static void ValidateConfig(IConfiguration config)
+{
+    var issues = new List<string>();
+
+    if (string.IsNullOrWhiteSpace(config["Smtp:Username"]))    issues.Add("Smtp:Username");
+    if (string.IsNullOrWhiteSpace(config["Smtp:Password"]))    issues.Add("Smtp:Password");
+    if (string.IsNullOrWhiteSpace(config["Smtp:FromAddress"])) issues.Add("Smtp:FromAddress");
+    if (string.IsNullOrWhiteSpace(config["Monitor:AlertEmail"])) issues.Add("Monitor:AlertEmail");
+
+    if (issues.Count > 0)
+        Logger.Warn($"Missing required configuration — alerts will not send until resolved: {string.Join(", ", issues)}. Set these in appsettings.local.json.");
+    else
+        Logger.Info("Configuration validated.");
 }

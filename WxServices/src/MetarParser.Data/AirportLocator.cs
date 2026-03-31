@@ -37,11 +37,17 @@ public static class AirportLocator
         AirportDto[]? airports;
         try
         {
-            airports = await httpClient.GetFromJsonAsync<AirportDto[]>(url);
+            var json = await httpClient.GetStringAsync(url);
+            if (string.IsNullOrWhiteSpace(json))
+            {
+                Logger.Warn($"Airport '{icao}' not found in Aviation Weather Center database (empty response).");
+                return null;
+            }
+            airports = System.Text.Json.JsonSerializer.Deserialize<AirportDto[]>(json);
         }
         catch (Exception ex)
         {
-            Logger.Error($"Airport lookup failed: {ex.Message}");
+            Logger.Error($"Airport lookup failed for '{icao}': {ex.Message}");
             return null;
         }
 
@@ -59,17 +65,26 @@ public static class AirportLocator
     /// coordinates by querying the Aviation Weather Center METAR endpoint with
     /// a bounding box in JSON format.
     /// Tries a 2-degree box first, widening to 5 degrees if no results are found.
+    /// When <paramref name="allowedIcaos"/> is provided, only stations in that set
+    /// are considered; this ensures the resolver only selects stations that the
+    /// local METAR fetcher is already collecting.  If the filtered result is empty
+    /// the method falls back to the nearest unfiltered station.
     /// </summary>
     /// <param name="lat">Target latitude in decimal degrees.</param>
     /// <param name="lon">Target longitude in decimal degrees.</param>
     /// <param name="httpClient">HTTP client for the AWC METAR bounding-box API requests.</param>
+    /// <param name="allowedIcaos">
+    /// Optional set of ICAOs to restrict selection to.  Pass <see langword="null"/>
+    /// to consider all stations returned by the API (e.g. on first run before the
+    /// local database has any data).
+    /// </param>
     /// <returns>
     /// The ICAO identifier of the nearest METAR station, or <see langword="null"/>
     /// if no stations are found even within the 5-degree fallback box, or if the API call fails.
     /// </returns>
     /// <sideeffects>Makes up to two HTTP GET requests to the Aviation Weather Center METAR API. Writes error log entries on failure.</sideeffects>
     public static async Task<string?> FindNearestStationAsync(
-        double lat, double lon, HttpClient httpClient)
+        double lat, double lon, HttpClient httpClient, IReadOnlySet<string>? allowedIcaos = null)
     {
         foreach (var deg in new[] { 2.0, 5.0 })
         {
@@ -89,14 +104,66 @@ public static class AirportLocator
 
             if (stations is not { Length: > 0 }) continue;
 
-            // Pick the station with the smallest squared Euclidean distance.
-            return stations
+            // Prefer stations already present in the local DB; fall back to any if none match.
+            var candidates = allowedIcaos is { Count: > 0 }
+                ? stations.Where(s => allowedIcaos.Contains(s.StationId)).ToList()
+                : stations.ToList();
+
+            if (candidates.Count == 0)
+                candidates = stations.ToList();
+
+            return candidates
                 .OrderBy(s => Math.Pow(s.Lat - lat, 2) + Math.Pow(s.Lon - lon, 2))
                 .First()
                 .StationId;
         }
 
         Logger.Warn("No METAR stations found near the specified coordinates.");
+        return null;
+    }
+
+    /// <summary>
+    /// Finds the ICAO identifier of the nearest TAF station to the given
+    /// coordinates by querying the Aviation Weather Center TAF endpoint with
+    /// a bounding box.
+    /// Tries a 2-degree box first, widening to 5 degrees if no results are found.
+    /// </summary>
+    /// <param name="lat">Target latitude in decimal degrees.</param>
+    /// <param name="lon">Target longitude in decimal degrees.</param>
+    /// <param name="httpClient">HTTP client for the AWC TAF bounding-box API requests.</param>
+    /// <returns>
+    /// The ICAO identifier of the nearest TAF station, or <see langword="null"/>
+    /// if no stations are found even within the 5-degree fallback box, or if the API call fails.
+    /// </returns>
+    /// <sideeffects>Makes up to two HTTP GET requests to the Aviation Weather Center TAF API. Writes error log entries on failure.</sideeffects>
+    public static async Task<string?> FindNearestTafStationAsync(
+        double lat, double lon, HttpClient httpClient)
+    {
+        foreach (var deg in new[] { 2.0, 5.0 })
+        {
+            var bbox = $"{lat - deg},{lon - deg},{lat + deg},{lon + deg}";
+            var url  = $"https://aviationweather.gov/api/data/taf?bbox={bbox}&hours=24&format=json";
+
+            TafStationDto[]? stations;
+            try
+            {
+                stations = await httpClient.GetFromJsonAsync<TafStationDto[]>(url);
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"Nearest TAF station lookup failed: {ex.Message}");
+                return null;
+            }
+
+            if (stations is not { Length: > 0 }) continue;
+
+            return stations
+                .OrderBy(s => Math.Pow(s.Lat - lat, 2) + Math.Pow(s.Lon - lon, 2))
+                .First()
+                .IcaoId;
+        }
+
+        Logger.Warn("No TAF stations found near the specified coordinates.");
         return null;
     }
 
@@ -112,5 +179,12 @@ public static class AirportLocator
         [JsonPropertyName("icaoId")] public string StationId { get; set; } = "";
         [JsonPropertyName("lat")]    public double Lat       { get; set; }
         [JsonPropertyName("lon")]    public double Lon       { get; set; }
+    }
+
+    private sealed class TafStationDto
+    {
+        [JsonPropertyName("icaoId")] public string IcaoId { get; set; } = "";
+        [JsonPropertyName("lat")]    public double Lat    { get; set; }
+        [JsonPropertyName("lon")]    public double Lon    { get; set; }
     }
 }

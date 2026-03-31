@@ -3,6 +3,7 @@ using MetarParser.Data.Entities;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using WxInterp;
+using WxServices.Common;
 using WxServices.Logging;
 
 namespace WxReport.Svc;
@@ -82,7 +83,7 @@ public sealed class ReportWorker : BackgroundService
                 Logger.Error("Unhandled exception in report cycle.", ex);
             }
 
-            var cfg = LoadConfig();
+            var (cfg, _, _) = LoadConfigs();
             var intervalMinutes = cfg.IntervalMinutes;
             if (intervalMinutes <= 0)
             {
@@ -118,11 +119,11 @@ public sealed class ReportWorker : BackgroundService
     /// </sideeffects>
     private async Task SendStartupReportAsync(CancellationToken ct)
     {
-        var cfg = LoadConfig();
+        var (cfg, smtp, claude_cfg) = LoadConfigs();
 
-        if (string.IsNullOrWhiteSpace(cfg.Claude.ApiKey))
+        if (string.IsNullOrWhiteSpace(claude_cfg.ApiKey))
         {
-            Logger.Warn("Report.Claude.ApiKey is not set — skipping startup report.");
+            Logger.Warn("Claude.ApiKey is not set — skipping startup report.");
             return;
         }
 
@@ -141,7 +142,10 @@ public sealed class ReportWorker : BackgroundService
         var preferredIcaos = ParseIcaoList(recipient.MetarIcao);
         var localityName   = recipient.LocalityName ?? (preferredIcaos.Count > 0 ? preferredIcaos[0] : recipient.Email);
         var snapshot       = await WxInterpreter.GetSnapshotAsync(
-            preferredIcaos, recipient.TafIcao, localityName, _dbOptions, ct);
+            preferredIcaos, recipient.TafIcao == "NONE" ? null : recipient.TafIcao, localityName, _dbOptions,
+            homeLat: recipient.Latitude, homeLon: recipient.Longitude,
+            precipThresholdMmHr: cfg.PrecipRateThresholdMmHr,
+            ct: ct);
 
         if (snapshot is null)
         {
@@ -154,11 +158,12 @@ public sealed class ReportWorker : BackgroundService
         var language      = recipient.Language ?? cfg.DefaultLanguage;
         var scheduledHour = recipient.ScheduledSendHour ?? cfg.DefaultScheduledSendHour;
         var tz            = ResolveTimezone(recipient.Timezone);
-        var claude        = new ClaudeClient(_httpClient, cfg.Claude.ApiKey, cfg.Claude.Model);
+        var claude        = new ClaudeClient(_httpClient, claude_cfg.ApiKey, claude_cfg.Model);
         var report        = await claude.GenerateReportAsync(
             snapshot, language, recipient.Name, tz,
             isFirstReport: false,
             scheduledHour: scheduledHour,
+            units: recipient.Units,
             ct: ct);
 
         if (report is null)
@@ -167,9 +172,10 @@ public sealed class ReportWorker : BackgroundService
             return;
         }
 
-        var subject = BuildSubject(snapshot, language, tz);
-        var emailer = new EmailSender(cfg.Smtp);
-        var sent    = await emailer.SendAsync(recipient.Email, recipient.Name, subject, report, ct);
+        var subject       = BuildSubject(snapshot, language, tz);
+        var plainFallback = SnapshotDescriber.Describe(snapshot, tz, recipient.Units);
+        var emailer       = new SmtpSender(smtp, "WxReport");
+        var sent          = await emailer.SendAsync(recipient.Email, subject, plainFallback, htmlBody: report, toName: recipient.Name, ct: ct);
 
         if (!sent) return;
 
@@ -212,11 +218,11 @@ public sealed class ReportWorker : BackgroundService
     private async Task RunCycleAsync(CancellationToken ct)
     {
         Logger.Info("Starting report cycle.");
-        var cfg = LoadConfig();
+        var (cfg, smtp, claude_cfg) = LoadConfigs();
 
-        if (string.IsNullOrWhiteSpace(cfg.Claude.ApiKey))
+        if (string.IsNullOrWhiteSpace(claude_cfg.ApiKey))
         {
-            Logger.Warn("Report.Claude.ApiKey is not set — skipping report cycle.");
+            Logger.Warn("Claude.ApiKey is not set — skipping report cycle.");
             return;
         }
 
@@ -236,8 +242,8 @@ public sealed class ReportWorker : BackgroundService
         foreach (var id in duplicateIds)
             Logger.Error($"Duplicate recipient Id '{id}' — all entries with this Id will be skipped.");
 
-        var claude      = new ClaudeClient(_httpClient, cfg.Claude.ApiKey, cfg.Claude.Model);
-        var emailer     = new EmailSender(cfg.Smtp);
+        var claude      = new ClaudeClient(_httpClient, claude_cfg.ApiKey, claude_cfg.Model);
+        var emailer     = new SmtpSender(smtp, "WxReport");
         var resolver    = new RecipientResolver(_dbOptions, _httpClient);
         var now         = DateTime.UtcNow;
         var reportsSent = 0;
@@ -270,7 +276,10 @@ public sealed class ReportWorker : BackgroundService
             var preferredIcaos = ParseIcaoList(recipient.MetarIcao);
             var localityName   = recipient.LocalityName ?? (preferredIcaos.Count > 0 ? preferredIcaos[0] : recipient.Email);
             var snapshot = await WxInterpreter.GetSnapshotAsync(
-                preferredIcaos, recipient.TafIcao, localityName, _dbOptions, ct);
+                preferredIcaos, recipient.TafIcao == "NONE" ? null : recipient.TafIcao, localityName, _dbOptions,
+                homeLat: recipient.Latitude, homeLon: recipient.Longitude,
+                precipThresholdMmHr: cfg.PrecipRateThresholdMmHr,
+                ct: ct);
 
             if (snapshot is null)
             {
@@ -281,8 +290,14 @@ public sealed class ReportWorker : BackgroundService
             if (preferredIcaos.Count > 0 && !preferredIcaos.Contains(snapshot.StationIcao))
                 Logger.Warn($"{recipient.Email}: preferred station(s) [{string.Join(", ", preferredIcaos)}] had no data — fell back to {snapshot.StationIcao}.");
 
+            if (snapshot.GfsForecast is { } gfs)
+                Logger.Info($"{recipient.Email}: GFS run {gfs.ModelRunUtc:yyyy-MM-dd HH}Z — {gfs.Days.Count} day(s); " +
+                    string.Join(", ", gfs.Days.Select(d => $"{d.Date:MM/dd} {d.HighTempF:F0}°/{d.LowTempF:F0}°F")));
+            else
+                Logger.Warn($"{recipient.Email}: no GFS forecast available.");
+
             var fingerprint      = SnapshotFingerprint.Compute(snapshot, cfg.SignificantChange);
-            var (shouldSend, reason) = ShouldSend(recipient, state, fingerprint, cfg, now);
+            var (shouldSend, reason, severity) = ShouldSend(recipient, state, fingerprint, cfg, now);
 
             if (!shouldSend) continue;
 
@@ -291,12 +306,12 @@ public sealed class ReportWorker : BackgroundService
             var language      = recipient.Language ?? cfg.DefaultLanguage;
             var scheduledHour = recipient.ScheduledSendHour ?? cfg.DefaultScheduledSendHour;
             var tz            = ResolveTimezone(recipient.Timezone);
-            var isChangeAlert = reason == "change";
             var report        = await claude.GenerateReportAsync(
                 snapshot, language, recipient.Name, tz,
                 isFirstReport: reason == "first",
                 scheduledHour: scheduledHour,
-                isChangeAlert: isChangeAlert,
+                units: recipient.Units,
+                changeSeverity: severity,
                 ct: ct);
 
             if (report is null)
@@ -305,8 +320,9 @@ public sealed class ReportWorker : BackgroundService
                 continue;
             }
 
-            var subject = BuildSubject(snapshot, language, tz, isChangeAlert);
-            var sent    = await emailer.SendAsync(recipient.Email, recipient.Name, subject, report, ct);
+            var subject       = BuildSubject(snapshot, language, tz, severity);
+            var plainFallback = SnapshotDescriber.Describe(snapshot, tz, recipient.Units);
+            var sent          = await emailer.SendAsync(recipient.Email, subject, plainFallback, htmlBody: report, toName: recipient.Name, ct: ct);
 
             if (!sent) continue;
 
@@ -356,11 +372,16 @@ public sealed class ReportWorker : BackgroundService
     /// <param name="cfg">Report config providing the minimum inter-send gap and default scheduled hour.</param>
     /// <param name="nowUtc">The UTC clock time to use as "now" for all comparisons.</param>
     /// <returns>
-    /// A tuple of (<c>send</c>, <c>reason</c>).  When <c>send</c> is <see langword="false"/>,
-    /// <c>reason</c> is an empty string.  When <see langword="true"/>, <c>reason</c> is
-    /// <c>"first"</c>, <c>"scheduled"</c>, or <c>"change"</c>.
+    /// A tuple of (<c>send</c>, <c>reason</c>, <c>severity</c>).
+    /// When <c>send</c> is <see langword="false"/>, <c>reason</c> is an empty string
+    /// and <c>severity</c> is <see cref="ChangeSeverity.None"/>.
+    /// When <see langword="true"/>, <c>reason</c> is <c>"first"</c>, <c>"scheduled"</c>,
+    /// or <c>"change"</c>, and <c>severity</c> is the classified change severity
+    /// (<see cref="ChangeSeverity.None"/> for scheduled/first sends).
+    /// A <c>"change"</c> send with <see cref="ChangeSeverity.Minor"/> is suppressed
+    /// — the method returns <c>send = false</c> in that case.
     /// </returns>
-    private static (bool send, string reason) ShouldSend(
+    private static (bool send, string reason, ChangeSeverity severity) ShouldSend(
         RecipientConfig     recipient,
         RecipientState      state,
         string              fingerprint,
@@ -369,7 +390,7 @@ public sealed class ReportWorker : BackgroundService
     {
         // Brand-new recipient — send an introductory report on the first cycle.
         if (!state.LastScheduledSentUtc.HasValue && !state.LastUnscheduledSentUtc.HasValue)
-            return (true, "first");
+            return (true, "first", ChangeSeverity.None);
 
         var minGap = TimeSpan.FromMinutes(cfg.MinGapMinutes);
 
@@ -380,7 +401,7 @@ public sealed class ReportWorker : BackgroundService
 
         // Enforce minimum gap.
         if (lastSentUtc.HasValue && (nowUtc - lastSentUtc.Value) < minGap)
-            return (false, "");
+            return (false, "", ChangeSeverity.None);
 
         // ── Scheduled send ────────────────────────────────────────────────────
 
@@ -396,17 +417,23 @@ public sealed class ReportWorker : BackgroundService
             && state.LastScheduledSentUtc.Value >= todayStartUtc;
 
         if (localNow.Hour >= scheduledHour && !scheduledOnceToday)
-            return (true, "scheduled");
+            return (true, "scheduled", ChangeSeverity.None);
 
         // ── Significant-change send ───────────────────────────────────────────
 
         if (state.LastSnapshotFingerprint is not null
             && state.LastSnapshotFingerprint != fingerprint)
         {
-            return (true, "change");
+            var severity = SnapshotFingerprint.ClassifyChange(state.LastSnapshotFingerprint, fingerprint);
+            if (severity == ChangeSeverity.Minor)
+            {
+                Logger.Debug($"Fingerprint changed but severity is Minor — suppressing unscheduled send.");
+                return (false, "", ChangeSeverity.Minor);
+            }
+            return (true, "change", severity);
         }
 
-        return (false, "");
+        return (false, "", ChangeSeverity.None);
     }
 
     /// <summary>
@@ -441,27 +468,46 @@ public sealed class ReportWorker : BackgroundService
     /// <param name="snap">Snapshot providing the station ICAO, locality name, and observation time.</param>
     /// <param name="language">Report language name (e.g. <c>"Spanish"</c>, <c>"French"</c>, <c>"English"</c>).</param>
     /// <param name="tz">Timezone used to convert the UTC observation time for display.</param>
-    /// <param name="isChangeAlert">
-    /// When <see langword="true"/>, the subject uses an alert label
-    /// (e.g. <c>"Weather alert"</c>) to distinguish unscheduled sends from the daily report.
+    /// <param name="severity">
+    /// Severity of the change that triggered this send.
+    /// <see cref="ChangeSeverity.Alert"/> uses an alert label (e.g. <c>"Weather alert"</c>);
+    /// <see cref="ChangeSeverity.Update"/> uses an update label (e.g. <c>"Weather update"</c>);
+    /// all other values use the standard report label (e.g. <c>"Weather report"</c>).
     /// </param>
-    /// <returns>A localised subject string, e.g. <c>"Weather report — The Woodlands (7:05 AM)"</c>
+    /// <returns>A localised subject string, e.g. <c>"Weather report — The Woodlands (7:05 AM)"</c>,
+    /// <c>"Weather update — The Woodlands (7:05 AM)"</c>,
     /// or <c>"Weather alert — The Woodlands (7:05 AM)"</c>.</returns>
-    private static string BuildSubject(WeatherSnapshot snap, string language, TimeZoneInfo tz, bool isChangeAlert = false)
+    private static string BuildSubject(WeatherSnapshot snap, string language, TimeZoneInfo tz,
+        ChangeSeverity severity = ChangeSeverity.None)
     {
         var localTime = TimeZoneInfo.ConvertTimeFromUtc(snap.ObservationTimeUtc, tz).ToString("h:mm tt");
         if (language.Equals("Spanish", StringComparison.OrdinalIgnoreCase))
         {
-            var label = isChangeAlert ? "Alerta meteorológica" : "Reporte del tiempo";
+            var label = severity switch
+            {
+                ChangeSeverity.Alert  => "Alerta meteorológica",
+                ChangeSeverity.Update => "Actualización del tiempo",
+                _                     => "Reporte del tiempo",
+            };
             return $"{label} — {snap.LocalityName} ({localTime})";
         }
         if (language.Equals("French", StringComparison.OrdinalIgnoreCase))
         {
-            var label = isChangeAlert ? "Alerte météo" : "Bulletin météo";
+            var label = severity switch
+            {
+                ChangeSeverity.Alert  => "Alerte météo",
+                ChangeSeverity.Update => "Mise à jour météo",
+                _                     => "Bulletin météo",
+            };
             return $"{label} — {snap.LocalityName} ({localTime})";
         }
         {
-            var label = isChangeAlert ? "Weather alert" : "Weather report";
+            var label = severity switch
+            {
+                ChangeSeverity.Alert  => "Weather alert",
+                ChangeSeverity.Update => "Weather update",
+                _                     => "Weather report",
+            };
             return $"{label} — {snap.LocalityName} ({localTime})";
         }
     }
@@ -497,16 +543,27 @@ public sealed class ReportWorker : BackgroundService
                  .ToList();
 
     /// <summary>
-    /// Loads and returns the current <see cref="ReportConfig"/> from the
-    /// <c>Report</c> section of the application configuration.
-    /// Called at the start of each cycle so that config changes take effect
-    /// without restarting the service.
+    /// Loads and returns the current configuration from the application settings.
+    /// Binds <see cref="ReportConfig"/> from the <c>Report</c> section and
+    /// <see cref="SmtpConfig"/> and <see cref="ClaudeConfig"/> from their respective
+    /// top-level sections.  Called at the start of each cycle so that config changes
+    /// take effect without restarting the service.
     /// </summary>
-    /// <returns>A freshly bound <see cref="ReportConfig"/> reflecting the current appsettings.</returns>
-    private ReportConfig LoadConfig()
+    /// <returns>
+    /// A tuple of freshly bound <see cref="ReportConfig"/>, <see cref="SmtpConfig"/>,
+    /// and <see cref="ClaudeConfig"/> reflecting the current appsettings.
+    /// </returns>
+    private (ReportConfig report, SmtpConfig smtp, ClaudeConfig claude) LoadConfigs()
     {
-        var cfg = new ReportConfig();
-        _config.GetSection("Report").Bind(cfg);
-        return cfg;
+        var report = new ReportConfig();
+        _config.GetSection("Report").Bind(report);
+
+        var smtp = new SmtpConfig();
+        _config.GetSection("Smtp").Bind(smtp);
+
+        var claude = new ClaudeConfig();
+        _config.GetSection("Claude").Bind(claude);
+
+        return (report, smtp, claude);
     }
 }

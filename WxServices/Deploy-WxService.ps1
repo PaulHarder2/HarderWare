@@ -1,0 +1,185 @@
+#Requires -RunAsAdministrator
+<#
+.SYNOPSIS
+    Publishes and redeploys one or all WxServices Windows services.
+
+.PARAMETER ServiceName
+    The service to deploy, or 'all' to deploy all three in order
+    (WxParserSvc, WxReportSvc, WxMonitorSvc).
+
+.EXAMPLE
+    .\Deploy-WxService.ps1 WxReportSvc
+    .\Deploy-WxService.ps1 all
+#>
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory)]
+    [ValidateSet('WxParserSvc', 'WxReportSvc', 'WxMonitorSvc', 'all')]
+    [string]$ServiceName
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+$SolutionRoot = "C:\Users\PaulH\Dropbox\PH\Documents\Code\HarderWare\WxServices"
+
+$ServiceMap = [ordered]@{
+    'WxParserSvc'  = 'WxParser.Svc'
+    'WxReportSvc'  = 'WxReport.Svc'
+    'WxMonitorSvc' = 'WxMonitor.Svc'
+}
+
+# ---------------------------------------------------------------------------
+# Ensure home location is configured in appsettings.shared.json.
+# Only called for WxParserSvc; skipped if already set.
+# ---------------------------------------------------------------------------
+function Invoke-HomeLocationSetup {
+    $sharedConfig = "$SolutionRoot\appsettings.shared.json"
+    $config = Get-Content $sharedConfig -Raw | ConvertFrom-Json
+
+    if ($config.Fetch.HomeIcao) { return }
+
+    Write-Host "Home location is not configured."
+    $resolved = $false
+
+    while (-not $resolved) {
+        $address = Read-Host "Enter your home address (e.g. '7323 Saddle Tree Drive, Spring, TX 77379')"
+        if ([string]::IsNullOrWhiteSpace($address)) { continue }
+
+        Write-Host "Validating address..."
+        $encoded = [Uri]::EscapeDataString($address)
+        $nomUrl  = "https://nominatim.openstreetmap.org/search?q=$encoded&format=json&addressdetails=1&limit=1"
+        try {
+            $results = Invoke-RestMethod -Uri $nomUrl -Headers @{ 'User-Agent' = 'WxServices/1.0' }
+        } catch {
+            Write-Warning "Nominatim request failed: $_"
+            continue
+        }
+
+        if (-not $results -or $results.Count -eq 0) {
+            Write-Warning "Address not found. Please try again."
+            continue
+        }
+
+        $locality = if     ($results[0].address.suburb)  { $results[0].address.suburb  }
+                    elseif ($results[0].address.town)     { $results[0].address.town    }
+                    elseif ($results[0].address.village)  { $results[0].address.village }
+                    elseif ($results[0].address.city)     { $results[0].address.city    }
+                    elseif ($results[0].address.county)   { $results[0].address.county  }
+                    else                                  { '(unknown locality)'         }
+
+        $homeLat = [double]$results[0].lat
+        $homeLon = [double]$results[0].lon
+        Write-Host "Resolved to: $locality (lat=$homeLat, lon=$homeLon)"
+        $confirm = Read-Host "Is this correct? (Y/N)"
+        if ($confirm -notmatch '^[Yy]') { continue }
+
+        Write-Host "Finding nearest METAR station..."
+        $deg      = 2
+        $bbox     = "$($homeLat - $deg),$($homeLon - $deg),$($homeLat + $deg),$($homeLon + $deg)"
+        $metarUrl = "https://aviationweather.gov/api/data/metar?bbox=$bbox&hours=1&format=json"
+        try {
+            $stations = Invoke-RestMethod -Uri $metarUrl -Headers @{ 'User-Agent' = 'WxServices/1.0' }
+        } catch {
+            Write-Warning "METAR station lookup failed: $_"
+            $stations = @()
+        }
+
+        $nearestIcao = $null
+        if ($stations -and $stations.Count -gt 0) {
+            $nearest     = $stations |
+                Sort-Object { [Math]::Pow($_.lat - $homeLat, 2) + [Math]::Pow($_.lon - $homeLon, 2) } |
+                Select-Object -First 1
+            $nearestIcao = $nearest.icaoId
+            Write-Host "Nearest METAR station: $nearestIcao"
+        } else {
+            Write-Warning "Could not find a nearby METAR station automatically."
+        }
+
+        $icaoInput = Read-Host "Press Enter to use '$nearestIcao', or type a different ICAO"
+        $homeIcao  = if ([string]::IsNullOrWhiteSpace($icaoInput)) { $nearestIcao } else { $icaoInput.Trim().ToUpper() }
+
+        $config.Fetch.HomeIcao      = $homeIcao
+        $config.Fetch.HomeLatitude  = $homeLat
+        $config.Fetch.HomeLongitude = $homeLon
+        $config | ConvertTo-Json -Depth 5 | Set-Content $sharedConfig -Encoding UTF8
+        Write-Host "Saved: HomeIcao='$homeIcao', lat=$homeLat, lon=$homeLon"
+        $resolved = $true
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Stop, publish, and start a single service.
+# ---------------------------------------------------------------------------
+function Invoke-ServiceDeploy {
+    param([string]$SvcName)
+
+    $projectFolder = $ServiceMap[$SvcName]
+    $projectPath   = "$SolutionRoot\src\$projectFolder"
+    $publishDir    = "$projectPath\bin\Release\net8.0\publish"
+    $binPath       = "$publishDir\$projectFolder.exe"
+
+    if ($SvcName -eq 'WxParserSvc') {
+        Invoke-HomeLocationSetup
+    }
+
+    # Stop
+    $svc = Get-Service -Name $SvcName -ErrorAction SilentlyContinue
+    if ($svc -and $svc.Status -ne 'Stopped') {
+        Write-Host "Stopping $SvcName..."
+        sc.exe stop $SvcName | Out-Null
+
+        $timeout = 30
+        $elapsed = 0
+        while ($elapsed -lt $timeout) {
+            Start-Sleep -Seconds 1
+            $elapsed++
+            $svc = Get-Service -Name $SvcName -ErrorAction SilentlyContinue
+            if (-not $svc -or $svc.Status -eq 'Stopped') { break }
+        }
+        if ($svc -and $svc.Status -ne 'Stopped') {
+            Write-Warning "$SvcName did not stop within ${timeout}s — aborting deploy of this service."
+            return $false
+        }
+    }
+
+    # Publish
+    Write-Host "Publishing $projectFolder..."
+    dotnet publish $projectPath -c Release
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "dotnet publish failed for $projectFolder (exit code $LASTEXITCODE)."
+        return $false
+    }
+
+    if (-not (Test-Path $binPath)) {
+        Write-Error "Expected executable not found after publish: $binPath"
+        return $false
+    }
+
+    $sourceLocalConfig = "$projectPath\appsettings.local.json"
+    if (Test-Path $sourceLocalConfig) {
+        Copy-Item $sourceLocalConfig $publishDir
+        Write-Host "Copied appsettings.local.json to publish dir."
+    }
+
+    # Start
+    Write-Host "Starting $SvcName..."
+    sc.exe start $SvcName | Out-Null
+    Write-Host "$SvcName deployed and started." -ForegroundColor Green
+    return $true
+}
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+$targets = if ($ServiceName -eq 'all') { $ServiceMap.Keys } else { @($ServiceName) }
+
+foreach ($target in $targets) {
+    Write-Host ""
+    Write-Host "=== $target ===" -ForegroundColor Cyan
+    $ok = Invoke-ServiceDeploy -SvcName $target
+    if (-not $ok -and $ServiceName -eq 'all') {
+        Write-Warning "Stopping 'all' deploy due to failure in $target."
+        exit 1
+    }
+}

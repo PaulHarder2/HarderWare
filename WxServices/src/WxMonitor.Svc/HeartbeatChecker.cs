@@ -30,6 +30,8 @@ public static class HeartbeatChecker
             {
                 return DateTime.UtcNow - ts.ToUniversalTime();
             }
+
+            Logger.Warn($"Could not parse heartbeat timestamp from '{filePath}' — content: '{text}'.");
         }
         catch (Exception ex)
         {

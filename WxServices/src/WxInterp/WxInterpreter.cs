@@ -12,7 +12,9 @@ public static class WxInterpreter
 {
     /// <summary>
     /// Builds a <see cref="WeatherSnapshot"/> from the most recent METAR and
-    /// the most recent valid TAF for <paramref name="tafIcao"/> (if provided).
+    /// the most recent valid TAF for <paramref name="tafIcao"/> (if provided),
+    /// optionally enriched with a GFS model forecast at the recipient's exact
+    /// location.
     /// <para>
     /// METAR stations are tried in the order given by <paramref name="metarIcaos"/>.
     /// If none have recent data the method falls back to the most recent METAR
@@ -31,6 +33,19 @@ public static class WxInterpreter
     /// </param>
     /// <param name="localityName">Human-readable location label to embed in the snapshot.</param>
     /// <param name="dbOptions">EF Core options for opening a <see cref="WeatherDataContext"/>.</param>
+    /// <param name="homeLat">
+    /// Recipient latitude in decimal degrees North, used to query GFS forecast data.
+    /// Pass <see langword="null"/> to omit the GFS forecast.
+    /// </param>
+    /// <param name="homeLon">
+    /// Recipient longitude in decimal degrees East (negative = West), used to query
+    /// GFS forecast data.  Pass <see langword="null"/> to omit the GFS forecast.
+    /// </param>
+    /// <param name="precipThresholdMmHr">
+    /// Minimum precipitation rate in mm/hr for a GFS forecast hour to contribute to
+    /// <see cref="GfsDailyForecast.MaxPrecipRateMmHr"/>.  Ignored when
+    /// <paramref name="homeLat"/> or <paramref name="homeLon"/> is <see langword="null"/>.
+    /// </param>
     /// <param name="ct">Cancellation token propagated to all EF Core async queries.</param>
     /// <returns>
     /// A populated <see cref="WeatherSnapshot"/>, or <see langword="null"/> if no
@@ -41,6 +56,9 @@ public static class WxInterpreter
         string? tafIcao,
         string localityName,
         DbContextOptions<WeatherDataContext> dbOptions,
+        double? homeLat = null,
+        double? homeLon = null,
+        float precipThresholdMmHr = 0.1f,
         CancellationToken ct = default)
     {
         await using var ctx = new WeatherDataContext(dbOptions);
@@ -85,7 +103,14 @@ public static class WxInterpreter
                 .FirstOrDefaultAsync(ct);
         }
 
-        return BuildSnapshot(metar, taf, localityName);
+        GfsForecast? gfsForecast = null;
+        if (homeLat.HasValue && homeLon.HasValue)
+        {
+            gfsForecast = await GfsInterpreter.GetForecastAsync(
+                homeLat.Value, homeLon.Value, dbOptions, precipThresholdMmHr, ct);
+        }
+
+        return BuildSnapshot(metar, taf, localityName, gfsForecast);
     }
 
     // ── nearest-station resolution ────────────────────────────────────────────
@@ -194,9 +219,10 @@ public static class WxInterpreter
     /// <param name="metar">The METAR record to use as the current-conditions source.  Must not be <see langword="null"/>.</param>
     /// <param name="taf">The TAF record to populate forecast periods, or <see langword="null"/> to omit forecast data.</param>
     /// <param name="localityName">Human-readable location label to embed in the snapshot.</param>
+    /// <param name="gfsForecast">GFS model forecast to attach to the snapshot, or <see langword="null"/> if unavailable.</param>
     /// <returns>A fully populated <see cref="WeatherSnapshot"/> derived from the given records.</returns>
     private static WeatherSnapshot BuildSnapshot(
-        MetarRecord metar, TafRecord? taf, string localityName)
+        MetarRecord metar, TafRecord? taf, string localityName, GfsForecast? gfsForecast = null)
     {
         var visSm    = metar.VisibilityStatuteMiles
                        ?? (metar.VisibilityM.HasValue ? metar.VisibilityM.Value / 1609.344 : null);
@@ -247,6 +273,7 @@ public static class WxInterpreter
             AltimeterInHg         = altInHg,
             TafStationIcao        = taf?.StationIcao,
             ForecastPeriods       = forecastPeriods,
+            GfsForecast           = gfsForecast,
         };
     }
 

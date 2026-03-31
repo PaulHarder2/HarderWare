@@ -75,10 +75,14 @@ public sealed class RecipientResolver
             }
 
             Logger.Info($"{label}: geocoding address...");
-            var geo = await AddressGeocoder.LookupAsync(recipient.Address, _httpClient);
+            var geo = await RetryAsync(
+                () => AddressGeocoder.LookupAsync(recipient.Address, _httpClient),
+                maxAttempts: 3, delay: TimeSpan.FromSeconds(2),
+                onRetry: attempt => Logger.Warn($"{label}: geocoding attempt {attempt} failed — retrying..."));
+
             if (geo is null)
             {
-                Logger.Error($"{label}: geocoding failed — skipping.");
+                Logger.Error($"{label}: geocoding failed after all attempts — skipping.");
                 return false;
             }
 
@@ -96,12 +100,18 @@ public sealed class RecipientResolver
         if (recipient.MetarIcao is null)
         {
             Logger.Info($"{label}: finding nearest METAR station...");
-            recipient.MetarIcao = await WxInterpreter.FindNearestMetarStationAsync(
-                recipient.Latitude!.Value, recipient.Longitude!.Value, _dbOptions, _httpClient);
+
+            // Only consider stations the local METAR fetcher is already collecting,
+            // so the resolved ICAO is guaranteed to have data in the DB.
+            var activeMetarStations = await GetActiveMetarStationsAsync();
+
+            recipient.MetarIcao = await AirportLocator.FindNearestStationAsync(
+                recipient.Latitude!.Value, recipient.Longitude!.Value,
+                _httpClient, allowedIcaos: activeMetarStations);
 
             if (recipient.MetarIcao is null)
             {
-                Logger.Error($"{label}: no METAR station found in database — skipping.");
+                Logger.Error($"{label}: no METAR station found — skipping.");
                 return false;
             }
 
@@ -112,13 +122,19 @@ public sealed class RecipientResolver
         if (recipient.TafIcao is null)
         {
             Logger.Info($"{label}: finding nearest TAF station...");
-            recipient.TafIcao = await WxInterpreter.FindNearestTafStationAsync(
-                recipient.Latitude!.Value, recipient.Longitude!.Value, _dbOptions, _httpClient);
+            var tafIcao = await AirportLocator.FindNearestTafStationAsync(
+                recipient.Latitude!.Value, recipient.Longitude!.Value, _httpClient);
 
-            if (recipient.TafIcao is null)
+            if (tafIcao is null)
+            {
                 Logger.Warn($"{label}: no TAF station found — forecast will be omitted.");
+                recipient.TafIcao = "NONE";  // sentinel: lookup was attempted, nothing found
+            }
             else
-                Logger.Info($"{label}: nearest TAF = {recipient.TafIcao}");
+            {
+                Logger.Info($"{label}: nearest TAF = {tafIcao}");
+                recipient.TafIcao = tafIcao;
+            }
 
             changed = true;
         }
@@ -127,6 +143,63 @@ public sealed class RecipientResolver
             SaveRecipient(recipient);
 
         return true;
+    }
+
+    // ── helpers ───────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Returns the set of METAR station ICAOs that have observations in the local
+    /// database within the last three hours.  Used to constrain station resolution
+    /// to stations the METAR fetcher is actively collecting.
+    /// Returns an empty set when the database has no recent data (e.g. first run),
+    /// causing the resolver to fall back to the full AWC API result.
+    /// </summary>
+    /// <returns>A read-only set of active ICAO identifiers.</returns>
+    private async Task<IReadOnlySet<string>> GetActiveMetarStationsAsync()
+    {
+        var cutoff = DateTime.UtcNow.AddHours(-3);
+        await using var ctx = new WeatherDataContext(_dbOptions);
+        var stations = await ctx.Metars
+            .Where(m => m.ObservationUtc >= cutoff)
+            .Select(m => m.StationIcao)
+            .Distinct()
+            .ToListAsync();
+        return stations.ToHashSet();
+    }
+
+    // ── retry ─────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Calls <paramref name="operation"/> up to <paramref name="maxAttempts"/> times,
+    /// returning the first non-null result.  Waits <paramref name="delay"/> between
+    /// attempts and calls <paramref name="onRetry"/> with the 1-based attempt number
+    /// before each retry.  Returns <see langword="null"/> if all attempts return null
+    /// or throw.
+    /// </summary>
+    /// <typeparam name="T">The non-nullable result type returned by the operation.</typeparam>
+    /// <param name="operation">The async operation to attempt.  A null return is treated as failure.</param>
+    /// <param name="maxAttempts">Maximum number of attempts (must be ≥ 1).</param>
+    /// <param name="delay">Time to wait between attempts.</param>
+    /// <param name="onRetry">Called with the just-completed attempt number before sleeping and retrying.</param>
+    /// <returns>The first non-null result, or <see langword="null"/> if all attempts fail.</returns>
+    private static async Task<T?> RetryAsync<T>(
+        Func<Task<T?>> operation, int maxAttempts, TimeSpan delay, Action<int> onRetry)
+        where T : struct
+    {
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            T? result = null;
+            try   { result = await operation(); }
+            catch { /* logged by the callee; treat as null */ }
+
+            if (result is not null) return result;
+            if (attempt < maxAttempts)
+            {
+                onRetry(attempt);
+                await Task.Delay(delay);
+            }
+        }
+        return null;
     }
 
     // ── save-back ─────────────────────────────────────────────────────────────

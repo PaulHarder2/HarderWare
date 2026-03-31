@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Configuration;
+using WxServices.Common;
 using WxServices.Logging;
 
 namespace WxMonitor.Svc;
@@ -43,7 +44,7 @@ public sealed class MonitorWorker : BackgroundService
                 Logger.Error("Unhandled exception in monitor cycle.", ex);
             }
 
-            var cfg = LoadConfig();
+            var (cfg, _) = LoadConfigs();
             var intervalMinutes = cfg.IntervalMinutes;
             if (intervalMinutes <= 0)
             {
@@ -73,7 +74,7 @@ public sealed class MonitorWorker : BackgroundService
     /// </sideeffects>
     private async Task RunCycleAsync()
     {
-        var cfg = LoadConfig();
+        var (cfg, smtp) = LoadConfigs();
 
         if (string.IsNullOrWhiteSpace(cfg.AlertEmail))
         {
@@ -88,7 +89,7 @@ public sealed class MonitorWorker : BackgroundService
         }
 
         var state   = MonitorStateStore.Load();
-        var emailer = new AlertEmailSender(cfg.Smtp);
+        var emailer = new SmtpSender(smtp, "WxMonitor");
         var cooldown = TimeSpan.FromMinutes(cfg.AlertCooldownMinutes);
         var now      = DateTime.UtcNow;
         var dirty    = false;
@@ -236,16 +237,24 @@ public sealed class MonitorWorker : BackgroundService
     // ── helpers ───────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Loads and returns the current <see cref="MonitorConfig"/> from the
-    /// <c>Monitor</c> section of the application configuration.
+    /// Loads and returns the current configuration from the application settings.
+    /// Binds <see cref="MonitorConfig"/> from the <c>Monitor</c> section and
+    /// <see cref="SmtpConfig"/> from the top-level <c>Smtp</c> section.
     /// Called at the start of each cycle so that config changes take effect
     /// without restarting the service.
     /// </summary>
-    /// <returns>A freshly bound <see cref="MonitorConfig"/> reflecting the current appsettings.</returns>
-    private MonitorConfig LoadConfig()
+    /// <returns>
+    /// A tuple of freshly bound <see cref="MonitorConfig"/> and <see cref="SmtpConfig"/>
+    /// reflecting the current appsettings.
+    /// </returns>
+    private (MonitorConfig monitor, SmtpConfig smtp) LoadConfigs()
     {
-        var cfg = new MonitorConfig();
-        _config.GetSection("Monitor").Bind(cfg);
-        return cfg;
+        var monitor = new MonitorConfig();
+        _config.GetSection("Monitor").Bind(monitor);
+
+        var smtp = new SmtpConfig();
+        _config.GetSection("Smtp").Bind(smtp);
+
+        return (monitor, smtp);
     }
 }

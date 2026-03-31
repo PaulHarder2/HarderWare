@@ -80,19 +80,6 @@ public sealed class GfsGridPoint
     public float? PRateKgM2s { get; set; }
 
     /// <summary>
-    /// Total accumulated precipitation in mm since model initialisation time
-    /// (<see cref="ModelRunUtc"/>).
-    /// <para>
-    /// <b>Important:</b> GFS APCP is a running accumulation from T+0, not a
-    /// period total.  To obtain rainfall for a specific hour, subtract the value
-    /// at the preceding forecast hour:
-    /// <c>period_mm = APCP[h] - APCP[h-1]</c>.
-    /// </para>
-    /// <see langword="null"/> if not available.
-    /// </summary>
-    public float? ApcpMm { get; set; }
-
-    /// <summary>
     /// Total cloud cover as a percentage (0–100).
     /// <see langword="null"/> if not available.
     /// </summary>

@@ -2,6 +2,11 @@
 // Populated from the "Report" section of appsettings files.
 // Secrets (ApiKey, Smtp.Password) must be provided in appsettings.local.json,
 // which is excluded from source control.
+//
+// SmtpConfig is defined in WxServices.Common and bound from the top-level
+// "Smtp" section, shared with other services.
+
+using WxServices.Common;
 
 namespace WxReport.Svc;
 
@@ -27,9 +32,14 @@ public class ReportConfig
     /// <summary>Path to the heartbeat file written after each successful report cycle. Read by WxMonitor.Svc.</summary>
     public string?                 HeartbeatFile     { get; set; }
 
+    /// <summary>
+    /// Minimum precipitation rate in mm/hr for a GFS forecast hour to be counted
+    /// as precipitation in the daily summary.  Hours below this threshold are
+    /// treated as dry.  Defaults to 0.1 mm/hr.
+    /// </summary>
+    public float PrecipRateThresholdMmHr { get; set; } = 0.1f;
+
     public SignificantChangeConfig SignificantChange { get; set; } = new();
-    public ClaudeConfig            Claude            { get; set; } = new();
-    public SmtpConfig              Smtp              { get; set; } = new();
     public List<RecipientConfig>   Recipients        { get; set; } = [];
 }
 
@@ -44,9 +54,39 @@ public class SignificantChangeConfig
 
     /// <summary>Ceiling below this threshold (ft AGL) is considered a significant condition.</summary>
     public int    CeilingThresholdFt    { get; set; } = 3000;
+
+    /// <summary>
+    /// Minimum change in the GFS forecast high temperature (°F) between report
+    /// cycles that triggers an unscheduled alert.  The fingerprint buckets the
+    /// forecast high to this resolution, so a change of this many degrees or more
+    /// will produce a different fingerprint.  Default 15°F.
+    /// </summary>
+    public int    ForecastHighChangeDegF { get; set; } = 15;
+
+    /// <summary>
+    /// Surface-based CAPE threshold in J/kg above which a day is considered to
+    /// carry meaningful thunderstorm potential in the fingerprint.  When any
+    /// forecast day crosses this threshold (or stops crossing it), the fingerprint
+    /// changes and an unscheduled alert is sent.  Default 1000 J/kg.
+    /// </summary>
+    public int    CapeThresholdJKg      { get; set; } = 1000;
+
+    /// <summary>
+    /// Maximum precipitation rate in mm/hr that any GFS forecast day must reach or
+    /// exceed to be counted as having meaningful precipitation in the fingerprint
+    /// (<c>GP</c> field).  When any day crosses this threshold (or drops below it),
+    /// the fingerprint changes and an unscheduled update may be sent.
+    /// Default 2.0 mm/hr (moderate rain).
+    /// </summary>
+    public float  GfsPrecipThresholdMmHr { get; set; } = 2.0f;
 }
 
-/// <summary>Claude API connection settings used by <see cref="ClaudeClient"/>.</summary>
+/// <summary>
+/// Claude API connection settings shared across all services.
+/// Bound from the top-level <c>Claude</c> section of appsettings files.
+/// The API key must come from <c>appsettings.local.json</c>.
+/// The model can be overridden per-service in that service's own appsettings files.
+/// </summary>
 public class ClaudeConfig
 {
     public string? ApiKey { get; set; }
@@ -55,17 +95,22 @@ public class ClaudeConfig
     public string  Model  { get; set; } = "claude-haiku-4-5-20251001";
 }
 
-/// <summary>SMTP connection and credential settings used by <see cref="EmailSender"/>.</summary>
-public class SmtpConfig
-{
-    public string  Host        { get; set; } = "smtp.gmail.com";
-    public int     Port        { get; set; } = 587;
-    public string? Username    { get; set; }
 
-    /// <summary>App password or SMTP password — must come from appsettings.local.json.</summary>
-    public string? Password    { get; set; }
-    public string? FromAddress { get; set; }
-    public string  FromName    { get; set; } = "WxReport";
+/// <summary>
+/// Per-recipient unit preferences for displayed values.
+/// Each preference is independent — recipients can mix units freely
+/// (e.g. Celsius temperatures with mph wind speeds).
+/// </summary>
+public class UnitPreferences
+{
+    /// <summary>Temperature unit: <c>"F"</c> for Fahrenheit (default) or <c>"C"</c> for Celsius.</summary>
+    public string Temperature { get; set; } = "F";
+
+    /// <summary>Pressure unit: <c>"inHg"</c> for inches of mercury (default) or <c>"kPa"</c> for kilopascals.</summary>
+    public string Pressure    { get; set; } = "inHg";
+
+    /// <summary>Wind speed unit: <c>"mph"</c> for miles per hour (default) or <c>"kph"</c> for kilometres per hour.</summary>
+    public string WindSpeed   { get; set; } = "mph";
 }
 
 /// <summary>
@@ -127,4 +172,7 @@ public class RecipientConfig
 
     /// <summary>Cached ICAO of the nearest TAF station to this recipient.</summary>
     public string? TafIcao      { get; set; }
+
+    /// <summary>Preferred units for displayed values. Each dimension is independent; defaults to US customary.</summary>
+    public UnitPreferences Units { get; set; } = new();
 }
