@@ -1,0 +1,8 @@
+{
+  "db": {
+    "server": ".\\SQLEXPRESS",
+    "database": "WeatherData",
+    "driver": "ODBC Driver 17 for SQL Server"
+  },
+  "output_dir": "C:\\HarderWare\\plots"
+}

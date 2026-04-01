@@ -92,4 +92,12 @@ public sealed class GfsGridPoint
     /// <see langword="null"/> if not available.
     /// </summary>
     public float? CapeJKg { get; set; }
+
+    /// <summary>
+    /// Mean sea-level pressure in Pascals.
+    /// Derived from the GFS <c>PRMSL</c> field at the mean sea level surface.
+    /// Divide by 100 to convert to hectopascals (hPa / millibars).
+    /// <see langword="null"/> if not available.
+    /// </summary>
+    public float? PrMslPa { get; set; }
 }

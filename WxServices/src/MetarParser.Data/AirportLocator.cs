@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using System.Net.Http.Json;
+using MetarParser.Data.Entities;
 using WxServices.Logging;
 
 namespace MetarParser.Data;
@@ -58,6 +59,62 @@ public static class AirportLocator
         }
 
         return (airports[0].Lat, airports[0].Lon);
+    }
+
+    /// <summary>
+    /// Looks up full station metadata for the airport identified by
+    /// <paramref name="icao"/> using the Aviation Weather Center airport endpoint,
+    /// and returns a <see cref="WxStation"/> entity ready for database insertion.
+    /// </summary>
+    /// <param name="icao">ICAO airport identifier to resolve (e.g. <c>"KDWH"</c>).</param>
+    /// <param name="httpClient">HTTP client for the AWC airport API request.</param>
+    /// <returns>
+    /// A populated <see cref="WxStation"/> if the airport is found, or
+    /// <see langword="null"/> if the identifier is unknown or the API call fails.
+    /// </returns>
+    /// <sideeffects>Makes an HTTP GET request to the Aviation Weather Center airport API. Writes error log entries on failure.</sideeffects>
+    public static async Task<WxStation?> LookupStationAsync(string icao, HttpClient httpClient)
+    {
+        if (string.IsNullOrWhiteSpace(icao))
+        {
+            Logger.Error("AirportLocator.LookupStationAsync called with null or empty ICAO — returning null.");
+            return null;
+        }
+
+        var url = $"{AirportApiBase}?ids={Uri.EscapeDataString(icao)}&format=json";
+
+        AirportDto[]? airports;
+        try
+        {
+            var json = await httpClient.GetStringAsync(url);
+            if (string.IsNullOrWhiteSpace(json))
+            {
+                Logger.Warn($"Station '{icao}' not found in Aviation Weather Center database (empty response).");
+                return null;
+            }
+            airports = System.Text.Json.JsonSerializer.Deserialize<AirportDto[]>(json);
+        }
+        catch (Exception ex)
+        {
+            Logger.Error($"Station lookup failed for '{icao}': {ex.Message}");
+            return null;
+        }
+
+        if (airports is not { Length: > 0 })
+        {
+            Logger.Warn($"Station '{icao}' was not found in the Aviation Weather Center database.");
+            return null;
+        }
+
+        var a = airports[0];
+        return new WxStation
+        {
+            IcaoId      = a.IcaoId,
+            Name        = string.IsNullOrWhiteSpace(a.Name) ? null : a.Name.Trim(),
+            Lat         = a.Lat,
+            Lon         = a.Lon,
+            ElevationFt = a.Elev,
+        };
     }
 
     /// <summary>
@@ -169,9 +226,11 @@ public static class AirportLocator
 
     private sealed class AirportDto
     {
-        [JsonPropertyName("icaoId")] public string IcaoId { get; set; } = "";
-        [JsonPropertyName("lat")]    public double Lat    { get; set; }
-        [JsonPropertyName("lon")]    public double Lon    { get; set; }
+        [JsonPropertyName("icaoId")] public string  IcaoId { get; set; } = "";
+        [JsonPropertyName("name")]   public string? Name   { get; set; }
+        [JsonPropertyName("lat")]    public double  Lat    { get; set; }
+        [JsonPropertyName("lon")]    public double  Lon    { get; set; }
+        [JsonPropertyName("elev")]   public double? Elev   { get; set; }
     }
 
     private sealed class MetarStationDto

@@ -20,8 +20,8 @@ public class ReportConfig
     /// <summary>Language to use when no per-recipient language is specified (e.g. "English", "Spanish").</summary>
     public string DefaultLanguage         { get; set; } = "English";
 
-    /// <summary>Hour of day (0–23, in the recipient's local timezone) at which the daily scheduled report is sent.</summary>
-    public int    DefaultScheduledSendHour { get; set; } = 7;
+    /// <summary>Hour(s) of day (0–23, in the recipient's local timezone) at which the daily scheduled report is sent.  Comma-separated when multiple hours are desired (e.g. "6, 12").</summary>
+    public string DefaultScheduledSendHours { get; set; } = "7";
 
     /// <summary>Minimum minutes that must elapse between any two reports sent to the same recipient.</summary>
     public int    MinGapMinutes           { get; set; } = 60;
@@ -51,9 +51,6 @@ public class SignificantChangeConfig
 
     /// <summary>Visibility below this threshold (SM) is considered a significant condition.</summary>
     public double VisibilityThresholdSm { get; set; } = 3.0;
-
-    /// <summary>Ceiling below this threshold (ft AGL) is considered a significant condition.</summary>
-    public int    CeilingThresholdFt    { get; set; } = 3000;
 
     /// <summary>
     /// Minimum change in the GFS forecast high temperature (°F) between report
@@ -136,8 +133,8 @@ public class RecipientConfig
     /// <summary>IANA timezone name (e.g. "America/Chicago").  Defaults to UTC.</summary>
     public string  Timezone          { get; set; } = "UTC";
 
-    /// <summary>Hour of day (0–23) in the recipient's timezone at which the daily report is sent.  Null falls back to <see cref="ReportConfig.DefaultScheduledSendHour"/>.</summary>
-    public int?    ScheduledSendHour { get; set; }
+    /// <summary>Hour(s) of day (0–23) in the recipient's timezone at which the daily report is sent.  Comma-separated when multiple hours are desired (e.g. "6, 12").  Null falls back to <see cref="ReportConfig.DefaultScheduledSendHours"/>.</summary>
+    public string? ScheduledSendHours { get; set; }
 
     // ── location fields (all stored in appsettings.local.json) ───────────────
 

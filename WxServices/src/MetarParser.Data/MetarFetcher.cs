@@ -65,14 +65,19 @@ public static class MetarFetcher
 
     /// <summary>
     /// Downloads METAR/SPECI data from <paramref name="url"/>, parses each line,
-    /// deduplicates against the database, and inserts new records in a single
-    /// <see cref="WeatherDataContext.SaveChanges"/> call.
+    /// deduplicates against the database, inserts new records in a single
+    /// <see cref="WeatherDataContext.SaveChanges"/> call, and then upserts any
+    /// station ICAOs not yet present in the <c>WxStations</c> table.
     /// Logs parse errors per line but continues processing remaining lines.
     /// </summary>
     /// <param name="url">Fully qualified Aviation Weather Center API URL to fetch.</param>
     /// <param name="dbOptions">EF Core options for the deduplication query and batch insert.</param>
-    /// <param name="httpClient">HTTP client for the GET request.</param>
-    /// <sideeffects>Inserts new <see cref="MetarRecord"/> rows into the database. Writes progress and error log entries.</sideeffects>
+    /// <param name="httpClient">HTTP client for the METAR GET request and AWC airport lookups.</param>
+    /// <sideeffects>
+    /// Inserts new <see cref="MetarRecord"/> rows into the database.
+    /// Inserts new <see cref="WxStation"/> rows for any station ICAOs not yet in <c>WxStations</c>.
+    /// Writes progress and error log entries.
+    /// </sideeffects>
     private static async Task FetchUrlAndInsertAsync(
         string url,
         DbContextOptions<WeatherDataContext> dbOptions,
@@ -163,5 +168,67 @@ public static class MetarFetcher
         }
 
         Logger.Info($"METAR fetch done. Inserted: {inserted}  Skipped: {skipped}  Parse errors: {parseErrors}");
+
+        // ── Upsert any station ICAOs not yet in WxStations ───────────────────
+        await UpsertNewStationsAsync(stations, dbOptions, httpClient);
+    }
+
+    /// <summary>
+    /// For each ICAO in <paramref name="icaos"/> that is not already present in the
+    /// <c>WxStations</c> table, queries the Aviation Weather Center airport API and
+    /// inserts a new <see cref="WxStation"/> row.  ICAOs that cannot be resolved are
+    /// skipped without failing the overall cycle.
+    /// </summary>
+    /// <param name="icaos">Station identifiers seen in the current METAR batch.</param>
+    /// <param name="dbOptions">EF Core options for database access.</param>
+    /// <param name="httpClient">HTTP client for AWC airport API lookups.</param>
+    /// <sideeffects>
+    /// Makes one HTTP GET request to the AWC airport API per unknown station.
+    /// Inserts new <see cref="WxStation"/> rows.
+    /// Writes info and warning log entries.
+    /// </sideeffects>
+    private static async Task UpsertNewStationsAsync(
+        IReadOnlyList<string> icaos,
+        DbContextOptions<WeatherDataContext> dbOptions,
+        HttpClient httpClient)
+    {
+        using var ctx = new WeatherDataContext(dbOptions);
+
+        var knownIds = ctx.WxStations
+            .Where(s => icaos.Contains(s.IcaoId))
+            .Select(s => s.IcaoId)
+            .ToHashSet();
+
+        var newIcaos = icaos.Where(id => !knownIds.Contains(id)).ToList();
+        if (newIcaos.Count == 0) return;
+
+        Logger.Info($"MetarFetcher: {newIcaos.Count} new station(s) to register: {string.Join(", ", newIcaos)}");
+
+        foreach (var icao in newIcaos)
+        {
+            var station = await AirportLocator.LookupStationAsync(icao, httpClient);
+            if (station is null)
+            {
+                // Insert a stub row with no coordinates so we don't retry on
+                // every subsequent cycle for stations the AWC airport API
+                // does not know about.
+                Logger.Info($"MetarFetcher: '{icao}' not found in AWC airport database — registering as unresolved.");
+                station = new Entities.WxStation { IcaoId = icao };
+            }
+
+            ctx.WxStations.Add(station);
+            try
+            {
+                await ctx.SaveChangesAsync();
+                var coords = station.Lat.HasValue ? $"{station.Lat:F3}/{station.Lon:F3}" : "unresolved";
+                Logger.Info($"MetarFetcher: registered station '{icao}' ({station.Name ?? "no name"}, {coords}, elev {station.ElevationFt?.ToString("F0") ?? "unknown"} ft).");
+            }
+            catch (DbUpdateException ex)
+            {
+                // Another process may have inserted concurrently — not fatal.
+                Logger.Warn($"MetarFetcher: DB error inserting station '{icao}': {ex.InnerException?.Message ?? ex.Message}");
+                ctx.Entry(station).State = Microsoft.EntityFrameworkCore.EntityState.Detached;
+            }
+        }
     }
 }

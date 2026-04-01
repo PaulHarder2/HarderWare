@@ -113,7 +113,7 @@ public sealed class ClaudeClient
             "Use inline CSS throughout (email clients do not reliably support external stylesheets). " +
             "Maximum content width: 600px, centred, with a clean and professional visual style. " +
             "Structure the output in this order: " +
-            "(1) A styled header showing the locality name and local observation time. " +
+            "(1) A styled header showing the locality name and station ICAO from the data (e.g. 'Spring, TX (KDWH)') and the local observation time — never use the recipient's name here. " +
             "(2) A 'Current Conditions' section as a two-column HTML table (label | value) " +
             "covering sky, visibility, wind, temperature, relative humidity, and pressure. " +
             "(3) An 'Extended Forecast' section as a multi-column HTML table with one row per " +
@@ -127,8 +127,10 @@ public sealed class ClaudeClient
             "Rules: use only the data provided — never invent or estimate conditions. " +
             "Never show raw METAR codes, numeric precipitation rates, or CAPE values to the reader. " +
             "Never use aviation terminology — no 'ceiling', 'TAF', 'METAR', 'IFR', 'VFR', or similar. " +
-            "Low cloud layers should be described in everyday terms such as 'low clouds', " +
-            "'a thick overcast', or 'clouds hanging low'. " +
+            "Never include altitude or height figures in sky descriptions. " +
+            "Describe sky conditions with a short plain phrase that conveys overall coverage and height " +
+            "(e.g. 'Low overcast', 'High thin overcast', 'Partly cloudy') — " +
+            "do not list or enumerate individual cloud layers. " +
             "You may use TAF forecast data to inform your descriptions, but do not reference it explicitly. " +
             "Use the CAPE label to describe thunderstorm potential in plain language — " +
             "low CAPE warrants at most a mention of an isolated storm; " +

@@ -78,6 +78,13 @@ public sealed class WeatherDataContext : DbContext
     public DbSet<GfsModelRun> GfsModelRuns => Set<GfsModelRun>();
 
     /// <summary>
+    /// The <c>WxStations</c> table — one row per METAR reporting station, holding
+    /// geographic metadata (name, lat, lon, elevation).  Rows are inserted on first
+    /// encounter during a METAR fetch cycle and are never updated or deleted.
+    /// </summary>
+    public DbSet<WxStation> WxStations => Set<WxStation>();
+
+    /// <summary>
     /// Configures the EF Core model: table names, column types, indexes,
     /// and relationships between entities.
     /// </summary>
@@ -268,6 +275,20 @@ public sealed class WeatherDataContext : DbContext
             e.ToTable("GfsModelRuns");
             e.HasKey(x => x.ModelRunUtc);
             e.Property(x => x.IsComplete).IsRequired();
+        });
+
+        // ── WxStations ───────────────────────────────────────────────────────
+
+        modelBuilder.Entity<WxStation>(e =>
+        {
+            e.ToTable("WxStations");
+            e.HasKey(x => x.IcaoId);
+
+            e.Property(x => x.IcaoId)     .HasMaxLength(4).IsFixedLength().IsRequired();
+            e.Property(x => x.Name)       .HasMaxLength(100);
+            e.Property(x => x.Lat);
+            e.Property(x => x.Lon);
+            e.Property(x => x.ElevationFt);
         });
 
         // ── GfsGrid ──────────────────────────────────────────────────────────

@@ -26,7 +26,7 @@ public enum ChangeSeverity
 
     /// <summary>
     /// A dangerous current-conditions change occurred (thunderstorm, low visibility,
-    /// low ceiling, or high winds appeared).
+    /// or high winds appeared).
     /// Subject line: "Weather alert"; Claude opens with an urgent notice.
     /// </summary>
     Alert,
@@ -45,7 +45,6 @@ public static class SnapshotFingerprint
     /// <list type="bullet">
     ///   <item>Wind speed crosses the configured knot threshold.</item>
     ///   <item>Visibility crosses the configured statute-mile threshold.</item>
-    ///   <item>The lowest BKN/OVC/VV ceiling crosses the configured feet threshold.</item>
     ///   <item>A thunderstorm phenomenon appears or disappears.</item>
     ///   <item>Any precipitation phenomenon appears or disappears.</item>
     ///   <item>The GFS forecast high for the next calendar day shifts by at least <see cref="SignificantChangeConfig.ForecastHighChangeDegF"/> degrees.</item>
@@ -56,8 +55,8 @@ public static class SnapshotFingerprint
     /// <param name="snap">The weather snapshot to fingerprint.</param>
     /// <param name="cfg">Thresholds that define what constitutes a "significant" condition for each dimension.</param>
     /// <returns>
-    /// A compact pipe-delimited string encoding eight fields, e.g.
-    /// <c>"W:False|V:False|C:True|TS:False|PR:True|GH:5|GC:False|GP:True"</c>.
+    /// A compact pipe-delimited string encoding seven fields, e.g.
+    /// <c>"W:False|V:False|TS:False|PR:True|GH:5|GC:False|GP:True"</c>.
     /// The <c>GH</c> field is a bucket index derived by dividing the forecast high
     /// by <see cref="SignificantChangeConfig.ForecastHighChangeDegF"/>; it is <c>?</c>
     /// when no GFS data is available.
@@ -69,9 +68,6 @@ public static class SnapshotFingerprint
 
         var visSm  = snap.Cavok ? 99.0 : (snap.VisibilityStatuteMiles ?? 99.0);
         var visLow = visSm < cfg.VisibilityThresholdSm;
-
-        var ceiling    = LowestSignificantCeilingFt(snap);
-        var ceilingLow = ceiling.HasValue && ceiling.Value < cfg.CeilingThresholdFt;
 
         // Current (non-recent) thunderstorm
         var hasTs = snap.WeatherPhenomena.Any(w =>
@@ -96,7 +92,7 @@ public static class SnapshotFingerprint
         // GFS: precip risk — any forecast day exceeds the precipitation-rate threshold.
         var gfsPrecipRisk = gfsDays?.Any(d => d.MaxPrecipRateMmHr >= cfg.GfsPrecipThresholdMmHr) ?? false;
 
-        return $"W:{windHigh}|V:{visLow}|C:{ceilingLow}|TS:{hasTs}|PR:{hasPrecip}" +
+        return $"W:{windHigh}|V:{visLow}|TS:{hasTs}|PR:{hasPrecip}" +
                $"|GH:{highBucket?.ToString() ?? "?"}|GC:{gfsCapeRisk}|GP:{gfsPrecipRisk}";
     }
 
@@ -107,7 +103,7 @@ public static class SnapshotFingerprint
     /// <remarks>
     /// Classification rules (evaluated in priority order):
     /// <list type="bullet">
-    ///   <item><b>Alert</b> — a dangerous current-conditions flag (<c>W</c>, <c>V</c>, <c>C</c>, or <c>TS</c>) changed to <c>True</c>.</item>
+    ///   <item><b>Alert</b> — a dangerous current-conditions flag (<c>W</c>, <c>V</c>, or <c>TS</c>) changed to <c>True</c>.</item>
     ///   <item><b>Update</b> — any current-conditions flag cleared; <c>PR</c> changed; a GFS risk flag (<c>GC</c> or <c>GP</c>) appeared; or the temperature bucket (<c>GH</c>) shifted.</item>
     ///   <item><b>Minor</b> — only GFS risk flags (<c>GC</c>/<c>GP</c>) cleared (good news; no send needed).</item>
     /// </list>
@@ -127,13 +123,11 @@ public static class SnapshotFingerprint
         // Alert: a dangerous current-condition appeared.
         if (BecameTrue(oldP, newP, "W"))  return ChangeSeverity.Alert;
         if (BecameTrue(oldP, newP, "V"))  return ChangeSeverity.Alert;
-        if (BecameTrue(oldP, newP, "C"))  return ChangeSeverity.Alert;
         if (BecameTrue(oldP, newP, "TS")) return ChangeSeverity.Alert;
 
         // Update: conditions cleared, precip changed, or forecast worsened.
         if (Changed(oldP, newP, "W"))           return ChangeSeverity.Update;
         if (Changed(oldP, newP, "V"))           return ChangeSeverity.Update;
-        if (Changed(oldP, newP, "C"))           return ChangeSeverity.Update;
         if (Changed(oldP, newP, "TS"))          return ChangeSeverity.Update;
         if (Changed(oldP, newP, "PR"))          return ChangeSeverity.Update;
         if (BecameTrue(oldP, newP, "GC"))       return ChangeSeverity.Update;
@@ -145,24 +139,6 @@ public static class SnapshotFingerprint
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────
-
-    /// <summary>
-    /// Returns the height in feet of the lowest broken, overcast, or vertical-visibility
-    /// sky layer in <paramref name="snap"/>, or <see langword="null"/> if no such layer exists.
-    /// </summary>
-    /// <param name="snap">The snapshot whose sky layers to examine.</param>
-    /// <returns>Height in feet of the lowest significant ceiling layer, or <see langword="null"/>.</returns>
-    private static int? LowestSignificantCeilingFt(WeatherSnapshot snap) =>
-        snap.SkyLayers
-            .Where(l => l.Coverage is SkyCoverage.Broken
-                                   or SkyCoverage.Overcast
-                                   or SkyCoverage.VerticalVisibility)
-            .Select(l => l.HeightFeet)
-            .Where(h => h.HasValue)
-            .Select(h => h!.Value)
-            .OrderBy(h => h)
-            .Cast<int?>()
-            .FirstOrDefault();
 
     /// <summary>
     /// Parses a pipe-delimited fingerprint string into a key/value dictionary.

@@ -155,11 +155,12 @@ public sealed class ReportWorker : BackgroundService
 
         Logger.Info($"Sending startup report to {recipient.Email}.");
 
-        var language      = recipient.Language ?? cfg.DefaultLanguage;
-        var scheduledHour = recipient.ScheduledSendHour ?? cfg.DefaultScheduledSendHour;
-        var tz            = ResolveTimezone(recipient.Timezone);
-        var claude        = new ClaudeClient(_httpClient, claude_cfg.ApiKey, claude_cfg.Model);
-        var report        = await claude.GenerateReportAsync(
+        var language       = recipient.Language ?? cfg.DefaultLanguage;
+        var scheduledHours = ParseHourList(recipient.ScheduledSendHours ?? cfg.DefaultScheduledSendHours);
+        var scheduledHour  = scheduledHours.Count > 0 ? scheduledHours[0] : 7;
+        var tz             = ResolveTimezone(recipient.Timezone);
+        var claude         = new ClaudeClient(_httpClient, claude_cfg.ApiKey, claude_cfg.Model);
+        var report         = await claude.GenerateReportAsync(
             snapshot, language, recipient.Name, tz,
             isFirstReport: false,
             scheduledHour: scheduledHour,
@@ -303,9 +304,10 @@ public sealed class ReportWorker : BackgroundService
 
             Logger.Info($"Generating {reason} report for {recipient.Email}.");
 
-            var language      = recipient.Language ?? cfg.DefaultLanguage;
-            var scheduledHour = recipient.ScheduledSendHour ?? cfg.DefaultScheduledSendHour;
-            var tz            = ResolveTimezone(recipient.Timezone);
+            var language       = recipient.Language ?? cfg.DefaultLanguage;
+            var scheduledHours = ParseHourList(recipient.ScheduledSendHours ?? cfg.DefaultScheduledSendHours);
+            var scheduledHour  = scheduledHours.Count > 0 ? scheduledHours[0] : 7;
+            var tz             = ResolveTimezone(recipient.Timezone);
             var report        = await claude.GenerateReportAsync(
                 snapshot, language, recipient.Name, tz,
                 isFirstReport: reason == "first",
@@ -405,19 +407,28 @@ public sealed class ReportWorker : BackgroundService
 
         // ── Scheduled send ────────────────────────────────────────────────────
 
-        var tz            = ResolveTimezone(recipient.Timezone);
-        var localNow      = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, tz);
-        var scheduledHour = recipient.ScheduledSendHour ?? cfg.DefaultScheduledSendHour;
+        var tz             = ResolveTimezone(recipient.Timezone);
+        var localNow       = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, tz);
+        var scheduledHours = ParseHourList(recipient.ScheduledSendHours ?? cfg.DefaultScheduledSendHours);
 
-        // Has the scheduled hour arrived today and not yet been sent today?
-        var todayStartUtc = TimeZoneInfo.ConvertTimeToUtc(
-            new DateTime(localNow.Year, localNow.Month, localNow.Day, 0, 0, 0), tz);
+        // Find the most recently passed scheduled hour today (if any).
+        // A send is due when the last passed hour's slot has not yet been served.
+        var lastPassedHour = scheduledHours
+            .Where(h => h <= localNow.Hour)
+            .Cast<int?>()
+            .LastOrDefault();
 
-        var scheduledOnceToday = state.LastScheduledSentUtc.HasValue
-            && state.LastScheduledSentUtc.Value >= todayStartUtc;
+        if (lastPassedHour.HasValue)
+        {
+            var slotStartUtc = TimeZoneInfo.ConvertTimeToUtc(
+                new DateTime(localNow.Year, localNow.Month, localNow.Day, lastPassedHour.Value, 0, 0), tz);
 
-        if (localNow.Hour >= scheduledHour && !scheduledOnceToday)
-            return (true, "scheduled", ChangeSeverity.None);
+            var sentAfterSlotStart = state.LastScheduledSentUtc.HasValue
+                && state.LastScheduledSentUtc.Value >= slotStartUtc;
+
+            if (!sentAfterSlotStart)
+                return (true, "scheduled", ChangeSeverity.None);
+        }
 
         // ── Significant-change send ───────────────────────────────────────────
 
@@ -541,6 +552,21 @@ public sealed class ReportWorker : BackgroundService
             : raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                  .Where(s => !string.IsNullOrWhiteSpace(s))
                  .ToList();
+
+    /// <summary>
+    /// Parses a comma-separated string of scheduled send hours into a sorted list of valid hour values (0–23).
+    /// Entries that cannot be parsed or are out of range are silently ignored.
+    /// </summary>
+    private static IReadOnlyList<int> ParseHourList(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return [];
+        return raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                  .Select(s => int.TryParse(s, out var h) ? (int?)h : null)
+                  .Where(h => h is >= 0 and <= 23)
+                  .Select(h => h!.Value)
+                  .OrderBy(h => h)
+                  .ToList();
+    }
 
     /// <summary>
     /// Loads and returns the current configuration from the application settings.

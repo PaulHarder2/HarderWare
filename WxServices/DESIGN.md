@@ -374,7 +374,7 @@ flowchart TD
 
 **Send-decision logic:**
 - **First run:** Immediately sends a welcome + weather report.
-- **Scheduled:** Sends once per day when the recipient's configured local hour arrives (default 07:00). Subject line: "Weather report — …".
+- **Scheduled:** Sends once per configured hour when that hour arrives in the recipient's local timezone. Multiple hours can be specified (e.g. `"6, 18"` for morning and evening); default is `"7"`. Subject line: "Weather report — …".
 - **Significant change:** Sends an unscheduled report when the weather fingerprint changes and the classified severity is `Update` or `Alert`, subject to a minimum gap between sends (default 60 minutes). `Minor` severity changes (only forecast-risk flags cleared) are suppressed. Subject line and Claude prompt vary by severity:
 
 | Severity | Trigger | Subject line | Claude opening |
@@ -697,7 +697,7 @@ Each service loads configuration from up to three files, merged in order (later 
     "IntervalMinutes": 5,
     "HeartbeatFile": "C:\\HarderWare\\Logs\\wxreport-heartbeat.txt",
     "DefaultLanguage": "English",
-    "DefaultScheduledSendHour": 7,
+    "DefaultScheduledSendHours": "7",
     "MinGapMinutes": 60,
     "PrecipRateThresholdMmHr": 0.1,
     "SignificantChange": {
@@ -740,7 +740,7 @@ Each service loads configuration from up to three files, merged in order (later 
         "Name": "Paul",
         "Language": "English",
         "Timezone": "America/Chicago",
-        "ScheduledSendHour": 7,
+        "ScheduledSendHours": "7",
         "Address": "123 Main St, The Woodlands TX 77380",
         "LocalityName": "The Woodlands",
         "Latitude": 30.1658,
@@ -758,6 +758,7 @@ Each service loads configuration from up to three files, merged in order (later 
 - `Id` must be unique across all recipients. It is used as the stable key in `RecipientStates`.
 - `Address` is used only for one-time geocoding; it is never displayed in reports.
 - `LocalityName` is used in report subjects and body. If omitted, it is inferred from geocoding.
+- `ScheduledSendHours` is a comma-separated string of hours (0–23) in the recipient's local timezone at which a daily report is sent (e.g. `"6, 18"` for morning and evening). A single hour is also valid (e.g. `"7"`). Falls back to `DefaultScheduledSendHours` in the `Report` section when omitted.
 - `MetarIcao` accepts a comma-separated list in preference order (e.g. `"KDWH, KHOU"`). The first station with data is used; no config update occurs when a fallback station is used.
 - `Latitude`, `Longitude`, `MetarIcao`, `TafIcao` are written back automatically by the service on first run. To trigger re-resolution (e.g. after a move), set them to `null`.
 - `Units` controls how values are displayed in reports. Each field is independent — any combination is valid. Supported values: `Temperature`: `"F"` or `"C"`; `Pressure`: `"inHg"` or `"kPa"`; `WindSpeed`: `"mph"` or `"kph"`. All default to US customary when omitted.

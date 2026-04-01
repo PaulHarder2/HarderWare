@@ -14,7 +14,6 @@ public class SnapshotFingerprintTests
     {
         WindThresholdKt       = 25,
         VisibilityThresholdSm = 3.0,
-        CeilingThresholdFt    = 3000,
     };
 
     // ── helpers ───────────────────────────────────────────────────────────────

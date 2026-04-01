@@ -20,11 +20,11 @@ namespace MetarParser.Data;
 /// being computed).
 /// </para>
 /// <para>
-/// Seven variables are downloaded per forecast hour via byte-range HTTP requests
+/// Eight variables are downloaded per forecast hour via byte-range HTTP requests
 /// against the NOMADS pgrb2 0.25° files:
 /// TMP (2 m temperature), SPFH (2 m specific humidity → dew point), UGRD / VGRD
 /// (10 m wind components), PRATE (precipitation rate), TCDC (total cloud cover),
-/// and CAPE (surface convective energy).
+/// CAPE (surface convective energy), and PRMSL (mean sea-level pressure).
 /// </para>
 /// </remarks>
 public static class GfsFetcher
@@ -45,7 +45,8 @@ public static class GfsFetcher
         "VGRD:10 m above ground",
         "PRATE:surface",
         "TCDC:entire atmosphere",
-        "CAPE:surface"
+        "CAPE:surface",
+        "PRMSL:mean sea level"
     };
 
     /// <summary>
@@ -480,6 +481,9 @@ public static class GfsFetcher
 
             if (byKey.TryGetValue("CAPE:surface",            out var cape))
                 point.CapeJKg = cape.Value;
+
+            if (byKey.TryGetValue("PRMSL:mean sea level",   out var prmsl))
+                point.PrMslPa = prmsl.Value;
 
             points.Add(point);
         }
