@@ -243,6 +243,51 @@ def prepare_plot_data(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+# ── Projection helpers ────────────────────────────────────────────────────────
+
+def _inner_proj_limits(
+    proj, extent: tuple[float, float, float, float], n: int = 200
+) -> tuple[float, float, float, float]:
+    """
+    Return the largest axis-aligned rectangle (in projection metres) that fits
+    entirely within the projected shape of a lat/lon bounding box.
+
+    Sampling each edge densely handles the curvature of parallels and meridians
+    in Lambert Conformal: parallels bow away from the equator so the top edge
+    peaks at the centre; meridians converge at the pole so the left/right edges
+    lean inward at the top.  Taking the tightest constraint from each edge gives
+    an inner rectangle fully covered by data.
+
+    Parameters
+    ----------
+    proj:
+        Cartopy CRS instance used for the map axes.
+    extent:
+        ``(lon_min, lon_max, lat_min, lat_max)`` in degrees.
+    n:
+        Number of sample points per edge.  Default 200.
+
+    Returns
+    -------
+    x_min, x_max, y_min, y_max in the projection's native units (metres).
+    """
+    lon_min, lon_max, lat_min, lat_max = extent
+    lons_h = np.linspace(lon_min, lon_max, n)
+    lats_v = np.linspace(lat_min, lat_max, n)
+
+    top   = proj.transform_points(ccrs.PlateCarree(), lons_h,          np.full(n, lat_max))
+    bot   = proj.transform_points(ccrs.PlateCarree(), lons_h,          np.full(n, lat_min))
+    left  = proj.transform_points(ccrs.PlateCarree(), np.full(n, lon_min), lats_v)
+    right = proj.transform_points(ccrs.PlateCarree(), np.full(n, lon_max), lats_v)
+
+    return (
+        left[:, 0].max(),   # left meridian leans right at top → tightest x_min
+        right[:, 0].min(),  # right meridian leans left at top → tightest x_max
+        bot[:, 1].max(),    # bottom parallel dips at centre → tightest y_min
+        top[:, 1].min(),    # top parallel bows up at centre → tightest y_max
+    )
+
+
 # ── Rendering ─────────────────────────────────────────────────────────────────
 
 def render_station_plots(
@@ -294,16 +339,9 @@ def render_station_plots(
 
     fig = plt.figure(figsize=(14, 10))
     ax = fig.add_subplot(1, 1, 1, projection=proj)
-    # Set axis limits in projection coordinates (metres) for a tight fit.
-    # Using set_extent with PlateCarree adds large padding because Lambert
-    # Conformal must encompass the entire curved boundary of the lat/lon box.
-    corners = proj.transform_points(
-        ccrs.PlateCarree(),
-        np.array([extent[0], extent[1], extent[0], extent[1]]),
-        np.array([extent[2], extent[2], extent[3], extent[3]]),
-    )
-    ax.set_xlim(corners[:, 0].min(), corners[:, 0].max())
-    ax.set_ylim(corners[:, 1].min(), corners[:, 1].max())
+    x_min, x_max, y_min, y_max = _inner_proj_limits(proj, extent)
+    ax.set_xlim(x_min, x_max)
+    ax.set_ylim(y_min, y_max)
 
     # Map features
     ax.add_feature(cfeature.STATES.with_scale("50m"), linewidth=0.5, edgecolor="gray")

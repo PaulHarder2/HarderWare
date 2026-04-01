@@ -31,6 +31,8 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "WxMonitor.Svc", "src\WxMoni
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "WxMonitor.Tests", "tests\WxMonitor.Tests\WxMonitor.Tests.csproj", "{02A3B4C5-D6E7-8901-ABCD-EF1234567892}"
 EndProject
+Project("{888888A0-9F3D-457C-B088-3A5042F75D52}") = "WxVis", "src\WxVis\WxVis.pyproj", "{A3B4C5D6-E7F8-9012-ABCD-EF1234567893}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -93,6 +95,8 @@ Global
 		{02A3B4C5-D6E7-8901-ABCD-EF1234567892}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{02A3B4C5-D6E7-8901-ABCD-EF1234567892}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{02A3B4C5-D6E7-8901-ABCD-EF1234567892}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A3B4C5D6-E7F8-9012-ABCD-EF1234567893}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A3B4C5D6-E7F8-9012-ABCD-EF1234567893}.Release|Any CPU.ActiveCfg = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

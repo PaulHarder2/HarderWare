@@ -20,7 +20,8 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
-from scipy.ndimage import gaussian_filter
+from scipy.ndimage import gaussian_filter, maximum_filter, minimum_filter
+from scipy.ndimage import label as _connected_components
 
 from metpy.plots import StationPlot
 from metpy.plots.wx_symbols import sky_cover, current_weather
@@ -28,6 +29,34 @@ from metpy.calc import reduce_point_density
 from metpy.interpolate import interpolate_to_grid
 
 from metar_plot import prepare_plot_data
+
+
+# ── Projection helpers ────────────────────────────────────────────────────────
+
+def _inner_proj_limits(
+    proj, extent: tuple[float, float, float, float], n: int = 200
+) -> tuple[float, float, float, float]:
+    """
+    Return the largest axis-aligned rectangle (in projection metres) that fits
+    entirely within the projected shape of a lat/lon bounding box.
+
+    See :func:`metar_plot._inner_proj_limits` for full documentation.
+    """
+    lon_min, lon_max, lat_min, lat_max = extent
+    lons_h = np.linspace(lon_min, lon_max, n)
+    lats_v = np.linspace(lat_min, lat_max, n)
+
+    top   = proj.transform_points(ccrs.PlateCarree(), lons_h,              np.full(n, lat_max))
+    bot   = proj.transform_points(ccrs.PlateCarree(), lons_h,              np.full(n, lat_min))
+    left  = proj.transform_points(ccrs.PlateCarree(), np.full(n, lon_min), lats_v)
+    right = proj.transform_points(ccrs.PlateCarree(), np.full(n, lon_max), lats_v)
+
+    return (
+        left[:, 0].max(),
+        right[:, 0].min(),
+        bot[:, 1].max(),
+        top[:, 1].min(),
+    )
 
 
 # ── Default map extents ───────────────────────────────────────────────────────
@@ -40,6 +69,79 @@ SOUTH_CENTRAL_EXTENT = (-106.0, -88.0, 25.0, 38.0)
 
 
 # ── Contour analysis ──────────────────────────────────────────────────────────
+
+def _mark_extrema(
+    ax,
+    x2d: np.ndarray,
+    y2d: np.ndarray,
+    data: np.ndarray,
+    high_label: str,
+    low_label: str,
+    high_color: str = "navy",
+    low_color: str = "maroon",
+    neighborhood: int = 16,
+    transform=None,
+) -> None:
+    """
+    Annotate local extrema in a 2-D gridded field with bold text labels.
+
+    A cell qualifies as a local maximum (minimum) when its value equals the
+    neighbourhood maximum (minimum) over a square window of *neighborhood*
+    cells.  Connected blobs of equal extreme values — which arise when a
+    pressure or temperature centre is broad and flat — are collapsed to their
+    centroid so that each feature produces exactly one marker.  A border strip
+    of half the neighbourhood width is excluded to suppress edge artifacts.
+
+    Parameters
+    ----------
+    ax:
+        Cartopy GeoAxes to annotate.
+    x2d, y2d:
+        2-D coordinate arrays with the same shape as *data*.
+    data:
+        2-D smoothed gridded field (NaN-masked at edges).
+    high_label, low_label:
+        Text strings placed at local maxima and minima (e.g. ``"H"``/``"L"``
+        for pressure or ``"W"``/``"K"`` for temperature).
+    high_color, low_color:
+        Matplotlib colour strings for each label.
+    neighborhood:
+        Filter window size in grid cells.  Default 16.
+    transform:
+        Cartopy CRS transform, or ``None`` when coordinates are already in
+        the projection's native units (metres).
+    """
+    valid = ~np.isnan(data)
+    if not valid.any():
+        return
+
+    filled = np.where(valid, data, float(np.nanmean(data)))
+
+    local_max = (maximum_filter(filled, size=neighborhood) == filled) & valid
+    local_min = (minimum_filter(filled, size=neighborhood) == filled) & valid
+
+    # Suppress markers within half a neighbourhood width of the border
+    pad = neighborhood // 2
+    interior = np.zeros(data.shape, dtype=bool)
+    interior[pad:-pad, pad:-pad] = True
+    local_max &= interior
+    local_min &= interior
+
+    txt_kw = dict(fontsize=16, fontweight="bold", ha="center", va="center", zorder=6)
+    if transform is not None:
+        txt_kw["transform"] = transform
+
+    for mask, lbl, color in (
+        (local_max, high_label, high_color),
+        (local_min, low_label,  low_color),
+    ):
+        labeled_arr, n = _connected_components(mask)
+        for idx in range(1, n + 1):
+            ys, xs = np.where(labeled_arr == idx)
+            iy = int(round(ys.mean()))
+            ix = int(round(xs.mean()))
+            ax.text(x2d[iy, ix], y2d[iy, ix], lbl, color=color, **txt_kw)
+
 
 def _smooth_with_nans(data: np.ndarray, sigma: float) -> np.ndarray:
     """
@@ -66,7 +168,7 @@ def _add_analysis_contours(
     extent: tuple[float, float, float, float],
     proj,
     isobar_interval_hpa: float = 4.0,
-    isotherm_interval_c: float = 5.0,
+    isotherm_interval_c: float = 3.0,
     hres_km: float = 25.0,
     search_radius_km: float = 400.0,
     smooth_sigma: float = 2.5,
@@ -147,6 +249,8 @@ def _add_analysis_contours(
         zorder=2,
     )
     ax.clabel(cs, inline=True, fontsize=8, fmt="%d")
+    _mark_extrema(ax, grid_x, grid_y, slp_smooth, "H", "L",
+                  high_color="navy", low_color="maroon", neighborhood=20)
 
     # ── Isotherms ─────────────────────────────────────────────────────────────
     _, _, tmp_raw = interpolate_to_grid(
@@ -171,6 +275,37 @@ def _add_analysis_contours(
         zorder=2,
     )
     ax.clabel(ct, inline=True, fontsize=7, fmt="%d°C")
+    _mark_extrema(ax, grid_x, grid_y, tmp_smooth, "W", "K",
+                  high_color="darkred", low_color="steelblue", neighborhood=12)
+
+    # ── Dewpoint isopleths ────────────────────────────────────────────────────
+    dew_data = data.dropna(subset=["DewPointCelsius"])
+    if len(dew_data) >= 6:
+        dew_proj = proj.transform_points(
+            ccrs.PlateCarree(), dew_data["Lon"].values, dew_data["Lat"].values
+        )
+        _, _, dew_raw = interpolate_to_grid(
+            dew_proj[:, 0], dew_proj[:, 1], dew_data["DewPointCelsius"].values,
+            interp_type="barnes",
+            minimum_neighbors=3,
+            hres=hres_m,
+            search_radius=search_radius_m,
+        )
+        dew_smooth = _smooth_with_nans(dew_raw, sigma=smooth_sigma)
+
+        dew_min = np.floor(np.nanmin(dew_smooth) / isotherm_interval_c) * isotherm_interval_c
+        dew_max = np.ceil( np.nanmax(dew_smooth) / isotherm_interval_c) * isotherm_interval_c
+        dew_levels = np.arange(dew_min, dew_max + isotherm_interval_c, isotherm_interval_c)
+
+        cd = ax.contour(
+            grid_x, grid_y, dew_smooth,
+            levels=dew_levels,
+            colors="green",
+            linewidths=0.8,
+            linestyles="dashed",
+            zorder=2,
+        )
+        ax.clabel(cd, inline=True, fontsize=7, fmt="%d°C")
 
 
 # ── Rendering ─────────────────────────────────────────────────────────────────
@@ -247,16 +382,9 @@ def render_synoptic_map(
     # ── Figure setup ─────────────────────────────────────────────────────────
     fig = plt.figure(figsize=(16, 10))
     ax = fig.add_subplot(1, 1, 1, projection=proj)
-    # Set axis limits in projection coordinates (metres) for a tight fit.
-    # Using set_extent with PlateCarree adds large padding because Lambert
-    # Conformal must encompass the entire curved boundary of the lat/lon box.
-    corners = proj.transform_points(
-        ccrs.PlateCarree(),
-        np.array([extent[0], extent[1], extent[0], extent[1]]),
-        np.array([extent[2], extent[2], extent[3], extent[3]]),
-    )
-    ax.set_xlim(corners[:, 0].min(), corners[:, 0].max())
-    ax.set_ylim(corners[:, 1].min(), corners[:, 1].max())
+    x_min, x_max, y_min, y_max = _inner_proj_limits(proj, extent)
+    ax.set_xlim(x_min, x_max)
+    ax.set_ylim(y_min, y_max)
 
     ax.add_feature(cfeature.LAND.with_scale("50m"),       facecolor="#f5f5f0")
     ax.add_feature(cfeature.OCEAN.with_scale("50m"),      facecolor="#cce5f0")

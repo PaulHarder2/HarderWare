@@ -46,6 +46,7 @@ WxServices is a set of Windows services that:
 - Periodically fetch METAR and TAF aviation weather reports from the Aviation Weather Center API and store them in a local SQL Server database.
 - Download GFS numerical weather prediction model data from NOAA (via the AWS Open Data mirror) and extract gridded medium-range forecasts covering temperature, wind, cloud cover, precipitation rate, and convective energy (CAPE) for the configured region.
 - Generate friendly, plain-English (or other language) weather summaries using Anthropic's Claude AI and email them to a configured list of recipients.
+- Render weather visualisation maps (METAR station plots, synoptic analysis, and GFS forecast parameter maps) using the WxVis Python project.
 - Monitor the health of the above services and send alert emails if errors occur or a service goes silent.
 
 Recipients each have their own location. The system automatically resolves the nearest METAR and TAF reporting stations for each recipient on first run and caches the result. Daily reports are sent at each recipient's configured local time; additional reports are triggered by significant weather changes.
@@ -72,6 +73,9 @@ flowchart TD
     REPORT["WxReport.Svc (every 5 min)"]
     MONITOR["WxMonitor.Svc (every 5 min)"]
 
+    WXVIS["WxVis (Python — manual / future auto-trigger)"]
+    PLOTS["C:\\HarderWare\\plots\\"]
+
     AWC -->|METAR + TAF| PARSER
     NOMADS -->|GFS GRIB2 files| PARSER
     PARSER -->|store observations + GFS grid| DB
@@ -81,6 +85,9 @@ flowchart TD
     CLAUDE -->|report text| REPORT
     REPORT -->|email| RECIPIENTS
     REPORT -->|log + heartbeat| LOGS
+
+    DB -->|METAR + GFS grid| WXVIS
+    WXVIS -->|PNG maps| PLOTS
 
     LOGS -->|scan| MONITOR
     MONITOR -->|alert email| ALERTS
@@ -268,13 +275,22 @@ WxServices/
     ├── WxInterp/                    ← snapshot interpreter (METAR+TAF+GFS → WeatherSnapshot)
     ├── WxParser.Svc/                ← Windows service: periodic METAR/TAF + GFS fetch
     ├── WxReport.Svc/                ← Windows service: report generation and email
-    └── WxMonitor.Svc/               ← Windows service: log and heartbeat monitoring
+    ├── WxMonitor.Svc/               ← Windows service: log and heartbeat monitoring
+    └── WxVis/                       ← Python visualisation project (conda env: wxvis)
+        ├── db.py                    ← SQLAlchemy engine + data loading queries
+        ├── metar_plot.py            ← WMO station model maps (MetPy StationPlot)
+        ├── synoptic_map.py          ← Synoptic analysis maps (Barnes interpolation)
+        ├── forecast_map.py          ← GFS forecast parameter maps (contour lines)
+        ├── config.json              ← DB connection string + output directory
+        └── requirements.txt         ← conda install list
 tests/
     ├── MetarParser.Tests/
     ├── TafParser.Tests/
     ├── WxInterp.Tests/
     └── WxMonitor.Tests/
 ```
+
+WxVis is a standalone Python project; it has no build-time dependency on the C# projects. It reads directly from the same SQL Server database using SQLAlchemy + pyodbc (Windows Authentication).
 
 ### Project dependency graph
 
@@ -326,7 +342,7 @@ graph TD
 **GFS cycle (default: every 60 minutes):**
 1. Check for any incomplete model run registered in `GfsModelRuns`. If one exists, resume it; otherwise compute the most recent GFS cycle (00Z/06Z/12Z/18Z) that should be available on NOMADS.
 2. For each forecast hour 0–120 not yet stored, fetch the `.idx` inventory file for that hour. A 404 means the run is still being computed — stop and resume next cycle.
-3. Download byte-range HTTP requests for the 7 target variables (TMP, SPFH, UGRD, VGRD, PRATE, TCDC, CAPE) and concatenate them into a temporary GRIB2 file.
+3. Download byte-range HTTP requests for the 8 target variables (TMP, SPFH, UGRD, VGRD, PRATE, TCDC, CAPE, PRMSL) and concatenate them into a temporary GRIB2 file.
 4. Invoke wgrib2 (via WSL) to crop to the configured bounding box and emit a CSV of grid values.
 5. Assemble `GfsGridPoint` entities (applying unit conversions) and insert into `GfsGrid`.
 6. When all 121 hours are stored, mark the run `IsComplete = true` and purge old runs (retaining the 2 most recent).
@@ -420,7 +436,51 @@ The config is never updated when a fallback station is used; a warning is logged
 
 ---
 
-### 4.3 WxMonitor.Svc — Health Monitor
+### 4.3 WxVis — Python Visualisation
+
+**Purpose:** Render weather maps from the local database for manual review and (in future) automated post-run delivery.
+
+**Three map types:**
+
+| Script | Map type | Data source | Output |
+|---|---|---|---|
+| `metar_plot.py` | WMO standard station model | Latest METAR + WxStations | `station_plot.png` |
+| `synoptic_map.py` | Synoptic analysis (Barnes interpolation) | Latest METAR + WxStations | `synoptic_auto.png` (or preset extent) |
+| `forecast_map.py` | GFS forecast parameters | GfsGrid for a given forecast hour | `forecast_f084.png` etc. |
+
+**Rendering details:**
+- All maps use a Lambert Conformal projection centred on the data extent.
+- Map limits are computed by dense boundary sampling (`_inner_proj_limits`, 200 points per edge) so the plotted area fills to the border with no empty corners from projection curvature.
+- Isobars: black solid, 4 hPa interval, labelled.
+- Temperature isopleths: red dashed, 3°C interval, labelled.
+- Dewpoint isopleths: green dashed, 3°C interval, labelled.
+- Pressure extrema: **H** (navy) / **L** (maroon), neighbourhood 20 grid cells.
+- Temperature extrema: **W** (dark red) / **K** (steel blue), neighbourhood 12 grid cells.
+- Station models (metar_plot, synoptic_map): MetPy StationPlot; synoptic_map thins stations with `reduce_point_density` (default 75 km).
+
+**Running:**
+```powershell
+conda activate wxvis
+cd C:\Users\PaulH\...\WxServices\src\WxVis
+
+python metar_plot.py
+python synoptic_map.py [--extent conus|south_central] [--density 75]
+python forecast_map.py --fh 84
+```
+
+Output PNGs are saved to the directory configured in `config.json` (default `C:\HarderWare\plots\`).
+
+**Key files:**
+| File | Role |
+|---|---|
+| `db.py` | SQLAlchemy engine; `load_latest_metars`, `load_gfs_grid`, `load_output_dir` |
+| `metar_plot.py` | Station model helpers + `render_station_plots` |
+| `synoptic_map.py` | Barnes contour analysis + `render_synoptic_map` |
+| `forecast_map.py` | GFS grid contouring + `render_forecast_map` |
+
+---
+
+### 4.4 WxMonitor.Svc — Health Monitor
 
 **Purpose:** Alert the operator by email when either watched service logs errors or goes silent.
 
@@ -606,8 +666,18 @@ erDiagram
         float PRateKgM2s
         float TcdcPct
         float CapeJKg
+        float PrMslPa
     }
 
+    WxStations {
+        char IcaoId PK
+        nvarchar Name
+        float Lat
+        float Lon
+        float ElevationFt
+    }
+
+    Metars ||--|| WxStations : "station metadata"
     Metars ||--o{ MetarSkyConditions : "has"
     Metars ||--o{ MetarWeatherPhenomena : "has"
     Metars ||--o{ MetarRunwayVisualRanges : "has"
@@ -628,6 +698,12 @@ erDiagram
 | RecipientStates | RecipientId | Unique |
 | GfsGrid | ModelRunUtc + ForecastHour + Lat + Lon | Unique |
 | GfsGrid | ModelRunUtc + ForecastHour | Non-unique |
+| WxStations | IcaoId | Primary key |
+
+**Notes on WxStations:**
+- Populated opportunistically by `MetarFetcher` after each METAR batch: any ICAO not yet in `WxStations` triggers an AWC Airport API lookup.
+- Stations unresolvable via AWC are inserted with `null` Lat/Lon/ElevationFt (stub rows) to prevent repeated retry attempts.
+- WxVis queries `WxStations` via `INNER JOIN` so stub-row stations are automatically excluded from maps.
 
 ---
 
@@ -818,6 +894,16 @@ SMTP settings come from the top-level `Smtp` block in `appsettings.shared.json` 
 | WxReport.Svc | Anthropic Claude API | Generate natural-language reports | API key |
 | WxReport.Svc / WxMonitor.Svc | Gmail SMTP | Send emails | App password |
 
+**WxVis Python packages (conda env: wxvis, Python 3.12):**
+| Package | Purpose |
+|---|---|
+| `metpy` | StationPlot, reduce_point_density, Barnes interpolation |
+| `cartopy` | Map projections and geographic features (requires conda — C extensions) |
+| `matplotlib` | Figure rendering, contour lines |
+| `scipy` | Gaussian smoothing, local extrema detection |
+| `sqlalchemy` + `pyodbc` | SQL Server access via Windows Authentication |
+| `pandas` / `numpy` | Data manipulation and grid math |
+
 **NuGet packages:**
 | Package | Used by |
 |---|---|
@@ -890,3 +976,5 @@ All logs are written to `C:\HarderWare\Logs\`. Log paths can be changed by editi
 | No metrics | Cycle duration, API call counts, send success rates, etc. are not tracked. Consider adding structured metrics (Seq, Windows Event Log) in a future session. |
 | WxMonitor does not watch itself | WxMonitor has no watchdog. A Windows Task Scheduler task could serve this purpose if needed. |
 | Nominatim rate limit | Nominatim's terms require a maximum of 1 request/second and a valid User-Agent. Resolution is one-time per recipient, so this is unlikely to be a problem in practice. |
+| WxVis map generation is manual | Maps are currently produced by running Python scripts from an Anaconda PowerShell prompt. Automatic generation after each complete GFS run is planned: detect run completion (e.g. in `GfsFetcher` or a new WxVis.Svc worker) and shell out to render all 121 forecast maps plus the analysis map. |
+| No weather data viewer | A local web dashboard (Flask/FastAPI) is planned to display generated maps with forecast-hour navigation, recent METAR tables, and point forecast charts. Design is pending. |
