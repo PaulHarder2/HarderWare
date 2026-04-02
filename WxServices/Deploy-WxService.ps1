@@ -4,9 +4,9 @@
     Publishes and redeploys one or all WxServices Windows services.
 
 .PARAMETER ServiceName
-    The service to deploy, or 'all' to deploy all three Windows services in order
-    (WxParserSvc, WxReportSvc, WxMonitorSvc), or 'WxAnnounce' to publish the
-    console tool to C:\bin.
+    The service to deploy, or 'all' to deploy all four Windows services in order
+    (WxParserSvc, WxReportSvc, WxMonitorSvc, WxVisSvc), or 'WxAnnounce' to
+    publish the console tool to C:\bin.
 
 .EXAMPLE
     .\Deploy-WxService.ps1 WxReportSvc
@@ -16,7 +16,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [ValidateSet('WxParserSvc', 'WxReportSvc', 'WxMonitorSvc', 'WxAnnounce', 'all')]
+    [ValidateSet('WxParserSvc', 'WxReportSvc', 'WxMonitorSvc', 'WxVisSvc', 'WxAnnounce', 'all')]
     [string]$ServiceName
 )
 
@@ -29,6 +29,7 @@ $ServiceMap = [ordered]@{
     'WxParserSvc'  = 'WxParser.Svc'
     'WxReportSvc'  = 'WxReport.Svc'
     'WxMonitorSvc' = 'WxMonitor.Svc'
+    'WxVisSvc'     = 'WxVis.Svc'
 }
 
 # ---------------------------------------------------------------------------
