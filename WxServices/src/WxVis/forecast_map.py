@@ -31,6 +31,8 @@ from datetime import timedelta
 from metpy.plots import StationPlot
 from metpy.plots.wx_symbols import sky_cover
 
+from logger import logger
+
 
 # ── Projection helpers ────────────────────────────────────────────────────────
 
@@ -205,7 +207,7 @@ def render_forecast_map(
     """
     df = df.dropna(subset=["Lat", "Lon", "TmpC"])
     if df.empty:
-        print("No GFS data with valid coordinates and temperature — nothing to render.")
+        logger.warning("No GFS data with valid coordinates and temperature — nothing to render.")
         return
 
     # ── Map extent ────────────────────────────────────────────────────────────
@@ -239,7 +241,7 @@ def render_forecast_map(
         _, _, slp_raw = _to_grid(slp_df, "PrMslPa")
         slp_hpa = _smooth(slp_raw / 100.0, sigma=smooth_sigma)
     else:
-        print("No MSLP data available for this forecast hour — isobars skipped.")
+        logger.warning("No MSLP data available for this forecast hour — isobars skipped.")
 
     # ── Figure setup ─────────────────────────────────────────────────────────
     fig = plt.figure(figsize=(16, 10))
@@ -413,7 +415,7 @@ def render_forecast_map(
     plt.tight_layout()
     plt.savefig(output_path, dpi=dpi, bbox_inches="tight")
     plt.close(fig)
-    print(f"Saved forecast map → {output_path}")
+    logger.info(f"Saved forecast map → {output_path}")
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -433,13 +435,13 @@ if __name__ == "__main__":
     df     = load_gfs_grid(engine, forecast_hour=args.fh)
 
     if df.empty:
-        print(f"No GFS data found for forecast hour {args.fh}.")
+        logger.error(f"No GFS data found for forecast hour {args.fh}.")
     else:
-        print(f"Loaded {len(df)} grid points for f{args.fh:03d}.")
+        logger.info(f"Loaded {len(df)} grid points for f{args.fh:03d}.")
         metar_df = load_latest_metars(engine)
         station_locs = metar_df[["Lat", "Lon"]].dropna() if not metar_df.empty else None
         if station_locs is not None:
-            print(f"Loaded {len(station_locs)} METAR station locations for forecast station models.")
+            logger.info(f"Loaded {len(station_locs)} METAR station locations for forecast station models.")
         out_dir = load_output_dir()
         render_forecast_map(
             df,

@@ -23,6 +23,8 @@ import cartopy.feature as cfeature
 
 from metpy.plots import StationPlot
 from metpy.plots.wx_symbols import sky_cover, current_weather
+
+from logger import logger
 import metpy.calc as mpcalc
 from metpy.units import units
 
@@ -321,7 +323,7 @@ def render_station_plots(
     # Drop rows with no position data
     plot_df = plot_df.dropna(subset=["Lat", "Lon"])
     if plot_df.empty:
-        print("No plottable METAR data — nothing to render.")
+        logger.warning("No plottable METAR data — nothing to render.")
         return
 
     if extent is None:
@@ -411,7 +413,7 @@ def render_station_plots(
     plt.tight_layout()
     plt.savefig(output_path, dpi=dpi, bbox_inches="tight")
     plt.close(fig)
-    print(f"Saved station plot → {output_path}")
+    logger.info(f"Saved station plot → {output_path}")
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -421,7 +423,7 @@ if __name__ == "__main__":
 
     engine = get_engine()
     df = load_latest_metars(engine)
-    print(f"Loaded {len(df)} METAR observations.")
+    logger.info(f"Loaded {len(df)} METAR observations.")
 
     out_dir = load_output_dir()
     render_station_plots(df, str(out_dir / "station_plot.png"))

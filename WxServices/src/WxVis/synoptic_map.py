@@ -29,6 +29,7 @@ from metpy.calc import reduce_point_density
 from metpy.interpolate import interpolate_to_grid
 
 from metar_plot import prepare_plot_data
+from logger import logger
 
 
 # ── Projection helpers ────────────────────────────────────────────────────────
@@ -214,7 +215,7 @@ def _add_analysis_contours(
     ]
 
     if len(data) < 6:
-        print("Not enough stations with valid SLP/temperature for contour analysis.")
+        logger.warning("Not enough stations with valid SLP/temperature for contour analysis.")
         return
 
     # Transform station positions to projection coordinates (metres)
@@ -351,7 +352,7 @@ def render_synoptic_map(
     plot_df = plot_df.dropna(subset=["Lat", "Lon"])
 
     if plot_df.empty:
-        print("No stations with valid coordinates — nothing to render.")
+        logger.warning("No stations with valid coordinates — nothing to render.")
         return
 
     if extent is None:
@@ -371,7 +372,7 @@ def render_synoptic_map(
         plot_df = plot_df[in_extent].reset_index(drop=True)
 
     if plot_df.empty:
-        print("No stations within the map extent — nothing to render.")
+        logger.warning("No stations within the map extent — nothing to render.")
         return
 
     proj = ccrs.LambertConformal(
@@ -408,7 +409,7 @@ def render_synoptic_map(
         point_density_km * 1000.0,
     )
     station_df = plot_df[keep].reset_index(drop=True)
-    print(f"Rendering {len(station_df)} stations after density reduction.")
+    logger.info(f"Rendering {len(station_df)} stations after density reduction.")
 
     # ── Station plot ─────────────────────────────────────────────────────────
     stationplot = StationPlot(
@@ -456,7 +457,7 @@ def render_synoptic_map(
     plt.tight_layout()
     plt.savefig(output_path, dpi=dpi, bbox_inches="tight")
     plt.close(fig)
-    print(f"Saved synoptic map → {output_path}")
+    logger.info(f"Saved synoptic map → {output_path}")
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -483,7 +484,7 @@ if __name__ == "__main__":
 
     engine = get_engine()
     df = load_latest_metars(engine)
-    print(f"Loaded {len(df)} METAR observations.")
+    logger.info(f"Loaded {len(df)} METAR observations.")
 
     out_dir = load_output_dir()
     label = args.extent or "auto"
