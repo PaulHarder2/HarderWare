@@ -7,8 +7,12 @@
     <UseWPF>true</UseWPF>
     <RootNamespace>WxViewer</RootNamespace>
     <AssemblyName>WxViewer</AssemblyName>
+    <ApplicationIcon>HarderWare.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
+    <None Update="HarderWare.ico">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
     <None Update="appsettings.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
