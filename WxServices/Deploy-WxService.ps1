@@ -6,17 +6,19 @@
 .PARAMETER ServiceName
     The service to deploy, or 'all' to deploy all four Windows services in order
     (WxParserSvc, WxReportSvc, WxMonitorSvc, WxVisSvc), or 'WxAnnounce' to
-    publish the console tool to C:\bin.
+    publish the console tool to C:\bin, or 'WxViewer' to publish the WPF viewer
+    to C:\HarderWare\WxViewer.
 
 .EXAMPLE
     .\Deploy-WxService.ps1 WxReportSvc
     .\Deploy-WxService.ps1 all
     .\Deploy-WxService.ps1 WxAnnounce
+    .\Deploy-WxService.ps1 WxViewer
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [ValidateSet('WxParserSvc', 'WxReportSvc', 'WxMonitorSvc', 'WxVisSvc', 'WxAnnounce', 'all')]
+    [ValidateSet('WxParserSvc', 'WxReportSvc', 'WxMonitorSvc', 'WxVisSvc', 'WxAnnounce', 'WxViewer', 'all')]
     [string]$ServiceName
 )
 
@@ -194,10 +196,39 @@ function Invoke-ToolPublish {
 }
 
 # ---------------------------------------------------------------------------
+# Publish WxViewer WPF desktop app to C:\HarderWare\WxViewer
+# ---------------------------------------------------------------------------
+function Invoke-ViewerPublish {
+    $projectPath = "$SolutionRoot\src\WxViewer"
+    $outputDir   = "C:\HarderWare\WxViewer"
+
+    Write-Host "Publishing WxViewer to $outputDir..."
+    dotnet publish $projectPath -c Release -o $outputDir
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "dotnet publish failed for WxViewer (exit code $LASTEXITCODE)."
+        return $false
+    }
+
+    $sourceLocalConfig = "$projectPath\appsettings.local.json"
+    if (Test-Path $sourceLocalConfig) {
+        Copy-Item $sourceLocalConfig $outputDir
+        Write-Host "Copied appsettings.local.json to publish dir."
+    }
+
+    Write-Host "WxViewer published to $outputDir." -ForegroundColor Green
+    return $true
+}
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 if ($ServiceName -eq 'WxAnnounce') {
     Invoke-ToolPublish
+    exit $LASTEXITCODE
+}
+
+if ($ServiceName -eq 'WxViewer') {
+    Invoke-ViewerPublish
     exit $LASTEXITCODE
 }
 
