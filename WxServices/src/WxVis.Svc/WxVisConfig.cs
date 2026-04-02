@@ -25,4 +25,7 @@ public class WxVisConfig
 
     /// <summary>How often the forecast map worker polls the database for new forecast hours (seconds).</summary>
     public int ForecastPollIntervalSeconds { get; set; } = 30;
+
+    /// <summary>Number of days to retain PNG plot files in <see cref="OutputDir"/> before deleting them.</summary>
+    public int PlotRetentionDays { get; set; } = 14;
 }

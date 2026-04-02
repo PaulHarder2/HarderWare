@@ -429,6 +429,10 @@ if __name__ == "__main__":
         "--fh", type=int, default=84,
         help="Forecast hour offset to render (default: 84)",
     )
+    parser.add_argument(
+        "--run", type=str, required=True,
+        help="GFS model run timestamp in YYYYMMDDHH format (e.g. 2026040218)",
+    )
     args = parser.parse_args()
 
     engine = get_engine()
@@ -445,6 +449,6 @@ if __name__ == "__main__":
         out_dir = load_output_dir()
         render_forecast_map(
             df,
-            str(out_dir / f"forecast_f{args.fh:03d}.png"),
+            str(out_dir / f"forecast_{args.run}_f{args.fh:03d}.png"),
             station_locs=station_locs,
         )

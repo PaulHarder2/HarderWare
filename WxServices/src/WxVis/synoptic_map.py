@@ -486,11 +486,14 @@ if __name__ == "__main__":
     df = load_latest_metars(engine)
     logger.info(f"Loaded {len(df)} METAR observations.")
 
+    obs_time = pd.to_datetime(df["ObservationUtc"]).max()
+    ts       = obs_time.strftime("%Y%m%d_%H")
+
     out_dir = load_output_dir()
     label = args.extent or "auto"
     render_synoptic_map(
         df,
-        output_path=str(out_dir / f"synoptic_{label}.png"),
+        output_path=str(out_dir / f"synoptic_{label}_{ts}.png"),
         extent=extent_map.get(args.extent),
         point_density_km=args.density,
     )

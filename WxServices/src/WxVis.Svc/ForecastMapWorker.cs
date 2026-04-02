@@ -106,7 +106,7 @@ public sealed class ForecastMapWorker : BackgroundService
 
             foreach (var fh in availableHours)
             {
-                var png = PngPath(cfg.OutputDir, fh);
+                var png = PngPath(cfg.OutputDir, latestRun, fh);
                 if (File.Exists(png) && File.GetLastWriteTimeUtc(png) > latestRun)
                     rendered.Add(fh);
             }
@@ -131,7 +131,7 @@ public sealed class ForecastMapWorker : BackgroundService
             Logger.Info($"ForecastMapWorker: rendering f{fh:D3}...");
             var ok = await MapRenderer.RunAsync(
                 cfg.CondaPythonExe, cfg.ScriptDir,
-                "forecast_map.py", $"--fh {fh}",
+                "forecast_map.py", $"--fh {fh} --run {latestRun:yyyyMMddHH}",
                 ct);
 
             if (ok)
@@ -141,9 +141,9 @@ public sealed class ForecastMapWorker : BackgroundService
         }
     }
 
-    /// <summary>Returns the expected PNG output path for a given forecast hour.</summary>
-    private static string PngPath(string outputDir, int forecastHour) =>
-        Path.Combine(outputDir, $"forecast_f{forecastHour:D3}.png");
+    /// <summary>Returns the expected PNG output path for a given model run and forecast hour.</summary>
+    private static string PngPath(string outputDir, DateTime modelRun, int forecastHour) =>
+        Path.Combine(outputDir, $"forecast_{modelRun:yyyyMMddHH}_f{forecastHour:D3}.png");
 
     /// <summary>
     /// Loads and returns the current <see cref="WxVisConfig"/> from the

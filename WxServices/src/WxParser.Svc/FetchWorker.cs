@@ -14,6 +14,7 @@ public sealed class FetchWorker : BackgroundService
     private readonly IConfiguration _config;
     private readonly DbContextOptions<WeatherDataContext> _dbOptions;
     private readonly HttpClient _http = new();
+    private DateTime _lastPurgeUtc = DateTime.MinValue;
 
     /// <summary>Initializes a new instance of <see cref="FetchWorker"/> with the given dependencies.</summary>
     /// <param name="config">Application configuration used to read <c>Fetch:*</c> settings each cycle.</param>
@@ -40,6 +41,7 @@ public sealed class FetchWorker : BackgroundService
         while (!stoppingToken.IsCancellationRequested)
         {
             await FetchCycleAsync(stoppingToken);
+            await PurgeCycleAsync(stoppingToken);
 
             var intervalMinutes = int.TryParse(_config["Fetch:IntervalMinutes"], out var m) ? m : 10;
             if (intervalMinutes <= 0)
@@ -209,6 +211,33 @@ public sealed class FetchWorker : BackgroundService
             new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
 
         Logger.Info($"Coordinates saved to {path}");
+    }
+
+    /// <summary>
+    /// Runs stale-data purge once per day.  Reads retention periods from
+    /// <c>Fetch:MetarRetentionDays</c> and <c>Fetch:TafRetentionDays</c>;
+    /// defaults to 14 days each if not configured.
+    /// </summary>
+    /// <param name="ct">Cancellation token.</param>
+    /// <sideeffects>Deletes old METAR and TAF records from the database. Writes log entries.</sideeffects>
+    private async Task PurgeCycleAsync(CancellationToken ct)
+    {
+        if ((DateTime.UtcNow - _lastPurgeUtc).TotalHours < 24) return;
+
+        try
+        {
+            var metatRetention = int.TryParse(_config["Fetch:MetarRetentionDays"], out var mr) ? mr : 14;
+            var tafRetention   = int.TryParse(_config["Fetch:TafRetentionDays"],   out var tr) ? tr : 14;
+
+            await DataPurger.PurgeOldMetarsAsync(_dbOptions, metatRetention, ct);
+            await DataPurger.PurgeOldTafsAsync(  _dbOptions, tafRetention,   ct);
+
+            _lastPurgeUtc = DateTime.UtcNow;
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            Logger.Error("Unhandled exception in purge cycle.", ex);
+        }
     }
 
     public override void Dispose()

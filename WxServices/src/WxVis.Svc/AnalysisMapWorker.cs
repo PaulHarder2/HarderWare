@@ -15,6 +15,7 @@ namespace WxVis.Svc;
 public sealed class AnalysisMapWorker : BackgroundService
 {
     private readonly IConfiguration _config;
+    private DateTime _lastCleanupUtc = DateTime.MinValue;
 
     /// <summary>Initialises a new instance with the application configuration.</summary>
     /// <param name="config">Application configuration used to read <c>WxVis:*</c> settings each cycle.</param>
@@ -36,15 +37,15 @@ public sealed class AnalysisMapWorker : BackgroundService
         var cfg             = LoadConfig();
         int? lastRenderedHour = null;
 
-        // On startup: if the trigger minute has already passed this hour and the
-        // synoptic map was written after the start of this UTC hour, treat it as
-        // already rendered so we don't re-render unnecessarily.
+        // On startup: if the trigger minute has already passed this hour and a
+        // timestamped synoptic map for this UTC hour already exists, skip the first render.
         var nowUtc = DateTime.UtcNow;
         if (nowUtc.Minute >= cfg.AnalysisMapMinutePastHour)
         {
-            var synopticPath = Path.Combine(cfg.OutputDir, "synoptic_south_central.png");
-            var hourStart    = new DateTime(nowUtc.Year, nowUtc.Month, nowUtc.Day, nowUtc.Hour, 0, 0, DateTimeKind.Utc);
-            if (File.Exists(synopticPath) && File.GetLastWriteTimeUtc(synopticPath) >= hourStart)
+            var hourStart  = new DateTime(nowUtc.Year, nowUtc.Month, nowUtc.Day, nowUtc.Hour, 0, 0, DateTimeKind.Utc);
+            var hourTag    = nowUtc.ToString("yyyyMMdd_HH");
+            var alreadyDone = Directory.EnumerateFiles(cfg.OutputDir, $"synoptic_*_{hourTag}.png").Any();
+            if (alreadyDone)
             {
                 lastRenderedHour = nowUtc.Hour;
                 Logger.Info($"AnalysisMapWorker: synoptic map already current for {nowUtc:yyyy-MM-dd HH}Z — skipping first render.");
@@ -78,11 +79,48 @@ public sealed class AnalysisMapWorker : BackgroundService
                 }
             }
 
+            PurgeStalePlots(cfg);
+
             try { await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken); }
             catch (OperationCanceledException) { break; }
         }
 
         Logger.Info("AnalysisMapWorker stopped.");
+    }
+
+    /// <summary>
+    /// Deletes PNG files in <see cref="WxVisConfig.OutputDir"/> older than
+    /// <see cref="WxVisConfig.PlotRetentionDays"/> days.  Runs at most once per 24 hours.
+    /// </summary>
+    /// <param name="cfg">Current configuration.</param>
+    /// <sideeffects>Deletes files from <see cref="WxVisConfig.OutputDir"/>. Writes log entries.</sideeffects>
+    private void PurgeStalePlots(WxVisConfig cfg)
+    {
+        if ((DateTime.UtcNow - _lastCleanupUtc).TotalHours < 24) return;
+
+        try
+        {
+            var cutoff  = DateTime.UtcNow - TimeSpan.FromDays(cfg.PlotRetentionDays);
+            int deleted = 0;
+
+            foreach (var file in Directory.EnumerateFiles(cfg.OutputDir, "*.png"))
+            {
+                if (File.GetLastWriteTimeUtc(file) < cutoff)
+                {
+                    File.Delete(file);
+                    deleted++;
+                }
+            }
+
+            if (deleted > 0)
+                Logger.Info($"AnalysisMapWorker: deleted {deleted} plot file(s) older than {cfg.PlotRetentionDays} days.");
+
+            _lastCleanupUtc = DateTime.UtcNow;
+        }
+        catch (Exception ex)
+        {
+            Logger.Error("AnalysisMapWorker: error during plot cleanup.", ex);
+        }
     }
 
     /// <summary>
