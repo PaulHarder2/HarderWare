@@ -131,7 +131,7 @@ public sealed class ForecastMapWorker : BackgroundService
             Logger.Info($"ForecastMapWorker: rendering f{fh:D3}...");
             var ok = await MapRenderer.RunAsync(
                 cfg.CondaPythonExe, cfg.ScriptDir,
-                "forecast_map.py", $"--fh {fh} --run {latestRun:yyyyMMddHH}",
+                "forecast_map.py", $"--fh {fh} --run {latestRun:yyyyMMdd_HH}",
                 ct);
 
             if (ok)
@@ -143,7 +143,7 @@ public sealed class ForecastMapWorker : BackgroundService
 
     /// <summary>Returns the expected PNG output path for a given model run and forecast hour.</summary>
     private static string PngPath(string outputDir, DateTime modelRun, int forecastHour) =>
-        Path.Combine(outputDir, $"forecast_{modelRun:yyyyMMddHH}_f{forecastHour:D3}.png");
+        Path.Combine(outputDir, $"forecast_{modelRun:yyyyMMdd_HH}_f{forecastHour:D3}.png");
 
     /// <summary>
     /// Loads and returns the current <see cref="WxVisConfig"/> from the
