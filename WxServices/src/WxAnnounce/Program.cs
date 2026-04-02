@@ -14,6 +14,7 @@
 //   3 — one or more sends failed (see log for details)
 
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.FileProviders;
 using System.Windows.Forms;
 using WxAnnounce;
 using WxServices.Common;
@@ -30,7 +31,7 @@ var config = new ConfigurationBuilder()
     .SetBasePath(AppContext.BaseDirectory)
     .AddJsonFile("appsettings.shared.json", optional: false)
     .AddJsonFile("appsettings.json",        optional: true)
-    .AddJsonFile(@"C:\HarderWare\appsettings.local.json", optional: true)
+    .AddJsonFile(new PhysicalFileProvider(@"C:\HarderWare"), "appsettings.local.json", optional: true, reloadOnChange: false)
     .AddJsonFile("appsettings.local.json",  optional: true)
     .Build();
 
@@ -64,13 +65,13 @@ if (issues.Count > 0)
 if (!File.Exists(announceConfig.FilePath))
     return Abort($"Announcement file not found:\n{announceConfig.FilePath}");
 
-var fileAge = DateTime.Now - File.GetLastWriteTime(announceConfig.FilePath);
-if (fileAge.TotalMinutes > announceConfig.MaxAgeMinutes)
-    return Abort($"Announcement file is {fileAge.TotalMinutes:0} minutes old (max: {announceConfig.MaxAgeMinutes}).\n\nWrite new content and try again.");
-
 var announcementText = (await File.ReadAllTextAsync(announceConfig.FilePath)).Trim();
 if (string.IsNullOrWhiteSpace(announcementText))
     return Abort($"Announcement file is empty:\n{announceConfig.FilePath}\n\nWrite your announcement text and try again.");
+
+var fileAge = DateTime.Now - File.GetLastWriteTime(announceConfig.FilePath);
+if (fileAge.TotalMinutes > announceConfig.MaxAgeMinutes)
+    return Abort($"Announcement file is {fileAge.TotalMinutes:0} minutes old (max: {announceConfig.MaxAgeMinutes}).\n\nWrite new content and try again.");
 
 Logger.Info($"Announcement file accepted: {announceConfig.FilePath} ({announcementText.Length} chars, {fileAge.TotalMinutes:0.0} min old).");
 
@@ -111,8 +112,16 @@ foreach (var group in languageGroups)
             recipient.Email, subject, announcementText,
             htmlBody: html, toName: recipient.Name);
 
-        if (ok) { sent++;   Logger.Info($"  Sent to {recipient.Name} <{recipient.Email}>"); }
-        else   { failed++; Logger.Error($"  Failed to send to {recipient.Name} <{recipient.Email}>"); }
+        if (ok)
+        {
+            sent++;
+            Logger.Info($"  Sent to {recipient.Name} <{recipient.Email}>. Text: {announcementText}");
+        }
+        else
+        {
+            failed++;
+            Logger.Error($"  Failed to send to {recipient.Name} <{recipient.Email}>");
+        }
     }
 }
 

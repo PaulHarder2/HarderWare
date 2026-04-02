@@ -53,7 +53,7 @@ public sealed class AnnouncementFormatter
             "Maximum content width: 600px, centred, clean and professional. " +
             "Structure the output in this order: " +
             "(1) Header div — background #1a3a5c, white text, left-aligned, padding 20px 24px, border-radius 6px 6px 0 0. " +
-            $"Bold text at 22px: 'HarderWare' followed by the phrase 'Service Announcement' translated into {language}. " +
+            $"All header text at 22px in a single span: <strong>HarderWare</strong> followed by a non-bold space and the phrase 'Service Announcement' translated into {language} — same font size throughout, no other bold. " +
             "(2) Body div — background white, padding 20px 24px, font-size 14px, line-height 1.6, color #222, border-radius 0 0 6px 6px. " +
             "Render the announcement content as clean HTML paragraphs. Preserve all paragraph breaks from the source text. " +
             translateInstruction +

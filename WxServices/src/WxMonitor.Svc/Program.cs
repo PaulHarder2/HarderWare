@@ -8,6 +8,7 @@
 // Stop:      sc.exe stop WxMonitorSvc
 
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.FileProviders;
 using WxMonitor.Svc;
 using WxServices.Logging;
 
@@ -24,7 +25,7 @@ var host = Host.CreateDefaultBuilder(args)
         cfg.SetBasePath(AppContext.BaseDirectory)
            .AddJsonFile("appsettings.shared.json", optional: false, reloadOnChange: true)
            .AddJsonFile("appsettings.json",        optional: false, reloadOnChange: true)
-           .AddJsonFile(@"C:\HarderWare\appsettings.local.json", optional: true, reloadOnChange: true)
+           .AddJsonFile(new PhysicalFileProvider(@"C:\HarderWare"), "appsettings.local.json", optional: true, reloadOnChange: true)
            .AddJsonFile("appsettings.local.json",  optional: true,  reloadOnChange: true);
     })
     .ConfigureServices((_, services) =>
