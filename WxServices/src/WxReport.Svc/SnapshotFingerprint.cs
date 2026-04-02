@@ -138,6 +138,79 @@ public static class SnapshotFingerprint
         return ChangeSeverity.Minor;
     }
 
+    /// <summary>
+    /// Produces a human-readable description of which fingerprint fields changed
+    /// and why an unscheduled report is being issued.  Intended for diagnostic
+    /// logging when <see cref="ClassifyChange"/> returns a send-triggering severity.
+    /// </summary>
+    /// <param name="oldFp">Fingerprint from the previous send.</param>
+    /// <param name="newFp">Fingerprint computed from the current snapshot.</param>
+    /// <param name="snap">Current snapshot (provides actual measured values).</param>
+    /// <param name="cfg">Thresholds used during fingerprint computation.</param>
+    /// <returns>
+    /// A semicolon-delimited string describing each changed field, e.g.
+    /// <c>"Wind speed: 35 kt exceeded threshold of 25 kt; Thunderstorm: appeared"</c>,
+    /// or <c>"(unknown change)"</c> if no specific field can be identified.
+    /// </returns>
+    public static string DescribeChanges(string oldFp, string newFp, WeatherSnapshot snap, SignificantChangeConfig cfg)
+    {
+        var oldP  = ParseFields(oldFp);
+        var newP  = ParseFields(newFp);
+        var parts = new List<string>();
+
+        // Wind speed
+        if (Changed(oldP, newP, "W"))
+        {
+            var windKt = snap.WindSpeedKt ?? 0;
+            parts.Add(BecameTrue(oldP, newP, "W")
+                ? $"Wind speed: {windKt:F0} kt exceeded threshold of {cfg.WindThresholdKt} kt"
+                : $"Wind speed: {windKt:F0} kt dropped below threshold of {cfg.WindThresholdKt} kt");
+        }
+
+        // Visibility (V:True = below threshold = bad)
+        if (Changed(oldP, newP, "V"))
+        {
+            var visSm = snap.Cavok ? 99.0 : (snap.VisibilityStatuteMiles ?? 99.0);
+            parts.Add(BecameTrue(oldP, newP, "V")
+                ? $"Visibility: {visSm:F1} sm dropped below threshold of {cfg.VisibilityThresholdSm} sm"
+                : $"Visibility: {visSm:F1} sm rose above threshold of {cfg.VisibilityThresholdSm} sm");
+        }
+
+        // Thunderstorm
+        if (Changed(oldP, newP, "TS"))
+            parts.Add(BecameTrue(oldP, newP, "TS") ? "Thunderstorm: appeared" : "Thunderstorm: cleared");
+
+        // Precipitation
+        if (Changed(oldP, newP, "PR"))
+            parts.Add(BecameTrue(oldP, newP, "PR") ? "Precipitation: appeared" : "Precipitation: cleared");
+
+        // GFS forecast high bucket
+        if (Changed(oldP, newP, "GH"))
+        {
+            var gfsDays = snap.GfsForecast?.Days;
+            var today   = DateOnly.FromDateTime(DateTime.UtcNow);
+            var nextDay = gfsDays?.FirstOrDefault(d => d.Date > today) ?? gfsDays?.FirstOrDefault();
+            var highF   = nextDay?.HighTempF;
+            parts.Add(highF.HasValue
+                ? $"Forecast high: {highF.Value:F0}°F (shifted by at least {cfg.ForecastHighChangeDegF}°F)"
+                : $"Forecast high: shifted by at least {cfg.ForecastHighChangeDegF}°F");
+        }
+
+        // GFS CAPE risk
+        if (Changed(oldP, newP, "GC"))
+            parts.Add(BecameTrue(oldP, newP, "GC")
+                ? $"CAPE risk: appeared (threshold {cfg.CapeThresholdJKg} J/kg)"
+                : $"CAPE risk: cleared (threshold {cfg.CapeThresholdJKg} J/kg)");
+
+        // GFS precip risk
+        if (Changed(oldP, newP, "GP"))
+            parts.Add(BecameTrue(oldP, newP, "GP")
+                ? $"GFS precip risk: appeared (threshold {cfg.GfsPrecipThresholdMmHr} mm/hr)"
+                : $"GFS precip risk: cleared (threshold {cfg.GfsPrecipThresholdMmHr} mm/hr)");
+
+        return parts.Count > 0 ? string.Join("; ", parts) : "(unknown change)";
+    }
+
     // ── helpers ───────────────────────────────────────────────────────────────
 
     /// <summary>

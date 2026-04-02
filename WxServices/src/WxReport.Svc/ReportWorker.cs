@@ -292,13 +292,20 @@ public sealed class ReportWorker : BackgroundService
                 Logger.Warn($"{recipient.Email}: preferred station(s) [{string.Join(", ", preferredIcaos)}] had no data — fell back to {snapshot.StationIcao}.");
 
             if (snapshot.GfsForecast is { } gfs)
-                Logger.Info($"{recipient.Email}: GFS run {gfs.ModelRunUtc:yyyy-MM-dd HH}Z — {gfs.Days.Count} day(s); " +
+                Logger.Info($"{recipient.Email} ({recipient.Name}): GFS run {gfs.ModelRunUtc:yyyy-MM-dd HH}Z — {gfs.Days.Count} day(s); " +
                     string.Join(", ", gfs.Days.Select(d => $"{d.Date:MM/dd} {d.HighTempF:F0}°/{d.LowTempF:F0}°F")));
             else
-                Logger.Warn($"{recipient.Email}: no GFS forecast available.");
+                Logger.Warn($"{recipient.Email} ({recipient.Name}): no GFS forecast available.");
 
             var fingerprint      = SnapshotFingerprint.Compute(snapshot, cfg.SignificantChange);
             var (shouldSend, reason, severity) = ShouldSend(recipient, state, fingerprint, cfg, now);
+
+            if (shouldSend && reason == "change" && state.LastSnapshotFingerprint is not null)
+            {
+                var changeDesc = SnapshotFingerprint.DescribeChanges(
+                    state.LastSnapshotFingerprint, fingerprint, snapshot, cfg.SignificantChange);
+                Logger.Info($"{recipient.Email}: unscheduled send triggered — {changeDesc}");
+            }
 
             if (!shouldSend) continue;
 
