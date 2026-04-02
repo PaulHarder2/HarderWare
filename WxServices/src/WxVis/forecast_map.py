@@ -28,6 +28,9 @@ from scipy.ndimage import gaussian_filter, maximum_filter, minimum_filter
 from scipy.ndimage import label as _connected_components
 from datetime import timedelta
 
+from metpy.plots import StationPlot
+from metpy.plots.wx_symbols import sky_cover
+
 
 # ── Projection helpers ────────────────────────────────────────────────────────
 
@@ -158,6 +161,8 @@ def render_forecast_map(
     isobar_interval_hpa: float = 4.0,
     isotherm_interval_c: float = 3.0,
     smooth_sigma: float = 1.5,
+    barb_spacing_deg: float = 1.0,
+    station_locs: pd.DataFrame | None = None,
     dpi: int = 150,
 ) -> None:
     """
@@ -186,6 +191,15 @@ def render_forecast_map(
         Temperature and dewpoint contour interval in °C.  Default 5.
     smooth_sigma:
         Gaussian smoothing sigma in grid cells (0.25° each).  Default 1.5.
+    barb_spacing_deg:
+        Approximate spacing between wind barbs in degrees when *station_locs*
+        is not provided.  The grid is subsampled so that one barb appears
+        roughly every *barb_spacing_deg* degrees in both lat and lon.  Default 1.0.
+    station_locs:
+        Optional DataFrame with ``Lat`` and ``Lon`` columns (e.g. from
+        :func:`db.load_latest_metars`).  When supplied, one wind barb is drawn
+        at each station position using the GFS value at the nearest grid point,
+        instead of the regular grid subsampling.  Default ``None``.
     dpi:
         Output resolution.  Default 150.
     """
@@ -304,6 +318,88 @@ def render_forecast_map(
                       high_color="navy", low_color="maroon", neighborhood=20,
                       transform=ccrs.PlateCarree())
 
+    # ── Wind / station model ──────────────────────────────────────────────────
+    has_wind = "UGrdMs" in df.columns and "VGrdMs" in df.columns \
+               and df["UGrdMs"].notna().any() and df["VGrdMs"].notna().any()
+    if has_wind:
+        wind_df = df.dropna(subset=["UGrdMs", "VGrdMs"])
+        _, _, u_raw = _to_grid(wind_df, "UGrdMs")
+        _, _, v_raw = _to_grid(wind_df, "VGrdMs")
+        MS_TO_KT = 1.94384
+        u_kt = u_raw * MS_TO_KT
+        v_kt = v_raw * MS_TO_KT
+
+    has_tcc = "TcdcPct" in df.columns and df["TcdcPct"].notna().any()
+    if has_tcc:
+        _, _, tcc_raw = _to_grid(df.dropna(subset=["TcdcPct"]), "TcdcPct")
+
+    if station_locs is not None and not station_locs.empty:
+        # ── Station model at METAR locations, GFS values ──────────────────────
+        stn = station_locs.dropna(subset=["Lat", "Lon"])
+        stn = stn[
+            (stn["Lon"] >= extent[0]) & (stn["Lon"] <= extent[1]) &
+            (stn["Lat"] >= extent[2]) & (stn["Lat"] <= extent[3])
+        ]
+        records = []
+        for _, row in stn.iterrows():
+            i_lat = int(np.argmin(np.abs(lats - row["Lat"])))
+            i_lon = int(np.argmin(np.abs(lons - row["Lon"])))
+            rec = {"lon": float(row["Lon"]), "lat": float(row["Lat"])}
+            rec["tmp_c"]   = float(tmp_raw[i_lat, i_lon])
+            rec["dwp_c"]   = float(dew_raw[i_lat, i_lon]) if has_dwp  else np.nan
+            rec["u_kt"]    = float(u_kt[i_lat, i_lon])    if has_wind else np.nan
+            rec["v_kt"]    = float(v_kt[i_lat, i_lon])    if has_wind else np.nan
+            if has_slp:
+                p = float(slp_raw[i_lat, i_lon]) / 100.0   # Pa → hPa
+                rec["slp_enc"] = round(p * 10) % 1000 if not np.isnan(p) else np.nan
+            else:
+                rec["slp_enc"] = np.nan
+            if has_tcc:
+                t = float(tcc_raw[i_lat, i_lon])
+                rec["oktas"] = int(np.clip(round(t / 100.0 * 8), 0, 8)) \
+                               if not np.isnan(t) else -1
+            else:
+                rec["oktas"] = -1
+            records.append(rec)
+
+        if records:
+            stn_df = pd.DataFrame(records)
+            sp = StationPlot(
+                ax,
+                stn_df["lon"].values, stn_df["lat"].values,
+                clip_on=True,
+                transform=ccrs.PlateCarree(),
+                fontsize=8,
+            )
+            sp.plot_parameter("NW", stn_df["tmp_c"].values,   color="darkred")
+            if has_dwp:
+                sp.plot_parameter("SW", stn_df["dwp_c"].values, color="darkgreen")
+            if has_slp:
+                sp.plot_parameter("NE", stn_df["slp_enc"].values,
+                                  formatter=lambda v: f"{int(v):03d}")
+            if has_wind:
+                sp.plot_barb(stn_df["u_kt"].values, stn_df["v_kt"].values)
+            if has_tcc:
+                ok = stn_df["oktas"].values.astype(int)
+                sp.plot_symbol("C", np.where(ok >= 0, ok, 0), sky_cover)
+
+    elif has_wind:
+        # ── Fallback: grid-subsampled barbs only ──────────────────────────────
+        grid_spacing = float(np.median(np.diff(lons)))
+        step = max(1, round(barb_spacing_deg / grid_spacing))
+        sub_lon = lon_grid[::step, ::step]
+        sub_lat = lat_grid[::step, ::step]
+        sub_u   = u_kt[::step, ::step]
+        sub_v   = v_kt[::step, ::step]
+        valid_mask = ~(np.isnan(sub_u) | np.isnan(sub_v))
+        if valid_mask.any():
+            ax.barbs(
+                sub_lon[valid_mask], sub_lat[valid_mask],
+                sub_u[valid_mask],   sub_v[valid_mask],
+                length=5, linewidth=0.6, color="dimgray",
+                transform=ccrs.PlateCarree(), zorder=5,
+            )
+
     # ── Title ─────────────────────────────────────────────────────────────────
     model_run  = pd.to_datetime(df["ModelRunUtc"].iloc[0])
     fh         = int(df["ForecastHour"].iloc[0])
@@ -324,7 +420,7 @@ def render_forecast_map(
 
 if __name__ == "__main__":
     import argparse
-    from db import get_engine, load_gfs_grid, load_output_dir
+    from db import get_engine, load_gfs_grid, load_latest_metars, load_output_dir
 
     parser = argparse.ArgumentParser(description="Render a GFS forecast parameter map.")
     parser.add_argument(
@@ -340,5 +436,13 @@ if __name__ == "__main__":
         print(f"No GFS data found for forecast hour {args.fh}.")
     else:
         print(f"Loaded {len(df)} grid points for f{args.fh:03d}.")
+        metar_df = load_latest_metars(engine)
+        station_locs = metar_df[["Lat", "Lon"]].dropna() if not metar_df.empty else None
+        if station_locs is not None:
+            print(f"Loaded {len(station_locs)} METAR station locations for forecast station models.")
         out_dir = load_output_dir()
-        render_forecast_map(df, str(out_dir / f"forecast_f{args.fh:03d}.png"))
+        render_forecast_map(
+            df,
+            str(out_dir / f"forecast_f{args.fh:03d}.png"),
+            station_locs=station_locs,
+        )
