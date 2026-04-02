@@ -4,17 +4,19 @@
     Publishes and redeploys one or all WxServices Windows services.
 
 .PARAMETER ServiceName
-    The service to deploy, or 'all' to deploy all three in order
-    (WxParserSvc, WxReportSvc, WxMonitorSvc).
+    The service to deploy, or 'all' to deploy all three Windows services in order
+    (WxParserSvc, WxReportSvc, WxMonitorSvc), or 'WxAnnounce' to publish the
+    console tool to C:\bin.
 
 .EXAMPLE
     .\Deploy-WxService.ps1 WxReportSvc
     .\Deploy-WxService.ps1 all
+    .\Deploy-WxService.ps1 WxAnnounce
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [ValidateSet('WxParserSvc', 'WxReportSvc', 'WxMonitorSvc', 'all')]
+    [ValidateSet('WxParserSvc', 'WxReportSvc', 'WxMonitorSvc', 'WxAnnounce', 'all')]
     [string]$ServiceName
 )
 
@@ -173,8 +175,31 @@ function Invoke-ServiceDeploy {
 }
 
 # ---------------------------------------------------------------------------
+# Publish WxAnnounce console tool to C:\bin
+# ---------------------------------------------------------------------------
+function Invoke-ToolPublish {
+    $projectPath = "$SolutionRoot\src\WxAnnounce"
+    $outputDir   = "C:\bin"
+
+    Write-Host "Publishing WxAnnounce to $outputDir..."
+    dotnet publish $projectPath -c Release -o $outputDir
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "dotnet publish failed for WxAnnounce (exit code $LASTEXITCODE)."
+        return $false
+    }
+
+    Write-Host "WxAnnounce published to $outputDir." -ForegroundColor Green
+    return $true
+}
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+if ($ServiceName -eq 'WxAnnounce') {
+    Invoke-ToolPublish
+    exit $LASTEXITCODE
+}
+
 $targets = if ($ServiceName -eq 'all') { $ServiceMap.Keys } else { @($ServiceName) }
 
 foreach ($target in $targets) {

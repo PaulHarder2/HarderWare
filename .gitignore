@@ -3,3 +3,6 @@ todo.json
 
 # Personal notes — not for source control
 Notes/
+
+# Machine-local secrets — never commit
+appsettings.local.json
