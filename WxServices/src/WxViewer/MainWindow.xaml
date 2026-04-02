@@ -3,7 +3,15 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="WxViewer" Height="750" Width="1400"
         Background="#1a1a1a"
-        WindowStartupLocation="CenterScreen">
+        WindowStyle="None"
+        WindowState="Maximized">
+
+    <WindowChrome.WindowChrome>
+        <WindowChrome CaptionHeight="0"
+                      ResizeBorderThickness="5"
+                      GlassFrameThickness="0"
+                      NonClientFrameEdges="None"/>
+    </WindowChrome.WindowChrome>
 
     <Window.Resources>
         <Style TargetType="ComboBox">
@@ -14,91 +22,113 @@
             <Setter Property="Padding"           Value="8,3"/>
             <Setter Property="Margin"            Value="2,0"/>
             <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Foreground"        Value="#e0e0e0"/>
+        </Style>
+
+        <!-- Window chrome button — minimize and maximize/restore -->
+        <Style x:Key="WinCtrlButton" TargetType="Button">
+            <Setter Property="Background"      Value="Transparent"/>
+            <Setter Property="Foreground"      Value="#c0c0c0"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Width"           Value="46"/>
+            <Setter Property="Height"          Value="34"/>
+            <Setter Property="FontSize"        Value="13"/>
+            <Setter Property="Focusable"       Value="False"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="bg" Background="{TemplateBinding Background}">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bg" Property="Background" Value="#3c3c3c"/>
+                                <Setter Property="Foreground" Value="#ffffff"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="bg" Property="Background" Value="#505050"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Window chrome button — close (red hover) -->
+        <Style x:Key="CloseWinCtrlButton" TargetType="Button">
+            <Setter Property="Background"      Value="Transparent"/>
+            <Setter Property="Foreground"      Value="#c0c0c0"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Width"           Value="46"/>
+            <Setter Property="Height"          Value="34"/>
+            <Setter Property="FontSize"        Value="13"/>
+            <Setter Property="Focusable"       Value="False"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="bg" Background="{TemplateBinding Background}">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bg" Property="Background" Value="#c42b1c"/>
+                                <Setter Property="Foreground" Value="#ffffff"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="bg" Property="Background" Value="#a82315"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
     </Window.Resources>
 
     <DockPanel>
 
-        <!-- ── Toolbar ──────────────────────────────────────────────────────── -->
-        <ToolBarTray DockPanel.Dock="Top" Background="#252525">
-            <ToolBar Band="0" BandIndex="0" Background="#252525"
-                     Foreground="#e0e0e0">
+        <!-- ── Header / logo + window controls ─────────────────────────────── -->
+        <Border DockPanel.Dock="Top" Background="#0d0d0d"
+                BorderBrush="#333333" BorderThickness="0,0,0,1"
+                MouseLeftButtonDown="Header_MouseLeftButtonDown">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
 
-                <!-- Analysis selector -->
-                <TextBlock Text="Analysis:" Foreground="#a0a0a0"
-                           VerticalAlignment="Center" Margin="4,0,4,0"/>
-                <ComboBox Width="270"
-                          ItemsSource="{Binding AnalysisMaps}"
-                          SelectedItem="{Binding SelectedAnalysis}"
-                          DisplayMemberPath="Label"/>
+                <TextBlock Grid.Column="0" VerticalAlignment="Center" Margin="14,8">
+                    <Run Text="HarderWare" FontWeight="Bold"   FontSize="18" Foreground="#e0e0e0"/>
+                    <Run Text=" WxViewer"  FontWeight="Normal" FontSize="18" Foreground="#c8c8c8"/>
+                </TextBlock>
 
-                <Separator/>
-
-                <!-- Forecast run selector -->
-                <TextBlock Text="GFS Run:" Foreground="#a0a0a0"
-                           VerticalAlignment="Center" Margin="4,0,4,0"/>
-                <ComboBox Width="200"
-                          ItemsSource="{Binding ForecastRuns}"
-                          SelectedItem="{Binding SelectedRun}"
-                          DisplayMemberPath="Label"/>
-
-                <Separator/>
-
-                <!-- Forecast hour slider -->
-                <TextBlock Text="Hour:" Foreground="#a0a0a0"
-                           VerticalAlignment="Center" Margin="4,0,4,0"/>
-                <Slider Width="220"
-                        Minimum="0"
-                        Maximum="{Binding MaxFrameIndex}"
-                        Value="{Binding FrameIndex, Mode=TwoWay,
-                                        UpdateSourceTrigger=PropertyChanged}"
-                        TickFrequency="1"
-                        IsSnapToTickEnabled="True"
-                        VerticalAlignment="Center"
-                        Margin="0,0,4,0"/>
-                <TextBlock Text="{Binding FrameLabel}"
-                           Foreground="#e0e0e0"
-                           VerticalAlignment="Center"
-                           MinWidth="215"
-                           Margin="0,0,8,0"/>
-
-                <Separator/>
-
-                <!-- Playback controls -->
-                <Button Command="{Binding StepBackCommand}"
-                        ToolTip="Step back  (←)"
-                        Content="◀" Width="30"/>
-
-                <Button Command="{Binding PlayPauseCommand}"
-                        ToolTip="Play / Pause  (Space)"
-                        Width="72">
-                    <Button.Style>
-                        <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-                            <Setter Property="Content" Value="▶  Play"/>
-                            <Style.Triggers>
-                                <DataTrigger Binding="{Binding IsPlaying}" Value="True">
-                                    <Setter Property="Content" Value="⏸  Pause"/>
-                                </DataTrigger>
-                            </Style.Triggers>
-                        </Style>
-                    </Button.Style>
-                </Button>
-
-                <Button Command="{Binding StepForwardCommand}"
-                        ToolTip="Step forward  (→)"
-                        Content="▶" Width="30"/>
-
-                <Separator/>
-
-                <TextBlock Text="Speed:" Foreground="#a0a0a0"
-                           VerticalAlignment="Center" Margin="4,0,4,0"/>
-                <ComboBox Width="90"
-                          ItemsSource="{Binding SpeedOptions}"
-                          SelectedItem="{Binding SelectedSpeed}"
-                          DisplayMemberPath="Label"/>
-
-            </ToolBar>
-        </ToolBarTray>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Stretch">
+                    <Button Style="{StaticResource WinCtrlButton}"
+                            ToolTip="Minimize"
+                            Content="&#x2012;"
+                            Click="MinimizeButton_Click"/>
+                    <Button ToolTip="Restore / Maximize" Click="MaxRestoreButton_Click">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource WinCtrlButton}">
+                                <Setter Property="Content" Value="&#x25A1;"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding WindowState,
+                                                 RelativeSource={RelativeSource AncestorType=Window}}"
+                                                 Value="Maximized">
+                                        <Setter Property="Content" Value="&#x2752;"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                    <Button Style="{StaticResource CloseWinCtrlButton}"
+                            ToolTip="Close"
+                            Content="&#x2715;"
+                            Click="CloseButton_Click"/>
+                </StackPanel>
+            </Grid>
+        </Border>
 
         <!-- ── Status bar ────────────────────────────────────────────────────── -->
         <StatusBar DockPanel.Dock="Bottom" Background="#111111">
@@ -108,22 +138,93 @@
             </StatusBarItem>
         </StatusBar>
 
-        <!-- ── Map area ──────────────────────────────────────────────────────── -->
+        <!-- ── Split map area ───────────────────────────────────────────────── -->
         <Grid>
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" MinWidth="200"/>
+                <ColumnDefinition Width="*" MinWidth="300"/>
                 <ColumnDefinition Width="4"/>
-                <ColumnDefinition Width="*" MinWidth="200"/>
+                <ColumnDefinition Width="*" MinWidth="300"/>
             </Grid.ColumnDefinitions>
 
-            <!-- Left: Analysis map -->
-            <Grid Grid.Column="0" Background="#111111">
-                <TextBlock Text="No analysis map selected"
-                           HorizontalAlignment="Center" VerticalAlignment="Center"
-                           Foreground="#404040" FontSize="15"/>
-                <Image Source="{Binding AnalysisImage}"
-                       Stretch="Uniform"
-                       RenderOptions.BitmapScalingMode="HighQuality"/>
+            <!-- ── Analysis pane ─────────────────────────────────────────────── -->
+            <Grid Grid.Column="0">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <!-- Analysis control bar -->
+                <ToolBarTray Grid.Row="0" Background="#252525">
+                    <ToolBar Band="0" BandIndex="0" Background="#252525" Foreground="#e0e0e0">
+
+                        <TextBlock Text="Analysis:" Foreground="#d0d0d0"
+                                   VerticalAlignment="Center" Margin="4,0,4,0"/>
+                        <ComboBox Width="190"
+                                  ItemsSource="{Binding AnalysisLabels}"
+                                  SelectedItem="{Binding SelectedAnalysisLabel}"
+                                  DisplayMemberPath="Label"/>
+
+                        <Separator/>
+
+                        <Button Command="{Binding AnalysisStepBackCommand}"
+                                ToolTip="Step back" Content="◀" Width="26"/>
+
+                        <Button Command="{Binding AnalysisPlayPauseCommand}"
+                                ToolTip="Play / Pause" Width="72">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                    <Setter Property="Foreground" Value="#e0e0e0"/>
+                                    <Setter Property="Content"    Value="▶  Play"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsAnalysisPlaying}" Value="True">
+                                            <Setter Property="Content" Value="⏸  Pause"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
+
+                        <Button Command="{Binding AnalysisStepForwardCommand}"
+                                ToolTip="Step forward" Content="▶" Width="26"/>
+
+                        <Separator/>
+
+                        <TextBlock Text="Speed:" Foreground="#d0d0d0"
+                                   VerticalAlignment="Center" Margin="4,0,4,0"/>
+                        <ComboBox Width="80"
+                                  ItemsSource="{Binding SpeedOptions}"
+                                  SelectedItem="{Binding SelectedAnalysisSpeed}"
+                                  DisplayMemberPath="Label"/>
+
+                        <Separator/>
+
+                        <Slider Width="130"
+                                Minimum="0"
+                                Maximum="{Binding MaxAnalysisFrameIndex}"
+                                Value="{Binding AnalysisFrameIndex, Mode=TwoWay,
+                                                UpdateSourceTrigger=PropertyChanged}"
+                                TickFrequency="1"
+                                IsSnapToTickEnabled="True"
+                                VerticalAlignment="Center"
+                                Margin="0,0,4,0"/>
+                        <TextBlock Text="{Binding AnalysisFrameLabel}"
+                                   Foreground="#e0e0e0"
+                                   VerticalAlignment="Center"
+                                   MinWidth="150"
+                                   Margin="0,0,8,0"/>
+
+                    </ToolBar>
+                </ToolBarTray>
+
+                <!-- Analysis image -->
+                <Grid Grid.Row="1" Background="#111111">
+                    <TextBlock Text="No analysis map selected"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                               Foreground="#404040" FontSize="15"/>
+                    <Image Source="{Binding AnalysisImage}"
+                           Stretch="Uniform"
+                           RenderOptions.BitmapScalingMode="HighQuality"/>
+                </Grid>
             </Grid>
 
             <!-- Splitter -->
@@ -133,14 +234,87 @@
                           ResizeDirection="Columns"
                           ResizeBehavior="PreviousAndNext"/>
 
-            <!-- Right: Forecast map -->
-            <Grid Grid.Column="2" Background="#111111">
-                <TextBlock Text="No forecast map selected"
-                           HorizontalAlignment="Center" VerticalAlignment="Center"
-                           Foreground="#404040" FontSize="15"/>
-                <Image Source="{Binding ForecastImage}"
-                       Stretch="Uniform"
-                       RenderOptions.BitmapScalingMode="HighQuality"/>
+            <!-- ── Forecast pane ──────────────────────────────────────────────── -->
+            <Grid Grid.Column="2">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <!-- Forecast control bar -->
+                <ToolBarTray Grid.Row="0" Background="#252525">
+                    <ToolBar Band="0" BandIndex="0" Background="#252525" Foreground="#e0e0e0">
+
+                        <TextBlock Text="GFS Run:" Foreground="#d0d0d0"
+                                   VerticalAlignment="Center" Margin="4,0,4,0"/>
+                        <ComboBox Width="190"
+                                  ItemsSource="{Binding ForecastRuns}"
+                                  SelectedItem="{Binding SelectedRun}"
+                                  DisplayMemberPath="Label"/>
+
+                        <Separator/>
+
+                        <Button Command="{Binding StepBackCommand}"
+                                ToolTip="Step back" Content="◀" Width="26"/>
+
+                        <Button Command="{Binding PlayPauseCommand}"
+                                ToolTip="Play / Pause" Width="72">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                    <Setter Property="Foreground" Value="#e0e0e0"/>
+                                    <Setter Property="Content"    Value="▶  Play"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsPlaying}" Value="True">
+                                            <Setter Property="Content" Value="⏸  Pause"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
+
+                        <Button Command="{Binding StepForwardCommand}"
+                                ToolTip="Step forward" Content="▶" Width="26"/>
+
+                        <Separator/>
+
+                        <TextBlock Text="Speed:" Foreground="#d0d0d0"
+                                   VerticalAlignment="Center" Margin="4,0,4,0"/>
+                        <ComboBox Width="80"
+                                  ItemsSource="{Binding SpeedOptions}"
+                                  SelectedItem="{Binding SelectedForecastSpeed}"
+                                  DisplayMemberPath="Label"/>
+
+                        <Separator/>
+
+                        <TextBlock Text="Hour:" Foreground="#d0d0d0"
+                                   VerticalAlignment="Center" Margin="4,0,4,0"/>
+                        <Slider Width="130"
+                                Minimum="0"
+                                Maximum="{Binding MaxFrameIndex}"
+                                Value="{Binding FrameIndex, Mode=TwoWay,
+                                                UpdateSourceTrigger=PropertyChanged}"
+                                TickFrequency="1"
+                                IsSnapToTickEnabled="True"
+                                VerticalAlignment="Center"
+                                Margin="0,0,4,0"/>
+                        <TextBlock Text="{Binding FrameLabel}"
+                                   Foreground="#e0e0e0"
+                                   VerticalAlignment="Center"
+                                   MinWidth="190"
+                                   Margin="0,0,8,0"/>
+
+                    </ToolBar>
+                </ToolBarTray>
+
+                <!-- Forecast image -->
+                <Grid Grid.Row="1" Background="#111111">
+                    <TextBlock Text="No forecast map selected"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                               Foreground="#404040" FontSize="15"/>
+                    <Image Source="{Binding ForecastImage}"
+                           Stretch="Uniform"
+                           RenderOptions.BitmapScalingMode="HighQuality"/>
+                </Grid>
             </Grid>
 
         </Grid>

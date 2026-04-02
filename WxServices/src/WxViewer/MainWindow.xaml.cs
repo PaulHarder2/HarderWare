@@ -14,26 +14,25 @@ public partial class MainWindow : Window
         DataContext = _vm;
     }
 
-    protected override void OnKeyDown(KeyEventArgs e)
+    private void Header_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        base.OnKeyDown(e);
-
-        switch (e.Key)
-        {
-            case Key.Space:
-                _vm.TogglePlay();
-                e.Handled = true;
-                break;
-
-            case Key.Right:
-                _vm.StepForward();
-                e.Handled = true;
-                break;
-
-            case Key.Left:
-                _vm.StepBack();
-                e.Handled = true;
-                break;
-        }
+        if (e.ClickCount == 2)
+            ToggleMaximize();
+        else
+            DragMove();
     }
+
+    private void MinimizeButton_Click(object sender, RoutedEventArgs e)
+        => WindowState = WindowState.Minimized;
+
+    private void MaxRestoreButton_Click(object sender, RoutedEventArgs e)
+        => ToggleMaximize();
+
+    private void CloseButton_Click(object sender, RoutedEventArgs e)
+        => Close();
+
+    private void ToggleMaximize()
+        => WindowState = WindowState == WindowState.Maximized
+            ? WindowState.Normal
+            : WindowState.Maximized;
 }

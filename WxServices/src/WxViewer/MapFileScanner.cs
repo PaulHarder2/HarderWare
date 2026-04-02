@@ -82,14 +82,14 @@ public sealed class MapFileScanner : IDisposable
         });
 
     /// <summary>
-    /// Reads the directory and returns all recognised analysis maps, ordered
-    /// newest-first.
+    /// Reads the directory and returns all recognised analysis maps grouped by
+    /// region label, with each group's frames ordered oldest-first for animation.
     /// </summary>
-    public List<AnalysisMap> ScanAnalysis()
+    public List<AnalysisLabel> ScanAnalysis()
     {
         if (!Directory.Exists(_directory)) return [];
 
-        var results = new List<AnalysisMap>();
+        var byLabel = new Dictionary<string, List<AnalysisMap>>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var path in Directory.EnumerateFiles(_directory, "synoptic_*.png"))
         {
@@ -100,12 +100,24 @@ public sealed class MapFileScanner : IDisposable
             if (!TryParseDateTime(match.Groups["date"].Value, match.Groups["hour"].Value,
                                   out var obsUtc)) continue;
 
-            var mapLabel = $"{match.Groups["label"].Value}  {obsUtc:yyyy-MM-dd HH}Z";
-            results.Add(new AnalysisMap(obsUtc, path, mapLabel));
+            var labelName  = match.Groups["label"].Value;
+            var frameLabel = $"{labelName}  {obsUtc:yyyy-MM-dd HH}Z";
+            var map        = new AnalysisMap(obsUtc, path, frameLabel);
+
+            if (!byLabel.TryGetValue(labelName, out var list))
+                byLabel[labelName] = list = [];
+            list.Add(map);
         }
 
-        results.Sort((a, b) => b.ObsUtc.CompareTo(a.ObsUtc));
-        return results;
+        var labels = new List<AnalysisLabel>();
+        foreach (var (name, frames) in byLabel)
+        {
+            frames.Sort((a, b) => a.ObsUtc.CompareTo(b.ObsUtc)); // oldest-first for animation
+            labels.Add(new AnalysisLabel(name, frames, name));
+        }
+
+        labels.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase));
+        return labels;
     }
 
     /// <summary>
