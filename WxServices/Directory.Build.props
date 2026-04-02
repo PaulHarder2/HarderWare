@@ -1,0 +1,11 @@
+<Project>
+  <!--
+    Redirects MSBuild output outside of the Dropbox tree so that build artifacts
+    are never synced to Dropbox. All obj/ and bin/ folders go to C:\HarderWare\BuildCache\.
+    This file is automatically picked up by MSBuild for every project in this solution.
+  -->
+  <PropertyGroup>
+    <BaseIntermediateOutputPath>C:\HarderWare\BuildCache\WxServices\$(MSBuildProjectName)\obj\</BaseIntermediateOutputPath>
+    <BaseOutputPath>C:\HarderWare\BuildCache\WxServices\$(MSBuildProjectName)\bin\</BaseOutputPath>
+  </PropertyGroup>
+</Project>

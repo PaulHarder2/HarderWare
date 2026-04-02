@@ -173,7 +173,7 @@ public sealed class ReportWorker : BackgroundService
             return;
         }
 
-        var subject       = BuildSubject(snapshot, language, tz);
+        var subject       = BuildSubject(snapshot, language, tz, recipientName: recipient.Name);
         var plainFallback = SnapshotDescriber.Describe(snapshot, tz, recipient.Units);
         var emailer       = new SmtpSender(smtp, "WxReport");
         var sent          = await emailer.SendAsync(recipient.Email, subject, plainFallback, htmlBody: report, toName: recipient.Name, ct: ct);
@@ -329,7 +329,7 @@ public sealed class ReportWorker : BackgroundService
                 continue;
             }
 
-            var subject       = BuildSubject(snapshot, language, tz, severity);
+            var subject       = BuildSubject(snapshot, language, tz, severity, recipientName: recipient.Name);
             var plainFallback = SnapshotDescriber.Describe(snapshot, tz, recipient.Units);
             var sent          = await emailer.SendAsync(recipient.Email, subject, plainFallback, htmlBody: report, toName: recipient.Name, ct: ct);
 
@@ -478,9 +478,9 @@ public sealed class ReportWorker : BackgroundService
 
     /// <summary>
     /// Builds a localised email subject line for a weather report or alert.
-    /// The subject includes the locality name and the local observation time.
-    /// When <paramref name="isChangeAlert"/> is <see langword="true"/>, the subject uses
-    /// an alert label instead of the standard report label.
+    /// The subject includes the recipient's first name, the locality name, and the local observation time.
+    /// When <paramref name="severity"/> is <see cref="ChangeSeverity.Alert"/> or
+    /// <see cref="ChangeSeverity.Update"/>, the subject uses the corresponding label.
     /// Supported languages with translated subjects: Spanish, French; all others default to English.
     /// </summary>
     /// <param name="snap">Snapshot providing the station ICAO, locality name, and observation time.</param>
@@ -492,13 +492,15 @@ public sealed class ReportWorker : BackgroundService
     /// <see cref="ChangeSeverity.Update"/> uses an update label (e.g. <c>"Weather update"</c>);
     /// all other values use the standard report label (e.g. <c>"Weather report"</c>).
     /// </param>
-    /// <returns>A localised subject string, e.g. <c>"Weather report — The Woodlands (7:05 AM)"</c>,
-    /// <c>"Weather update — The Woodlands (7:05 AM)"</c>,
-    /// or <c>"Weather alert — The Woodlands (7:05 AM)"</c>.</returns>
+    /// <param name="recipientName">Display name of the recipient, included in the subject (e.g. <c>"Paul"</c>).</param>
+    /// <returns>A localised subject string, e.g. <c>"Weather report for Paul — The Woodlands (7:05 AM)"</c>,
+    /// <c>"Weather update for Paul — The Woodlands (7:05 AM)"</c>,
+    /// or <c>"Weather alert for Paul — The Woodlands (7:05 AM)"</c>.</returns>
     private static string BuildSubject(WeatherSnapshot snap, string language, TimeZoneInfo tz,
-        ChangeSeverity severity = ChangeSeverity.None)
+        ChangeSeverity severity = ChangeSeverity.None, string recipientName = "")
     {
         var localTime = TimeZoneInfo.ConvertTimeFromUtc(snap.ObservationTimeUtc, tz).ToString("h:mm tt");
+        var forName   = string.IsNullOrWhiteSpace(recipientName) ? "" : $" for {recipientName}";
         if (language.Equals("Spanish", StringComparison.OrdinalIgnoreCase))
         {
             var label = severity switch
@@ -507,7 +509,8 @@ public sealed class ReportWorker : BackgroundService
                 ChangeSeverity.Update => "Actualización del tiempo",
                 _                     => "Reporte del tiempo",
             };
-            return $"{label} — {snap.LocalityName} ({localTime})";
+            var paraName = string.IsNullOrWhiteSpace(recipientName) ? "" : $" para {recipientName}";
+            return $"{label}{paraName} — {snap.LocalityName} ({localTime})";
         }
         if (language.Equals("French", StringComparison.OrdinalIgnoreCase))
         {
@@ -517,7 +520,8 @@ public sealed class ReportWorker : BackgroundService
                 ChangeSeverity.Update => "Mise à jour météo",
                 _                     => "Bulletin météo",
             };
-            return $"{label} — {snap.LocalityName} ({localTime})";
+            var pourName = string.IsNullOrWhiteSpace(recipientName) ? "" : $" pour {recipientName}";
+            return $"{label}{pourName} — {snap.LocalityName} ({localTime})";
         }
         {
             var label = severity switch
@@ -526,7 +530,7 @@ public sealed class ReportWorker : BackgroundService
                 ChangeSeverity.Update => "Weather update",
                 _                     => "Weather report",
             };
-            return $"{label} — {snap.LocalityName} ({localTime})";
+            return $"{label}{forName} — {snap.LocalityName} ({localTime})";
         }
     }
 

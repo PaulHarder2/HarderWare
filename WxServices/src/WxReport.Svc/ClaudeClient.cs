@@ -93,15 +93,13 @@ public sealed class ClaudeClient
             ChangeSeverity.Alert =>
                 "This is an unscheduled weather alert — a significant and potentially dangerous change " +
                 "has occurred since the last report. " +
-                "Open with a single clear, direct sentence identifying what changed " +
-                "(for example: 'A thunderstorm has moved into the area' or " +
-                "'Visibility has dropped sharply'). " +
-                "Then continue with the full report as normal. ",
+                "For the change-summary band (section 2), write a single clear, direct sentence " +
+                "identifying what changed (e.g. 'A thunderstorm has moved into the area' or " +
+                "'Visibility has dropped sharply'). ",
             ChangeSeverity.Update =>
                 "This is an unscheduled update — conditions have changed since the last report. " +
-                "Open with one or two sentences summarising what has changed " +
-                "(for example: a forecast risk that has appeared, or a significant temperature shift). " +
-                "Then continue with the full report as normal. ",
+                "For the change-summary band (section 2), write one or two sentences summarising " +
+                "what has changed (e.g. a forecast risk that has appeared, or a significant temperature shift). ",
             _ => "",
         };
 
@@ -113,15 +111,33 @@ public sealed class ClaudeClient
             "Use inline CSS throughout (email clients do not reliably support external stylesheets). " +
             "Maximum content width: 600px, centred, with a clean and professional visual style. " +
             "Structure the output in this order: " +
-            "(1) A styled header showing the locality name and station ICAO from the data (e.g. 'Spring, TX (KDWH)') and the local observation time — never use the recipient's name here. " +
-            "(2) A 'Current Conditions' section as a two-column HTML table (label | value) " +
-            "covering sky, visibility, wind, temperature, relative humidity, and pressure. " +
-            "(3) An 'Extended Forecast' section as a multi-column HTML table with one row per " +
-            "GFS day. Columns: date, high/low temperature, wind, and a brief plain-language " +
-            "conditions description you write from the data (precipitation type, storm risk, cloud cover). " +
-            "Each conditions description must be a single sentence of no more than 15 words — " +
+            "(1) Header div — background #1a3a5c, white text, left-aligned, padding 20px 24px, border-radius 6px 6px 0 0. " +
+            "Line 1: locality name and station ICAO in bold at 22px. " +
+            "Line 2: local observation time at 14px, color #c8daea. " +
+            $"Line 3 (unscheduled reports only): italic text at 13px, color #a0bcd4, " +
+            $"reading 'Unscheduled update — see note below', translated into {language}. " +
+            "Never use the recipient's name in the header. " +
+            "(2) Change-summary band (unscheduled reports only) — background #fef6e4, " +
+            "left border 4px solid #e8a020, padding 14px 20px, font-size 14px. " +
+            $"Begin with the bold label 'What's changed:' translated into {language}, " +
+            "followed by the change summary text. " +
+            "Omit this section entirely on scheduled reports. " +
+            "(3) Current Conditions section — background #f7f9fc, padding 20px 24px. " +
+            "Section heading: bold, 17px, color #1a3a5c, 2px solid #1a3a5c bottom border. " +
+            "Two-column table (label | value), alternating row shading (#eaf0f7 / white). " +
+            "Rows in this exact order: Sky; Visibility; Wind; " +
+            "Weather (include only when weather phenomena are present, e.g. rain, fog, drizzle — omit on clear days); " +
+            "Temperature; Relative Humidity; Pressure. " +
+            "(4) Extended Forecast section — background white, padding 20px 24px. " +
+            "Section heading styled identically to Current Conditions. " +
+            "Multi-column table, header row background #1a3a5c white text. " +
+            "Columns: Date, High/Low, Wind, Conditions. " +
+            "Each Conditions cell: a single sentence of no more than 15 words — " +
             "lead with the most important condition and omit anything that can be inferred. " +
-            "(4) A closing of no more than two sentences of plain-language context — " +
+            "(5) Closing div — background #f0f4f9, padding 16px 24px, " +
+            "border-top 1px solid #d0dce8, border-radius 0. " +
+            $"Begin with the bold label 'In summary:' translated into {language}, " +
+            "followed by no more than two sentences of plain-language context — " +
             "headline storm risk, a notable temperature trend, or similar. " +
             $"{unitInstruction}" +
             "Rules: use only the data provided — never invent or estimate conditions. " +
@@ -195,19 +211,60 @@ public sealed class ClaudeClient
             var bodyContent = parsed?.Content?.FirstOrDefault(c => c.Type == "text")?.Text;
             if (bodyContent is null) return null;
 
+            var langCode = language.ToLowerInvariant() switch
+            {
+                "spanish" or "español"       => "es",
+                "french"  or "français"      => "fr",
+                "german"  or "deutsch"       => "de",
+                "portuguese" or "português"  => "pt",
+                _                            => "en",
+            };
+
+            var footer = BuildFooterHtml(snapshot, tz);
+
             return $"""
                 <!DOCTYPE html>
-                <html lang="en">
+                <html lang="{langCode}">
                 <head>
                 <meta charset="utf-8">
                 <meta name="viewport" content="width=device-width, initial-scale=1">
                 </head>
                 <body style="margin:0;padding:16px;background:#f0f4f8;font-family:Arial,Helvetica,sans-serif;">
                 {bodyContent.Trim()}
+                {footer}
                 </body>
                 </html>
                 """;
         }
+    }
+
+    // ── footer ────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Builds a dark-blue footer div containing the observation timestamp,
+    /// locality, METAR station, and GFS model run cycle.
+    /// Generated in C# so the data is always accurate and consistently formatted,
+    /// regardless of report language.
+    /// </summary>
+    /// <param name="snap">Snapshot supplying station, locality, observation time, and GFS run.</param>
+    /// <param name="tz">Timezone used to localise the observation time.</param>
+    /// <returns>An HTML string for the footer div.</returns>
+    /// <sideeffects>None.</sideeffects>
+    private static string BuildFooterHtml(WeatherSnapshot snap, TimeZoneInfo tz)
+    {
+        var gfsPart = snap.GfsForecast is { } gfs
+            ? $" &middot; GFS: {gfs.ModelRunUtc:yyyy-MM-dd HHmm}Z"
+            : " &middot; GFS: n/a";
+
+        var line = $"{snap.StationIcao}: {snap.ObservationTimeUtc:yyyy-MM-dd HHmm}Z{gfsPart}";
+
+        return $"""
+            <div style="max-width:600px;margin:0 auto;">
+            <div style="background:#1a3a5c;color:#c8daea;font-size:12px;text-align:center;padding:10px 20px;border-radius:0 0 6px 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+            {line}
+            </div>
+            </div>
+            """;
     }
 
     // ── response DTOs ─────────────────────────────────────────────────────────

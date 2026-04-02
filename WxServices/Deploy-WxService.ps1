@@ -116,7 +116,7 @@ function Invoke-ServiceDeploy {
 
     $projectFolder = $ServiceMap[$SvcName]
     $projectPath   = "$SolutionRoot\src\$projectFolder"
-    $publishDir    = "$projectPath\bin\Release\net8.0\publish"
+    $publishDir    = "C:\HarderWare\BuildCache\WxServices\$projectFolder\bin\Release\net8.0\publish"
     $binPath       = "$publishDir\$projectFolder.exe"
 
     if ($SvcName -eq 'WxParserSvc') {
@@ -161,6 +161,9 @@ function Invoke-ServiceDeploy {
         Copy-Item $sourceLocalConfig $publishDir
         Write-Host "Copied appsettings.local.json to publish dir."
     }
+
+    # Update registered binary path in case it has changed (e.g. after build output was relocated)
+    sc.exe config $SvcName binpath= "`"$binPath`"" | Out-Null
 
     # Start
     Write-Host "Starting $SvcName..."
