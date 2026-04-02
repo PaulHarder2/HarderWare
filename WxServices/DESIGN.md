@@ -29,7 +29,10 @@
 4. [Service Details](#4-service-details)
    - [WxParser.Svc — Data Fetcher](#41-wxparsersvc--data-fetcher)
    - [WxReport.Svc — Report Generator](#42-wxreportsvc--report-generator)
-   - [WxMonitor.Svc — Health Monitor](#43-wxmonitorsvc--health-monitor)
+   - [WxVis.Svc — Map Renderer](#43-wxvissvc--map-renderer)
+   - [WxVis — Python Visualisation](#44-wxvis--python-visualisation)
+   - [WxMonitor.Svc — Health Monitor](#45-wxmonitorsvc--health-monitor)
+   - [WxViewer — Desktop Map Viewer](#46-wxviewer--desktop-map-viewer)
 5. [Class Libraries](#5-class-libraries)
 6. [Data Model](#6-data-model)
 7. [Configuration Guide](#7-configuration-guide)
@@ -46,7 +49,8 @@ WxServices is a set of Windows services that:
 - Periodically fetch METAR and TAF aviation weather reports from the Aviation Weather Center API and store them in a local SQL Server database.
 - Download GFS numerical weather prediction model data from NOAA (via the AWS Open Data mirror) and extract gridded medium-range forecasts covering temperature, wind, cloud cover, precipitation rate, and convective energy (CAPE) for the configured region.
 - Generate friendly, plain-English (or other language) weather summaries using Anthropic's Claude AI and email them to a configured list of recipients.
-- Render weather visualisation maps (METAR station plots, synoptic analysis, and GFS forecast parameter maps) using the WxVis Python project.
+- Render weather visualisation maps (METAR station plots, synoptic analysis, and GFS forecast parameter maps) automatically via WxVis.Svc, which invokes the WxVis Python project after each data cycle.
+- Provide a local WPF desktop viewer (WxViewer) for browsing and animating the generated maps side-by-side.
 - Monitor the health of the above services and send alert emails if errors occur or a service goes silent.
 
 Recipients each have their own location. The system automatically resolves the nearest METAR and TAF reporting stations for each recipient on first run and caches the result. Daily reports are sent at each recipient's configured local time; additional reports are triggered by significant weather changes.
@@ -73,8 +77,10 @@ flowchart TD
     REPORT["WxReport.Svc (every 5 min)"]
     MONITOR["WxMonitor.Svc (every 5 min)"]
 
-    WXVIS["WxVis (Python — manual / future auto-trigger)"]
+    WVISSVC["WxVis.Svc (Windows service — map renderer)"]
+    WXVIS["WxVis Python scripts"]
     PLOTS["C:\\HarderWare\\plots\\"]
+    VIEWER["WxViewer (WPF desktop app)"]
 
     AWC -->|METAR + TAF| PARSER
     NOMADS -->|GFS GRIB2 files| PARSER
@@ -86,8 +92,12 @@ flowchart TD
     REPORT -->|email| RECIPIENTS
     REPORT -->|log + heartbeat| LOGS
 
-    DB -->|METAR + GFS grid| WXVIS
-    WXVIS -->|PNG maps| PLOTS
+    DB -->|METAR + GFS grid| WVISSVC
+    WVISSVC -->|invoke| WXVIS
+    WXVIS -->|timestamped PNG maps| PLOTS
+    WVISSVC -->|log + heartbeat| LOGS
+
+    PLOTS -->|file scan| VIEWER
 
     LOGS -->|scan| MONITOR
     MONITOR -->|alert email| ALERTS
@@ -276,6 +286,8 @@ WxServices/
     ├── WxParser.Svc/                ← Windows service: periodic METAR/TAF + GFS fetch
     ├── WxReport.Svc/                ← Windows service: report generation and email
     ├── WxMonitor.Svc/               ← Windows service: log and heartbeat monitoring
+    ├── WxVis.Svc/                   ← Windows service: automated map rendering
+    ├── WxViewer/                    ← WPF desktop app: animated weather map viewer
     └── WxVis/                       ← Python visualisation project (conda env: wxvis)
         ├── db.py                    ← SQLAlchemy engine + data loading queries
         ├── metar_plot.py            ← WMO station model maps (MetPy StationPlot)
@@ -306,6 +318,7 @@ graph TD
     PSVC[WxParser.Svc]
     RSVC[WxReport.Svc]
     MSVC[WxMonitor.Svc]
+    VSSVC[WxVis.Svc]
 
     CMN --> LOG
     MDATA --> MP
@@ -321,6 +334,8 @@ graph TD
     RSVC --> LOG
     MSVC --> CMN
     MSVC --> LOG
+    VSSVC --> MDATA
+    VSSVC --> LOG
 ```
 
 ---
@@ -436,17 +451,46 @@ The config is never updated when a fallback station is used; a warning is logged
 
 ---
 
-### 4.3 WxVis — Python Visualisation
+### 4.3 WxVis.Svc — Map Renderer
 
-**Purpose:** Render weather maps from the local database for manual review and (in future) automated post-run delivery.
+**Purpose:** Automatically render weather maps after each data cycle, eliminating the need to run Python scripts manually.
+
+**Two workers:**
+
+| Worker | Trigger | Output filename format |
+|---|---|---|
+| `AnalysisMapWorker` | After each METAR fetch cycle | `synoptic_{label}_{yyyyMMdd_HH}.png` |
+| `ForecastMapWorker` | After each completed GFS model run, once per forecast hour | `forecast_{yyyyMMdd_HH}_f{NNN}.png` |
+
+Both workers check for an existing output file before invoking Python; if the file is already current the render is skipped.
+
+**Map rendering (`MapRenderer`):**
+- Invokes the appropriate WxVis Python script via `Process`/`ProcessStartInfo`.
+- Augments the process `PATH` with the conda environment's `bin`, `Library\bin`, and `Scripts` directories so Python and its DLL dependencies resolve correctly when the service runs under the Windows service account (which has a minimal PATH).
+- Captures stdout/stderr and logs them at INFO/ERROR level.
+
+**Stale plot cleanup:** `AnalysisMapWorker` runs a daily purge that deletes `*.png` files older than `PlotRetentionDays` from the output directory.
+
+**Key classes:**
+| Class | Location | Role |
+|---|---|---|
+| `AnalysisMapWorker` | WxVis.Svc | `BackgroundService`; renders synoptic maps after METAR cycles; daily PNG purge |
+| `ForecastMapWorker` | WxVis.Svc | `BackgroundService`; renders all forecast hours for the latest complete GFS run |
+| `MapRenderer` | WxVis.Svc | Subprocess launcher; conda PATH augmentation; stdout/stderr capture |
+
+---
+
+### 4.4 WxVis — Python Visualisation
+
+**Purpose:** Render weather maps from the local database. Called automatically by WxVis.Svc; can also be run manually for development and testing.
 
 **Three map types:**
 
-| Script | Map type | Data source | Output |
+| Script | Map type | Data source | Output filename |
 |---|---|---|---|
 | `metar_plot.py` | WMO standard station model | Latest METAR + WxStations | `station_plot.png` |
-| `synoptic_map.py` | Synoptic analysis (Barnes interpolation) | Latest METAR + WxStations | `synoptic_auto.png` (or preset extent) |
-| `forecast_map.py` | GFS forecast parameters | GfsGrid for a given forecast hour | `forecast_f084.png` etc. |
+| `synoptic_map.py` | Synoptic analysis (Barnes interpolation) | Latest METAR + WxStations | `synoptic_{label}_{yyyyMMdd_HH}.png` |
+| `forecast_map.py` | GFS forecast parameters | GfsGrid for a given forecast hour | `forecast_{yyyyMMdd_HH}_f{NNN}.png` |
 
 **Rendering details:**
 - All maps use a Lambert Conformal projection centred on the data extent.
@@ -458,14 +502,14 @@ The config is never updated when a fallback station is used; a warning is logged
 - Temperature extrema: **W** (dark red) / **K** (steel blue), neighbourhood 12 grid cells.
 - Station models (metar_plot, synoptic_map): MetPy StationPlot; synoptic_map thins stations with `reduce_point_density` (default 75 km).
 
-**Running:**
+**Manual use:**
 ```powershell
 conda activate wxvis
 cd C:\Users\PaulH\...\WxServices\src\WxVis
 
 python metar_plot.py
 python synoptic_map.py [--extent conus|south_central] [--density 75]
-python forecast_map.py --fh 84
+python forecast_map.py --run 20260402_18 --fh 84
 ```
 
 Output PNGs are saved to the directory configured in `config.json` (default `C:\HarderWare\plots\`).
@@ -480,7 +524,7 @@ Output PNGs are saved to the directory configured in `config.json` (default `C:\
 
 ---
 
-### 4.4 WxMonitor.Svc — Health Monitor
+### 4.5 WxMonitor.Svc — Health Monitor
 
 **Purpose:** Alert the operator by email when either watched service logs errors or goes silent.
 
@@ -500,6 +544,50 @@ Output PNGs are saved to the directory configured in `config.json` (default `C:\
 | `HeartbeatChecker` | WxMonitor.Svc | Reads heartbeat file; returns age |
 | `SmtpSender` | WxServices.Common | MailKit SMTP wrapper; `fromName` set per-service at construction time |
 | `MonitorStateStore` | WxMonitor.Svc | Reads/writes `wxmonitor-state.json` |
+
+---
+
+### 4.6 WxViewer — Desktop Map Viewer
+
+**Purpose:** Provide a local WPF desktop application for browsing and animating the PNG maps produced by WxVis.Svc.
+
+**Layout:** A frameless maximised window (no OS title bar) with a custom header bar containing the HarderWare/WxViewer logo and standard window controls (minimise, restore, close). Below the header, the window is split into two independent panes by a draggable `GridSplitter`:
+
+| Pane | Content | Controls |
+|---|---|---|
+| Left | Synoptic analysis maps | Region selector, step back/play/step forward, speed, time slider, obs-time label |
+| Right | GFS forecast maps | Run selector, step back/play/step forward, speed, hour slider, valid-time label |
+
+Each pane has its own toolbar docked to the top of the pane, immediately above the map image.
+
+**File discovery (`MapFileScanner`):**
+- Scans the configured output directory for `synoptic_*.png` and `forecast_*.png` files on startup and whenever the directory changes (via `FileSystemWatcher`).
+- Parses the timestamp embedded in each filename to reconstruct obs time (analysis) or model-run + forecast hour (forecast).
+- Analysis files are grouped by region label; within each label, frames are sorted oldest-first for chronological animation.
+- `DirectoryChanged` events are marshalled back to the WPF UI thread via `Dispatcher.BeginInvoke`.
+
+**Animation:**
+- Two independent `DispatcherTimer` instances — one per pane — allow both panes to play simultaneously at their own speeds.
+- Analysis pane defaults to showing the newest frame on label selection; play restarts from the oldest frame.
+- Forecast pane starts at forecast hour 0; play steps through all available hours.
+- `BitmapImage` is loaded with `CacheOption.OnLoad` (releases file handle immediately) and `Freeze()`d for cross-thread safety.
+
+**Key classes:**
+| Class | Role |
+|---|---|
+| `MapFileScanner` | Directory scan + `FileSystemWatcher`; returns `List<AnalysisLabel>` and `List<ForecastRun>` |
+| `AnalysisLabel` | Groups `AnalysisMap` frames by region label, sorted oldest-first |
+| `MainViewModel` | All bindable state; two timers; two independent sets of animation commands |
+| `RelayCommand` | `ICommand` implementation; `CanExecuteChanged` wired to `CommandManager.RequerySuggested` |
+| `MainWindow` | Frameless WPF window; `WindowChrome` for correct maximise/resize behaviour; custom title-bar event handlers |
+
+**Configuration (`appsettings.json`):**
+```json
+{
+  "OutputDir": "C:\\HarderWare\\plots"
+}
+```
+Override with `appsettings.local.json` if the plots directory is in a different location.
 
 ---
 
@@ -935,23 +1023,33 @@ SMTP settings come from the top-level `Smtp` block in `appsettings.shared.json` 
 
 ```powershell
 # Deploy a single service
-.\Deploy-WxService.ps1 -Service WxReportSvc
+.\Deploy-WxService.ps1 WxReportSvc
 
-# Deploy all three in order (stops on first failure)
-.\Deploy-WxService.ps1 -Service all
+# Deploy all four Windows services in order (stops on first failure)
+.\Deploy-WxService.ps1 all
+
+# Publish the WxAnnounce console tool to C:\bin
+.\Deploy-WxService.ps1 WxAnnounce
+
+# Publish the WxViewer desktop app to C:\HarderWare\WxViewer
+.\Deploy-WxService.ps1 WxViewer
 ```
 
-Valid service names: `WxParserSvc`, `WxReportSvc`, `WxMonitorSvc`, `all`.
+Valid names: `WxParserSvc`, `WxReportSvc`, `WxMonitorSvc`, `WxVisSvc`, `WxAnnounce`, `WxViewer`, `all`.
+
+`all` deploys the four Windows services only; desktop tools (`WxAnnounce`, `WxViewer`) are published separately.
 
 ### First-time install (run as Administrator)
 ```
-sc.exe create WxParserSvc  binPath= "C:\HarderWare\WxParser.Svc\WxParser.Svc.exe"
-sc.exe create WxReportSvc  binPath= "C:\HarderWare\WxReport.Svc\WxReport.Svc.exe"
-sc.exe create WxMonitorSvc binPath= "C:\HarderWare\WxMonitor.Svc\WxMonitor.Svc.exe"
+sc.exe create WxParserSvc  binPath= "C:\HarderWare\BuildCache\WxServices\WxParser.Svc\bin\Release\net8.0\publish\WxParser.Svc.exe"
+sc.exe create WxReportSvc  binPath= "C:\HarderWare\BuildCache\WxServices\WxReport.Svc\bin\Release\net8.0\publish\WxReport.Svc.exe"
+sc.exe create WxMonitorSvc binPath= "C:\HarderWare\BuildCache\WxServices\WxMonitor.Svc\bin\Release\net8.0\publish\WxMonitor.Svc.exe"
+sc.exe create WxVisSvc     binPath= "C:\HarderWare\BuildCache\WxServices\WxVis.Svc\bin\Release\net8.0\publish\WxVis.Svc.exe"
 
 sc.exe start WxParserSvc
 sc.exe start WxReportSvc
 sc.exe start WxMonitorSvc
+sc.exe start WxVisSvc
 ```
 
 ### Startup order
@@ -976,5 +1074,4 @@ All logs are written to `C:\HarderWare\Logs\`. Log paths can be changed by editi
 | No metrics | Cycle duration, API call counts, send success rates, etc. are not tracked. Consider adding structured metrics (Seq, Windows Event Log) in a future session. |
 | WxMonitor does not watch itself | WxMonitor has no watchdog. A Windows Task Scheduler task could serve this purpose if needed. |
 | Nominatim rate limit | Nominatim's terms require a maximum of 1 request/second and a valid User-Agent. Resolution is one-time per recipient, so this is unlikely to be a problem in practice. |
-| WxVis map generation is manual | Maps are currently produced by running Python scripts from an Anaconda PowerShell prompt. Automatic generation after each complete GFS run is planned: detect run completion (e.g. in `GfsFetcher` or a new WxVis.Svc worker) and shell out to render all 121 forecast maps plus the analysis map. |
-| No weather data viewer | A local web dashboard (Flask/FastAPI) is planned to display generated maps with forecast-hour navigation, recent METAR tables, and point forecast charts. Design is pending. |
+| WxViewer shows maps only | WxViewer reads PNG files directly with no database access. METAR observation tables and point forecast charts would require a database-connected panel in a future session. |
