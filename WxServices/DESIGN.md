@@ -498,8 +498,8 @@ Both workers check for an existing output file before invoking Python; if the fi
 - Isobars: black solid, 4 hPa interval, labelled.
 - Temperature isopleths: red dashed, 3°C interval, labelled.
 - Dewpoint isopleths: green dashed, 3°C interval, labelled.
-- Pressure extrema: **H** (navy) / **L** (maroon), neighbourhood 20 grid cells.
-- Temperature extrema: **W** (dark red) / **K** (steel blue), neighbourhood 12 grid cells.
+- Pressure extrema: **H** (navy) / **L** (maroon), neighbourhood 12 grid cells (~3°/333 km), minimum prominence 1 hPa.
+- Temperature extrema: **W** (dark red) / **K** (steel blue), neighbourhood 12 grid cells, no minimum prominence filter.
 - Station models (metar_plot, synoptic_map): MetPy StationPlot; synoptic_map thins stations with `reduce_point_density` (default 75 km).
 
 **Manual use:**

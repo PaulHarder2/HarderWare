@@ -115,6 +115,7 @@ def _mark_extrema(
     high_color: str = "navy",
     low_color: str = "maroon",
     neighborhood: int = 16,
+    min_depth: float = 0.0,
     transform=None,
 ) -> None:
     """
@@ -128,8 +129,15 @@ def _mark_extrema(
 
     filled = np.where(valid, data, float(np.nanmean(data)))
 
-    local_max = (maximum_filter(filled, size=neighborhood) == filled) & valid
-    local_min = (minimum_filter(filled, size=neighborhood) == filled) & valid
+    max_filt = maximum_filter(filled, size=neighborhood)
+    min_filt = minimum_filter(filled, size=neighborhood)
+
+    local_max = (max_filt == filled) & valid
+    local_min = (min_filt == filled) & valid
+
+    if min_depth > 0.0:
+        local_max &= (filled - min_filt) >= min_depth
+        local_min &= (max_filt - filled) >= min_depth
 
     pad = neighborhood // 2
     interior = np.zeros(data.shape, dtype=bool)
@@ -317,7 +325,7 @@ def render_forecast_map(
         )
         ax.clabel(cs, inline=True, fontsize=8, fmt="%d")
         _mark_extrema(ax, lon_grid, lat_grid, slp_hpa, "H", "L",
-                      high_color="navy", low_color="maroon", neighborhood=20,
+                      high_color="navy", low_color="maroon", neighborhood=12, min_depth=1.0,
                       transform=ccrs.PlateCarree())
 
     # ── Wind / station model ──────────────────────────────────────────────────

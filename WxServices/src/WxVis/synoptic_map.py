@@ -81,6 +81,7 @@ def _mark_extrema(
     high_color: str = "navy",
     low_color: str = "maroon",
     neighborhood: int = 16,
+    min_depth: float = 0.0,
     transform=None,
 ) -> None:
     """
@@ -108,6 +109,12 @@ def _mark_extrema(
         Matplotlib colour strings for each label.
     neighborhood:
         Filter window size in grid cells.  Default 16.
+    min_depth:
+        Minimum prominence required for a feature to be labelled, in the same
+        units as *data*.  A local maximum must rise at least *min_depth* above
+        the neighbourhood minimum; a local minimum must fall at least
+        *min_depth* below the neighbourhood maximum.  ``0.0`` (default) disables
+        the check.
     transform:
         Cartopy CRS transform, or ``None`` when coordinates are already in
         the projection's native units (metres).
@@ -118,8 +125,15 @@ def _mark_extrema(
 
     filled = np.where(valid, data, float(np.nanmean(data)))
 
-    local_max = (maximum_filter(filled, size=neighborhood) == filled) & valid
-    local_min = (minimum_filter(filled, size=neighborhood) == filled) & valid
+    max_filt = maximum_filter(filled, size=neighborhood)
+    min_filt = minimum_filter(filled, size=neighborhood)
+
+    local_max = (max_filt == filled) & valid
+    local_min = (min_filt == filled) & valid
+
+    if min_depth > 0.0:
+        local_max &= (filled - min_filt) >= min_depth
+        local_min &= (max_filt - filled) >= min_depth
 
     # Suppress markers within half a neighbourhood width of the border
     pad = neighborhood // 2
@@ -251,7 +265,7 @@ def _add_analysis_contours(
     )
     ax.clabel(cs, inline=True, fontsize=8, fmt="%d")
     _mark_extrema(ax, grid_x, grid_y, slp_smooth, "H", "L",
-                  high_color="navy", low_color="maroon", neighborhood=20)
+                  high_color="navy", low_color="maroon", neighborhood=12, min_depth=1.0)
 
     # ── Isotherms ─────────────────────────────────────────────────────────────
     _, _, tmp_raw = interpolate_to_grid(
