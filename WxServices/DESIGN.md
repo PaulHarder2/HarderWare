@@ -288,6 +288,8 @@ WxServices/
     ├── WxMonitor.Svc/               ← Windows service: log and heartbeat monitoring
     ├── WxVis.Svc/                   ← Windows service: automated map rendering
     ├── WxViewer/                    ← WPF desktop app: animated weather map viewer
+    ├── WxAnnounce/                  ← console tool: operator service-announcement emails (C:\bin)
+    ├── WxIdentify/                  ← console tool: address geocoding + METAR station verification (C:\bin)
     └── WxVis/                       ← Python visualisation project (conda env: wxvis)
         ├── db.py                    ← SQLAlchemy engine + data loading queries
         ├── synoptic_map.py          ← Synoptic analysis maps (Barnes interpolation)
@@ -588,6 +590,28 @@ Each pane has its own toolbar docked to the top of the pane, immediately above t
 }
 ```
 Override with `appsettings.local.json` if the plots directory is in a different location.
+
+---
+
+### 4.7 WxIdentify — Address and Station Verification Tool
+
+**Purpose:** Interactive command-line diagnostic to confirm that a street address geocodes correctly, identify the nearest active METAR stations, and verify that each station has observations in the local database.  Intended for use when setting up a new recipient location.
+
+**Usage:**
+```
+WxIdentify.exe "<street address>"
+WxIdentify "306 Scenic Brook Street, Brenham, TX 77833"
+```
+
+**Workflow:**
+1. Geocodes the address via the Nominatim API (reuses `AddressGeocoder` from `MetarParser.Data`).
+2. Queries the Aviation Weather API for active METAR stations within ±2.5° of the resolved coordinates, deduplicates by ICAO ID, and ranks the five nearest by Haversine distance.
+3. For each candidate: queries the database for total observation count and most-recent observation time.  Pulls the station name from `WxStations` if it has been previously ingested.
+4. Checks whether the resolved coordinates fall within the configured `Fetch:HomeLatitude / HomeLongitude ± BoundingBoxDegrees` bbox; warns if they are outside it (no observations would be collected).
+
+**Exit codes:** 0 = nearest station has observations, 1 = config/network error, 2 = address not geocoded, 3 = no observations for any nearby station.
+
+**Deploy:** `.\Deploy-WxService.ps1 WxIdentify` publishes to `C:\bin`.
 
 ---
 
@@ -1031,13 +1055,16 @@ SMTP settings come from the top-level `Smtp` block in `appsettings.shared.json` 
 # Publish the WxAnnounce console tool to C:\bin
 .\Deploy-WxService.ps1 WxAnnounce
 
+# Publish the WxIdentify console tool to C:\bin
+.\Deploy-WxService.ps1 WxIdentify
+
 # Publish the WxViewer desktop app to C:\HarderWare\WxViewer
 .\Deploy-WxService.ps1 WxViewer
 ```
 
-Valid names: `WxParserSvc`, `WxReportSvc`, `WxMonitorSvc`, `WxVisSvc`, `WxAnnounce`, `WxViewer`, `all`.
+Valid names: `WxParserSvc`, `WxReportSvc`, `WxMonitorSvc`, `WxVisSvc`, `WxAnnounce`, `WxIdentify`, `WxViewer`, `WxVis`, `all`.
 
-`all` deploys the four Windows services only; desktop tools (`WxAnnounce`, `WxViewer`) are published separately.
+`all` deploys the four Windows services only; console tools and the desktop app are published separately.
 
 ### First-time install (run as Administrator)
 ```
