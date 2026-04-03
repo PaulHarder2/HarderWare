@@ -500,6 +500,8 @@ Both workers check for an existing output file before invoking Python; if the fi
 - Temperature extrema: **W** (dark red) / **K** (steel blue), neighbourhood 12 grid cells, no minimum prominence filter.
 - Station models (synoptic_map): MetPy StationPlot; stations thinned with `reduce_point_density` (default 75 km).
 - Contours (synoptic_map): Barnes-interpolated grid converted from projection metres to lat/lon before plotting so Cartopy clips to the inner viewport, matching forecast_map white-space border behaviour.
+- Both maps use the same fixed `SOUTH_CENTRAL_EXTENT = (-106, -88, 25, 38)` so the displayed geography is identical. `forecast_map.py` accepts `--extent south_central`; WxVis.Svc passes this flag so it doesn't fall back to auto-detecting bounds from the (larger) GFS data footprint.
+- Extrema labels (H/L/W/K): before placing a label, its lat/lon position is converted to projection metres and compared against `ax.get_xlim()`/`ax.get_ylim()`; labels outside the viewport are silently skipped. This is necessary because Cartopy does not reliably honour `clip_on=True` when the text anchor itself is outside the plot area.
 
 **Manual use:**
 ```powershell
@@ -507,7 +509,7 @@ conda activate wxvis
 cd C:\Users\PaulH\...\WxServices\src\WxVis
 
 python synoptic_map.py [--extent conus|south_central] [--density 75]
-python forecast_map.py --run 20260402_18 --fh 84
+python forecast_map.py --run 20260402_18 --fh 84 [--extent south_central]
 ```
 
 Output PNGs are saved to the directory configured in `config.json` (default `C:\HarderWare\plots\`).

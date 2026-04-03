@@ -66,6 +66,12 @@ def _inner_proj_limits(
     )
 
 
+# ── Default map extents ───────────────────────────────────────────────────────
+
+# South-central US (Texas + surrounding states) — matches synoptic_map.SOUTH_CENTRAL_EXTENT
+SOUTH_CENTRAL_EXTENT = (-106.0, -88.0, 25.0, 38.0)
+
+
 # ── Grid helpers ──────────────────────────────────────────────────────────────
 
 def _to_grid(df: pd.DataFrame, value_col: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -153,6 +159,9 @@ def _mark_extrema(
     if transform is not None:
         txt_kw["transform"] = transform
 
+    xl, xr = ax.get_xlim()
+    yb, yt = ax.get_ylim()
+
     for mask, lbl, color in (
         (local_max, high_label, high_color),
         (local_min, low_label,  low_color),
@@ -162,7 +171,17 @@ def _mark_extrema(
             ys, xs = np.where(labeled_arr == idx)
             iy = int(round(ys.mean()))
             ix = int(round(xs.mean()))
-            ax.text(x2d[iy, ix], y2d[iy, ix], lbl, color=color, **txt_kw)
+            lx, ly = x2d[iy, ix], y2d[iy, ix]
+            # Skip labels whose anchor falls outside the axes viewport.
+            # Cartopy does not reliably honour clip_on=True when the anchor
+            # itself is outside the plot area, so we guard here explicitly.
+            if transform is not None:
+                nx, ny = ax.projection.transform_point(lx, ly, transform)
+            else:
+                nx, ny = lx, ly
+            if not (xl <= nx <= xr and yb <= ny <= yt):
+                continue
+            ax.text(lx, ly, lbl, color=color, **txt_kw)
 
 
 # ── Rendering ─────────────────────────────────────────────────────────────────
@@ -443,9 +462,17 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--run", type=str, required=True,
-        help="GFS model run timestamp in YYYYMMDDHH format (e.g. 2026040218)",
+        help="GFS model run timestamp in YYYYMMDD_HH format (e.g. 20260402_18)",
+    )
+    parser.add_argument(
+        "--extent", choices=["south_central"], default=None,
+        help="Fixed map extent preset (default: auto-fit to GFS data bounds)",
     )
     args = parser.parse_args()
+
+    extent_map = {
+        "south_central": SOUTH_CENTRAL_EXTENT,
+    }
 
     from datetime import datetime
     model_run = datetime.strptime(args.run, "%Y%m%d_%H")
@@ -465,5 +492,6 @@ if __name__ == "__main__":
         render_forecast_map(
             df,
             str(out_dir / f"forecast_{args.run}_f{args.fh:03d}.png"),
+            extent=extent_map.get(args.extent),
             station_locs=station_locs,
         )
