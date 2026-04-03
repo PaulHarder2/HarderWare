@@ -274,7 +274,7 @@ def _mark_extrema(
     local_max &= interior
     local_min &= interior
 
-    txt_kw = dict(fontsize=16, fontweight="bold", ha="center", va="center", zorder=6)
+    txt_kw = dict(fontsize=16, fontweight="bold", ha="center", va="center", zorder=6, clip_on=True)
     if transform is not None:
         txt_kw["transform"] = transform
 
