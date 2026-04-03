@@ -244,7 +244,7 @@ def render_forecast_map(
         logger.warning("No MSLP data available for this forecast hour — isobars skipped.")
 
     # ── Figure setup ─────────────────────────────────────────────────────────
-    fig = plt.figure(figsize=(16, 10))
+    fig = plt.figure(figsize=(11, 11))
     ax = fig.add_subplot(1, 1, 1, projection=proj)
 
     x_min, x_max, y_min, y_max = _inner_proj_limits(proj, extent)
@@ -413,7 +413,7 @@ def render_forecast_map(
     )
 
     plt.tight_layout()
-    plt.savefig(output_path, dpi=dpi, bbox_inches="tight")
+    plt.savefig(output_path, dpi=dpi)
     plt.close(fig)
     logger.info(f"Saved forecast map → {output_path}")
 
@@ -435,11 +435,14 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
+    from datetime import datetime
+    model_run = datetime.strptime(args.run, "%Y%m%d_%H")
+
     engine = get_engine()
-    df     = load_gfs_grid(engine, forecast_hour=args.fh)
+    df     = load_gfs_grid(engine, forecast_hour=args.fh, model_run=model_run)
 
     if df.empty:
-        logger.error(f"No GFS data found for forecast hour {args.fh}.")
+        logger.error(f"No GFS data found for run {args.run} forecast hour {args.fh}.")
     else:
         logger.info(f"Loaded {len(df)} grid points for f{args.fh:03d}.")
         metar_df = load_latest_metars(engine)

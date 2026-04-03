@@ -8,10 +8,14 @@ use with MetPy / matplotlib.
 
 import json
 import urllib.parse
+import warnings
 from pathlib import Path
 
 import pandas as pd
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import SAWarning
+
+warnings.filterwarnings("ignore", category=SAWarning, message=".*Unrecognized server version info.*")
 
 
 def _load_config() -> dict:
@@ -119,18 +123,18 @@ _GFS_GRID_SQL = text("""
         g.PrMslPa
     FROM GfsGrid g
     WHERE g.ForecastHour = :fh
-      AND g.ModelRunUtc  = (
-          SELECT MAX(r.ModelRunUtc)
-          FROM   GfsModelRuns r
-          WHERE  r.IsComplete = 1
-      )
+      AND g.ModelRunUtc  = :run
+""")
+
+_GFS_LATEST_COMPLETE_RUN_SQL = text("""
+    SELECT MAX(ModelRunUtc) FROM GfsModelRuns WHERE IsComplete = 1
 """)
 
 
-def load_gfs_grid(engine, forecast_hour: int = 0) -> pd.DataFrame:
+def load_gfs_grid(engine, forecast_hour: int = 0, model_run=None) -> pd.DataFrame:
     """
-    Return all grid points for the most recent complete GFS model run at the
-    specified forecast hour offset.
+    Return all grid points for the specified GFS model run at the given
+    forecast hour offset.
 
     Parameters
     ----------
@@ -139,10 +143,15 @@ def load_gfs_grid(engine, forecast_hour: int = 0) -> pd.DataFrame:
     forecast_hour:
         Forecast hour offset (0 = analysis, 1–120 = hourly forecast).
         Default 0.
+    model_run:
+        Model run timestamp as a ``datetime`` or ISO string.  When ``None``
+        (the default), the most recent complete run is used.
 
     Returns a DataFrame with columns:
         ModelRunUtc, ForecastHour, Lat, Lon, TmpC, DwpC, UGrdMs, VGrdMs,
         PRateKgM2s, TcdcPct, CapeJKg, PrMslPa
     """
     with engine.connect() as conn:
-        return pd.read_sql(_GFS_GRID_SQL, conn, params={"fh": forecast_hour})
+        if model_run is None:
+            model_run = conn.execute(_GFS_LATEST_COMPLETE_RUN_SQL).scalar()
+        return pd.read_sql(_GFS_GRID_SQL, conn, params={"fh": forecast_hour, "run": model_run})

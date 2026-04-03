@@ -381,7 +381,7 @@ def render_synoptic_map(
     )
 
     # ── Figure setup ─────────────────────────────────────────────────────────
-    fig = plt.figure(figsize=(16, 10))
+    fig = plt.figure(figsize=(11, 11))
     ax = fig.add_subplot(1, 1, 1, projection=proj)
     x_min, x_max, y_min, y_max = _inner_proj_limits(proj, extent)
     ax.set_xlim(x_min, x_max)
@@ -455,7 +455,7 @@ def render_synoptic_map(
     )
 
     plt.tight_layout()
-    plt.savefig(output_path, dpi=dpi, bbox_inches="tight")
+    plt.savefig(output_path, dpi=dpi)
     plt.close(fig)
     logger.info(f"Saved synoptic map → {output_path}")
 

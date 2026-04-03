@@ -460,7 +460,7 @@ The config is never updated when a fallback station is used; a warning is logged
 | Worker | Trigger | Output filename format |
 |---|---|---|
 | `AnalysisMapWorker` | After each METAR fetch cycle | `synoptic_{label}_{yyyyMMdd_HH}.png` |
-| `ForecastMapWorker` | After each completed GFS model run, once per forecast hour | `forecast_{yyyyMMdd_HH}_f{NNN}.png` |
+| `ForecastMapWorker` | Progressively, as each forecast hour's data arrives for the latest model run | `forecast_{yyyyMMdd_HH}_f{NNN}.png` |
 
 Both workers check for an existing output file before invoking Python; if the file is already current the render is skipped.
 
@@ -475,7 +475,7 @@ Both workers check for an existing output file before invoking Python; if the fi
 | Class | Location | Role |
 |---|---|---|
 | `AnalysisMapWorker` | WxVis.Svc | `BackgroundService`; renders synoptic maps after METAR cycles; daily PNG purge |
-| `ForecastMapWorker` | WxVis.Svc | `BackgroundService`; renders all forecast hours for the latest complete GFS run |
+| `ForecastMapWorker` | WxVis.Svc | `BackgroundService`; renders forecast hours progressively as data arrives for the latest model run (complete or still ingesting) |
 | `MapRenderer` | WxVis.Svc | Subprocess launcher; conda PATH augmentation; stdout/stderr capture |
 
 ---

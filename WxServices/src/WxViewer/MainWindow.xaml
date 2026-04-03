@@ -167,7 +167,8 @@
                         <Separator/>
 
                         <Button Command="{Binding AnalysisStepBackCommand}"
-                                ToolTip="Step back" Content="◀" Width="26"/>
+                                ToolTip="Step back" Content="◀" Width="26"
+                                Foreground="#e0e0e0"/>
 
                         <Button Command="{Binding AnalysisPlayPauseCommand}"
                                 ToolTip="Play / Pause" Width="72">
@@ -185,7 +186,8 @@
                         </Button>
 
                         <Button Command="{Binding AnalysisStepForwardCommand}"
-                                ToolTip="Step forward" Content="▶" Width="26"/>
+                                ToolTip="Step forward" Content="▶" Width="26"
+                                Foreground="#e0e0e0"/>
 
                         <Separator/>
 
@@ -255,7 +257,8 @@
                         <Separator/>
 
                         <Button Command="{Binding StepBackCommand}"
-                                ToolTip="Step back" Content="◀" Width="26"/>
+                                ToolTip="Step back" Content="◀" Width="26"
+                                Foreground="#e0e0e0"/>
 
                         <Button Command="{Binding PlayPauseCommand}"
                                 ToolTip="Play / Pause" Width="72">
@@ -273,7 +276,8 @@
                         </Button>
 
                         <Button Command="{Binding StepForwardCommand}"
-                                ToolTip="Step forward" Content="▶" Width="26"/>
+                                ToolTip="Step forward" Content="▶" Width="26"
+                                Foreground="#e0e0e0"/>
 
                         <Separator/>
 
