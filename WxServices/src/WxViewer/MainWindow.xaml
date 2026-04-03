@@ -251,7 +251,7 @@
                                    VerticalAlignment="Center" Margin="4,0,4,0"/>
                         <ComboBox Width="190"
                                   ItemsSource="{Binding ForecastRuns}"
-                                  SelectedItem="{Binding SelectedRun}"
+                                  SelectedItem="{Binding SelectedForecastRun}"
                                   DisplayMemberPath="Label"/>
 
                         <Separator/>
@@ -267,7 +267,7 @@
                                     <Setter Property="Foreground" Value="#e0e0e0"/>
                                     <Setter Property="Content"    Value="▶  Play"/>
                                     <Style.Triggers>
-                                        <DataTrigger Binding="{Binding IsPlaying}" Value="True">
+                                        <DataTrigger Binding="{Binding IsForecastPlaying}" Value="True">
                                             <Setter Property="Content" Value="⏸  Pause"/>
                                         </DataTrigger>
                                     </Style.Triggers>
@@ -294,14 +294,14 @@
                                    VerticalAlignment="Center" Margin="4,0,4,0"/>
                         <Slider Width="130"
                                 Minimum="0"
-                                Maximum="{Binding MaxFrameIndex}"
-                                Value="{Binding FrameIndex, Mode=TwoWay,
+                                Maximum="{Binding MaxForecastFrameIndex}"
+                                Value="{Binding ForecastFrameIndex, Mode=TwoWay,
                                                 UpdateSourceTrigger=PropertyChanged}"
                                 TickFrequency="1"
                                 IsSnapToTickEnabled="True"
                                 VerticalAlignment="Center"
                                 Margin="0,0,4,0"/>
-                        <TextBlock Text="{Binding FrameLabel}"
+                        <TextBlock Text="{Binding ForecastFrameLabel}"
                                    Foreground="#e0e0e0"
                                    VerticalAlignment="Center"
                                    MinWidth="190"

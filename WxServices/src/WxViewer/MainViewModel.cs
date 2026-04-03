@@ -29,12 +29,12 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
     // ── Forecast backing fields ───────────────────────────────────────────────
 
-    private ForecastRun?   _selectedRun;
-    private int            _frameIndex;
-    private int            _maxFrameIndex;
+    private ForecastRun?   _selectedForecastRun;
+    private int            _forecastFrameIndex;
+    private int            _maxForecastFrameIndex;
     private BitmapImage?   _forecastImage;
-    private string         _frameLabel = "";
-    private bool           _isPlaying;
+    private string         _forecastFrameLabel = "";
+    private bool           _isForecastPlaying;
     private SpeedOption    _selectedForecastSpeed;
 
     // ── Shared ────────────────────────────────────────────────────────────────
@@ -84,13 +84,13 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         _forecastTimer        = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(_selectedForecastSpeed.IntervalMs) };
         _forecastTimer.Tick  += OnForecastTimerTick;
 
-        AnalysisPlayPauseCommand   = new RelayCommand(ToggleAnalysisPlay,  () => AnalysisLabels.Count > 1);
-        AnalysisStepForwardCommand = new RelayCommand(StepAnalysisForward, () => AnalysisLabels.Count > 1);
-        AnalysisStepBackCommand    = new RelayCommand(StepAnalysisBack,    () => AnalysisLabels.Count > 1);
+        AnalysisPlayPauseCommand   = new RelayCommand(ToggleAnalysisPlay,   () => AnalysisLabels.Count > 1);
+        AnalysisStepForwardCommand = new RelayCommand(StepAnalysisForward,  () => AnalysisLabels.Count > 1);
+        AnalysisStepBackCommand    = new RelayCommand(StepAnalysisBack,     () => AnalysisLabels.Count > 1);
 
-        ForecastPlayPauseCommand   = new RelayCommand(TogglePlay,  () => _selectedRun?.Frames.Count > 1);
-        ForecastStepForwardCommand = new RelayCommand(StepForward, () => _selectedRun?.Frames.Count > 1);
-        ForecastStepBackCommand    = new RelayCommand(StepBack,    () => _selectedRun?.Frames.Count > 1);
+        ForecastPlayPauseCommand   = new RelayCommand(ToggleForecastPlay,   () => _selectedForecastRun?.Frames.Count > 1);
+        ForecastStepForwardCommand = new RelayCommand(StepForecastForward,  () => _selectedForecastRun?.Frames.Count > 1);
+        ForecastStepBackCommand    = new RelayCommand(StepForecastBack,     () => _selectedForecastRun?.Frames.Count > 1);
 
         _scanner = new MapFileScanner(outputDir, dispatcher);
         _scanner.DirectoryChanged += (_, _) => Refresh();
@@ -185,51 +185,51 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
     /// <summary>
     /// Currently selected GFS model run.  Changing the run stops animation,
-    /// resets the frame index, and updates MaxFrameIndex before raising
-    /// FrameIndex PropertyChanged so the Slider never sees an out-of-range value.
+    /// resets the frame index, and updates MaxForecastFrameIndex before raising
+    /// ForecastFrameIndex PropertyChanged so the Slider never sees an out-of-range value.
     /// </summary>
-    public ForecastRun? SelectedRun
+    public ForecastRun? SelectedForecastRun
     {
-        get => _selectedRun;
+        get => _selectedForecastRun;
         set
         {
-            if (_selectedRun == value) return;
+            if (_selectedForecastRun == value) return;
 
             _forecastTimer.Stop();
-            _isPlaying = false;
-            OnPropertyChanged(nameof(IsPlaying));
+            _isForecastPlaying = false;
+            OnPropertyChanged(nameof(IsForecastPlaying));
 
-            _selectedRun = value;
+            _selectedForecastRun = value;
             OnPropertyChanged();
 
-            MaxFrameIndex = (_selectedRun?.Frames.Count ?? 1) - 1;
-            if (MaxFrameIndex < 0) MaxFrameIndex = 0;
+            MaxForecastFrameIndex = (_selectedForecastRun?.Frames.Count ?? 1) - 1;
+            if (MaxForecastFrameIndex < 0) MaxForecastFrameIndex = 0;
 
-            _frameIndex = 0;
-            OnPropertyChanged(nameof(FrameIndex));
+            _forecastFrameIndex = 0;
+            OnPropertyChanged(nameof(ForecastFrameIndex));
             LoadForecastImage();
         }
     }
 
     /// <summary>Current forecast frame index (0-based).</summary>
-    public int FrameIndex
+    public int ForecastFrameIndex
     {
-        get => _frameIndex;
+        get => _forecastFrameIndex;
         set
         {
-            var clamped = Math.Clamp(value, 0, _maxFrameIndex);
-            if (_frameIndex == clamped) return;
-            _frameIndex = clamped;
+            var clamped = Math.Clamp(value, 0, _maxForecastFrameIndex);
+            if (_forecastFrameIndex == clamped) return;
+            _forecastFrameIndex = clamped;
             OnPropertyChanged();
             LoadForecastImage();
         }
     }
 
     /// <summary>Maximum slider value for the forecast pane.</summary>
-    public int MaxFrameIndex
+    public int MaxForecastFrameIndex
     {
-        get => _maxFrameIndex;
-        private set { _maxFrameIndex = value; OnPropertyChanged(); }
+        get => _maxForecastFrameIndex;
+        private set { _maxForecastFrameIndex = value; OnPropertyChanged(); }
     }
 
     /// <summary>Decoded bitmap for the current forecast frame.</summary>
@@ -240,17 +240,17 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     }
 
     /// <summary>Human-readable label for the current forecast frame.</summary>
-    public string FrameLabel
+    public string ForecastFrameLabel
     {
-        get => _frameLabel;
-        private set { _frameLabel = value; OnPropertyChanged(); }
+        get => _forecastFrameLabel;
+        private set { _forecastFrameLabel = value; OnPropertyChanged(); }
     }
 
     /// <summary><see langword="true"/> while the forecast animation timer is running.</summary>
-    public bool IsPlaying
+    public bool IsForecastPlaying
     {
-        get => _isPlaying;
-        private set { _isPlaying = value; OnPropertyChanged(); }
+        get => _isForecastPlaying;
+        private set { _isForecastPlaying = value; OnPropertyChanged(); }
     }
 
     /// <summary>Selected animation speed for the forecast pane.</summary>
@@ -284,7 +284,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     public void Refresh()
     {
         var prevLabelName = _selectedAnalysisLabel?.Name;
-        var prevRunUtc    = _selectedRun?.ModelRunUtc;
+        var prevRunUtc    = _selectedForecastRun?.ModelRunUtc;
 
         var analysisList = _scanner.ScanAnalysis();
         AnalysisLabels.Clear();
@@ -299,7 +299,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             ? analysisList.FirstOrDefault(l => l.Name == prevLabelName) ?? analysisList.LastOrDefault()
             : analysisList.LastOrDefault();
 
-        SelectedRun = prevRunUtc.HasValue
+        SelectedForecastRun = prevRunUtc.HasValue
             ? forecastList.FirstOrDefault(r => r.ModelRunUtc == prevRunUtc.Value) ?? forecastList.FirstOrDefault()
             : forecastList.FirstOrDefault();
 
@@ -366,55 +366,55 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     // ── Forecast animation ────────────────────────────────────────────────────
 
     /// <summary>Toggles the forecast animation.  Restarts from frame 0 if at the last frame.</summary>
-    public void TogglePlay()
+    public void ToggleForecastPlay()
     {
-        if (_selectedRun?.Frames.Count is null or <= 1) return;
+        if (_selectedForecastRun?.Frames.Count is null or <= 1) return;
 
-        if (_isPlaying)
+        if (_isForecastPlaying)
         {
             _forecastTimer.Stop();
-            IsPlaying = false;
+            IsForecastPlaying = false;
         }
         else
         {
-            if (_frameIndex >= _maxFrameIndex) FrameIndex = 0;
+            if (_forecastFrameIndex >= _maxForecastFrameIndex) ForecastFrameIndex = 0;
             _forecastTimer.Start();
-            IsPlaying = true;
+            IsForecastPlaying = true;
         }
     }
 
     /// <summary>Stops animation and steps one forecast frame forward.</summary>
-    public void StepForward()
+    public void StepForecastForward()
     {
-        if (_selectedRun?.Frames.Count is null or 0) return;
+        if (_selectedForecastRun?.Frames.Count is null or 0) return;
         StopForecastAnimation();
-        FrameIndex = Math.Min(_frameIndex + 1, _maxFrameIndex);
+        ForecastFrameIndex = Math.Min(_forecastFrameIndex + 1, _maxForecastFrameIndex);
     }
 
     /// <summary>Stops animation and steps one forecast frame back.</summary>
-    public void StepBack()
+    public void StepForecastBack()
     {
-        if (_selectedRun?.Frames.Count is null or 0) return;
+        if (_selectedForecastRun?.Frames.Count is null or 0) return;
         StopForecastAnimation();
-        FrameIndex = Math.Max(_frameIndex - 1, 0);
+        ForecastFrameIndex = Math.Max(_forecastFrameIndex - 1, 0);
     }
 
     private void StopForecastAnimation()
     {
         _forecastTimer.Stop();
-        IsPlaying = false;
+        IsForecastPlaying = false;
     }
 
     private void OnForecastTimerTick(object? sender, EventArgs e)
     {
-        if (_frameIndex >= _maxFrameIndex)
+        if (_forecastFrameIndex >= _maxForecastFrameIndex)
         {
             _forecastTimer.Stop();
-            IsPlaying = false;
+            IsForecastPlaying = false;
             return;
         }
-        _frameIndex++;
-        OnPropertyChanged(nameof(FrameIndex));
+        _forecastFrameIndex++;
+        OnPropertyChanged(nameof(ForecastFrameIndex));
         LoadForecastImage();
     }
 
@@ -434,14 +434,14 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private void LoadForecastImage()
     {
         var frame = CurrentForecastFrame;
-        ForecastImage = LoadBitmap(frame?.FilePath);
-        FrameLabel    = frame?.HourLabel ?? "";
+        ForecastImage      = LoadBitmap(frame?.FilePath);
+        ForecastFrameLabel = frame?.HourLabel ?? "";
         UpdateStatus();
     }
 
     private ForecastFrame? CurrentForecastFrame =>
-        _selectedRun?.Frames.Count > 0
-            ? _selectedRun.Frames[Math.Clamp(_frameIndex, 0, _selectedRun.Frames.Count - 1)]
+        _selectedForecastRun?.Frames.Count > 0
+            ? _selectedForecastRun.Frames[Math.Clamp(_forecastFrameIndex, 0, _selectedForecastRun.Frames.Count - 1)]
             : null;
 
     /// <summary>
@@ -477,8 +477,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
         if (CurrentForecastFrame is { } ff)
             parts.Add(ff.HourLabel);
-        else if (_selectedRun is not null)
-            parts.Add($"Run: {_selectedRun.Label}");
+        else if (_selectedForecastRun is not null)
+            parts.Add($"Run: {_selectedForecastRun.Label}");
 
         StatusText = parts.Count > 0 ? string.Join("  |  ", parts) : "No maps loaded";
     }
