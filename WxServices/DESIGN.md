@@ -555,7 +555,7 @@ Output PNGs are saved to the directory configured in `config.json` (default `C:\
 
 | Pane | Content | Controls |
 |---|---|---|
-| Left | Synoptic analysis maps | Region selector, step back/play/step forward, speed, time slider, obs-time label |
+| Left | Synoptic analysis maps | Map selector (by obs time), step back/play/step forward, speed, time slider, obs-time label |
 | Right | GFS forecast maps | Run selector, step back/play/step forward, speed, hour slider, valid-time label |
 
 Each pane has its own toolbar docked to the top of the pane, immediately above the map image.
@@ -563,12 +563,12 @@ Each pane has its own toolbar docked to the top of the pane, immediately above t
 **File discovery (`MapFileScanner`):**
 - Scans the configured output directory for `synoptic_*.png` and `forecast_*.png` files on startup and whenever the directory changes (via `FileSystemWatcher`).
 - Parses the timestamp embedded in each filename to reconstruct obs time (analysis) or model-run + forecast hour (forecast).
-- Analysis files are grouped by region label; within each label, frames are sorted oldest-first for chronological animation.
+- Analysis files are listed individually, sorted oldest-first; each entry corresponds to one PNG file and is labelled with its obs time (`yyyy-MM-dd HH`Z).
 - `DirectoryChanged` events are marshalled back to the WPF UI thread via `Dispatcher.BeginInvoke`.
 
 **Animation:**
 - Two independent `DispatcherTimer` instances — one per pane — allow both panes to play simultaneously at their own speeds.
-- Analysis pane defaults to showing the newest frame on label selection; play restarts from the oldest frame.
+- Analysis pane defaults to the newest map; the slider and ComboBox stay in sync — selecting a map from either updates the other. Play animates forward in time from the selected map; if already at the newest, it wraps to the oldest.
 - Forecast pane starts at forecast hour 0; play steps through all available hours.
 - `BitmapImage` is loaded with `CacheOption.OnLoad` (releases file handle immediately) and `Freeze()`d for cross-thread safety.
 
@@ -576,7 +576,7 @@ Each pane has its own toolbar docked to the top of the pane, immediately above t
 | Class | Role |
 |---|---|
 | `MapFileScanner` | Directory scan + `FileSystemWatcher`; returns `List<AnalysisLabel>` and `List<ForecastRun>` |
-| `AnalysisLabel` | Groups `AnalysisMap` frames by region label, sorted oldest-first |
+| `AnalysisLabel` | Represents one analysis PNG file; `Name` = file path (selection key), `Label` = obs-time string |
 | `MainViewModel` | All bindable state; two timers; two independent sets of animation commands |
 | `RelayCommand` | `ICommand` implementation; `CanExecuteChanged` wired to `CommandManager.RequerySuggested` |
 | `MainWindow` | Frameless WPF window; `WindowChrome` for correct maximise/resize behaviour; custom title-bar event handlers |

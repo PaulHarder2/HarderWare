@@ -1,10 +1,9 @@
 namespace WxViewer;
 
 /// <summary>
-/// Groups all synoptic analysis frames sharing the same region label,
-/// ordered oldest-to-newest for animation playback.
+/// Represents a single synoptic analysis PNG file available for display.
 /// </summary>
-/// <param name="Name">The raw label from the filename, e.g. "south_central".</param>
-/// <param name="Frames">All frames for this label, sorted oldest-first.</param>
-/// <param name="Label">Human-readable ComboBox display string.</param>
+/// <param name="Name">Absolute file path — used as a stable identity key for selection preservation.</param>
+/// <param name="Frames">Single-element list containing the one <see cref="AnalysisMap"/> for this file.</param>
+/// <param name="Label">Human-readable ComboBox display string, e.g. "2026-04-03 06Z".</param>
 public sealed record AnalysisLabel(string Name, List<AnalysisMap> Frames, string Label);

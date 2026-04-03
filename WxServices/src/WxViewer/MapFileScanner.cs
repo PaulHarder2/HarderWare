@@ -82,14 +82,14 @@ public sealed class MapFileScanner : IDisposable
         });
 
     /// <summary>
-    /// Reads the directory and returns all recognised analysis maps grouped by
-    /// region label, with each group's frames ordered oldest-first for animation.
+    /// Reads the directory and returns one <see cref="AnalysisLabel"/> per
+    /// recognised analysis PNG file, sorted newest-first.
     /// </summary>
     public List<AnalysisLabel> ScanAnalysis()
     {
         if (!Directory.Exists(_directory)) return [];
 
-        var byLabel = new Dictionary<string, List<AnalysisMap>>(StringComparer.OrdinalIgnoreCase);
+        var labels = new List<AnalysisLabel>();
 
         foreach (var path in Directory.EnumerateFiles(_directory, "synoptic_*.png"))
         {
@@ -100,23 +100,12 @@ public sealed class MapFileScanner : IDisposable
             if (!TryParseDateTime(match.Groups["date"].Value, match.Groups["hour"].Value,
                                   out var obsUtc)) continue;
 
-            var labelName  = match.Groups["label"].Value;
-            var frameLabel = $"{labelName}  {obsUtc:yyyy-MM-dd HH}Z";
-            var map        = new AnalysisMap(obsUtc, path, frameLabel);
-
-            if (!byLabel.TryGetValue(labelName, out var list))
-                byLabel[labelName] = list = [];
-            list.Add(map);
+            var displayLabel = $"{obsUtc:yyyy-MM-dd HH}Z";
+            var map          = new AnalysisMap(obsUtc, path, displayLabel);
+            labels.Add(new AnalysisLabel(path, [map], displayLabel));
         }
 
-        var labels = new List<AnalysisLabel>();
-        foreach (var (name, frames) in byLabel)
-        {
-            frames.Sort((a, b) => a.ObsUtc.CompareTo(b.ObsUtc)); // oldest-first for animation
-            labels.Add(new AnalysisLabel(name, frames, name));
-        }
-
-        labels.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase));
+        labels.Sort((a, b) => a.Frames[0].ObsUtc.CompareTo(b.Frames[0].ObsUtc)); // oldest-first
         return labels;
     }
 

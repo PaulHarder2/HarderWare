@@ -84,9 +84,9 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         _forecastTimer        = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(_selectedForecastSpeed.IntervalMs) };
         _forecastTimer.Tick  += OnForecastTimerTick;
 
-        AnalysisPlayPauseCommand   = new RelayCommand(ToggleAnalysisPlay,  () => _selectedAnalysisLabel?.Frames.Count > 1);
-        AnalysisStepForwardCommand = new RelayCommand(StepAnalysisForward, () => _selectedAnalysisLabel?.Frames.Count > 0);
-        AnalysisStepBackCommand    = new RelayCommand(StepAnalysisBack,    () => _selectedAnalysisLabel?.Frames.Count > 0);
+        AnalysisPlayPauseCommand   = new RelayCommand(ToggleAnalysisPlay,  () => AnalysisLabels.Count > 1);
+        AnalysisStepForwardCommand = new RelayCommand(StepAnalysisForward, () => AnalysisLabels.Count > 0);
+        AnalysisStepBackCommand    = new RelayCommand(StepAnalysisBack,    () => AnalysisLabels.Count > 0);
 
         PlayPauseCommand   = new RelayCommand(TogglePlay,  () => _selectedRun?.Frames.Count > 1);
         StepForwardCommand = new RelayCommand(StepForward, () => _selectedRun?.Frames.Count > 0);
@@ -116,11 +116,9 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             _selectedAnalysisLabel = value;
             OnPropertyChanged();
 
-            MaxAnalysisFrameIndex = (_selectedAnalysisLabel?.Frames.Count ?? 1) - 1;
-            if (MaxAnalysisFrameIndex < 0) MaxAnalysisFrameIndex = 0;
-
-            // Default to newest frame so the latest data is shown on selection.
-            _analysisFrameIndex = MaxAnalysisFrameIndex;
+            // Sync slider to this item's position in the list.
+            var idx = value is null ? 0 : AnalysisLabels.IndexOf(value);
+            _analysisFrameIndex = Math.Max(0, idx);
             OnPropertyChanged(nameof(AnalysisFrameIndex));
             LoadAnalysisImage();
         }
@@ -136,6 +134,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             if (_analysisFrameIndex == clamped) return;
             _analysisFrameIndex = clamped;
             OnPropertyChanged();
+            _selectedAnalysisLabel = AnalysisLabels.Count > 0 ? AnalysisLabels[_analysisFrameIndex] : null;
+            OnPropertyChanged(nameof(SelectedAnalysisLabel));
             LoadAnalysisImage();
         }
     }
@@ -289,14 +289,15 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         var analysisList = _scanner.ScanAnalysis();
         AnalysisLabels.Clear();
         foreach (var l in analysisList) AnalysisLabels.Add(l);
+        MaxAnalysisFrameIndex = Math.Max(0, AnalysisLabels.Count - 1);
 
         var forecastList = _scanner.ScanForecasts();
         ForecastRuns.Clear();
         foreach (var r in forecastList) ForecastRuns.Add(r);
 
         SelectedAnalysisLabel = prevLabelName is not null
-            ? analysisList.FirstOrDefault(l => l.Name == prevLabelName) ?? analysisList.FirstOrDefault()
-            : analysisList.FirstOrDefault();
+            ? analysisList.FirstOrDefault(l => l.Name == prevLabelName) ?? analysisList.LastOrDefault()
+            : analysisList.LastOrDefault();
 
         SelectedRun = prevRunUtc.HasValue
             ? forecastList.FirstOrDefault(r => r.ModelRunUtc == prevRunUtc.Value) ?? forecastList.FirstOrDefault()
@@ -310,7 +311,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     /// <summary>Toggles the analysis animation.  Restarts from frame 0 if at the last frame.</summary>
     public void ToggleAnalysisPlay()
     {
-        if (_selectedAnalysisLabel?.Frames.Count is null or <= 1) return;
+        if (AnalysisLabels.Count <= 1) return;
 
         if (_isAnalysisPlaying)
         {
@@ -328,7 +329,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     /// <summary>Stops animation and steps one analysis frame forward.</summary>
     public void StepAnalysisForward()
     {
-        if (_selectedAnalysisLabel?.Frames.Count is null or 0) return;
+        if (AnalysisLabels.Count == 0) return;
         StopAnalysisAnimation();
         AnalysisFrameIndex = Math.Min(_analysisFrameIndex + 1, _maxAnalysisFrameIndex);
     }
@@ -336,7 +337,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     /// <summary>Stops animation and steps one analysis frame back.</summary>
     public void StepAnalysisBack()
     {
-        if (_selectedAnalysisLabel?.Frames.Count is null or 0) return;
+        if (AnalysisLabels.Count == 0) return;
         StopAnalysisAnimation();
         AnalysisFrameIndex = Math.Max(_analysisFrameIndex - 1, 0);
     }
@@ -356,7 +357,9 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             return;
         }
         _analysisFrameIndex++;
+        _selectedAnalysisLabel = AnalysisLabels[_analysisFrameIndex];
         OnPropertyChanged(nameof(AnalysisFrameIndex));
+        OnPropertyChanged(nameof(SelectedAnalysisLabel));
         LoadAnalysisImage();
     }
 
@@ -426,9 +429,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     }
 
     private AnalysisMap? CurrentAnalysisFrame =>
-        _selectedAnalysisLabel?.Frames.Count > 0
-            ? _selectedAnalysisLabel.Frames[Math.Clamp(_analysisFrameIndex, 0, _selectedAnalysisLabel.Frames.Count - 1)]
-            : null;
+        _selectedAnalysisLabel?.Frames.Count > 0 ? _selectedAnalysisLabel.Frames[0] : null;
 
     private void LoadForecastImage()
     {
