@@ -490,7 +490,7 @@ Both workers check for an existing output file before invoking Python; if the fi
 |---|---|---|---|
 | `metar_plot.py` | WMO standard station model | Latest METAR + WxStations | `station_plot.png` |
 | `synoptic_map.py` | Synoptic analysis (Barnes interpolation) | Latest METAR + WxStations | `synoptic_{label}_{yyyyMMdd_HH}.png` |
-| `forecast_map.py` | GFS forecast parameters | GfsGrid for a given forecast hour | `forecast_{yyyyMMdd_HH}_f{NNN}.png` |
+| `forecast_map.py` | GFS forecast parameters | GfsGrid for a specific model run and forecast hour (run passed via `--run`) | `forecast_{yyyyMMdd_HH}_f{NNN}.png` |
 
 **Rendering details:**
 - All maps use a Lambert Conformal projection centred on the data extent.
@@ -517,7 +517,7 @@ Output PNGs are saved to the directory configured in `config.json` (default `C:\
 **Key files:**
 | File | Role |
 |---|---|
-| `db.py` | SQLAlchemy engine; `load_latest_metars`, `load_gfs_grid`, `load_output_dir` |
+| `db.py` | SQLAlchemy engine; `load_latest_metars`, `load_gfs_grid` (accepts optional `model_run`; defaults to latest complete run), `load_output_dir` |
 | `metar_plot.py` | Station model helpers + `render_station_plots` |
 | `synoptic_map.py` | Barnes contour analysis + `render_synoptic_map` |
 | `forecast_map.py` | GFS grid contouring + `render_forecast_map` |
