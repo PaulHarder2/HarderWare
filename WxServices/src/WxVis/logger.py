@@ -15,6 +15,7 @@ Import the module-level ``logger`` instance in any WxVis script:
 
 import logging
 import logging.handlers
+import sys
 from pathlib import Path
 
 _LOG_PATH     = Path(r"C:\HarderWare\Logs\wxvis.log")
@@ -45,7 +46,9 @@ def _configure() -> logging.Logger:
     log.addHandler(fh)
 
     # ── Console handler ───────────────────────────────────────────────────────
-    ch = logging.StreamHandler()
+    # Explicit stdout so that MapRenderer.RunAsync (which logs stderr at WARN)
+    # only receives genuine Python errors and tracebacks, not normal progress.
+    ch = logging.StreamHandler(sys.stdout)
     ch.setLevel(logging.INFO)
     ch.setFormatter(formatter)
     log.addHandler(ch)

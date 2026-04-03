@@ -468,7 +468,7 @@ Both workers check for an existing output file before invoking Python; if the fi
 **Map rendering (`MapRenderer`):**
 - Invokes the appropriate WxVis Python script via `Process`/`ProcessStartInfo`.
 - Augments the process `PATH` with the conda environment's `bin`, `Library\bin`, and `Scripts` directories so Python and its DLL dependencies resolve correctly when the service runs under the Windows service account (which has a minimal PATH).
-- Captures stdout/stderr and logs them at INFO/ERROR level.
+- Captures stdout and stderr separately: stdout lines are logged at INFO; stderr lines are logged at WARN (so genuine Python tracebacks surface as warnings). WxVis's `logger.py` directs its console handler to `sys.stdout` so that normal Python log output does not trigger spurious WARN entries in the service log.
 
 **Stale plot cleanup:** `AnalysisMapWorker` runs a daily purge that deletes `*.png` files older than `PlotRetentionDays` from the output directory.
 
