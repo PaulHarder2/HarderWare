@@ -85,12 +85,12 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         _forecastTimer.Tick  += OnForecastTimerTick;
 
         AnalysisPlayPauseCommand   = new RelayCommand(ToggleAnalysisPlay,  () => AnalysisLabels.Count > 1);
-        AnalysisStepForwardCommand = new RelayCommand(StepAnalysisForward, () => AnalysisLabels.Count > 0);
-        AnalysisStepBackCommand    = new RelayCommand(StepAnalysisBack,    () => AnalysisLabels.Count > 0);
+        AnalysisStepForwardCommand = new RelayCommand(StepAnalysisForward, () => AnalysisLabels.Count > 1);
+        AnalysisStepBackCommand    = new RelayCommand(StepAnalysisBack,    () => AnalysisLabels.Count > 1);
 
         PlayPauseCommand   = new RelayCommand(TogglePlay,  () => _selectedRun?.Frames.Count > 1);
-        StepForwardCommand = new RelayCommand(StepForward, () => _selectedRun?.Frames.Count > 0);
-        StepBackCommand    = new RelayCommand(StepBack,    () => _selectedRun?.Frames.Count > 0);
+        StepForwardCommand = new RelayCommand(StepForward, () => _selectedRun?.Frames.Count > 1);
+        StepBackCommand    = new RelayCommand(StepBack,    () => _selectedRun?.Frames.Count > 1);
 
         _scanner = new MapFileScanner(outputDir, dispatcher);
         _scanner.DirectoryChanged += (_, _) => Refresh();
