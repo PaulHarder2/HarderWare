@@ -49,7 +49,7 @@ WxServices is a set of Windows services that:
 - Periodically fetch METAR and TAF aviation weather reports from the Aviation Weather Center API and store them in a local SQL Server database.
 - Download GFS numerical weather prediction model data from NOAA (via the AWS Open Data mirror) and extract gridded medium-range forecasts covering temperature, wind, cloud cover, precipitation rate, and convective energy (CAPE) for the configured region.
 - Generate friendly, plain-English (or other language) weather summaries using Anthropic's Claude AI and email them to a configured list of recipients.
-- Render weather visualisation maps (METAR station plots, synoptic analysis, and GFS forecast parameter maps) automatically via WxVis.Svc, which invokes the WxVis Python project after each data cycle.
+- Render weather visualisation maps (synoptic analysis and GFS forecast parameter maps) automatically via WxVis.Svc, which invokes the WxVis Python project after each data cycle.
 - Provide a local WPF desktop viewer (WxViewer) for browsing and animating the generated maps side-by-side.
 - Monitor the health of the above services and send alert emails if errors occur or a service goes silent.
 
@@ -290,7 +290,6 @@ WxServices/
     ├── WxViewer/                    ← WPF desktop app: animated weather map viewer
     └── WxVis/                       ← Python visualisation project (conda env: wxvis)
         ├── db.py                    ← SQLAlchemy engine + data loading queries
-        ├── metar_plot.py            ← WMO station model maps (MetPy StationPlot)
         ├── synoptic_map.py          ← Synoptic analysis maps (Barnes interpolation)
         ├── forecast_map.py          ← GFS forecast parameter maps (contour lines)
         ├── config.json              ← DB connection string + output directory
@@ -488,7 +487,6 @@ Both workers check for an existing output file before invoking Python; if the fi
 
 | Script | Map type | Data source | Output filename |
 |---|---|---|---|
-| `metar_plot.py` | WMO standard station model | Latest METAR + WxStations | `station_plot.png` |
 | `synoptic_map.py` | Synoptic analysis (Barnes interpolation) | Latest METAR + WxStations | `synoptic_{label}_{yyyyMMdd_HH}.png` |
 | `forecast_map.py` | GFS forecast parameters | GfsGrid for a specific model run and forecast hour (run passed via `--run`) | `forecast_{yyyyMMdd_HH}_f{NNN}.png` |
 
@@ -500,14 +498,14 @@ Both workers check for an existing output file before invoking Python; if the fi
 - Dewpoint isopleths: green dashed, 3°C interval, labelled.
 - Pressure extrema: **H** (navy) / **L** (maroon), neighbourhood 12 grid cells (~3°/333 km), minimum prominence 1 hPa.
 - Temperature extrema: **W** (dark red) / **K** (steel blue), neighbourhood 12 grid cells, no minimum prominence filter.
-- Station models (metar_plot, synoptic_map): MetPy StationPlot; synoptic_map thins stations with `reduce_point_density` (default 75 km).
+- Station models (synoptic_map): MetPy StationPlot; stations thinned with `reduce_point_density` (default 75 km).
+- Contours (synoptic_map): Barnes-interpolated grid converted from projection metres to lat/lon before plotting so Cartopy clips to the inner viewport, matching forecast_map white-space border behaviour.
 
 **Manual use:**
 ```powershell
 conda activate wxvis
 cd C:\Users\PaulH\...\WxServices\src\WxVis
 
-python metar_plot.py
 python synoptic_map.py [--extent conus|south_central] [--density 75]
 python forecast_map.py --run 20260402_18 --fh 84
 ```
@@ -518,8 +516,7 @@ Output PNGs are saved to the directory configured in `config.json` (default `C:\
 | File | Role |
 |---|---|
 | `db.py` | SQLAlchemy engine; `load_latest_metars`, `load_gfs_grid` (accepts optional `model_run`; defaults to latest complete run), `load_output_dir` |
-| `metar_plot.py` | Station model helpers + `render_station_plots` |
-| `synoptic_map.py` | Barnes contour analysis + `render_synoptic_map` |
+| `synoptic_map.py` | METAR data-prep helpers (`prepare_plot_data`); Barnes contour analysis; `render_synoptic_map` |
 | `forecast_map.py` | GFS grid contouring + `render_forecast_map` |
 
 ---

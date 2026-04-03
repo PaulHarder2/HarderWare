@@ -43,7 +43,11 @@ def _inner_proj_limits(
     Return the largest axis-aligned rectangle (in projection metres) that fits
     entirely within the projected shape of a lat/lon bounding box.
 
-    See :func:`metar_plot._inner_proj_limits` for full documentation.
+    Sampling each edge densely handles the curvature of Lambert Conformal
+    parallels and meridians: parallels bow away from the equator so the top edge
+    peaks at the centre; meridians converge at the pole so the left/right edges
+    lean inward at the top.  Taking the tightest constraint from each edge gives
+    an inner rectangle fully covered by data.
     """
     lon_min, lon_max, lat_min, lat_max = extent
     lons_h = np.linspace(lon_min, lon_max, n)

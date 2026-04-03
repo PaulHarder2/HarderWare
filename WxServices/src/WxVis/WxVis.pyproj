@@ -21,7 +21,6 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="db.py" />
-    <Compile Include="metar_plot.py" />
     <Compile Include="synoptic_map.py" />
     <Compile Include="forecast_map.py" />
     <Content Include="config.json" />

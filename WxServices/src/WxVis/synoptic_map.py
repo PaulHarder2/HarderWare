@@ -15,6 +15,7 @@ Typical usage:
     render_synoptic_map(df, output_path="plots/synoptic.png")
 """
 
+import re
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -28,8 +29,135 @@ from metpy.plots.wx_symbols import sky_cover, current_weather
 from metpy.calc import reduce_point_density
 from metpy.interpolate import interpolate_to_grid
 
-from metar_plot import prepare_plot_data
 from logger import logger
+
+
+# ── METAR data preparation ───────────────────────────────────────────────────
+
+_COVERAGE_OKTAS: dict[str, int] = {
+    "SKC": 0, "CLR": 0, "NCD": 0, "NSC": 0,
+    "FEW": 1, "SCT": 3, "BKN": 6, "OVC": 8, "VV": 8,
+}
+_COVERAGE_ORDER = ["OVC", "VV", "BKN", "SCT", "FEW", "SKC", "CLR", "NCD", "NSC"]
+
+_WX_CODE_MAP: list[tuple[re.Pattern, int]] = [
+    (re.compile(r"\bTS\b"),      95),
+    (re.compile(r"\bTS.*GR\b"),  99),
+    (re.compile(r"\bFZRA\b"),    66),
+    (re.compile(r"\bFZDZ\b"),    56),
+    (re.compile(r"\+SN\b"),      75),
+    (re.compile(r"\bSN\b"),      71),
+    (re.compile(r"\bSG\b"),      77),
+    (re.compile(r"\+RA\b"),      65),
+    (re.compile(r"-RA\b"),       61),
+    (re.compile(r"\bRA\b"),      63),
+    (re.compile(r"\bDZ\b"),      51),
+    (re.compile(r"\bFG\b"),      45),
+    (re.compile(r"\bBR\b"),      10),
+    (re.compile(r"\bHZ\b"),       5),
+    (re.compile(r"\bFU\b"),       4),
+    (re.compile(r"\bDU\b"),       6),
+    (re.compile(r"\bSA\b"),       7),
+    (re.compile(r"\bSS\b"),      34),
+    (re.compile(r"\bDS\b"),      34),
+]
+
+
+def _parse_sky_oktas(raw_sky: str | None) -> int:
+    """Return the WMO okta value (0–8) for the most significant sky layer."""
+    if not isinstance(raw_sky, str) or not raw_sky:
+        return 0
+    tokens = raw_sky.upper().split()
+    for cover_token in _COVERAGE_ORDER:
+        for token in tokens:
+            if token.startswith(cover_token):
+                return _COVERAGE_OKTAS[cover_token]
+    return 0
+
+
+def _parse_present_weather_code(raw_wx: str | None) -> int | None:
+    """Return a WMO present-weather code (0–99) or None."""
+    if not isinstance(raw_wx, str) or not raw_wx:
+        return None
+    wx = raw_wx.upper()
+    for pattern, code in _WX_CODE_MAP:
+        if pattern.search(wx):
+            return code
+    return None
+
+
+def _altimeter_to_slp_hpa(altimeter_value: float | None,
+                           altimeter_unit: str | None,
+                           elevation_ft: float | None) -> float | None:
+    """Convert a METAR altimeter setting to approximate MSLP in hPa."""
+    if altimeter_value is None:
+        return None
+    qnh_hpa = altimeter_value * 33.8639 \
+        if isinstance(altimeter_unit, str) and altimeter_unit.upper() == "INHG" \
+        else float(altimeter_value)
+    if elevation_ft is None or elevation_ft < 1.0:
+        return qnh_hpa
+    return qnh_hpa + (elevation_ft * 0.3048 / 8.5)
+
+
+def _encode_slp(slp_hpa: float | None) -> float | None:
+    """Encode SLP to the 3-digit station-model format (e.g. 1013.2 → 132.0)."""
+    if slp_hpa is None or not np.isfinite(slp_hpa):
+        return None
+    return round((slp_hpa * 10) % 1000, 1)
+
+
+def _wind_components_kt(
+    direction: float | None,
+    speed: float | None,
+    unit: str | None,
+    is_variable: bool,
+) -> tuple[float | None, float | None]:
+    """Return (u, v) wind components in knots."""
+    if speed is None:
+        return None, None
+    speed_kt = speed if not isinstance(unit, str) or unit.upper() != "MPS" \
+        else speed * 1.944
+    if is_variable or direction is None:
+        return 0.0, 0.0
+    rad = np.radians(direction)
+    return float(-speed_kt * np.sin(rad)), float(-speed_kt * np.cos(rad))
+
+
+def prepare_plot_data(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Augment a METAR DataFrame with derived columns needed for rendering:
+    ``sky_oktas``, ``wx_code``, ``slp_hpa``, ``slp_encoded``,
+    ``wind_u_kt``, ``wind_v_kt``, ``visibility_sm``.
+    """
+    out = df.copy()
+    out["sky_oktas"]   = out["RawSkyConditions"].apply(_parse_sky_oktas)
+    out["wx_code"]     = out["RawWeatherPhenomena"].apply(_parse_present_weather_code)
+    out["slp_hpa"]     = out.apply(
+        lambda r: _altimeter_to_slp_hpa(r["AltimeterValue"], r["AltimeterUnit"], r["ElevationFt"]),
+        axis=1,
+    )
+    out["slp_encoded"] = out["slp_hpa"].apply(_encode_slp)
+    components = out.apply(
+        lambda r: _wind_components_kt(
+            r["WindDirection"], r["WindSpeed"], r["WindUnit"], bool(r["WindIsVariable"])
+        ),
+        axis=1, result_type="expand",
+    )
+    out["wind_u_kt"] = components[0]
+    out["wind_v_kt"] = components[1]
+
+    def _vis_sm(row) -> float | None:
+        if row["VisibilityCavok"]:
+            return 10.0
+        if row["VisibilityStatuteMiles"] is not None:
+            return row["VisibilityStatuteMiles"]
+        if row["VisibilityM"] is not None:
+            return row["VisibilityM"] / 1609.344
+        return None
+
+    out["visibility_sm"] = out.apply(_vis_sm, axis=1)
+    return out
 
 
 # ── Projection helpers ────────────────────────────────────────────────────────
@@ -41,7 +169,11 @@ def _inner_proj_limits(
     Return the largest axis-aligned rectangle (in projection metres) that fits
     entirely within the projected shape of a lat/lon bounding box.
 
-    See :func:`metar_plot._inner_proj_limits` for full documentation.
+    Sampling each edge densely handles the curvature of Lambert Conformal
+    parallels and meridians: parallels bow away from the equator so the top edge
+    peaks at the centre; meridians converge at the pole so the left/right edges
+    lean inward at the top.  Taking the tightest constraint from each edge gives
+    an inner rectangle fully covered by data.
     """
     lon_min, lon_max, lat_min, lat_max = extent
     lons_h = np.linspace(lon_min, lon_max, n)
@@ -252,20 +384,29 @@ def _add_analysis_contours(
     )
     slp_smooth = _smooth_with_nans(slp_raw, sigma=smooth_sigma)
 
+    # Convert the Barnes grid from projection metres to lat/lon so that Cartopy
+    # clips contours to the inner viewport, matching forecast_map rendering.
+    _pc  = ccrs.PlateCarree()
+    _pts = _pc.transform_points(proj, grid_x.ravel(), grid_y.ravel())
+    grid_lon = _pts[:, 0].reshape(grid_x.shape)
+    grid_lat = _pts[:, 1].reshape(grid_x.shape)
+
     slp_min = np.floor(np.nanmin(slp_smooth) / isobar_interval_hpa) * isobar_interval_hpa
     slp_max = np.ceil( np.nanmax(slp_smooth) / isobar_interval_hpa) * isobar_interval_hpa
     isobar_levels = np.arange(slp_min, slp_max + isobar_interval_hpa, isobar_interval_hpa)
 
     cs = ax.contour(
-        grid_x, grid_y, slp_smooth,
+        grid_lon, grid_lat, slp_smooth,
         levels=isobar_levels,
         colors="black",
         linewidths=1.2,
+        transform=_pc,
         zorder=2,
     )
     ax.clabel(cs, inline=True, fontsize=8, fmt="%d")
-    _mark_extrema(ax, grid_x, grid_y, slp_smooth, "H", "L",
-                  high_color="navy", low_color="maroon", neighborhood=12, min_depth=1.0)
+    _mark_extrema(ax, grid_lon, grid_lat, slp_smooth, "H", "L",
+                  high_color="navy", low_color="maroon", neighborhood=12, min_depth=1.0,
+                  transform=_pc)
 
     # ── Isotherms ─────────────────────────────────────────────────────────────
     _, _, tmp_raw = interpolate_to_grid(
@@ -282,16 +423,18 @@ def _add_analysis_contours(
     isotherm_levels = np.arange(tmp_min, tmp_max + isotherm_interval_c, isotherm_interval_c)
 
     ct = ax.contour(
-        grid_x, grid_y, tmp_smooth,
+        grid_lon, grid_lat, tmp_smooth,
         levels=isotherm_levels,
         colors="red",
         linewidths=0.8,
         linestyles="dashed",
+        transform=_pc,
         zorder=2,
     )
     ax.clabel(ct, inline=True, fontsize=7, fmt="%d°C")
-    _mark_extrema(ax, grid_x, grid_y, tmp_smooth, "W", "K",
-                  high_color="darkred", low_color="steelblue", neighborhood=12)
+    _mark_extrema(ax, grid_lon, grid_lat, tmp_smooth, "W", "K",
+                  high_color="darkred", low_color="steelblue", neighborhood=12,
+                  transform=_pc)
 
     # ── Dewpoint isopleths ────────────────────────────────────────────────────
     dew_data = data.dropna(subset=["DewPointCelsius"])
@@ -313,11 +456,12 @@ def _add_analysis_contours(
         dew_levels = np.arange(dew_min, dew_max + isotherm_interval_c, isotherm_interval_c)
 
         cd = ax.contour(
-            grid_x, grid_y, dew_smooth,
+            grid_lon, grid_lat, dew_smooth,
             levels=dew_levels,
             colors="green",
             linewidths=0.8,
             linestyles="dashed",
+            transform=_pc,
             zorder=2,
         )
         ax.clabel(cd, inline=True, fontsize=7, fmt="%d°C")
