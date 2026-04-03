@@ -496,6 +496,7 @@ Both workers check for an existing output file before invoking Python; if the fi
 - Isobars: black solid, 4 hPa interval, labelled.
 - Temperature isopleths: red dashed, 3°C interval, labelled.
 - Dewpoint isopleths: green dashed, 3°C interval, labelled.
+- Precipitation shading (forecast_map only): semi-transparent green (`#66bb6a`, alpha 0.45) `contourf` fill over areas where the Gaussian-smoothed GFS PRATE field exceeds 0.1 mm/hr. Drawn below isopleths so contour lines and station symbols remain legible. The smoothing turns the blocky 0.25° grid into a smooth curved boundary.
 - Pressure extrema: **H** (navy) / **L** (maroon), neighbourhood 12 grid cells (~3°/333 km), minimum prominence 1 hPa.
 - Temperature extrema: **W** (dark red) / **K** (steel blue), neighbourhood 12 grid cells, no minimum prominence filter.
 - Station models (synoptic_map): MetPy StationPlot; stations thinned with `reduce_point_density` (default 75 km).

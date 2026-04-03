@@ -196,13 +196,15 @@ def render_forecast_map(
     smooth_sigma: float = 1.5,
     barb_spacing_deg: float = 1.0,
     station_locs: pd.DataFrame | None = None,
+    precip_threshold_mmhr: float = 0.1,
     dpi: int = 150,
 ) -> None:
     """
     Render a GFS forecast map and save it to *output_path*.
 
-    Draws red temperature isopleths, green dewpoint isopleths, and black MSLP
-    isobars as contour lines on a plain land/ocean background (no colour fill).
+    Draws a semi-transparent green precipitation fill over areas where the
+    GFS precipitation rate exceeds *precip_threshold_mmhr*, followed by red
+    temperature isopleths, green dewpoint isopleths, and black MSLP isobars.
 
     Parameters
     ----------
@@ -233,6 +235,9 @@ def render_forecast_map(
         :func:`db.load_latest_metars`).  When supplied, one wind barb is drawn
         at each station position using the GFS value at the nearest grid point,
         instead of the regular grid subsampling.  Default ``None``.
+    precip_threshold_mmhr:
+        Minimum precipitation rate in mm/hr required to shade a grid cell
+        green.  Cells below this value are left unshaded.  Default 0.1 mm/hr.
     dpi:
         Output resolution.  Default 150.
     """
@@ -274,6 +279,13 @@ def render_forecast_map(
     else:
         logger.warning("No MSLP data available for this forecast hour — isobars skipped.")
 
+    has_prate = "PRateKgM2s" in df.columns and df["PRateKgM2s"].notna().any()
+    if has_prate:
+        _, _, prate_raw = _to_grid(df.dropna(subset=["PRateKgM2s"]), "PRateKgM2s")
+        # Convert kg/m²/s → mm/hr and smooth to soften the 0.25° grid edges.
+        prate_mm_hr = _smooth(prate_raw * 3600.0, sigma=smooth_sigma)
+        has_prate = np.nanmax(prate_mm_hr) >= precip_threshold_mmhr
+
     # ── Figure setup ─────────────────────────────────────────────────────────
     fig = plt.figure(figsize=(11, 11))
     ax = fig.add_subplot(1, 1, 1, projection=proj)
@@ -289,6 +301,17 @@ def render_forecast_map(
     ax.add_feature(cfeature.COASTLINE.with_scale("50m"),  linewidth=0.7, zorder=4)
     ax.add_feature(cfeature.BORDERS.with_scale("50m"),    linewidth=0.6, zorder=4)
     ax.add_feature(cfeature.STATES.with_scale("50m"),     linewidth=0.4, edgecolor="#808080", zorder=4)
+
+    # ── Precipitation shading (semi-transparent green fill) ──────────────────
+    if has_prate:
+        ax.contourf(
+            lon_grid, lat_grid, prate_mm_hr,
+            levels=[precip_threshold_mmhr, np.nanmax(prate_mm_hr) + 1.0],
+            colors=["#66bb6a"],
+            alpha=0.45,
+            transform=ccrs.PlateCarree(),
+            zorder=1,
+        )
 
     # ── Temperature isopleths (red dashed) ───────────────────────────────────
     valid_tmp   = tmp_smooth[~np.isnan(tmp_smooth)]
