@@ -7,18 +7,20 @@
     The service to deploy, or 'all' to deploy all four Windows services in order
     (WxParserSvc, WxReportSvc, WxMonitorSvc, WxVisSvc), or 'WxAnnounce' to
     publish the console tool to C:\bin, or 'WxViewer' to publish the WPF viewer
-    to C:\HarderWare\WxViewer.
+    to C:\HarderWare\WxViewer, or 'WxVis' to clear the Python bytecode cache
+    so that the next map render picks up any script changes immediately.
 
 .EXAMPLE
     .\Deploy-WxService.ps1 WxReportSvc
     .\Deploy-WxService.ps1 all
     .\Deploy-WxService.ps1 WxAnnounce
     .\Deploy-WxService.ps1 WxViewer
+    .\Deploy-WxService.ps1 WxVis
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [ValidateSet('WxParserSvc', 'WxReportSvc', 'WxMonitorSvc', 'WxVisSvc', 'WxAnnounce', 'WxViewer', 'all')]
+    [ValidateSet('WxParserSvc', 'WxReportSvc', 'WxMonitorSvc', 'WxVisSvc', 'WxAnnounce', 'WxViewer', 'WxVis', 'all')]
     [string]$ServiceName
 )
 
@@ -196,6 +198,21 @@ function Invoke-ToolPublish {
 }
 
 # ---------------------------------------------------------------------------
+# Clear the WxVis Python bytecode cache so the next map render picks up
+# any script changes without redeploying WxVis.Svc.
+# ---------------------------------------------------------------------------
+function Invoke-WxVisCacheClear {
+    $cacheDir = "$SolutionRoot\src\WxVis\__pycache__"
+    if (Test-Path $cacheDir) {
+        Remove-Item $cacheDir -Recurse -Force
+        Write-Host "Cleared WxVis __pycache__." -ForegroundColor Green
+    } else {
+        Write-Host "WxVis __pycache__ not present — nothing to clear." -ForegroundColor Yellow
+    }
+    return $true
+}
+
+# ---------------------------------------------------------------------------
 # Publish WxViewer WPF desktop app to C:\HarderWare\WxViewer
 # ---------------------------------------------------------------------------
 function Invoke-ViewerPublish {
@@ -229,6 +246,11 @@ if ($ServiceName -eq 'WxAnnounce') {
 
 if ($ServiceName -eq 'WxViewer') {
     Invoke-ViewerPublish
+    exit $LASTEXITCODE
+}
+
+if ($ServiceName -eq 'WxVis') {
+    Invoke-WxVisCacheClear
     exit $LASTEXITCODE
 }
 
