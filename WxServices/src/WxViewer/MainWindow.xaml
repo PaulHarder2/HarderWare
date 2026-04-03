@@ -256,11 +256,11 @@
 
                         <Separator/>
 
-                        <Button Command="{Binding StepBackCommand}"
+                        <Button Command="{Binding ForecastStepBackCommand}"
                                 ToolTip="Step back" Content="◀" Width="26"
                                 Foreground="#e0e0e0"/>
 
-                        <Button Command="{Binding PlayPauseCommand}"
+                        <Button Command="{Binding ForecastPlayPauseCommand}"
                                 ToolTip="Play / Pause" Width="72">
                             <Button.Style>
                                 <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
@@ -275,7 +275,7 @@
                             </Button.Style>
                         </Button>
 
-                        <Button Command="{Binding StepForwardCommand}"
+                        <Button Command="{Binding ForecastStepForwardCommand}"
                                 ToolTip="Step forward" Content="▶" Width="26"
                                 Foreground="#e0e0e0"/>
 

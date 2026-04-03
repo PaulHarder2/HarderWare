@@ -58,9 +58,9 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     public RelayCommand AnalysisStepForwardCommand { get; }
     public RelayCommand AnalysisStepBackCommand    { get; }
 
-    public RelayCommand PlayPauseCommand   { get; }
-    public RelayCommand StepForwardCommand { get; }
-    public RelayCommand StepBackCommand    { get; }
+    public RelayCommand ForecastPlayPauseCommand   { get; }
+    public RelayCommand ForecastStepForwardCommand { get; }
+    public RelayCommand ForecastStepBackCommand    { get; }
 
     // ── Constructor ───────────────────────────────────────────────────────────
 
@@ -88,9 +88,9 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         AnalysisStepForwardCommand = new RelayCommand(StepAnalysisForward, () => AnalysisLabels.Count > 1);
         AnalysisStepBackCommand    = new RelayCommand(StepAnalysisBack,    () => AnalysisLabels.Count > 1);
 
-        PlayPauseCommand   = new RelayCommand(TogglePlay,  () => _selectedRun?.Frames.Count > 1);
-        StepForwardCommand = new RelayCommand(StepForward, () => _selectedRun?.Frames.Count > 1);
-        StepBackCommand    = new RelayCommand(StepBack,    () => _selectedRun?.Frames.Count > 1);
+        ForecastPlayPauseCommand   = new RelayCommand(TogglePlay,  () => _selectedRun?.Frames.Count > 1);
+        ForecastStepForwardCommand = new RelayCommand(StepForward, () => _selectedRun?.Frames.Count > 1);
+        ForecastStepBackCommand    = new RelayCommand(StepBack,    () => _selectedRun?.Frames.Count > 1);
 
         _scanner = new MapFileScanner(outputDir, dispatcher);
         _scanner.DirectoryChanged += (_, _) => Refresh();
