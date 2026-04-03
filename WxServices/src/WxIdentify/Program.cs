@@ -121,6 +121,7 @@ static double HaversineKm(double lat1, double lon1, double lat2, double lon2)
 
 var candidates = awcResults
     .Where(s => s.IcaoId is not null && s.Lat.HasValue && s.Lon.HasValue)
+    .DistinctBy(s => s.IcaoId)
     .Select(s => (Station: s, DistKm: HaversineKm(lat, lon, s.Lat!.Value, s.Lon!.Value)))
     .OrderBy(x => x.DistKm)
     .Take(5)
