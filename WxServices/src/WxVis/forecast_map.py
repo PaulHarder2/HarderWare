@@ -345,7 +345,7 @@ def render_forecast_map(
         cd = ax.contour(
             lon_grid, lat_grid, dew_smooth,
             levels=dew_levels,
-            colors="green",
+            colors="#00838f",  # teal — distinct from the green precip fill
             linewidths=0.8,
             linestyles="dashed",
             transform=ccrs.PlateCarree(),
