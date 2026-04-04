@@ -11,7 +11,7 @@ public class RecipientState
 {
     public int      Id                       { get; set; }
 
-    /// <summary>Stable recipient identifier matching <c>RecipientConfig.Id</c> in appsettings.local.json.</summary>
+    /// <summary>Stable recipient identifier matching <see cref="Recipient.RecipientId"/> in the <c>Recipients</c> table.</summary>
     public string   RecipientId              { get; set; } = "";
 
     /// <summary>UTC time the most recent scheduled report was sent, or null if never sent.</summary>

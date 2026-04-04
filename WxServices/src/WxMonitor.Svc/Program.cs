@@ -7,6 +7,8 @@
 // Start:     sc.exe start WxMonitorSvc
 // Stop:      sc.exe stop WxMonitorSvc
 
+using MetarParser.Data;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.FileProviders;
 using WxMonitor.Svc;
@@ -28,16 +30,48 @@ var host = Host.CreateDefaultBuilder(args)
            .AddJsonFile(new PhysicalFileProvider(@"C:\HarderWare"), "appsettings.local.json", optional: true, reloadOnChange: true)
            .AddJsonFile("appsettings.local.json",  optional: true,  reloadOnChange: true);
     })
-    .ConfigureServices((_, services) =>
+    .ConfigureServices((ctx, services) =>
     {
+        var connectionString = ctx.Configuration.GetConnectionString("WeatherData")
+            ?? throw new InvalidOperationException(
+                "Connection string 'WeatherData' not found in configuration.");
+
+        var dbOptions = new DbContextOptionsBuilder<WeatherDataContext>()
+            .UseSqlServer(connectionString)
+            .Options;
+
+        services.AddSingleton(dbOptions);
         services.AddHostedService<MonitorWorker>();
     })
     .Build();
 
-ValidateConfig(host.Services.GetRequiredService<IConfiguration>());
-
 try
 {
+    var dbOptions = host.Services.GetRequiredService<DbContextOptions<WeatherDataContext>>();
+    await using (var db = new WeatherDataContext(dbOptions))
+    {
+        await db.Database.EnsureCreatedAsync();
+
+        // Ensure GlobalSettings table exists so this service can read SMTP secrets from the DB.
+        await db.Database.ExecuteSqlRawAsync(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'GlobalSettings')
+            BEGIN
+                CREATE TABLE [GlobalSettings] (
+                    [Id]              int            NOT NULL,
+                    [ClaudeApiKey]    nvarchar(500)  NULL,
+                    [SmtpUsername]    nvarchar(200)  NULL,
+                    [SmtpPassword]    nvarchar(200)  NULL,
+                    [SmtpFromAddress] nvarchar(200)  NULL,
+                    CONSTRAINT [PK_GlobalSettings] PRIMARY KEY ([Id])
+                );
+                INSERT INTO [GlobalSettings] ([Id]) VALUES (1);
+            END");
+
+        Logger.Info("Database ready.");
+    }
+
+    await ValidateConfigAsync(host.Services.GetRequiredService<IConfiguration>(), dbOptions);
+
     await host.RunAsync();
 }
 catch (Exception ex)
@@ -46,17 +80,21 @@ catch (Exception ex)
     throw;
 }
 
-static void ValidateConfig(IConfiguration config)
+static async Task ValidateConfigAsync(IConfiguration config, DbContextOptions<WeatherDataContext> dbOptions)
 {
     var issues = new List<string>();
 
-    if (string.IsNullOrWhiteSpace(config["Smtp:Username"]))    issues.Add("Smtp:Username");
-    if (string.IsNullOrWhiteSpace(config["Smtp:Password"]))    issues.Add("Smtp:Password");
-    if (string.IsNullOrWhiteSpace(config["Smtp:FromAddress"])) issues.Add("Smtp:FromAddress");
-    if (string.IsNullOrWhiteSpace(config["Monitor:AlertEmail"])) issues.Add("Monitor:AlertEmail");
+    await using var ctx = new WeatherDataContext(dbOptions);
+    var gs = await ctx.GlobalSettings.FirstOrDefaultAsync(x => x.Id == 1);
+
+    if (string.IsNullOrWhiteSpace(gs?.SmtpUsername    ?? config["Smtp:Username"]))    issues.Add("SmtpUsername");
+    if (string.IsNullOrWhiteSpace(gs?.SmtpPassword    ?? config["Smtp:Password"]))    issues.Add("SmtpPassword");
+    if (string.IsNullOrWhiteSpace(gs?.SmtpFromAddress ?? config["Smtp:FromAddress"])) issues.Add("SmtpFromAddress");
+    if (string.IsNullOrWhiteSpace(config["Monitor:AlertEmail"]))                      issues.Add("Monitor:AlertEmail");
 
     if (issues.Count > 0)
-        Logger.Warn($"Missing required configuration — alerts will not send until resolved: {string.Join(", ", issues)}. Set these in appsettings.local.json.");
+        Logger.Warn($"Missing required configuration — alerts will not send until resolved: {string.Join(", ", issues)}. " +
+                    "Set SMTP secrets via GlobalSettings (database) or appsettings.local.json.");
     else
         Logger.Info("Configuration validated.");
 }

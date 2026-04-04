@@ -1,7 +1,5 @@
 using MetarParser.Data;
 using Microsoft.EntityFrameworkCore;
-using System.Text.Json;
-using System.Text.Json.Nodes;
 using WxInterp;
 using WxServices.Logging;
 
@@ -140,7 +138,7 @@ public sealed class RecipientResolver
         }
 
         if (changed)
-            SaveRecipient(recipient);
+            await SaveRecipientAsync(recipient);
 
         return true;
     }
@@ -205,68 +203,39 @@ public sealed class RecipientResolver
     // ── save-back ─────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Writes the resolved location fields of <paramref name="recipient"/> back to
-    /// <c>appsettings.local.json</c>.  Matches the recipient's entry in the JSON
-    /// array by <c>Id</c> (preferred) or <c>Email</c>.  Logs a warning if no
-    /// matching entry is found — this can happen if the config was modified externally.
+    /// Persists the resolved location fields of <paramref name="recipient"/> to the
+    /// <c>Recipients</c> database table.  Matches by <see cref="RecipientConfig.Id"/>.
+    /// Logs a warning if no matching row is found — this should not happen in normal
+    /// operation because recipients are seeded from config on first startup.
     /// </summary>
     /// <param name="recipient">Recipient whose resolved fields should be persisted.</param>
     /// <sideeffects>
-    /// Reads and overwrites <c>appsettings.local.json</c> alongside the executable.
-    /// Writes a log entry on success or when the recipient cannot be located in the file.
+    /// Opens a short-lived <see cref="WeatherDataContext"/> and updates the matching
+    /// <c>Recipients</c> row.  Writes a log entry on success or on lookup failure.
     /// </sideeffects>
-    private static void SaveRecipient(RecipientConfig recipient)
+    private async Task SaveRecipientAsync(RecipientConfig recipient)
     {
-        var path = Path.Combine(AppContext.BaseDirectory, "appsettings.local.json");
-
-        JsonNode root = File.Exists(path)
-            ? JsonNode.Parse(File.ReadAllText(path)) ?? new JsonObject()
-            : new JsonObject();
-
-        if (root["Report"] is not JsonObject reportNode)
-        {
-            reportNode = new JsonObject();
-            root["Report"] = reportNode;
-        }
-
-        if (reportNode["Recipients"] is not JsonArray recipientsArray)
-        {
-            recipientsArray = new JsonArray();
-            reportNode["Recipients"] = recipientsArray;
-        }
-
-        // Match on Id if present, fall back to Email for configs that predate this field.
-        var matchCount = 0;
-        foreach (var item in recipientsArray)
-        {
-            var matches = recipient.Id is not null
-                ? item?["Id"]?.GetValue<string>()    == recipient.Id
-                : item?["Email"]?.GetValue<string>() == recipient.Email;
-
-            if (!matches) continue;
-
-            item!["Latitude"]  = recipient.Latitude;
-            item["Longitude"]  = recipient.Longitude;
-            item["MetarIcao"]  = recipient.MetarIcao;
-            item["TafIcao"]    = recipient.TafIcao;
-
-            if (!string.IsNullOrWhiteSpace(recipient.LocalityName))
-                item["LocalityName"] = recipient.LocalityName;
-
-            matchCount++;
-        }
-
         var label = recipient.Id ?? recipient.Email;
 
-        if (matchCount > 0)
+        await using var ctx = new WeatherDataContext(_dbOptions);
+        var row = await ctx.Recipients
+            .FirstOrDefaultAsync(r => r.RecipientId == recipient.Id);
+
+        if (row is null)
         {
-            File.WriteAllText(path, root.ToJsonString(
-                new JsonSerializerOptions { WriteIndented = true }));
-            Logger.Info($"{label}: resolved data cached to local settings.");
+            Logger.Warn($"{label}: not found in Recipients table — cannot cache resolved data.");
+            return;
         }
-        else
-        {
-            Logger.Warn($"{label}: not found in appsettings.local.json — cannot cache resolved data.");
-        }
+
+        row.Latitude  = recipient.Latitude;
+        row.Longitude = recipient.Longitude;
+        row.MetarIcao = recipient.MetarIcao;
+        row.TafIcao   = recipient.TafIcao;
+
+        if (!string.IsNullOrWhiteSpace(recipient.LocalityName))
+            row.LocalityName = recipient.LocalityName;
+
+        await ctx.SaveChangesAsync();
+        Logger.Info($"{label}: resolved data cached to database.");
     }
 }

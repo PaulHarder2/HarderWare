@@ -5,6 +5,7 @@ using Microsoft.Extensions.Configuration;
 using WxInterp;
 using WxServices.Common;
 using WxServices.Logging;
+using Recipient = MetarParser.Data.Entities.Recipient;
 
 namespace WxReport.Svc;
 
@@ -83,8 +84,7 @@ public sealed class ReportWorker : BackgroundService
                 Logger.Error("Unhandled exception in report cycle.", ex);
             }
 
-            var (cfg, _, _) = LoadConfigs();
-            var intervalMinutes = cfg.IntervalMinutes;
+            var intervalMinutes = _config.GetValue<int>("Report:IntervalMinutes", 5);
             if (intervalMinutes <= 0)
             {
                 Logger.Warn($"Report:IntervalMinutes is {intervalMinutes} — must be > 0. Using 1 minute.");
@@ -119,7 +119,8 @@ public sealed class ReportWorker : BackgroundService
     /// </sideeffects>
     private async Task SendStartupReportAsync(CancellationToken ct)
     {
-        var (cfg, smtp, claude_cfg) = LoadConfigs();
+        await using var ctx = new WeatherDataContext(_dbOptions);
+        var (cfg, smtp, claude_cfg) = await LoadConfigsAsync(ctx, ct);
 
         if (string.IsNullOrWhiteSpace(claude_cfg.ApiKey))
         {
@@ -184,7 +185,6 @@ public sealed class ReportWorker : BackgroundService
 
         // Update state so the MinGap check prevents an immediate duplicate
         // from the first normal cycle.
-        await using var ctx = new WeatherDataContext(_dbOptions);
         var state = await ctx.RecipientStates
             .FirstOrDefaultAsync(r => r.RecipientId == recipient.Id, ct);
 
@@ -219,7 +219,8 @@ public sealed class ReportWorker : BackgroundService
     private async Task RunCycleAsync(CancellationToken ct)
     {
         Logger.Info("Starting report cycle.");
-        var (cfg, smtp, claude_cfg) = LoadConfigs();
+        await using var ctx = new WeatherDataContext(_dbOptions);
+        var (cfg, smtp, claude_cfg) = await LoadConfigsAsync(ctx, ct);
 
         if (string.IsNullOrWhiteSpace(claude_cfg.ApiKey))
         {
@@ -248,8 +249,6 @@ public sealed class ReportWorker : BackgroundService
         var resolver    = new RecipientResolver(_dbOptions, _httpClient);
         var now         = DateTime.UtcNow;
         var reportsSent = 0;
-
-        await using var ctx = new WeatherDataContext(_dbOptions);
 
         foreach (var recipient in cfg.Recipients)
         {
@@ -580,27 +579,71 @@ public sealed class ReportWorker : BackgroundService
     }
 
     /// <summary>
-    /// Loads and returns the current configuration from the application settings.
-    /// Binds <see cref="ReportConfig"/> from the <c>Report</c> section and
-    /// <see cref="SmtpConfig"/> and <see cref="ClaudeConfig"/> from their respective
-    /// top-level sections.  Called at the start of each cycle so that config changes
-    /// take effect without restarting the service.
+    /// Loads and returns the current configuration, merging database values with
+    /// appsettings files.  Recipients are loaded from the <c>Recipients</c> table;
+    /// if the table is empty, the <c>Report:Recipients</c> config section is used as
+    /// a fallback.  SMTP and Claude secrets are read from <c>GlobalSettings</c> (Id = 1)
+    /// and override any corresponding values from appsettings files.
+    /// Non-secret settings (intervals, thresholds, SMTP host/port) come from config only.
     /// </summary>
+    /// <param name="ctx">Open database context to query recipients and global settings.</param>
+    /// <param name="ct">Cancellation token propagated to database queries.</param>
     /// <returns>
-    /// A tuple of freshly bound <see cref="ReportConfig"/>, <see cref="SmtpConfig"/>,
-    /// and <see cref="ClaudeConfig"/> reflecting the current appsettings.
+    /// A tuple of <see cref="ReportConfig"/> (with recipients populated from the DB),
+    /// <see cref="SmtpConfig"/>, and <see cref="ClaudeConfig"/> with secrets from the DB.
     /// </returns>
-    private (ReportConfig report, SmtpConfig smtp, ClaudeConfig claude) LoadConfigs()
+    private async Task<(ReportConfig report, SmtpConfig smtp, ClaudeConfig claude)> LoadConfigsAsync(
+        WeatherDataContext ctx, CancellationToken ct)
     {
         var report = new ReportConfig();
         _config.GetSection("Report").Bind(report);
 
+        // Prefer DB recipients; fall back to config if the table is empty (e.g. first run).
+        var dbRecipients = await ctx.Recipients.OrderBy(r => r.Id).ToListAsync(ct);
+        if (dbRecipients.Count > 0)
+            report.Recipients = dbRecipients.Select(ToConfig).ToList();
+
+        // Load non-secret SMTP settings from config, then override secrets from DB.
         var smtp = new SmtpConfig();
         _config.GetSection("Smtp").Bind(smtp);
 
         var claude = new ClaudeConfig();
         _config.GetSection("Claude").Bind(claude);
 
+        var gs = await ctx.GlobalSettings.FirstOrDefaultAsync(x => x.Id == 1, ct);
+        if (!string.IsNullOrWhiteSpace(gs?.SmtpUsername))    smtp.Username    = gs.SmtpUsername;
+        if (!string.IsNullOrWhiteSpace(gs?.SmtpPassword))    smtp.Password    = gs.SmtpPassword;
+        if (!string.IsNullOrWhiteSpace(gs?.SmtpFromAddress)) smtp.FromAddress = gs.SmtpFromAddress;
+        if (!string.IsNullOrWhiteSpace(gs?.ClaudeApiKey))    claude.ApiKey    = gs.ClaudeApiKey;
+
         return (report, smtp, claude);
     }
+
+    /// <summary>
+    /// Converts a <see cref="Recipient"/> database entity to the <see cref="RecipientConfig"/>
+    /// view model used throughout the report worker.
+    /// </summary>
+    /// <param name="r">The database recipient entity to convert.</param>
+    /// <returns>A populated <see cref="RecipientConfig"/> instance.</returns>
+    private static RecipientConfig ToConfig(Recipient r) => new()
+    {
+        Id                 = r.RecipientId,
+        Email              = r.Email,
+        Name               = r.Name,
+        Language           = r.Language,
+        Timezone           = r.Timezone,
+        ScheduledSendHours = r.ScheduledSendHours,
+        Address            = r.Address,
+        LocalityName       = r.LocalityName,
+        Latitude           = r.Latitude,
+        Longitude          = r.Longitude,
+        MetarIcao          = r.MetarIcao,
+        TafIcao            = r.TafIcao,
+        Units              = new UnitPreferences
+        {
+            Temperature = r.TempUnit,
+            Pressure    = r.PressureUnit,
+            WindSpeed   = r.WindSpeedUnit,
+        },
+    };
 }

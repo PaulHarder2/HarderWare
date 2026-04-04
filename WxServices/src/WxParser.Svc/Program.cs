@@ -89,6 +89,46 @@ try
                     ON [GfsGrid] ([ModelRunUtc], [ForecastHour]);
             END");
 
+        await db.Database.ExecuteSqlRawAsync(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'Recipients')
+            BEGIN
+                CREATE TABLE [Recipients] (
+                    [Id]                int            NOT NULL IDENTITY,
+                    [RecipientId]       nvarchar(100)  NOT NULL,
+                    [Email]             nvarchar(200)  NOT NULL,
+                    [Name]              nvarchar(200)  NOT NULL,
+                    [Language]          nvarchar(50)   NULL,
+                    [Timezone]          nvarchar(100)  NOT NULL DEFAULT 'UTC',
+                    [ScheduledSendHours] nvarchar(50)  NULL,
+                    [Address]           nvarchar(500)  NULL,
+                    [LocalityName]      nvarchar(200)  NULL,
+                    [Latitude]          float          NULL,
+                    [Longitude]         float          NULL,
+                    [MetarIcao]         nvarchar(100)  NULL,
+                    [TafIcao]           nvarchar(10)   NULL,
+                    [TempUnit]          nvarchar(10)   NOT NULL DEFAULT 'F',
+                    [PressureUnit]      nvarchar(10)   NOT NULL DEFAULT 'inHg',
+                    [WindSpeedUnit]     nvarchar(10)   NOT NULL DEFAULT 'mph',
+                    CONSTRAINT [PK_Recipients] PRIMARY KEY ([Id])
+                );
+                CREATE UNIQUE INDEX [UX_Recipients_RecipientId]
+                    ON [Recipients] ([RecipientId]);
+            END");
+
+        await db.Database.ExecuteSqlRawAsync(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'GlobalSettings')
+            BEGIN
+                CREATE TABLE [GlobalSettings] (
+                    [Id]              int            NOT NULL,
+                    [ClaudeApiKey]    nvarchar(500)  NULL,
+                    [SmtpUsername]    nvarchar(200)  NULL,
+                    [SmtpPassword]    nvarchar(200)  NULL,
+                    [SmtpFromAddress] nvarchar(200)  NULL,
+                    CONSTRAINT [PK_GlobalSettings] PRIMARY KEY ([Id])
+                );
+                INSERT INTO [GlobalSettings] ([Id]) VALUES (1);
+            END");
+
         Logger.Info("Database ready.");
     }
 

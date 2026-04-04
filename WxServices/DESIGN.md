@@ -193,7 +193,7 @@ flowchart TD
     EACH --> RESOLVED{Location resolved?}
     RESOLVED -->|No| GEO["Geocode address via Nominatim"]
     GEO --> NEAREST["Find nearest METAR + TAF station in DB"]
-    NEAREST --> CACHE["Cache to appsettings.local.json"]
+    NEAREST --> CACHE["Cache to Recipients table in DB"]
     CACHE --> SNAP
 
     RESOLVED -->|Yes| SNAP["Build WeatherSnapshot from DB\n(METAR + TAF + GFS forecast)"]
@@ -389,7 +389,7 @@ flowchart TD
     B -->|No| Z[Done]
     B -->|Yes| C[For each recipient]
     C --> D{Resolved?}
-    D -->|No| E[Geocode address\nFind nearest METAR + TAF\nCache to appsettings.local.json]
+    D -->|No| E[Geocode address\nFind nearest METAR + TAF\nCache to Recipients table in DB]
     E --> F{Success?}
     F -->|No| SKIP[Skip recipient]
     D -->|Yes| G[Build WeatherSnapshot]
@@ -761,9 +761,36 @@ erDiagram
         int SortOrder
     }
 
+    Recipients {
+        int Id PK
+        string RecipientId UK
+        string Email
+        string Name
+        string Language
+        string Timezone
+        string ScheduledSendHours
+        string Address
+        string LocalityName
+        float Latitude
+        float Longitude
+        string MetarIcao
+        string TafIcao
+        string TempUnit
+        string PressureUnit
+        string WindSpeedUnit
+    }
+
+    GlobalSettings {
+        int Id PK
+        string ClaudeApiKey
+        string SmtpUsername
+        string SmtpPassword
+        string SmtpFromAddress
+    }
+
     RecipientStates {
         int Id PK
-        string RecipientId
+        string RecipientId UK
         datetime LastScheduledSentUtc
         datetime LastUnscheduledSentUtc
         string LastSnapshotFingerprint
@@ -816,6 +843,7 @@ erDiagram
 | Metars | StationIcao | Non-unique |
 | Tafs | StationIcao + IssuanceUtc + ReportType | Unique |
 | Tafs | StationIcao | Non-unique |
+| Recipients | RecipientId | Unique |
 | RecipientStates | RecipientId | Unique |
 | GfsGrid | ModelRunUtc + ForecastHour + Lat + Lon | Unique |
 | GfsGrid | ModelRunUtc + ForecastHour | Non-unique |
@@ -870,7 +898,7 @@ Each service loads configuration from up to three files, merged in order (later 
 }
 ```
 
-`Smtp` and `Claude` are top-level so any service can send email or call Claude without duplicating config. Secrets (`Username`, `Password`, `FromAddress`, `ApiKey`) are always `null` here and overridden in each service's `appsettings.local.json`.
+`Smtp` and `Claude` are top-level so any service can send email or call Claude without duplicating config. Secrets (`Username`, `Password`, `FromAddress`, `ApiKey`) are always `null` here; the authoritative values live in the `GlobalSettings` database table (Id = 1). Each service reads secrets from the DB at the start of every cycle and falls back to any values present in `appsettings.local.json` for backward compatibility.
 
 ### WxParser.Svc — appsettings.json
 
@@ -915,7 +943,25 @@ Each service loads configuration from up to three files, merged in order (later 
 
 `Claude.Model` can be overridden per-service to use a cheaper/faster model for report generation.
 
-### WxReport.Svc — appsettings.local.json
+### Recipients and secrets — database (primary)
+
+Recipients and secrets are stored in the `WeatherData` database. On first startup after upgrade, WxReport.Svc automatically seeds the `Recipients` table from the `Report:Recipients` config section and seeds the `GlobalSettings` row from the config secret values if they are present. After seeding, config values are ignored.
+
+**Recipients** (`Recipients` table): managed via WxManager (the GUI tool). Fields mirror the legacy config schema. `RecipientId` is the stable key; `Latitude`, `Longitude`, `MetarIcao`, `TafIcao`, and `LocalityName` are written back by `RecipientResolver` on first resolution.
+
+**Secrets** (`GlobalSettings` table, Id = 1): set these directly in SQL Server after first run:
+```sql
+UPDATE GlobalSettings SET
+    ClaudeApiKey    = 'sk-ant-...',
+    SmtpUsername    = 'you@gmail.com',
+    SmtpPassword    = 'your-app-password',
+    SmtpFromAddress = 'you@gmail.com'
+WHERE Id = 1;
+```
+
+### WxReport.Svc — appsettings.local.json (legacy / fallback only)
+
+`appsettings.local.json` is no longer required once the database is seeded. It is still supported as a fallback: any non-null values in it override `null` fields from `GlobalSettings`. This allows existing installations to continue working without a database update.
 
 ```json
 {
@@ -929,37 +975,18 @@ Each service loads configuration from up to three files, merged in order (later 
   },
   "Claude": {
     "ApiKey": "sk-ant-..."
-  },
-  "Report": {
-    "Recipients": [
-      {
-        "Id": "paul-en",
-        "Email": "you@gmail.com",
-        "Name": "Paul",
-        "Language": "English",
-        "Timezone": "America/Chicago",
-        "ScheduledSendHours": "7",
-        "Address": "123 Main St, The Woodlands TX 77380",
-        "LocalityName": "The Woodlands",
-        "Latitude": 30.1658,
-        "Longitude": -95.4613,
-        "MetarIcao": "KDWH, KHOU",
-        "TafIcao": "KIAH",
-        "Units": { "Temperature": "F", "Pressure": "inHg", "WindSpeed": "mph" }
-      }
-    ]
   }
 }
 ```
 
-**Notes on recipient config:**
-- `Id` must be unique across all recipients. It is used as the stable key in `RecipientStates`.
+**Notes on recipient fields:**
+- `RecipientId` must be unique across all recipients. It is the stable key linking `Recipients` to `RecipientStates`.
 - `Address` is used only for one-time geocoding; it is never displayed in reports.
-- `LocalityName` is used in report subjects and body. If omitted, it is inferred from geocoding.
-- `ScheduledSendHours` is a comma-separated string of hours (0–23) in the recipient's local timezone at which a daily report is sent (e.g. `"6, 18"` for morning and evening). A single hour is also valid (e.g. `"7"`). Falls back to `DefaultScheduledSendHours` in the `Report` section when omitted.
-- `MetarIcao` accepts a comma-separated list in preference order (e.g. `"KDWH, KHOU"`). The first station with data is used; no config update occurs when a fallback station is used.
-- `Latitude`, `Longitude`, `MetarIcao`, `TafIcao` are written back automatically by the service on first run. To trigger re-resolution (e.g. after a move), set them to `null`.
-- `Units` controls how values are displayed in reports. Each field is independent — any combination is valid. Supported values: `Temperature`: `"F"` or `"C"`; `Pressure`: `"inHg"` or `"kPa"`; `WindSpeed`: `"mph"` or `"kph"`. All default to US customary when omitted.
+- `LocalityName` is used in report subjects and body. If absent, it is inferred from geocoding on first run.
+- `ScheduledSendHours` is a comma-separated string of hours (0–23) in the recipient's local timezone (e.g. `"6, 18"` for morning and evening; `"7"` for a single hour). Falls back to `DefaultScheduledSendHours` when omitted.
+- `MetarIcao` accepts a comma-separated list in preference order (e.g. `"KDWH, KHOU"`). The first station with data is used; no DB update occurs when a fallback station is used.
+- `Latitude`, `Longitude`, `MetarIcao`, `TafIcao` are written back to the database automatically by the service on first resolution. To re-trigger resolution (e.g. after a move), set them to `NULL` in the `Recipients` table.
+- `TempUnit`, `PressureUnit`, `WindSpeedUnit` control how values are displayed. Each is independent. Supported values: `TempUnit`: `"F"` or `"C"`; `PressureUnit`: `"inHg"` or `"kPa"`; `WindSpeedUnit`: `"mph"` or `"kph"`. All default to US customary.
 
 ### WxMonitor.Svc — appsettings.json
 

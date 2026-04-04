@@ -12,6 +12,7 @@
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="8.0.0" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\MetarParser.Data\MetarParser.Data.csproj" />
     <ProjectReference Include="..\WxServices.Common\WxServices.Common.csproj" />
     <ProjectReference Include="..\WxServices.Logging\WxServices.Logging.csproj" />
   </ItemGroup>

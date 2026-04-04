@@ -60,6 +60,12 @@ public sealed class WeatherDataContext : DbContext
     /// <summary>The <c>TafChangePeriodWeatherPhenomena</c> table — weather phenomena within a change period (including the base period).</summary>
     public DbSet<TafChangePeriodWeather> TafChangePeriodWeatherPhenomena => Set<TafChangePeriodWeather>();
 
+    /// <summary>The <c>Recipients</c> table — one row per weather report subscriber, holding profile, resolved location, and unit preferences.</summary>
+    public DbSet<Recipient> Recipients => Set<Recipient>();
+
+    /// <summary>The <c>GlobalSettings</c> table — single row (Id = 1) storing application-wide secrets (Claude API key, SMTP credentials).</summary>
+    public DbSet<GlobalSettings> GlobalSettings => Set<GlobalSettings>();
+
     /// <summary>The <c>RecipientStates</c> table — one row per email recipient, tracking last send time and snapshot fingerprint.</summary>
     public DbSet<RecipientState> RecipientStates => Set<RecipientState>();
 
@@ -251,6 +257,45 @@ public sealed class WeatherDataContext : DbContext
              .WithMany(p => p.WeatherPhenomena)
              .HasForeignKey(x => x.TafChangePeriodId)
              .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // ── Recipients ───────────────────────────────────────────────────────────
+
+        modelBuilder.Entity<Recipient>(e =>
+        {
+            e.ToTable("Recipients");
+            e.HasKey(x => x.Id);
+
+            e.Property(x => x.RecipientId)       .HasMaxLength(100).IsRequired();
+            e.Property(x => x.Email)              .HasMaxLength(200).IsRequired();
+            e.Property(x => x.Name)               .HasMaxLength(200).IsRequired();
+            e.Property(x => x.Language)           .HasMaxLength(50);
+            e.Property(x => x.Timezone)           .HasMaxLength(100).IsRequired();
+            e.Property(x => x.ScheduledSendHours) .HasMaxLength(50);
+            e.Property(x => x.Address)            .HasMaxLength(500);
+            e.Property(x => x.LocalityName)       .HasMaxLength(200);
+            e.Property(x => x.MetarIcao)          .HasMaxLength(100);
+            e.Property(x => x.TafIcao)            .HasMaxLength(10);
+            e.Property(x => x.TempUnit)           .HasMaxLength(10).IsRequired();
+            e.Property(x => x.PressureUnit)       .HasMaxLength(10).IsRequired();
+            e.Property(x => x.WindSpeedUnit)      .HasMaxLength(10).IsRequired();
+
+            e.HasIndex(x => x.RecipientId)
+             .IsUnique()
+             .HasDatabaseName("UX_Recipients_RecipientId");
+        });
+
+        // ── GlobalSettings ────────────────────────────────────────────────────────
+
+        modelBuilder.Entity<GlobalSettings>(e =>
+        {
+            e.ToTable("GlobalSettings");
+            e.HasKey(x => x.Id);
+
+            e.Property(x => x.ClaudeApiKey)    .HasMaxLength(500);
+            e.Property(x => x.SmtpUsername)    .HasMaxLength(200);
+            e.Property(x => x.SmtpPassword)    .HasMaxLength(200);
+            e.Property(x => x.SmtpFromAddress) .HasMaxLength(200);
         });
 
         // ── RecipientStates ──────────────────────────────────────────────────

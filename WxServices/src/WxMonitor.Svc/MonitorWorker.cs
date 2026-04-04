@@ -1,3 +1,5 @@
+using MetarParser.Data;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using WxServices.Common;
 using WxServices.Logging;
@@ -16,11 +18,17 @@ namespace WxMonitor.Svc;
 /// </summary>
 public sealed class MonitorWorker : BackgroundService
 {
-    private readonly IConfiguration _config;
+    private readonly IConfiguration                        _config;
+    private readonly DbContextOptions<WeatherDataContext>  _dbOptions;
 
-    /// <summary>Initializes a new instance of <see cref="MonitorWorker"/> with the given configuration.</summary>
+    /// <summary>Initializes a new instance of <see cref="MonitorWorker"/> with the given dependencies.</summary>
     /// <param name="config">Application configuration used to load the <c>Monitor</c> config section each cycle.</param>
-    public MonitorWorker(IConfiguration config) => _config = config;
+    /// <param name="dbOptions">EF Core options used to open a <see cref="WeatherDataContext"/> to read SMTP secrets from <c>GlobalSettings</c>.</param>
+    public MonitorWorker(IConfiguration config, DbContextOptions<WeatherDataContext> dbOptions)
+    {
+        _config    = config;
+        _dbOptions = dbOptions;
+    }
 
     /// <summary>
     /// Entry point called by the .NET hosted-service infrastructure.
@@ -37,15 +45,14 @@ public sealed class MonitorWorker : BackgroundService
         {
             try
             {
-                await RunCycleAsync();
+                await RunCycleAsync(stoppingToken);
             }
             catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
             {
                 Logger.Error("Unhandled exception in monitor cycle.", ex);
             }
 
-            var (cfg, _) = LoadConfigs();
-            var intervalMinutes = cfg.IntervalMinutes;
+            var intervalMinutes = _config.GetValue<int>("Monitor:IntervalMinutes", 5);
             if (intervalMinutes <= 0)
             {
                 Logger.Warn($"Monitor:IntervalMinutes is {intervalMinutes} — must be > 0. Using 1 minute.");
@@ -72,9 +79,9 @@ public sealed class MonitorWorker : BackgroundService
     /// Updates and saves <see cref="MonitorState"/> to <c>wxmonitor-state.json</c> if any state changed.
     /// Writes log entries throughout.
     /// </sideeffects>
-    private async Task RunCycleAsync()
+    private async Task RunCycleAsync(CancellationToken ct)
     {
-        var (cfg, smtp) = LoadConfigs();
+        var (cfg, smtp) = await LoadConfigsAsync(ct);
 
         if (string.IsNullOrWhiteSpace(cfg.AlertEmail))
         {
@@ -237,23 +244,30 @@ public sealed class MonitorWorker : BackgroundService
     // ── helpers ───────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Loads and returns the current configuration from the application settings.
-    /// Binds <see cref="MonitorConfig"/> from the <c>Monitor</c> section and
-    /// <see cref="SmtpConfig"/> from the top-level <c>Smtp</c> section.
-    /// Called at the start of each cycle so that config changes take effect
-    /// without restarting the service.
+    /// Loads and returns the current configuration, merging appsettings with database
+    /// secrets.  Non-secret settings (intervals, alert email, watched services) come
+    /// from config.  SMTP secrets are read from <c>GlobalSettings</c> (Id = 1) and
+    /// override any corresponding config values so that <c>appsettings.local.json</c>
+    /// is no longer required for credentials.
     /// </summary>
+    /// <param name="ct">Cancellation token propagated to the database query.</param>
     /// <returns>
-    /// A tuple of freshly bound <see cref="MonitorConfig"/> and <see cref="SmtpConfig"/>
-    /// reflecting the current appsettings.
+    /// A tuple of freshly loaded <see cref="MonitorConfig"/> and <see cref="SmtpConfig"/>
+    /// with SMTP secrets sourced from the database when available.
     /// </returns>
-    private (MonitorConfig monitor, SmtpConfig smtp) LoadConfigs()
+    private async Task<(MonitorConfig monitor, SmtpConfig smtp)> LoadConfigsAsync(CancellationToken ct)
     {
         var monitor = new MonitorConfig();
         _config.GetSection("Monitor").Bind(monitor);
 
         var smtp = new SmtpConfig();
         _config.GetSection("Smtp").Bind(smtp);
+
+        await using var ctx = new WeatherDataContext(_dbOptions);
+        var gs = await ctx.GlobalSettings.FirstOrDefaultAsync(x => x.Id == 1, ct);
+        if (!string.IsNullOrWhiteSpace(gs?.SmtpUsername))    smtp.Username    = gs.SmtpUsername;
+        if (!string.IsNullOrWhiteSpace(gs?.SmtpPassword))    smtp.Password    = gs.SmtpPassword;
+        if (!string.IsNullOrWhiteSpace(gs?.SmtpFromAddress)) smtp.FromAddress = gs.SmtpFromAddress;
 
         return (monitor, smtp);
     }
