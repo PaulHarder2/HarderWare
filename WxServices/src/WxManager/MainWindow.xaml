@@ -1,0 +1,11 @@
+<Window x:Class="WxManager.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:WxManager"
+        Title="WxManager" MinWidth="900" MinHeight="650" Width="1050" Height="720">
+    <TabControl>
+        <TabItem Header="Recipients">
+            <local:RecipientsTab/>
+        </TabItem>
+    </TabControl>
+</Window>

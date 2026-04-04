@@ -1,0 +1,228 @@
+<UserControl x:Class="WxManager.RecipientsTab"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="280" MinWidth="180"/>
+            <ColumnDefinition Width="4"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- ── LEFT: Recipient list ───────────────────────────────────────── -->
+        <DockPanel Grid.Column="0" Margin="8">
+            <TextBlock DockPanel.Dock="Top" Text="Recipients"
+                       FontWeight="SemiBold" Margin="0,0,0,6"/>
+            <Button DockPanel.Dock="Bottom" Content="New"
+                    HorizontalAlignment="Left" Width="80" Margin="0,6,0,0"
+                    Click="NewBtn_Click"/>
+            <ListBox x:Name="RecipientList"
+                     SelectionChanged="RecipientList_SelectionChanged"
+                     ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                <ListBox.ItemContainerStyle>
+                    <Style TargetType="ListBoxItem">
+                        <Setter Property="Padding" Value="6,4"/>
+                        <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                    </Style>
+                </ListBox.ItemContainerStyle>
+            </ListBox>
+        </DockPanel>
+
+        <!-- ── SPLITTER ───────────────────────────────────────────────────── -->
+        <GridSplitter Grid.Column="1" HorizontalAlignment="Stretch"
+                      Background="#CCCCCC" ResizeBehavior="PreviousAndNext"/>
+
+        <!-- ── RIGHT: Editor pane ─────────────────────────────────────────── -->
+        <Grid Grid.Column="2">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>   <!-- Address Lookup -->
+                <RowDefinition Height="Auto"/>   <!-- Messages -->
+                <RowDefinition Height="Auto"/>   <!-- Stations -->
+                <RowDefinition Height="*"/>      <!-- Recipient fields -->
+                <RowDefinition Height="Auto"/>   <!-- Buttons -->
+            </Grid.RowDefinitions>
+
+            <!-- Row 0: Address Lookup ──────────────────────────────────── -->
+            <GroupBox Grid.Row="0" Header="Address Lookup" Margin="8,8,8,4">
+                <Grid Margin="4,6,4,4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBox x:Name="AddressBox" Grid.Column="0"
+                             Margin="0,0,8,0" Height="26"
+                             VerticalContentAlignment="Center"
+                             ToolTip="Enter a street address then click Look Up to geocode and find nearby stations"/>
+                    <Button x:Name="LookUpBtn" Grid.Column="1" Content="Look Up"
+                            Width="90" Height="26" Click="LookUpBtn_Click"/>
+                </Grid>
+            </GroupBox>
+
+            <!-- Row 1: Messages ────────────────────────────────────────── -->
+            <Border x:Name="MessagesBorder" Grid.Row="1" Visibility="Collapsed"
+                    Background="#FFF3CD" BorderBrush="#FFC107" BorderThickness="1"
+                    CornerRadius="3" Margin="8,0,8,4" Padding="10,8">
+                <DockPanel>
+                    <Button DockPanel.Dock="Right" Content="Cancel" Width="80"
+                            VerticalAlignment="Top" Margin="12,0,0,0"
+                            Click="CancelLookupBtn_Click"/>
+                    <TextBlock x:Name="MessagesText" TextWrapping="Wrap"
+                               Foreground="#856404" VerticalAlignment="Center"/>
+                </DockPanel>
+            </Border>
+
+            <!-- Row 2: Nearby Stations ─────────────────────────────────── -->
+            <GroupBox x:Name="StationsGroup" Grid.Row="2" Header="Nearby Stations"
+                      Margin="8,0,8,4" Visibility="Collapsed">
+                <StackPanel Margin="0,2,0,4">
+                    <DataGrid x:Name="StationsGrid"
+                              MaxHeight="185" AutoGenerateColumns="False"
+                              IsReadOnly="True" SelectionMode="Single"
+                              GridLinesVisibility="Horizontal"
+                              HeadersVisibility="Column"
+                              CanUserResizeRows="False"
+                              CanUserSortColumns="False"
+                              BorderThickness="0"
+                              SelectionChanged="StationsGrid_SelectionChanged">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="ICAO"      Binding="{Binding Icao}"       Width="62"/>
+                            <DataGridTextColumn Header="Station"   Binding="{Binding Name}"       Width="*"/>
+                            <DataGridTextColumn Header="Dist (km)" Binding="{Binding DistKmStr}"  Width="75">
+                                <DataGridTextColumn.ElementStyle>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="HorizontalAlignment" Value="Right"/>
+                                        <Setter Property="Margin" Value="0,0,6,0"/>
+                                    </Style>
+                                </DataGridTextColumn.ElementStyle>
+                            </DataGridTextColumn>
+                            <DataGridTextColumn Header="METARs"    Binding="{Binding MetarCountStr}" Width="65">
+                                <DataGridTextColumn.ElementStyle>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="HorizontalAlignment" Value="Right"/>
+                                        <Setter Property="Margin" Value="0,0,6,0"/>
+                                    </Style>
+                                </DataGridTextColumn.ElementStyle>
+                            </DataGridTextColumn>
+                            <DataGridTextColumn Header="TAFs"      Binding="{Binding TafCountStr}"   Width="55">
+                                <DataGridTextColumn.ElementStyle>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="HorizontalAlignment" Value="Right"/>
+                                        <Setter Property="Margin" Value="0,0,6,0"/>
+                                    </Style>
+                                </DataGridTextColumn.ElementStyle>
+                            </DataGridTextColumn>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                    <TextBlock x:Name="BboxStatusText" Margin="6,4,6,0"
+                               FontStyle="Italic" FontSize="11"
+                               Visibility="Collapsed"/>
+                </StackPanel>
+            </GroupBox>
+
+            <!-- Row 3: Recipient fields ─────────────────────────────────── -->
+            <ScrollViewer Grid.Row="3" VerticalScrollBarVisibility="Auto">
+                <GroupBox Header="Recipient" Margin="8,0,8,4">
+                    <Grid Margin="6,6,6,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="140"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <!-- Id -->
+                        <TextBlock Grid.Row="0"  Grid.Column="0" Text="Id" VerticalAlignment="Center" Margin="0,3"/>
+                        <TextBox   Grid.Row="0"  Grid.Column="1" x:Name="RecipientIdBox" Margin="0,3"
+                                   ToolTip="Stable identifier, e.g. &quot;john-en&quot;. Must be unique."/>
+
+                        <!-- Name -->
+                        <TextBlock Grid.Row="1"  Grid.Column="0" Text="Name" VerticalAlignment="Center" Margin="0,3"/>
+                        <TextBox   Grid.Row="1"  Grid.Column="1" x:Name="NameBox" Margin="0,3"/>
+
+                        <!-- Email -->
+                        <TextBlock Grid.Row="2"  Grid.Column="0" Text="Email" VerticalAlignment="Center" Margin="0,3"/>
+                        <TextBox   Grid.Row="2"  Grid.Column="1" x:Name="EmailBox" Margin="0,3"/>
+
+                        <!-- Language -->
+                        <TextBlock Grid.Row="3"  Grid.Column="0" Text="Language" VerticalAlignment="Center" Margin="0,3"/>
+                        <TextBox   Grid.Row="3"  Grid.Column="1" x:Name="LanguageBox" Margin="0,3"
+                                   ToolTip="e.g. English, Spanish"/>
+
+                        <!-- Timezone -->
+                        <TextBlock Grid.Row="4"  Grid.Column="0" Text="Timezone" VerticalAlignment="Center" Margin="0,3"/>
+                        <TextBox   Grid.Row="4"  Grid.Column="1" x:Name="TzBox" Margin="0,3"
+                                   ToolTip="IANA timezone name, e.g. America/Chicago"/>
+
+                        <!-- Scheduled Hours -->
+                        <TextBlock Grid.Row="5"  Grid.Column="0" Text="Scheduled Hours" VerticalAlignment="Center" Margin="0,3"/>
+                        <TextBox   Grid.Row="5"  Grid.Column="1" x:Name="ScheduledHoursBox" Margin="0,3"
+                                   ToolTip="Hour(s) of day (0–23) in recipient's timezone, e.g. &quot;7&quot; or &quot;6, 18&quot;"/>
+
+                        <!-- Locality -->
+                        <TextBlock Grid.Row="6"  Grid.Column="0" Text="Locality" VerticalAlignment="Center" Margin="0,3"/>
+                        <TextBox   Grid.Row="6"  Grid.Column="1" x:Name="LocalityBox" Margin="0,3"
+                                   ToolTip="Human-readable place name used in report subjects, e.g. Spring, TX"/>
+
+                        <!-- Latitude (read-only) -->
+                        <TextBlock Grid.Row="7"  Grid.Column="0" Text="Latitude" VerticalAlignment="Center" Margin="0,3"/>
+                        <TextBox   Grid.Row="7"  Grid.Column="1" x:Name="LatBox" Margin="0,3"
+                                   IsReadOnly="True" Background="#F5F5F5"
+                                   ToolTip="Set automatically by Address Lookup"/>
+
+                        <!-- Longitude (read-only) -->
+                        <TextBlock Grid.Row="8"  Grid.Column="0" Text="Longitude" VerticalAlignment="Center" Margin="0,3"/>
+                        <TextBox   Grid.Row="8"  Grid.Column="1" x:Name="LonBox" Margin="0,3"
+                                   IsReadOnly="True" Background="#F5F5F5"
+                                   ToolTip="Set automatically by Address Lookup"/>
+
+                        <!-- METAR ICAO(s) -->
+                        <TextBlock Grid.Row="9"  Grid.Column="0" Text="METAR ICAO(s)" VerticalAlignment="Center" Margin="0,3"/>
+                        <TextBox   Grid.Row="9"  Grid.Column="1" x:Name="MetarIcaoBox" Margin="0,3"
+                                   ToolTip="Comma-separated preferred METAR stations, e.g. &quot;KDWH, KIAH&quot;. Click a row in Nearby Stations to fill."/>
+
+                        <!-- TAF ICAO (auto-resolved, read-only) -->
+                        <TextBlock Grid.Row="10" Grid.Column="0" Text="TAF ICAO" VerticalAlignment="Center" Margin="0,3"/>
+                        <TextBox   Grid.Row="10" Grid.Column="1" x:Name="TafIcaoBox" Margin="0,3"
+                                   IsReadOnly="True" Background="#F5F5F5"
+                                   ToolTip="Auto-resolved by WxReport.Svc on first run for this recipient"/>
+
+                        <!-- Temperature Unit -->
+                        <TextBlock Grid.Row="11" Grid.Column="0" Text="Temperature" VerticalAlignment="Center" Margin="0,3"/>
+                        <ComboBox  Grid.Row="11" Grid.Column="1" x:Name="TempUnitBox" Margin="0,3"/>
+
+                        <!-- Pressure Unit -->
+                        <TextBlock Grid.Row="12" Grid.Column="0" Text="Pressure" VerticalAlignment="Center" Margin="0,3"/>
+                        <ComboBox  Grid.Row="12" Grid.Column="1" x:Name="PressureUnitBox" Margin="0,3"/>
+
+                        <!-- Wind Speed Unit -->
+                        <TextBlock Grid.Row="13" Grid.Column="0" Text="Wind Speed" VerticalAlignment="Center" Margin="0,3"/>
+                        <ComboBox  Grid.Row="13" Grid.Column="1" x:Name="WindUnitBox" Margin="0,3"/>
+                    </Grid>
+                </GroupBox>
+            </ScrollViewer>
+
+            <!-- Row 4: Action buttons ───────────────────────────────────── -->
+            <DockPanel Grid.Row="4" Margin="8,4,8,8" LastChildFill="False">
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                    <Button x:Name="SaveBtn" Content="Save" Width="80"
+                            Margin="0,0,10,0" Click="SaveBtn_Click"/>
+                    <Button x:Name="DeleteBtn" Content="Delete" Width="80"
+                            IsEnabled="False" Click="DeleteBtn_Click"/>
+                </StackPanel>
+            </DockPanel>
+        </Grid>
+    </Grid>
+</UserControl>
