@@ -24,52 +24,13 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
-from scipy.ndimage import gaussian_filter, maximum_filter, minimum_filter
-from scipy.ndimage import label as _connected_components
 from datetime import timedelta
 
 from metpy.plots import StationPlot
 from metpy.plots.wx_symbols import sky_cover
 
 from logger import logger
-
-
-# ── Projection helpers ────────────────────────────────────────────────────────
-
-def _inner_proj_limits(
-    proj, extent: tuple[float, float, float, float], n: int = 200
-) -> tuple[float, float, float, float]:
-    """
-    Return the largest axis-aligned rectangle (in projection metres) that fits
-    entirely within the projected shape of a lat/lon bounding box.
-
-    Sampling each edge densely handles the curvature of Lambert Conformal
-    parallels and meridians: parallels bow away from the equator so the top edge
-    peaks at the centre; meridians converge at the pole so the left/right edges
-    lean inward at the top.  Taking the tightest constraint from each edge gives
-    an inner rectangle fully covered by data.
-    """
-    lon_min, lon_max, lat_min, lat_max = extent
-    lons_h = np.linspace(lon_min, lon_max, n)
-    lats_v = np.linspace(lat_min, lat_max, n)
-
-    top   = proj.transform_points(ccrs.PlateCarree(), lons_h,              np.full(n, lat_max))
-    bot   = proj.transform_points(ccrs.PlateCarree(), lons_h,              np.full(n, lat_min))
-    left  = proj.transform_points(ccrs.PlateCarree(), np.full(n, lon_min), lats_v)
-    right = proj.transform_points(ccrs.PlateCarree(), np.full(n, lon_max), lats_v)
-
-    return (
-        left[:, 0].max(),
-        right[:, 0].min(),
-        bot[:, 1].max(),
-        top[:, 1].min(),
-    )
-
-
-# ── Default map extents ───────────────────────────────────────────────────────
-
-# South-central US (Texas + surrounding states) — matches synoptic_map.SOUTH_CENTRAL_EXTENT
-SOUTH_CENTRAL_EXTENT = (-106.0, -88.0, 25.0, 38.0)
+from map_utils import _inner_proj_limits, _mark_extrema, _smooth_with_nans, CONUS_EXTENT, SOUTH_CENTRAL_EXTENT
 
 
 # ── Grid helpers ──────────────────────────────────────────────────────────────
@@ -98,97 +59,6 @@ def _to_grid(df: pd.DataFrame, value_col: str) -> tuple[np.ndarray, np.ndarray, 
     grid = pivot.values.astype(float)
 
     return lons, lats, grid
-
-
-def _smooth(grid: np.ndarray, sigma: float) -> np.ndarray:
-    """Apply Gaussian smoothing while preserving the NaN mask."""
-    nan_mask      = np.isnan(grid)
-    filled        = np.where(nan_mask, 0.0, grid)
-    weights       = (~nan_mask).astype(float)
-    smooth_data   = gaussian_filter(filled,   sigma=sigma)
-    smooth_weight = gaussian_filter(weights,  sigma=sigma)
-    with np.errstate(invalid="ignore"):
-        result = smooth_data / smooth_weight
-    result[nan_mask] = np.nan
-    return result
-
-
-# ── Extrema annotation ───────────────────────────────────────────────────────
-
-def _mark_extrema(
-    ax,
-    x2d: np.ndarray,
-    y2d: np.ndarray,
-    data: np.ndarray,
-    high_label: str,
-    low_label: str,
-    high_color: str = "navy",
-    low_color: str = "maroon",
-    neighborhood: int = 16,
-    min_depth: float = 0.0,
-    transform=None,
-) -> None:
-    """
-    Annotate local extrema in a 2-D gridded field with bold text labels.
-
-    See :func:`synoptic_map._mark_extrema` for full documentation.
-    """
-    valid = ~np.isnan(data)
-    if not valid.any():
-        return
-
-    filled = np.where(valid, data, float(np.nanmean(data)))
-
-    max_filt = maximum_filter(filled, size=neighborhood)
-    min_filt = minimum_filter(filled, size=neighborhood)
-
-    local_max = (max_filt == filled) & valid
-    local_min = (min_filt == filled) & valid
-
-    if min_depth > 0.0:
-        local_max &= (filled - min_filt) >= min_depth
-        local_min &= (max_filt - filled) >= min_depth
-
-    pad = neighborhood // 2
-    interior = np.zeros(data.shape, dtype=bool)
-    interior[pad:-pad, pad:-pad] = True
-    local_max &= interior
-    local_min &= interior
-
-    txt_kw = dict(fontsize=16, fontweight="bold", ha="center", va="center", zorder=6, clip_on=True)
-    if transform is not None:
-        txt_kw["transform"] = transform
-
-    xl, xr = ax.get_xlim()
-    yb, yt = ax.get_ylim()
-    # Inward margin: reject labels whose anchor is within 3 % of any edge.
-    # tight_layout() adjusts subplot padding after labels are placed, which
-    # can shift the effective viewport bottom upward by a small amount.
-    # A 3 % guard prevents boundary-adjacent anchors from appearing outside
-    # the border in the saved image.
-    xm = 0.03 * (xr - xl)
-    ym = 0.03 * (yt - yb)
-
-    for mask, lbl, color in (
-        (local_max, high_label, high_color),
-        (local_min, low_label,  low_color),
-    ):
-        labeled_arr, n = _connected_components(mask)
-        for idx in range(1, n + 1):
-            ys, xs = np.where(labeled_arr == idx)
-            iy = int(round(ys.mean()))
-            ix = int(round(xs.mean()))
-            lx, ly = x2d[iy, ix], y2d[iy, ix]
-            # Skip labels whose anchor falls outside (or too close to) the
-            # axes viewport.  Cartopy does not reliably honour clip_on=True
-            # when the anchor itself is near or outside the plot area.
-            if transform is not None:
-                nx, ny = ax.projection.transform_point(lx, ly, transform)
-            else:
-                nx, ny = lx, ly
-            if not (xl + xm <= nx <= xr - xm and yb + ym <= ny <= yt - ym):
-                continue
-            ax.text(lx, ly, lbl, color=color, **txt_kw)
 
 
 # ── Rendering ─────────────────────────────────────────────────────────────────
@@ -269,20 +139,20 @@ def render_forecast_map(
 
     # ── Build 2D grids ────────────────────────────────────────────────────────
     lons, lats, tmp_raw = _to_grid(df, "TmpC")
-    tmp_smooth = _smooth(tmp_raw, sigma=smooth_sigma)
+    tmp_smooth = _smooth_with_nans(tmp_raw, sigma=smooth_sigma)
     lon_grid, lat_grid = np.meshgrid(lons, lats)
 
     has_dwp = df["DwpC"].notna().any()
     if has_dwp:
         dew_df = df.dropna(subset=["DwpC"])
         _, _, dew_raw = _to_grid(dew_df, "DwpC")
-        dew_smooth = _smooth(dew_raw, sigma=smooth_sigma)
+        dew_smooth = _smooth_with_nans(dew_raw, sigma=smooth_sigma)
 
     has_slp = df["PrMslPa"].notna().any()
     if has_slp:
         slp_df = df.dropna(subset=["PrMslPa"])
         _, _, slp_raw = _to_grid(slp_df, "PrMslPa")
-        slp_hpa = _smooth(slp_raw / 100.0, sigma=smooth_sigma)
+        slp_hpa = _smooth_with_nans(slp_raw / 100.0, sigma=smooth_sigma)
     else:
         logger.warning("No MSLP data available for this forecast hour — isobars skipped.")
 
@@ -290,7 +160,7 @@ def render_forecast_map(
     if has_prate:
         _, _, prate_raw = _to_grid(df.dropna(subset=["PRateKgM2s"]), "PRateKgM2s")
         # Convert kg/m²/s → mm/hr and smooth to soften the 0.25° grid edges.
-        prate_mm_hr = _smooth(prate_raw * 3600.0, sigma=smooth_sigma)
+        prate_mm_hr = _smooth_with_nans(prate_raw * 3600.0, sigma=smooth_sigma)
         has_prate = np.nanmax(prate_mm_hr) >= precip_threshold_mmhr
 
     # ── Figure setup ─────────────────────────────────────────────────────────

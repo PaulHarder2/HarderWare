@@ -521,6 +521,7 @@ Output PNGs are saved to the directory configured in `config.json` (default `C:\
 | File | Role |
 |---|---|
 | `db.py` | SQLAlchemy engine; `load_latest_metars`, `load_gfs_grid` (accepts optional `model_run`; defaults to latest complete run), `load_output_dir` |
+| `map_utils.py` | Shared rendering utilities imported by both map scripts: `CONUS_EXTENT`, `SOUTH_CENTRAL_EXTENT`, `_inner_proj_limits`, `_mark_extrema`, `_smooth_with_nans` |
 | `synoptic_map.py` | METAR data-prep helpers (`prepare_plot_data`); Barnes contour analysis; `render_synoptic_map` |
 | `forecast_map.py` | GFS grid contouring + `render_forecast_map` |
 
