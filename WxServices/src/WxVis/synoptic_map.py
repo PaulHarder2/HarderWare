@@ -460,7 +460,7 @@ def render_synoptic_map(
     obs_time = pd.to_datetime(station_df["ObservationUtc"]).max()
     ax.set_title(
         f"Synoptic Analysis  —  {obs_time.strftime('%Y-%m-%d %H%MZ')}",
-        fontsize=13, fontweight="bold",
+        fontsize=11, fontweight="bold",
     )
 
     plt.tight_layout()
