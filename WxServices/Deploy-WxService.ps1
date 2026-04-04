@@ -9,7 +9,7 @@
     publish the console tool to C:\bin, or 'WxViewer' to publish the WPF viewer
     to C:\HarderWare\WxViewer, or 'WxVis' to clear the Python bytecode cache
     so that the next map render picks up any script changes immediately, or
-    'WxIdentify' to publish the address-verification console tool to C:\bin.
+    'WxAddRecipient' to publish the address-verification console tool to C:\bin.
 
 .EXAMPLE
     .\Deploy-WxService.ps1 WxReportSvc
@@ -17,12 +17,12 @@
     .\Deploy-WxService.ps1 WxAnnounce
     .\Deploy-WxService.ps1 WxViewer
     .\Deploy-WxService.ps1 WxVis
-    .\Deploy-WxService.ps1 WxIdentify
+    .\Deploy-WxService.ps1 WxAddRecipient
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [ValidateSet('WxParserSvc', 'WxReportSvc', 'WxMonitorSvc', 'WxVisSvc', 'WxAnnounce', 'WxViewer', 'WxVis', 'WxIdentify', 'all')]
+    [ValidateSet('WxParserSvc', 'WxReportSvc', 'WxMonitorSvc', 'WxVisSvc', 'WxAnnounce', 'WxViewer', 'WxVis', 'WxAddRecipient', 'all')]
     [string]$ServiceName
 )
 
@@ -200,20 +200,20 @@ function Invoke-ToolPublish {
 }
 
 # ---------------------------------------------------------------------------
-# Publish WxIdentify console tool to C:\bin
+# Publish WxAddRecipient console tool to C:\bin
 # ---------------------------------------------------------------------------
 function Invoke-IdentifyPublish {
-    $projectPath = "$SolutionRoot\src\WxIdentify"
+    $projectPath = "$SolutionRoot\src\WxAddRecipient"
     $outputDir   = "C:\bin"
 
-    Write-Host "Publishing WxIdentify to $outputDir..."
+    Write-Host "Publishing WxAddRecipient to $outputDir..."
     dotnet publish $projectPath -c Release -o $outputDir
     if ($LASTEXITCODE -ne 0) {
-        Write-Error "dotnet publish failed for WxIdentify (exit code $LASTEXITCODE)."
+        Write-Error "dotnet publish failed for WxAddRecipient (exit code $LASTEXITCODE)."
         return $false
     }
 
-    Write-Host "WxIdentify published to $outputDir." -ForegroundColor Green
+    Write-Host "WxAddRecipient published to $outputDir." -ForegroundColor Green
     return $true
 }
 
@@ -264,7 +264,7 @@ if ($ServiceName -eq 'WxAnnounce') {
     exit $LASTEXITCODE
 }
 
-if ($ServiceName -eq 'WxIdentify') {
+if ($ServiceName -eq 'WxAddRecipient') {
     Invoke-IdentifyPublish
     exit $LASTEXITCODE
 }
