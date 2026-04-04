@@ -189,8 +189,7 @@
                         <!-- TAF ICAO (auto-resolved, read-only) -->
                         <TextBlock Grid.Row="10" Grid.Column="0" Text="TAF ICAO" VerticalAlignment="Center" Margin="0,3"/>
                         <TextBox   Grid.Row="10" Grid.Column="1" x:Name="TafIcaoBox" Margin="0,3"
-                                   IsReadOnly="True"
-                                   ToolTip="Auto-resolved by WxReport.Svc on first run for this recipient"/>
+                                   ToolTip="TAF station ICAO. Leave blank to let WxReport.Svc resolve it automatically on first run."/>
 
                         <!-- Temperature Unit -->
                         <TextBlock Grid.Row="11" Grid.Column="0" Text="Temperature" VerticalAlignment="Center" Margin="0,3"/>
