@@ -161,6 +161,13 @@ def _mark_extrema(
 
     xl, xr = ax.get_xlim()
     yb, yt = ax.get_ylim()
+    # Inward margin: reject labels whose anchor is within 3 % of any edge.
+    # tight_layout() adjusts subplot padding after labels are placed, which
+    # can shift the effective viewport bottom upward by a small amount.
+    # A 3 % guard prevents boundary-adjacent anchors from appearing outside
+    # the border in the saved image.
+    xm = 0.03 * (xr - xl)
+    ym = 0.03 * (yt - yb)
 
     for mask, lbl, color in (
         (local_max, high_label, high_color),
@@ -172,14 +179,14 @@ def _mark_extrema(
             iy = int(round(ys.mean()))
             ix = int(round(xs.mean()))
             lx, ly = x2d[iy, ix], y2d[iy, ix]
-            # Skip labels whose anchor falls outside the axes viewport.
-            # Cartopy does not reliably honour clip_on=True when the anchor
-            # itself is outside the plot area, so we guard here explicitly.
+            # Skip labels whose anchor falls outside (or too close to) the
+            # axes viewport.  Cartopy does not reliably honour clip_on=True
+            # when the anchor itself is near or outside the plot area.
             if transform is not None:
                 nx, ny = ax.projection.transform_point(lx, ly, transform)
             else:
                 nx, ny = lx, ly
-            if not (xl <= nx <= xr and yb <= ny <= yt):
+            if not (xl + xm <= nx <= xr - xm and yb + ym <= ny <= yt - ym):
                 continue
             ax.text(lx, ly, lbl, color=color, **txt_kw)
 
@@ -467,6 +474,11 @@ def render_forecast_map(
     )
 
     plt.tight_layout()
+    # Re-apply viewport limits after tight_layout(): that call adjusts subplot
+    # padding, which can shift the effective axes boundary and make borderline
+    # labels appear outside the map.
+    ax.set_xlim(x_min, x_max)
+    ax.set_ylim(y_min, y_max)
     plt.savefig(output_path, dpi=dpi)
     plt.close(fig)
     logger.info(f"Saved forecast map → {output_path}")
