@@ -504,7 +504,7 @@ Both workers check for an existing output file before invoking Python; if the fi
 - Station models (synoptic_map): MetPy StationPlot; stations thinned with `reduce_point_density` (default 75 km).
 - Contours (synoptic_map): Barnes-interpolated grid converted from projection metres to lat/lon before plotting so Cartopy clips to the inner viewport, matching forecast_map white-space border behaviour.
 - Both maps use the same fixed `SOUTH_CENTRAL_EXTENT = (-106, -88, 25, 38)` so the displayed geography is identical. `forecast_map.py` accepts `--extent south_central`; WxVis.Svc passes this flag so it doesn't fall back to auto-detecting bounds from the (larger) GFS data footprint.
-- Extrema labels (H/L/W/K): before placing a label, its lat/lon position is converted to projection metres and compared against `ax.get_xlim()`/`ax.get_ylim()`; labels outside the viewport are silently skipped. This is necessary because Cartopy does not reliably honour `clip_on=True` when the text anchor itself is outside the plot area.
+- Extrema labels (H/L/W/K): before placing a label, its lat/lon position is converted to projection metres and compared against `ax.get_xlim()`/`ax.get_ylim()` with a 3 % inward margin on all edges; labels outside or too close to the boundary are silently skipped. The margin guards against `plt.tight_layout()`, which adjusts subplot padding after labels are placed and can shift the effective axes boundary enough to push a borderline anchor outside the saved image. `ax.set_xlim`/`ax.set_ylim` are also re-applied after `tight_layout()` for the same reason.
 
 **Manual use:**
 ```powershell
