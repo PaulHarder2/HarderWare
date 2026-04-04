@@ -39,7 +39,7 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "WxVis.Svc", "src\WxVis.Svc\
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "WxViewer", "src\WxViewer\WxViewer.csproj", "{C6D7E8F9-A0B1-2345-DEF0-123456789006}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "WxIdentify", "src\WxIdentify\WxIdentify.csproj", "{D7E8F9A0-B1C2-3456-EF01-234567890117}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "WxAddRecipient", "src\WxAddRecipient\WxAddRecipient.csproj", "{D7E8F9A0-B1C2-3456-EF01-234567890117}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

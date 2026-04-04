@@ -289,7 +289,7 @@ WxServices/
     ├── WxVis.Svc/                   ← Windows service: automated map rendering
     ├── WxViewer/                    ← WPF desktop app: animated weather map viewer
     ├── WxAnnounce/                  ← console tool: operator service-announcement emails (C:\bin)
-    ├── WxIdentify/                  ← console tool: address geocoding + METAR station verification (C:\bin)
+    ├── WxAddRecipient/                  ← console tool: address geocoding + METAR station verification (C:\bin)
     └── WxVis/                       ← Python visualisation project (conda env: wxvis)
         ├── db.py                    ← SQLAlchemy engine + data loading queries
         ├── synoptic_map.py          ← Synoptic analysis maps (Barnes interpolation)
@@ -595,14 +595,14 @@ Override with `appsettings.local.json` if the plots directory is in a different 
 
 ---
 
-### 4.7 WxIdentify — Address and Station Verification Tool
+### 4.7 WxAddRecipient — Recipient Setup Tool
 
-**Purpose:** Interactive command-line diagnostic to confirm that a street address geocodes correctly, identify the nearest active METAR stations, and verify that each station has observations in the local database.  Intended for use when setting up a new recipient location.
+**Purpose:** Interactive command-line tool to geocode a street address, verify nearby METAR stations, and add a fully-configured recipient entry to the WxReport.Svc `appsettings.local.json`.  Handles JSON formatting automatically so commas are never an issue.
 
 **Usage:**
 ```
-WxIdentify.exe "<street address>"
-WxIdentify "306 Scenic Brook Street, Brenham, TX 77833"
+WxAddRecipient.exe "<street address>"
+WxAddRecipient "34 Stone Springs Circle, The Woodlands, TX 77381"
 ```
 
 **Workflow:**
@@ -610,10 +610,15 @@ WxIdentify "306 Scenic Brook Street, Brenham, TX 77833"
 2. Queries the Aviation Weather API for active METAR stations within ±2.5° of the resolved coordinates, deduplicates by ICAO ID, and ranks the five nearest by Haversine distance.
 3. For each candidate: queries the database for total METAR count, total TAF count, and most-recent METAR observation time.  Pulls the station name from `WxStations` if it has been previously ingested.  The output table has separate **METARs** and **TAFs** columns so it is immediately clear which stations issue forecasts in addition to observations.
 4. Checks whether the resolved coordinates fall within the configured `Fetch:HomeLatitude / HomeLongitude ± BoundingBoxDegrees` bbox; warns if they are outside it (no observations would be collected).
+5. Prompts interactively for recipient fields: Id, Name, Email, Language, Timezone, ScheduledSendHours, MetarIcao (pre-filled from the nearest station with DB observations), and unit preferences (temperature, pressure, wind speed).  `TafIcao` is intentionally omitted — `RecipientResolver` resolves it on the service's first run for the new recipient.
+6. Displays a summary and prompts for confirmation before writing.
+7. Reads `WxAddRecipient:RecipientConfigPath` from config, parses the target JSON file with `JsonNode`, appends the new recipient, and writes it back with proper indentation.  Duplicate Id detection prevents accidental overwrites.
 
-**Exit codes:** 0 = nearest station has observations, 1 = config/network error, 2 = address not geocoded, 3 = no observations for any nearby station.
+**Exit codes:** 0 = recipient added (or cancelled), 1 = config/network/write error, 2 = address not geocoded.
 
-**Deploy:** `.\Deploy-WxService.ps1 WxIdentify` publishes to `C:\bin`.
+**Config:** `WxAddRecipient:RecipientConfigPath` in `appsettings.shared.json` points to the WxReport.Svc publish-directory `appsettings.local.json` (`C:\HarderWare\BuildCache\WxServices\WxReport.Svc\bin\Release\net8.0\publish\appsettings.local.json`).
+
+**Deploy:** `.\Deploy-WxService.ps1 WxAddRecipient` publishes to `C:\bin`.
 
 ---
 
@@ -1058,14 +1063,14 @@ SMTP settings come from the top-level `Smtp` block in `appsettings.shared.json` 
 # Publish the WxAnnounce console tool to C:\bin
 .\Deploy-WxService.ps1 WxAnnounce
 
-# Publish the WxIdentify console tool to C:\bin
-.\Deploy-WxService.ps1 WxIdentify
+# Publish the WxAddRecipient console tool to C:\bin
+.\Deploy-WxService.ps1 WxAddRecipient
 
 # Publish the WxViewer desktop app to C:\HarderWare\WxViewer
 .\Deploy-WxService.ps1 WxViewer
 ```
 
-Valid names: `WxParserSvc`, `WxReportSvc`, `WxMonitorSvc`, `WxVisSvc`, `WxAnnounce`, `WxIdentify`, `WxViewer`, `WxVis`, `all`.
+Valid names: `WxParserSvc`, `WxReportSvc`, `WxMonitorSvc`, `WxVisSvc`, `WxAnnounce`, `WxAddRecipient`, `WxViewer`, `WxVis`, `all`.
 
 `all` deploys the four Windows services only; console tools and the desktop app are published separately.
 
