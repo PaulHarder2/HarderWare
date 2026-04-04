@@ -10,6 +10,7 @@
     <OutputPath>.</OutputPath>
     <ProjectTypeGuids>{888888A0-9F3D-457C-B088-3A5042F75D52}</ProjectTypeGuids>
     <LaunchProvider>Standard Python launcher</LaunchProvider>
+    <SuppressEnvironmentCreationPrompt>True</SuppressEnvironmentCreationPrompt>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)' == 'Debug' ">
     <DebugSymbols>true</DebugSymbols>
