@@ -15,6 +15,7 @@ Typical usage:
     render_synoptic_map(df, output_path="plots/synoptic.png")
 """
 
+import os
 import re
 import numpy as np
 import pandas as pd
@@ -435,9 +436,6 @@ def render_synoptic_map(
     stationplot.plot_parameter(
         "NE", station_df["slp_encoded"].values, formatter=lambda v: f"{v:03.0f}"
     )
-    stationplot.plot_parameter(
-        "SE", station_df["visibility_sm"].values, formatter=lambda v: f"{v:.1f}"
-    )
 
     stationplot.plot_barb(
         station_df["wind_u_kt"].values,
@@ -469,8 +467,10 @@ def render_synoptic_map(
     # labels appear outside the map.
     ax.set_xlim(x_min, x_max)
     ax.set_ylim(y_min, y_max)
-    plt.savefig(output_path, dpi=dpi)
+    tmp_path = output_path + ".tmp"
+    plt.savefig(tmp_path, dpi=dpi)
     plt.close(fig)
+    os.replace(tmp_path, output_path)
     logger.info(f"Saved synoptic map → {output_path}")
 
 

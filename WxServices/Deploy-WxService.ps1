@@ -275,8 +275,8 @@ if ($ServiceName -eq 'WxViewer') {
 }
 
 if ($ServiceName -eq 'WxVis') {
-    Invoke-WxVisCacheClear
-    exit $LASTEXITCODE
+    $ok = Invoke-WxVisCacheClear
+    exit $(if ($ok) { 0 } else { 1 })
 }
 
 $targets = if ($ServiceName -eq 'all') { $ServiceMap.Keys } else { @($ServiceName) }

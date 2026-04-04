@@ -68,11 +68,23 @@ public static class MapRenderer
         using var proc = new Process { StartInfo = psi };
         proc.Start();
 
-        // Read stdout and stderr concurrently to avoid deadlock on full pipe buffers.
-        var stdoutTask = proc.StandardOutput.ReadToEndAsync(ct);
-        var stderrTask = proc.StandardError.ReadToEndAsync(ct);
+        // Use CancellationToken.None for pipe reads: they complete naturally when
+        // the process exits or is killed, so passing ct would cancel the reads
+        // before the pipe closes and leave output unread.
+        var stdoutTask = proc.StandardOutput.ReadToEndAsync(CancellationToken.None);
+        var stderrTask = proc.StandardError.ReadToEndAsync(CancellationToken.None);
 
-        await proc.WaitForExitAsync(ct);
+        try
+        {
+            await proc.WaitForExitAsync(ct);
+        }
+        catch (OperationCanceledException)
+        {
+            // Service is stopping.  Kill the Python process so it does not
+            // continue running as an orphan after the service is redeployed.
+            try { proc.Kill(entireProcessTree: true); } catch { /* already exited */ }
+            throw;
+        }
 
         var stdout = await stdoutTask;
         var stderr = await stderrTask;

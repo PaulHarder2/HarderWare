@@ -19,6 +19,7 @@ Typical usage:
     render_forecast_map(df, output_path="plots/forecast_f084.png")
 """
 
+import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -349,8 +350,10 @@ def render_forecast_map(
     # labels appear outside the map.
     ax.set_xlim(x_min, x_max)
     ax.set_ylim(y_min, y_max)
-    plt.savefig(output_path, dpi=dpi)
+    tmp_path = output_path + ".tmp"
+    plt.savefig(tmp_path, dpi=dpi)
     plt.close(fig)
+    os.replace(tmp_path, output_path)
     logger.info(f"Saved forecast map → {output_path}")
 
 
