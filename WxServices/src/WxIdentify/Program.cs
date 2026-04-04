@@ -129,8 +129,8 @@ var candidates = awcResults
 
 // ── Query database for each station ──────────────────────────────────────────
 
-Console.WriteLine($"  {"#",2}  {"ICAO",-5}  {"Distance",8}  {"In DB",10}  Latest observation");
-Console.WriteLine($"  {new string('-', 68)}");
+Console.WriteLine($"  {"#",2}  {"ICAO",-5}  {"Distance",8}  {"METARs",8}  {"TAFs",8}  Latest observation");
+Console.WriteLine($"  {new string('-', 72)}");
 
 await using var ctx = new WeatherDataContext(dbOptions);
 int nearestWithObs = -1;
@@ -140,9 +140,10 @@ for (int i = 0; i < candidates.Count; i++)
     var (stn, distKm) = candidates[i];
     var icao = stn.IcaoId!;
 
-    var count = await ctx.Metars.CountAsync(m => m.StationIcao == icao);
+    var metarCount = await ctx.Metars.CountAsync(m => m.StationIcao == icao);
+    var tafCount   = await ctx.Tafs.CountAsync(t => t.StationIcao == icao);
 
-    DateTime? latest = count > 0
+    DateTime? latest = metarCount > 0
         ? await ctx.Metars
             .Where(m => m.StationIcao == icao)
             .MaxAsync(m => m.ObservationUtc)
@@ -153,7 +154,8 @@ for (int i = 0; i < candidates.Count; i++)
         .Select(s => s.Name)
         .FirstOrDefaultAsync();
 
-    var obsCol = count == 0 ? "—" : $"{count} obs";
+    var metarCol = metarCount == 0 ? "—" : $"{metarCount}";
+    var tafCol   = tafCount   == 0 ? "—" : $"{tafCount}";
 
     string latestCol;
     if (latest.HasValue)
@@ -167,9 +169,9 @@ for (int i = 0; i < candidates.Count; i++)
     }
 
     var nameNote = name is not null ? $"  [{name}]" : "";
-    Console.WriteLine($"  {i + 1,2}  {icao,-5}  {distKm,6:F1} km  {obsCol,10}  {latestCol}{nameNote}");
+    Console.WriteLine($"  {i + 1,2}  {icao,-5}  {distKm,6:F1} km  {metarCol,8}  {tafCol,8}  {latestCol}{nameNote}");
 
-    if (nearestWithObs < 0 && count > 0)
+    if (nearestWithObs < 0 && metarCount > 0)
         nearestWithObs = i;
 }
 

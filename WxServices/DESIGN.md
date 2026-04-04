@@ -607,7 +607,7 @@ WxIdentify "306 Scenic Brook Street, Brenham, TX 77833"
 **Workflow:**
 1. Geocodes the address via the Nominatim API (reuses `AddressGeocoder` from `MetarParser.Data`).
 2. Queries the Aviation Weather API for active METAR stations within ±2.5° of the resolved coordinates, deduplicates by ICAO ID, and ranks the five nearest by Haversine distance.
-3. For each candidate: queries the database for total observation count and most-recent observation time.  Pulls the station name from `WxStations` if it has been previously ingested.
+3. For each candidate: queries the database for total METAR count, total TAF count, and most-recent METAR observation time.  Pulls the station name from `WxStations` if it has been previously ingested.  The output table has separate **METARs** and **TAFs** columns so it is immediately clear which stations issue forecasts in addition to observations.
 4. Checks whether the resolved coordinates fall within the configured `Fetch:HomeLatitude / HomeLongitude ± BoundingBoxDegrees` bbox; warns if they are outside it (no observations would be collected).
 
 **Exit codes:** 0 = nearest station has observations, 1 = config/network error, 2 = address not geocoded, 3 = no observations for any nearby station.
