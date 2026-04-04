@@ -1,5 +1,6 @@
 using System.Net.Http.Json;
 using System.Text.Json.Serialization;
+using WxServices.Common;
 using WxServices.Logging;
 
 namespace WxAnnounce;
@@ -106,14 +107,7 @@ public sealed class AnnouncementFormatter
             var bodyContent = parsed?.Content?.FirstOrDefault(c => c.Type == "text")?.Text;
             if (bodyContent is null) return null;
 
-            var langCode = language.ToLowerInvariant() switch
-            {
-                "spanish"    or "español"    => "es",
-                "french"     or "français"   => "fr",
-                "german"     or "deutsch"    => "de",
-                "portuguese" or "português"  => "pt",
-                _                            => "en",
-            };
+            var langCode = LanguageHelper.ToIetfTag(language);
 
             return $"""
                 <!DOCTYPE html>

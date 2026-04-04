@@ -1,6 +1,7 @@
 using System.Net.Http.Json;
 using System.Text.Json.Serialization;
 using WxInterp;
+using WxServices.Common;
 using WxServices.Logging;
 
 namespace WxReport.Svc;
@@ -211,14 +212,7 @@ public sealed class ClaudeClient
             var bodyContent = parsed?.Content?.FirstOrDefault(c => c.Type == "text")?.Text;
             if (bodyContent is null) return null;
 
-            var langCode = language.ToLowerInvariant() switch
-            {
-                "spanish" or "español"       => "es",
-                "french"  or "français"      => "fr",
-                "german"  or "deutsch"       => "de",
-                "portuguese" or "português"  => "pt",
-                _                            => "en",
-            };
+            var langCode = LanguageHelper.ToIetfTag(language);
 
             var footer = BuildFooterHtml(snapshot, tz);
 

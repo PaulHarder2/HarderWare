@@ -142,11 +142,4 @@ static int Abort(string message, int exitCode = 1)
     return exitCode;
 }
 
-static string BuildSubject(string language) => language.ToLowerInvariant() switch
-{
-    "spanish"    or "español"    => "HarderWare Anuncio de servicio",
-    "french"     or "français"   => "HarderWare Annonce de service",
-    "german"     or "deutsch"    => "HarderWare Dienstankündigung",
-    "portuguese" or "português"  => "HarderWare Anúncio de serviço",
-    _                            => "HarderWare Service Announcement",
-};
+static string BuildSubject(string language) => LanguageHelper.AnnouncementSubject(language);
