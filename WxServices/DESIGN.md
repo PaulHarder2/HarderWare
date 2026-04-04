@@ -616,7 +616,7 @@ WxAddRecipient "34 Stone Springs Circle, The Woodlands, TX 77381"
 
 **Exit codes:** 0 = recipient added (or cancelled), 1 = config/network/write error, 2 = address not geocoded.
 
-**Config:** `WxAddRecipient:RecipientConfigPath` in `appsettings.shared.json` points to the WxReport.Svc publish-directory `appsettings.local.json` (`C:\HarderWare\BuildCache\WxServices\WxReport.Svc\bin\Release\net8.0\publish\appsettings.local.json`).
+**Config:** `WxAddRecipient:RecipientConfigPath` in `appsettings.shared.json` points to the **source** `appsettings.local.json` for WxReport.Svc (`C:\Users\PaulH\Dropbox\PH\Documents\Code\HarderWare\WxServices\src\WxReport.Svc\appsettings.local.json`).  Writing to the source file (rather than the publish-directory copy) ensures the new recipient survives redeployment.  Run `.\Deploy-WxService.ps1 WxReportSvc` after adding a recipient to push the change to the live service; the service then picks it up automatically on its next cycle via `reloadOnChange`.
 
 **Deploy:** `.\Deploy-WxService.ps1 WxAddRecipient` publishes to `C:\bin`.
 
