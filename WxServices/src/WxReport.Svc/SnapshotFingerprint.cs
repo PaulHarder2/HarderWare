@@ -48,6 +48,7 @@ public static class SnapshotFingerprint
     ///   <item>A thunderstorm phenomenon appears or disappears.</item>
     ///   <item>Any precipitation phenomenon appears or disappears.</item>
     ///   <item>The GFS forecast high for the next calendar day shifts by at least <see cref="SignificantChangeConfig.ForecastHighChangeDegF"/> degrees.</item>
+    ///   <item>The GFS forecast low for the next calendar day shifts by at least <see cref="SignificantChangeConfig.ForecastLowChangeDegF"/> degrees.</item>
     ///   <item>Any GFS forecast day crosses the <see cref="SignificantChangeConfig.CapeThresholdJKg"/> thunderstorm-potential threshold.</item>
     ///   <item>Any GFS forecast day crosses the <see cref="SignificantChangeConfig.GfsPrecipThresholdMmHr"/> precipitation threshold.</item>
     /// </list>
@@ -55,10 +56,13 @@ public static class SnapshotFingerprint
     /// <param name="snap">The weather snapshot to fingerprint.</param>
     /// <param name="cfg">Thresholds that define what constitutes a "significant" condition for each dimension.</param>
     /// <returns>
-    /// A compact pipe-delimited string encoding seven fields, e.g.
-    /// <c>"W:False|V:False|TS:False|PR:True|GH:5|GC:False|GP:True"</c>.
+    /// A compact pipe-delimited string encoding eight fields, e.g.
+    /// <c>"W:False|V:False|TS:False|PR:True|GH:5|GL:3|GC:False|GP:True"</c>.
     /// The <c>GH</c> field is a bucket index derived by dividing the forecast high
     /// by <see cref="SignificantChangeConfig.ForecastHighChangeDegF"/>; it is <c>?</c>
+    /// when no GFS data is available.
+    /// The <c>GL</c> field is a bucket index derived by dividing the forecast low
+    /// by <see cref="SignificantChangeConfig.ForecastLowChangeDegF"/>; it is <c>?</c>
     /// when no GFS data is available.
     /// </returns>
     public static string Compute(WeatherSnapshot snap, SignificantChangeConfig cfg)
@@ -77,13 +81,17 @@ public static class SnapshotFingerprint
         var hasPrecip = snap.WeatherPhenomena.Any(w =>
             w.Precipitation.Count > 0 && !w.IsRecent);
 
-        // GFS: bucket the next calendar day's forecast high to ForecastHighChangeDegF resolution.
-        // A change in bucket means the high shifted by at least that many degrees.
-        var gfsDays    = snap.GfsForecast?.Days;
-        var today      = DateOnly.FromDateTime(DateTime.UtcNow);
-        var nextDay    = gfsDays?.FirstOrDefault(d => d.Date > today) ?? gfsDays?.FirstOrDefault();
+        // GFS: bucket the next calendar day's forecast high/low to their respective
+        // change-degree resolutions.  A change in bucket means the temp shifted by
+        // at least that many degrees.
+        var gfsDays   = snap.GfsForecast?.Days;
+        var today     = DateOnly.FromDateTime(DateTime.UtcNow);
+        var nextDay   = gfsDays?.FirstOrDefault(d => d.Date > today) ?? gfsDays?.FirstOrDefault();
         var highBucket = nextDay?.HighTempF.HasValue == true
             ? (int?)Math.Floor(nextDay.HighTempF!.Value / cfg.ForecastHighChangeDegF)
+            : null;
+        var lowBucket  = nextDay?.LowTempF.HasValue == true
+            ? (int?)Math.Floor(nextDay.LowTempF!.Value / cfg.ForecastLowChangeDegF)
             : null;
 
         // GFS: CAPE risk — any forecast day exceeds the thunderstorm-potential threshold.
@@ -93,7 +101,7 @@ public static class SnapshotFingerprint
         var gfsPrecipRisk = gfsDays?.Any(d => d.MaxPrecipRateMmHr >= cfg.GfsPrecipThresholdMmHr) ?? false;
 
         return $"W:{windHigh}|V:{visLow}|TS:{hasTs}|PR:{hasPrecip}" +
-               $"|GH:{highBucket?.ToString() ?? "?"}|GC:{gfsCapeRisk}|GP:{gfsPrecipRisk}";
+               $"|GH:{highBucket?.ToString() ?? "?"}|GL:{lowBucket?.ToString() ?? "?"}|GC:{gfsCapeRisk}|GP:{gfsPrecipRisk}";
     }
 
     /// <summary>
@@ -103,9 +111,9 @@ public static class SnapshotFingerprint
     /// <remarks>
     /// Classification rules (evaluated in priority order):
     /// <list type="bullet">
-    ///   <item><b>Alert</b> — a dangerous current-conditions flag (<c>W</c>, <c>V</c>, or <c>TS</c>) changed to <c>True</c>.</item>
-    ///   <item><b>Update</b> — any current-conditions flag cleared; <c>PR</c> changed; a GFS risk flag (<c>GC</c> or <c>GP</c>) appeared; or the temperature bucket (<c>GH</c>) shifted.</item>
-    ///   <item><b>Minor</b> — only GFS risk flags (<c>GC</c>/<c>GP</c>) cleared (good news; no send needed).</item>
+    ///   <item><b>Alert</b> — a dangerous current-conditions flag (<c>W</c>, <c>V</c>, or <c>TS</c>) became <c>True</c> (conditions worsened past threshold).</item>
+    ///   <item><b>Update</b> — observed precipitation appeared (<c>PR</c> became <c>True</c>); a GFS risk flag (<c>GC</c> or <c>GP</c>) appeared; or a temperature bucket (<c>GH</c> or <c>GL</c>) shifted in either direction.</item>
+    ///   <item><b>Minor</b> — only "conditions improved" transitions occurred: observed flags (<c>W</c>, <c>V</c>, <c>TS</c>, <c>PR</c>) cleared, or GFS risk flags (<c>GC</c>/<c>GP</c>) cleared.  Send suppressed.</item>
     /// </list>
     /// If either fingerprint cannot be parsed, <see cref="ChangeSeverity.Update"/> is returned as a safe default.
     /// </remarks>
@@ -125,16 +133,16 @@ public static class SnapshotFingerprint
         if (BecameTrue(oldP, newP, "V"))  return ChangeSeverity.Alert;
         if (BecameTrue(oldP, newP, "TS")) return ChangeSeverity.Alert;
 
-        // Update: conditions cleared, precip changed, or forecast worsened.
-        if (Changed(oldP, newP, "W"))           return ChangeSeverity.Update;
-        if (Changed(oldP, newP, "V"))           return ChangeSeverity.Update;
-        if (Changed(oldP, newP, "TS"))          return ChangeSeverity.Update;
-        if (Changed(oldP, newP, "PR"))          return ChangeSeverity.Update;
+        // Update: precip appeared, forecast risk appeared, or temperature shifted.
+        // "Conditions improved" transitions for observed fields (W/V/TS/PR) are
+        // suppressed — they fall through to Minor below.
+        if (BecameTrue(oldP, newP, "PR"))       return ChangeSeverity.Update;
         if (BecameTrue(oldP, newP, "GC"))       return ChangeSeverity.Update;
         if (BecameTrue(oldP, newP, "GP"))       return ChangeSeverity.Update;
         if (Changed(oldP, newP, "GH"))          return ChangeSeverity.Update;
+        if (Changed(oldP, newP, "GL"))          return ChangeSeverity.Update;
 
-        // Everything remaining (GC/GP cleared): suppress.
+        // Everything remaining (observed flags cleared, GC/GP cleared): suppress.
         return ChangeSeverity.Minor;
     }
 
@@ -184,16 +192,28 @@ public static class SnapshotFingerprint
         if (Changed(oldP, newP, "PR"))
             parts.Add(BecameTrue(oldP, newP, "PR") ? "Precipitation: appeared" : "Precipitation: cleared");
 
-        // GFS forecast high bucket
-        if (Changed(oldP, newP, "GH"))
+        // GFS forecast high/low buckets — share the nextDay lookup.
+        if (Changed(oldP, newP, "GH") || Changed(oldP, newP, "GL"))
         {
             var gfsDays = snap.GfsForecast?.Days;
             var today   = DateOnly.FromDateTime(DateTime.UtcNow);
             var nextDay = gfsDays?.FirstOrDefault(d => d.Date > today) ?? gfsDays?.FirstOrDefault();
-            var highF   = nextDay?.HighTempF;
-            parts.Add(highF.HasValue
-                ? $"Forecast high: {highF.Value:F0}°F (shifted by at least {cfg.ForecastHighChangeDegF}°F)"
-                : $"Forecast high: shifted by at least {cfg.ForecastHighChangeDegF}°F");
+
+            if (Changed(oldP, newP, "GH"))
+            {
+                var highF = nextDay?.HighTempF;
+                parts.Add(highF.HasValue
+                    ? $"Forecast high: {highF.Value:F0}°F (shifted by at least {cfg.ForecastHighChangeDegF}°F)"
+                    : $"Forecast high: shifted by at least {cfg.ForecastHighChangeDegF}°F");
+            }
+
+            if (Changed(oldP, newP, "GL"))
+            {
+                var lowF = nextDay?.LowTempF;
+                parts.Add(lowF.HasValue
+                    ? $"Forecast low: {lowF.Value:F0}°F (shifted by at least {cfg.ForecastLowChangeDegF}°F)"
+                    : $"Forecast low: shifted by at least {cfg.ForecastLowChangeDegF}°F");
+            }
         }
 
         // GFS CAPE risk
@@ -232,7 +252,10 @@ public static class SnapshotFingerprint
         return d;
     }
 
-    /// <summary>Returns <see langword="true"/> when <paramref name="key"/> was <c>False</c> in <paramref name="old"/> and is <c>True</c> in <paramref name="neu"/>.</summary>
+    /// <summary>
+    /// Returns <see langword="true"/> when <paramref name="key"/> was <c>False</c> in <paramref name="old"/>
+    /// and is <c>True</c> in <paramref name="neu"/> — i.e. a condition rose above its threshold.
+    /// </summary>
     /// <param name="old">Parsed fields from the previous fingerprint.</param>
     /// <param name="neu">Parsed fields from the current fingerprint.</param>
     /// <param name="key">The field name to check.</param>
@@ -240,6 +263,19 @@ public static class SnapshotFingerprint
     private static bool BecameTrue(Dictionary<string, string> old, Dictionary<string, string> neu, string key)
         => old.TryGetValue(key, out var o) && neu.TryGetValue(key, out var n)
            && o == "False" && n == "True";
+
+    /// <summary>
+    /// Returns <see langword="true"/> when <paramref name="key"/> was <c>True</c> in <paramref name="old"/>
+    /// and is <c>False</c> in <paramref name="neu"/> — i.e. a condition fell back below its threshold
+    /// (conditions improved).
+    /// </summary>
+    /// <param name="old">Parsed fields from the previous fingerprint.</param>
+    /// <param name="neu">Parsed fields from the current fingerprint.</param>
+    /// <param name="key">The field name to check.</param>
+    /// <returns><see langword="true"/> if the field transitioned from <c>True</c> to <c>False</c>.</returns>
+    private static bool BecameFalse(Dictionary<string, string> old, Dictionary<string, string> neu, string key)
+        => old.TryGetValue(key, out var o) && neu.TryGetValue(key, out var n)
+           && o == "True" && n == "False";
 
     /// <summary>Returns <see langword="true"/> when the value of <paramref name="key"/> differs between <paramref name="old"/> and <paramref name="neu"/>.</summary>
     /// <param name="old">Parsed fields from the previous fingerprint.</param>

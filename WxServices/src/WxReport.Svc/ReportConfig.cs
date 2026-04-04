@@ -61,6 +61,14 @@ public class SignificantChangeConfig
     public int    ForecastHighChangeDegF { get; set; } = 15;
 
     /// <summary>
+    /// Minimum change in the GFS forecast low temperature (°F) between report
+    /// cycles that triggers an unscheduled alert.  The fingerprint buckets the
+    /// forecast low to this resolution, so a change of this many degrees or more
+    /// will produce a different fingerprint.  Default 15°F.
+    /// </summary>
+    public int    ForecastLowChangeDegF  { get; set; } = 15;
+
+    /// <summary>
     /// Surface-based CAPE threshold in J/kg above which a day is considered to
     /// carry meaningful thunderstorm potential in the fingerprint.  When any
     /// forecast day crosses this threshold (or stops crossing it), the fingerprint

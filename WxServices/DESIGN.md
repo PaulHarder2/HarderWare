@@ -407,13 +407,13 @@ flowchart TD
 **Send-decision logic:**
 - **First run:** Immediately sends a welcome + weather report.
 - **Scheduled:** Sends once per configured hour when that hour arrives in the recipient's local timezone. Multiple hours can be specified (e.g. `"6, 18"` for morning and evening); default is `"7"`. Subject line: "Weather report — …".
-- **Significant change:** Sends an unscheduled report when the weather fingerprint changes and the classified severity is `Update` or `Alert`, subject to a minimum gap between sends (default 60 minutes). `Minor` severity changes (only forecast-risk flags cleared) are suppressed. Subject line and Claude prompt vary by severity:
+- **Significant change:** Sends an unscheduled report when the weather fingerprint changes and the classified severity is `Update` or `Alert`, subject to a minimum gap between sends (default 60 minutes). `Minor` severity changes are suppressed. Subject line and Claude prompt vary by severity:
 
 | Severity | Trigger | Subject line | Claude opening |
 |---|---|---|---|
-| `Alert` | Dangerous current-condition flag appeared (wind, visibility, ceiling, or thunderstorm) | "Weather alert — …" | One urgent sentence naming the new condition |
-| `Update` | Current condition cleared; precip appeared/cleared; GFS risk flag appeared; or forecast high shifted | "Weather update — …" | One or two sentences summarising what changed |
-| `Minor` | Only GFS risk flags cleared (things improved) | — send suppressed — | — |
+| `Alert` | Dangerous observed-condition flag appeared: wind, visibility, or thunderstorm rose above threshold | "Weather alert — …" | One urgent sentence naming the new condition |
+| `Update` | Observed precipitation appeared; GFS risk flag (CAPE or precip) appeared; or forecast high/low temperature bucket shifted | "Weather update — …" | One or two sentences summarising what changed |
+| `Minor` | "Conditions improved" — observed flags (wind, visibility, thunderstorm, precipitation) cleared, or GFS risk flags cleared — send suppressed | — send suppressed — | — |
 
 **Significant-change thresholds (configurable):**
 | Condition | Default threshold |
@@ -422,6 +422,7 @@ flowchart TD
 | Visibility | < 3.0 SM |
 | Ceiling | < 3,000 ft AGL |
 | GFS forecast high temperature | Changes by ≥ 15 °F (next calendar day) |
+| GFS forecast low temperature | Changes by ≥ 15 °F (next calendar day) |
 | GFS CAPE | Any forecast day ≥ 1,000 J/kg |
 | GFS precipitation rate | Any forecast day ≥ 2.0 mm/hr |
 
@@ -448,7 +449,7 @@ The config is never updated when a fallback station is used; a warning is logged
 | `SnapshotDescriber` | WxReport.Svc | `WeatherSnapshot` → structured plain-text for Claude; unit-aware (temperature, pressure, wind speed); outputs relative humidity (computed from temperature and dew point) rather than raw dew point |
 | `ClaudeClient` | WxReport.Svc | Anthropic Messages API wrapper; generates HTML email body; accepts `UnitPreferences` and `ChangeSeverity` to tailor the system prompt per recipient |
 | `SmtpSender` | WxServices.Common | MailKit SMTP wrapper; sends `multipart/alternative` (plain-text + HTML) when an HTML body is provided; `fromName` set per-service at construction time |
-| `SnapshotFingerprint` | WxReport.Svc | Computes an 8-field pipe-delimited fingerprint (W, V, C, TS, PR, GH, GC, GP) from significant weather fields; `ClassifyChange` compares two fingerprints and returns a `ChangeSeverity` value |
+| `SnapshotFingerprint` | WxReport.Svc | Computes an 8-field pipe-delimited fingerprint (W, V, TS, PR, GH, GL, GC, GP) from significant weather fields; `ClassifyChange` compares two fingerprints and returns a `ChangeSeverity` value |
 
 ---
 
@@ -894,6 +895,7 @@ Each service loads configuration from up to three files, merged in order (later 
       "VisibilityThresholdSm": 3.0,
       "CeilingThresholdFt": 3000,
       "ForecastHighChangeDegF": 15,
+      "ForecastLowChangeDegF": 15,
       "CapeThresholdJKg": 1000,
       "GfsPrecipThresholdMmHr": 2.0
     }
