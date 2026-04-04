@@ -7,7 +7,8 @@
     The service to deploy, or 'all' to deploy all four Windows services in order
     (WxParserSvc, WxReportSvc, WxMonitorSvc, WxVisSvc), or 'WxAnnounce' to
     publish the console tool to C:\bin, or 'WxViewer' to publish the WPF viewer
-    to C:\HarderWare\WxViewer, or 'WxVis' to clear the Python bytecode cache
+    to C:\HarderWare\WxViewer, or 'WxManager' to publish the WPF management GUI
+    to C:\HarderWare\WxManager, or 'WxVis' to clear the Python bytecode cache
     so that the next map render picks up any script changes immediately, or
     'WxAddRecipient' to publish the address-verification console tool to C:\bin.
 
@@ -16,13 +17,14 @@
     .\Deploy-WxService.ps1 all
     .\Deploy-WxService.ps1 WxAnnounce
     .\Deploy-WxService.ps1 WxViewer
+    .\Deploy-WxService.ps1 WxManager
     .\Deploy-WxService.ps1 WxVis
     .\Deploy-WxService.ps1 WxAddRecipient
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [ValidateSet('WxParserSvc', 'WxReportSvc', 'WxMonitorSvc', 'WxVisSvc', 'WxAnnounce', 'WxViewer', 'WxVis', 'WxAddRecipient', 'all')]
+    [ValidateSet('WxParserSvc', 'WxReportSvc', 'WxMonitorSvc', 'WxVisSvc', 'WxAnnounce', 'WxViewer', 'WxManager', 'WxVis', 'WxAddRecipient', 'all')]
     [string]$ServiceName
 )
 
@@ -218,6 +220,24 @@ function Invoke-IdentifyPublish {
 }
 
 # ---------------------------------------------------------------------------
+# Publish WxManager WPF GUI to C:\HarderWare\WxManager
+# ---------------------------------------------------------------------------
+function Invoke-ManagerPublish {
+    $projectPath = "$SolutionRoot\src\WxManager"
+    $outputDir   = "C:\HarderWare\WxManager"
+
+    Write-Host "Publishing WxManager to $outputDir..."
+    dotnet publish $projectPath -c Release -o $outputDir
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "dotnet publish failed for WxManager (exit code $LASTEXITCODE)."
+        return $false
+    }
+
+    Write-Host "WxManager published to $outputDir." -ForegroundColor Green
+    return $true
+}
+
+# ---------------------------------------------------------------------------
 # Clear the WxVis Python bytecode cache so the next map render picks up
 # any script changes without redeploying WxVis.Svc.
 # ---------------------------------------------------------------------------
@@ -271,6 +291,11 @@ if ($ServiceName -eq 'WxAddRecipient') {
 
 if ($ServiceName -eq 'WxViewer') {
     Invoke-ViewerPublish
+    exit $LASTEXITCODE
+}
+
+if ($ServiceName -eq 'WxManager') {
+    Invoke-ManagerPublish
     exit $LASTEXITCODE
 }
 
