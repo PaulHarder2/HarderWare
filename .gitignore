@@ -10,3 +10,6 @@ appsettings.local.json
 # Python bytecode
 __pycache__/
 *.pyc
+
+# WSL path artifact — langcount temp project landed here due to path resolution quirk
+C:/
