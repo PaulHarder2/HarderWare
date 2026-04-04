@@ -350,7 +350,7 @@ try
 
     Console.WriteLine();
     Console.WriteLine($"OK: Recipient \"{recipientId}\" added to {Path.GetFileName(recipientConfigPath)}");
-    Console.WriteLine("Restart WxReport.Svc to activate the new recipient.");
+    Console.WriteLine("WxReport.Svc will pick up the new recipient automatically on its next cycle.");
 }
 catch (Exception ex)
 {
