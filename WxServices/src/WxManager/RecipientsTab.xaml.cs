@@ -347,13 +347,13 @@ public partial class RecipientsTab : UserControl
                 if (inBox)
                 {
                     BboxStatusText.Text       = "Address is within the fetch bounding box.";
-                    BboxStatusText.Foreground = Brushes.DarkGreen;
+                    BboxStatusText.Foreground = new SolidColorBrush(Color.FromRgb(0x88, 0xDD, 0x88));
                 }
                 else
                 {
                     BboxStatusText.Text       = "Address is outside the fetch bounding box — " +
                                                "nearby stations may not accumulate local observations.";
-                    BboxStatusText.Foreground = Brushes.DarkRed;
+                    BboxStatusText.Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0x88, 0x88));
                 }
                 BboxStatusText.Visibility = Visibility.Visible;
             }

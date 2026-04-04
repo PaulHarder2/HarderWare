@@ -17,19 +17,12 @@
                     Click="NewBtn_Click"/>
             <ListBox x:Name="RecipientList"
                      SelectionChanged="RecipientList_SelectionChanged"
-                     ScrollViewer.HorizontalScrollBarVisibility="Disabled">
-                <ListBox.ItemContainerStyle>
-                    <Style TargetType="ListBoxItem">
-                        <Setter Property="Padding" Value="6,4"/>
-                        <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
-                    </Style>
-                </ListBox.ItemContainerStyle>
-            </ListBox>
+                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"/>
         </DockPanel>
 
         <!-- ── SPLITTER ───────────────────────────────────────────────────── -->
         <GridSplitter Grid.Column="1" HorizontalAlignment="Stretch"
-                      Background="#CCCCCC" ResizeBehavior="PreviousAndNext"/>
+                      Background="#444444" ResizeBehavior="PreviousAndNext"/>
 
         <!-- ── RIGHT: Editor pane ─────────────────────────────────────────── -->
         <Grid Grid.Column="2">
@@ -179,13 +172,13 @@
                         <!-- Latitude (read-only) -->
                         <TextBlock Grid.Row="7"  Grid.Column="0" Text="Latitude" VerticalAlignment="Center" Margin="0,3"/>
                         <TextBox   Grid.Row="7"  Grid.Column="1" x:Name="LatBox" Margin="0,3"
-                                   IsReadOnly="True" Background="#F5F5F5"
+                                   IsReadOnly="True"
                                    ToolTip="Set automatically by Address Lookup"/>
 
                         <!-- Longitude (read-only) -->
                         <TextBlock Grid.Row="8"  Grid.Column="0" Text="Longitude" VerticalAlignment="Center" Margin="0,3"/>
                         <TextBox   Grid.Row="8"  Grid.Column="1" x:Name="LonBox" Margin="0,3"
-                                   IsReadOnly="True" Background="#F5F5F5"
+                                   IsReadOnly="True"
                                    ToolTip="Set automatically by Address Lookup"/>
 
                         <!-- METAR ICAO(s) -->
@@ -196,7 +189,7 @@
                         <!-- TAF ICAO (auto-resolved, read-only) -->
                         <TextBlock Grid.Row="10" Grid.Column="0" Text="TAF ICAO" VerticalAlignment="Center" Margin="0,3"/>
                         <TextBox   Grid.Row="10" Grid.Column="1" x:Name="TafIcaoBox" Margin="0,3"
-                                   IsReadOnly="True" Background="#F5F5F5"
+                                   IsReadOnly="True"
                                    ToolTip="Auto-resolved by WxReport.Svc on first run for this recipient"/>
 
                         <!-- Temperature Unit -->
