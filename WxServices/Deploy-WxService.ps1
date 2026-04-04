@@ -5,17 +5,16 @@
 
 .PARAMETER ServiceName
     The service to deploy, or 'all' to deploy all four Windows services in order
-    (WxParserSvc, WxReportSvc, WxMonitorSvc, WxVisSvc), or 'WxAnnounce' to
-    publish the console tool to C:\bin, or 'WxViewer' to publish the WPF viewer
-    to C:\HarderWare\WxViewer, or 'WxManager' to publish the WPF management GUI
-    to C:\HarderWare\WxManager, or 'WxVis' to clear the Python bytecode cache
-    so that the next map render picks up any script changes immediately, or
-    'WxAddRecipient' to publish the address-verification console tool to C:\bin.
+    (WxParserSvc, WxReportSvc, WxMonitorSvc, WxVisSvc), or 'WxViewer' to publish
+    the WPF viewer to C:\HarderWare\WxViewer, or 'WxManager' to publish the WPF
+    management GUI to C:\HarderWare\WxManager, or 'WxVis' to clear the Python
+    bytecode cache so that the next map render picks up any script changes
+    immediately, or 'WxAddRecipient' to publish the address-verification console
+    tool to C:\bin.
 
 .EXAMPLE
     .\Deploy-WxService.ps1 WxReportSvc
     .\Deploy-WxService.ps1 all
-    .\Deploy-WxService.ps1 WxAnnounce
     .\Deploy-WxService.ps1 WxViewer
     .\Deploy-WxService.ps1 WxManager
     .\Deploy-WxService.ps1 WxVis
@@ -24,7 +23,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [ValidateSet('WxParserSvc', 'WxReportSvc', 'WxMonitorSvc', 'WxVisSvc', 'WxAnnounce', 'WxViewer', 'WxManager', 'WxVis', 'WxAddRecipient', 'all')]
+    [ValidateSet('WxParserSvc', 'WxReportSvc', 'WxMonitorSvc', 'WxVisSvc', 'WxViewer', 'WxManager', 'WxVis', 'WxAddRecipient', 'all')]
     [string]$ServiceName
 )
 
@@ -184,24 +183,6 @@ function Invoke-ServiceDeploy {
 }
 
 # ---------------------------------------------------------------------------
-# Publish WxAnnounce console tool to C:\bin
-# ---------------------------------------------------------------------------
-function Invoke-ToolPublish {
-    $projectPath = "$SolutionRoot\src\WxAnnounce"
-    $outputDir   = "C:\bin"
-
-    Write-Host "Publishing WxAnnounce to $outputDir..."
-    dotnet publish $projectPath -c Release -o $outputDir
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "dotnet publish failed for WxAnnounce (exit code $LASTEXITCODE)."
-        return $false
-    }
-
-    Write-Host "WxAnnounce published to $outputDir." -ForegroundColor Green
-    return $true
-}
-
-# ---------------------------------------------------------------------------
 # Publish WxAddRecipient console tool to C:\bin
 # ---------------------------------------------------------------------------
 function Invoke-IdentifyPublish {
@@ -279,11 +260,6 @@ function Invoke-ViewerPublish {
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
-if ($ServiceName -eq 'WxAnnounce') {
-    Invoke-ToolPublish
-    exit $LASTEXITCODE
-}
-
 if ($ServiceName -eq 'WxAddRecipient') {
     Invoke-IdentifyPublish
     exit $LASTEXITCODE

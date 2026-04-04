@@ -15,6 +15,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\MetarParser.Data\MetarParser.Data.csproj" />
+    <ProjectReference Include="..\WxServices.Common\WxServices.Common.csproj" />
   </ItemGroup>
   <ItemGroup>
     <None Include="..\WxViewer\HarderWare.ico">

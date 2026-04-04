@@ -369,6 +369,9 @@
             <TabItem Header="Recipients">
                 <local:RecipientsTab/>
             </TabItem>
+            <TabItem Header="Announcement">
+                <local:AnnouncementTab/>
+            </TabItem>
         </TabControl>
 
     </DockPanel>

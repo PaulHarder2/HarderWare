@@ -33,6 +33,8 @@
    - [WxVis — Python Visualisation](#44-wxvis--python-visualisation)
    - [WxMonitor.Svc — Health Monitor](#45-wxmonitorsvc--health-monitor)
    - [WxViewer — Desktop Map Viewer](#46-wxviewer--desktop-map-viewer)
+   - [WxAddRecipient — Recipient Setup Tool](#47-wxaddrecipient--recipient-setup-tool)
+   - [WxManager — Management GUI](#48-wxmanager--management-gui)
 5. [Class Libraries](#5-class-libraries)
 6. [Data Model](#6-data-model)
 7. [Configuration Guide](#7-configuration-guide)
@@ -52,6 +54,7 @@ WxServices is a set of Windows services that:
 - Render weather visualisation maps (synoptic analysis and GFS forecast parameter maps) automatically via WxVis.Svc, which invokes the WxVis Python project after each data cycle.
 - Provide a local WPF desktop viewer (WxViewer) for browsing and animating the generated maps side-by-side.
 - Monitor the health of the above services and send alert emails if errors occur or a service goes silent.
+- Provide a local WPF management GUI (WxManager) for adding and editing recipients and sending operator service announcements to all subscribers.
 
 Recipients each have their own location. The system automatically resolves the nearest METAR and TAF reporting stations for each recipient on first run and caches the result. Daily reports are sent at each recipient's configured local time; additional reports are triggered by significant weather changes.
 
@@ -288,8 +291,8 @@ WxServices/
     ├── WxMonitor.Svc/               ← Windows service: log and heartbeat monitoring
     ├── WxVis.Svc/                   ← Windows service: automated map rendering
     ├── WxViewer/                    ← WPF desktop app: animated weather map viewer
-    ├── WxAnnounce/                  ← console tool: operator service-announcement emails (C:\bin)
-    ├── WxAddRecipient/                  ← console tool: address geocoding + METAR station verification (C:\bin)
+    ├── WxManager/                   ← WPF management GUI: recipient editor + announcement sender (C:\HarderWare\WxManager)
+    ├── WxAddRecipient/              ← console tool: address geocoding + METAR station verification (C:\bin, legacy)
     └── WxVis/                       ← Python visualisation project (conda env: wxvis)
         ├── db.py                    ← SQLAlchemy engine + data loading queries
         ├── synoptic_map.py          ← Synoptic analysis maps (Barnes interpolation)
@@ -622,6 +625,24 @@ WxAddRecipient "34 Stone Springs Circle, The Woodlands, TX 77381"
 
 **Deploy:** `.\Deploy-WxService.ps1 WxAddRecipient` publishes to `C:\bin`.
 
+> **Note:** WxManager (section 4.8) provides a GUI-based recipient editor that supersedes WxAddRecipient for day-to-day use. WxAddRecipient remains available as a lightweight command-line alternative.
+
+---
+
+### 4.8 WxManager — Management GUI
+
+**Purpose:** WPF desktop application that provides a tabbed GUI for managing the WxServices system. Deployed to `C:\HarderWare\WxManager`.
+
+**Tabs:**
+
+- **Recipients** — Left pane shows a scrollable list of all recipients from the `Recipients` database table. Right pane provides an address geocoder (Nominatim), a nearby-stations grid (Aviation Weather Center API with METAR/TAF counts), and a full recipient field editor. Selecting a station pre-fills the MetarIcao field. Save writes directly to the `Recipients` table; Delete removes the row after confirmation.
+
+- **Announcement** — Multi-line text editor for composing operator service announcements. Clicking **Send** loads the recipient list from the database, groups recipients by language, calls Claude to format the announcement as a professional HTML email for each language group (translating non-English groups), and sends via SMTP. Progress is shown inline. On complete success the text area is cleared; partial failures are reported in a dismissible amber message panel with selectable text.
+
+**Configuration:** Non-secret settings (`Smtp:Host`, `Smtp:Port`, `Claude:Model`, `Report:DefaultLanguage`) are read from `appsettings.shared.json`. Secrets (`Claude:ApiKey`, `Smtp:Username`, `Smtp:Password`, `Smtp:FromAddress`) are read from the `GlobalSettings` database row (Id = 1), with `C:\HarderWare\appsettings.local.json` and a local `appsettings.local.json` beside the executable as fallbacks.
+
+**Deploy:** `.\Deploy-WxService.ps1 WxManager` publishes to `C:\HarderWare\WxManager`.
+
 ---
 
 ## 5. Class Libraries
@@ -639,6 +660,7 @@ Shared utility code referenced by WxReport.Svc and WxMonitor.Svc.
 Key types:
 - `SmtpConfig` — POCO holding SMTP host, port, credentials, and sender address (no `FromName`; each service supplies its own display name at construction time)
 - `SmtpSender` — MailKit-based SMTP wrapper; constructed with `SmtpConfig` and a `fromName` string; `SendAsync` accepts a plain-text body and an optional `htmlBody`; when HTML is provided the message is sent as `multipart/alternative` so plain-text clients still receive a readable fallback
+- `LanguageHelper` — maps natural-language names (English or native script) to BCP 47 IETF tags via `CultureInfo.GetCultures`; also provides localised announcement email subject lines
 - `Util` — static utility class; currently exposes `Ignore(object? obj = null)` for suppressing "unused variable" warnings during debugging sessions
 
 ### WxInterp
@@ -1089,17 +1111,17 @@ SMTP settings come from the top-level `Smtp` block in `appsettings.shared.json` 
 # Deploy all four Windows services in order (stops on first failure)
 .\Deploy-WxService.ps1 all
 
-# Publish the WxAnnounce console tool to C:\bin
-.\Deploy-WxService.ps1 WxAnnounce
-
 # Publish the WxAddRecipient console tool to C:\bin
 .\Deploy-WxService.ps1 WxAddRecipient
 
 # Publish the WxViewer desktop app to C:\HarderWare\WxViewer
 .\Deploy-WxService.ps1 WxViewer
+
+# Publish the WxManager GUI to C:\HarderWare\WxManager
+.\Deploy-WxService.ps1 WxManager
 ```
 
-Valid names: `WxParserSvc`, `WxReportSvc`, `WxMonitorSvc`, `WxVisSvc`, `WxAnnounce`, `WxAddRecipient`, `WxViewer`, `WxVis`, `all`.
+Valid names: `WxParserSvc`, `WxReportSvc`, `WxMonitorSvc`, `WxVisSvc`, `WxAddRecipient`, `WxViewer`, `WxManager`, `WxVis`, `all`.
 
 `all` deploys the four Windows services only; console tools and the desktop app are published separately.
 
