@@ -273,10 +273,10 @@ public sealed class ClaudeClient
 
         return $"""
             <div style="max-width:600px;margin:0 auto;">
+            <!--meteogram-->
             <div style="background:#1a3a5c;color:#c8daea;font-size:12px;text-align:center;padding:10px 20px;border-radius:0 0 6px 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
             {line}
             </div>
-            <!--meteogram-->
             </div>
             """;
     }
