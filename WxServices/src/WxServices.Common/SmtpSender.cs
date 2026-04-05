@@ -6,10 +6,11 @@ using WxServices.Logging;
 namespace WxServices.Common;
 
 /// <summary>
-/// Sends plain-text emails via SMTP using MailKit.
+/// Sends plain-text or HTML emails via SMTP using MailKit.
 /// Configured for STARTTLS on port 587 (compatible with Gmail App Password authentication).
 /// The From display name is fixed at construction time; credentials are supplied via
 /// <see cref="SmtpConfig"/> and must be set in <c>appsettings.local.json</c>.
+/// Supports inline image attachments referenced by <c>cid:</c> URIs in the HTML body.
 /// </summary>
 public sealed class SmtpSender
 {
@@ -35,15 +36,25 @@ public sealed class SmtpSender
     /// as <c>multipart/alternative</c> (plain-text first, HTML second) so that clients
     /// without HTML support still receive a readable version.  When <paramref name="htmlBody"/>
     /// is <see langword="null"/> the message is sent as plain text only.
-    /// Returns <see langword="true"/> on success, <see langword="false"/> if credentials
-    /// are missing or the send fails.
     /// </summary>
+    /// <remarks>
+    /// When <paramref name="inlineImages"/> is non-empty the HTML part is wrapped in a
+    /// <c>multipart/related</c> container so that each image can be referenced by
+    /// <c>&lt;img src="cid:content-id"&gt;</c> in the HTML.  The keys in
+    /// <paramref name="inlineImages"/> must match the <c>cid:</c> values used in the HTML,
+    /// without the <c>cid:</c> prefix (e.g. key <c>"meteogram24h"</c> for
+    /// <c>src="cid:meteogram24h"</c>).
+    /// </remarks>
     /// <param name="toAddress">Recipient email address.</param>
     /// <param name="subject">Email subject line.</param>
     /// <param name="plainBody">Plain-text email body, used as the primary body or as the fallback part in a multipart message.</param>
     /// <param name="htmlBody">
     /// Optional HTML email body.  When supplied, the message is sent as
     /// <c>multipart/alternative</c> with <paramref name="plainBody"/> as the plain-text part.
+    /// </param>
+    /// <param name="inlineImages">
+    /// Optional dictionary mapping content-id strings to local file paths for inline images.
+    /// Ignored when <paramref name="htmlBody"/> is <see langword="null"/>.
     /// </param>
     /// <param name="toName">
     /// Recipient display name used in the <c>To:</c> header.
@@ -54,7 +65,10 @@ public sealed class SmtpSender
     /// <sideeffects>Opens an SMTP connection to the configured host and sends an email. Writes error log entries on failure.</sideeffects>
     public async Task<bool> SendAsync(
         string toAddress, string subject, string plainBody,
-        string? htmlBody = null, string? toName = null, CancellationToken ct = default)
+        string? htmlBody = null,
+        IReadOnlyDictionary<string, string>? inlineImages = null,
+        string? toName = null,
+        CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(toAddress))
         {
@@ -77,10 +91,39 @@ public sealed class SmtpSender
 
         if (htmlBody is not null)
         {
+            var htmlPart = new TextPart("html") { Text = htmlBody };
+
+            MimeEntity richPart;
+            if (inlineImages is { Count: > 0 })
+            {
+                // Wrap the HTML and its inline images in multipart/related.
+                var related = new MultipartRelated { htmlPart };
+                foreach (var (cid, filePath) in inlineImages)
+                {
+                    if (!File.Exists(filePath))
+                    {
+                        Logger.Warn($"{_fromName}: inline image not found, skipping: {filePath}");
+                        continue;
+                    }
+                    var img = new MimePart("image", "png")
+                    {
+                        Content            = new MimeContent(File.OpenRead(filePath)),
+                        ContentDisposition = new ContentDisposition(ContentDisposition.Inline),
+                        ContentId          = cid,
+                    };
+                    related.Add(img);
+                }
+                richPart = related;
+            }
+            else
+            {
+                richPart = htmlPart;
+            }
+
             message.Body = new MultipartAlternative
             {
                 new TextPart("plain") { Text = plainBody },
-                new TextPart("html")  { Text = htmlBody  },
+                richPart,
             };
         }
         else

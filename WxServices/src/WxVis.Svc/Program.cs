@@ -1,11 +1,14 @@
 // WxVis.Svc Windows Service
-// Automatically renders synoptic analysis and GFS forecast maps.
+// Automatically renders synoptic analysis maps, GFS forecast maps, and meteograms.
 //
-// AnalysisMapWorker: generates a synoptic analysis map at HH:10 UTC each hour,
+// AnalysisMapWorker:  generates a synoptic analysis map at HH:10 UTC each hour,
 //   after WxParser.Svc has had time to ingest the routine hourly METARs.
 //
-// ForecastMapWorker: polls the database every 30 s and renders each GFS
+// ForecastMapWorker:  polls the database every 30 s and renders each GFS
 //   forecast hour as soon as its grid data has been ingested.
+//
+// MeteogramWorker:    renders a 24-hour and full-period meteogram for each
+//   recipient location after each complete GFS run, then writes a manifest JSON.
 //
 // Install:   sc.exe create WxVisSvc binPath= "<path>\WxVis.Svc.exe"
 // Uninstall: sc.exe delete WxVisSvc
@@ -47,6 +50,7 @@ var host = Host.CreateDefaultBuilder(args)
         services.AddSingleton(dbOptions);
         services.AddHostedService<AnalysisMapWorker>();
         services.AddHostedService<ForecastMapWorker>();
+        services.AddHostedService<MeteogramWorker>();
     })
     .Build();
 

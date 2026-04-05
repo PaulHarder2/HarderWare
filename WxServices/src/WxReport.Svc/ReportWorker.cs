@@ -1,3 +1,4 @@
+using System.Text.Json;
 using MetarParser.Data;
 using MetarParser.Data.Entities;
 using Microsoft.EntityFrameworkCore;
@@ -176,8 +177,20 @@ public sealed class ReportWorker : BackgroundService
 
         var subject       = BuildSubject(snapshot, language, tz, recipientName: recipient.Name);
         var plainFallback = SnapshotDescriber.Describe(snapshot, tz, recipient.Units);
-        var emailer       = new SmtpSender(smtp, "WxReport");
-        var sent          = await emailer.SendAsync(recipient.Email, subject, plainFallback, htmlBody: report, toName: recipient.Name, ct: ct);
+
+        var plotsDir = _config["WxVis:OutputDir"] ?? @"C:\HarderWare\plots";
+        var meteogramPath = FindMeteogram24hPath(preferredIcaos.Count > 0 ? preferredIcaos[0] : "", recipient.Timezone, plotsDir);
+        if (meteogramPath is not null)
+            report = InsertMeteogramImage(report);
+        IReadOnlyDictionary<string, string>? inlineImages = meteogramPath is not null
+            ? new Dictionary<string, string> { ["meteogram24h"] = meteogramPath }
+            : null;
+
+        var emailer = new SmtpSender(smtp, "WxReport");
+        var sent    = await emailer.SendAsync(
+            recipient.Email, subject, plainFallback,
+            htmlBody: report, inlineImages: inlineImages,
+            toName: recipient.Name, ct: ct);
 
         if (!sent) return;
 
@@ -330,7 +343,19 @@ public sealed class ReportWorker : BackgroundService
 
             var subject       = BuildSubject(snapshot, language, tz, severity, recipientName: recipient.Name);
             var plainFallback = SnapshotDescriber.Describe(snapshot, tz, recipient.Units);
-            var sent          = await emailer.SendAsync(recipient.Email, subject, plainFallback, htmlBody: report, toName: recipient.Name, ct: ct);
+
+            var plotsDir2     = _config["WxVis:OutputDir"] ?? @"C:\HarderWare\plots";
+            var meteogramPath = FindMeteogram24hPath(preferredIcaos.Count > 0 ? preferredIcaos[0] : "", recipient.Timezone, plotsDir2);
+            if (meteogramPath is not null)
+                report = InsertMeteogramImage(report);
+            IReadOnlyDictionary<string, string>? inlineImages = meteogramPath is not null
+                ? new Dictionary<string, string> { ["meteogram24h"] = meteogramPath }
+                : null;
+
+            var sent = await emailer.SendAsync(
+                recipient.Email, subject, plainFallback,
+                htmlBody: report, inlineImages: inlineImages,
+                toName: recipient.Name, ct: ct);
 
             if (!sent) continue;
 
@@ -617,6 +642,77 @@ public sealed class ReportWorker : BackgroundService
         if (!string.IsNullOrWhiteSpace(gs?.ClaudeApiKey))    claude.ApiKey    = gs.ClaudeApiKey;
 
         return (report, smtp, claude);
+    }
+
+    // ── meteogram helpers ─────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Searches the most recent meteogram manifest in <paramref name="plotsDir"/>
+    /// for the 24-hour PNG file matching the given <paramref name="icao"/> and
+    /// <paramref name="timezone"/>.
+    /// Returns the full path to the PNG if found and the file exists; otherwise
+    /// <see langword="null"/>.
+    /// </summary>
+    /// <param name="icao">ICAO station identifier to look up in the manifest.</param>
+    /// <param name="timezone">IANA timezone name to match (e.g. <c>"America/Chicago"</c>).</param>
+    /// <param name="plotsDir">Directory where WxVis.Svc writes PNGs and manifest files.</param>
+    private static string? FindMeteogram24hPath(string icao, string timezone, string plotsDir)
+    {
+        if (string.IsNullOrWhiteSpace(icao) || !Directory.Exists(plotsDir))
+            return null;
+
+        var manifests = Directory.GetFiles(plotsDir, "meteogram_manifest_*.json")
+            .OrderByDescending(f => f)
+            .ToList();
+
+        foreach (var manifestPath in manifests)
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(File.ReadAllText(manifestPath));
+                foreach (var entry in doc.RootElement.EnumerateArray())
+                {
+                    if (!entry.TryGetProperty("Icao",     out var icaoProp))  continue;
+                    if (!entry.TryGetProperty("Timezone", out var tzProp))    continue;
+                    if (!entry.TryGetProperty("File24h",  out var file24hProp)) continue;
+
+                    if (!string.Equals(icaoProp.GetString(), icao, StringComparison.OrdinalIgnoreCase)) continue;
+                    if (!string.Equals(tzProp.GetString(),   timezone, StringComparison.Ordinal))       continue;
+
+                    var file = file24hProp.GetString();
+                    if (string.IsNullOrWhiteSpace(file)) continue;
+
+                    var fullPath = Path.Combine(plotsDir, file);
+                    if (File.Exists(fullPath)) return fullPath;
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"FindMeteogram24hPath: could not read manifest '{manifestPath}': {ex.Message}");
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Inserts a <c>cid:meteogram24h</c> image tag into the HTML report body,
+    /// just before the closing <c>&lt;/body&gt;</c> tag (or appended if not found).
+    /// </summary>
+    /// <param name="html">Claude-generated HTML report.</param>
+    /// <returns>Modified HTML string with the meteogram image included.</returns>
+    private static string InsertMeteogramImage(string html)
+    {
+        const string img =
+            "<p style=\"text-align:center;margin-top:16px\">" +
+            "<img src=\"cid:meteogram24h\" style=\"width:100%;max-width:1000px\" " +
+            "alt=\"24-hour forecast meteogram\">" +
+            "</p>";
+
+        var idx = html.IndexOf("</body>", StringComparison.OrdinalIgnoreCase);
+        return idx >= 0
+            ? html[..idx] + img + html[idx..]
+            : html + img;
     }
 
     /// <summary>

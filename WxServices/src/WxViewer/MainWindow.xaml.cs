@@ -51,6 +51,23 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
+    /// Prevents the inner horizontal ScrollViewer on each meteogram row from
+    /// swallowing vertical mouse wheel events.  Marks the tunnelling event
+    /// handled, then re-raises a bubbling MouseWheel event on the inner
+    /// ScrollViewer's parent so the outer vertical ScrollViewer receives it.
+    /// </summary>
+    private void MeteogramImageScrollViewer_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        if (e.Handled) return;
+        e.Handled = true;
+        var args = new MouseWheelEventArgs(e.MouseDevice, e.Timestamp, e.Delta)
+        {
+            RoutedEvent = MouseWheelEvent,
+        };
+        ((UIElement)((ScrollViewer)sender).Parent).RaiseEvent(args);
+    }
+
+    /// <summary>
     /// Handles arrow-key navigation for both panes.
     /// Left/Right step the forecast pane; Up/Down step the observation pane.
     /// Ctrl+Left/Right jump to the first/last forecast hour.

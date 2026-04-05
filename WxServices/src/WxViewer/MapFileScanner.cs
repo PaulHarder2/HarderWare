@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.IO;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Windows.Threading;
 
@@ -10,8 +11,10 @@ namespace WxViewer;
 /// when files appear or disappear.
 /// </summary>
 /// <remarks>
-/// Analysis filename format:  synoptic_{label}_{yyyyMMdd}_{HH}.png<br/>
-/// Forecast filename format:  forecast_{yyyyMMdd}_{HH}_f{NNN}.png
+/// Analysis filename format:   synoptic_{label}_{yyyyMMdd}_{HH}.png<br/>
+/// Forecast filename format:   forecast_{yyyyMMdd}_{HH}_f{NNN}.png<br/>
+/// Meteogram manifest format:  meteogram_manifest_{yyyyMMdd}_{HH}.json<br/>
+/// Meteogram PNG format:       meteogram_{yyyyMMdd}_{HH}_{ICAO}_{24h|full}.png
 /// </remarks>
 public sealed class MapFileScanner : IDisposable
 {
@@ -25,9 +28,15 @@ public sealed class MapFileScanner : IDisposable
         @"^forecast_(?<date>\d{8})_(?<hour>\d{2})_f(?<fh>\d{3})\.png$",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    // meteogram_manifest_{yyyyMMdd}_{HH}.json
+    private static readonly Regex ManifestRegex = new(
+        @"^meteogram_manifest_(?<date>\d{8})_(?<hour>\d{2})\.json$",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     private readonly string     _directory;
     private readonly Dispatcher _dispatcher;
-    private FileSystemWatcher?  _watcher;
+    private FileSystemWatcher?  _pngWatcher;
+    private FileSystemWatcher?  _jsonWatcher;
 
     /// <summary>
     /// Raised on the UI thread when PNG files are created, deleted, or renamed
@@ -46,24 +55,32 @@ public sealed class MapFileScanner : IDisposable
 
     /// <summary>
     /// Starts watching the directory for file changes.  Safe to call multiple
-    /// times — disposes the previous watcher first.
+    /// times — disposes the previous watchers first.  Watches both PNG files
+    /// (maps and meteogram images) and JSON files (meteogram manifests).
     /// </summary>
     public void StartWatching()
     {
-        _watcher?.Dispose();
+        _pngWatcher?.Dispose();
+        _jsonWatcher?.Dispose();
         if (!Directory.Exists(_directory)) return;
 
-        _watcher = new FileSystemWatcher(_directory, "*.png")
+        _pngWatcher = MakeWatcher("*.png");
+        _jsonWatcher = MakeWatcher("*.json");
+    }
+
+    private FileSystemWatcher MakeWatcher(string filter)
+    {
+        var w = new FileSystemWatcher(_directory, filter)
         {
             NotifyFilter          = NotifyFilters.FileName,
             IncludeSubdirectories = false,
             EnableRaisingEvents   = true,
         };
-
-        _watcher.Created += OnFsEvent;
-        _watcher.Deleted += OnFsEvent;
-        _watcher.Renamed += OnFsRenamed;
-        _watcher.Error   += OnWatcherError;
+        w.Created += OnFsEvent;
+        w.Deleted += OnFsEvent;
+        w.Renamed += OnFsRenamed;
+        w.Error   += OnWatcherError;
+        return w;
     }
 
     private void OnFsEvent(object sender, FileSystemEventArgs e) =>
@@ -161,10 +178,80 @@ public sealed class MapFileScanner : IDisposable
         return true;
     }
 
-    /// <summary>Disposes the underlying FileSystemWatcher.</summary>
+    /// <summary>
+    /// Reads the directory for meteogram manifest JSON files and returns one
+    /// <see cref="MeteogramRun"/> per manifest, sorted newest-first.
+    /// Each run's items are sorted by ICAO.
+    /// </summary>
+    public List<MeteogramRun> ScanMeteograms()
+    {
+        if (!Directory.Exists(_directory)) return [];
+
+        var runs = new List<MeteogramRun>();
+
+        foreach (var path in Directory.EnumerateFiles(_directory, "meteogram_manifest_*.json"))
+        {
+            var name  = Path.GetFileName(path);
+            var match = ManifestRegex.Match(name);
+            if (!match.Success) continue;
+
+            if (!TryParseDateTime(match.Groups["date"].Value, match.Groups["hour"].Value,
+                                  out var runUtc)) continue;
+
+            var items = ParseManifest(path, _directory);
+            if (items.Count == 0) continue;
+
+            var label = $"GFS  {runUtc:yyyy-MM-dd HH}Z";
+            runs.Add(new MeteogramRun(runUtc, label, items));
+        }
+
+        runs.Sort((a, b) => b.ModelRunUtc.CompareTo(a.ModelRunUtc)); // newest-first
+        return runs;
+    }
+
+    private static List<MeteogramItem> ParseManifest(string manifestPath, string directory)
+    {
+        var items = new List<MeteogramItem>();
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(manifestPath));
+            foreach (var entry in doc.RootElement.EnumerateArray())
+            {
+                if (!entry.TryGetProperty("Icao",         out var icaoProp))     continue;
+                if (!entry.TryGetProperty("LocalityName", out var localityProp)) continue;
+                if (!entry.TryGetProperty("TempUnit",     out var unitProp))     continue;
+                if (!entry.TryGetProperty("Timezone",     out var tzProp))       continue;
+                if (!entry.TryGetProperty("FileFull",     out var fileProp))     continue;
+
+                var icao     = icaoProp.GetString();
+                var locality = localityProp.GetString();
+                var unit     = unitProp.GetString();
+                var tz       = tzProp.GetString();
+                var file     = fileProp.GetString();
+
+                if (string.IsNullOrWhiteSpace(icao) || string.IsNullOrWhiteSpace(file)) continue;
+
+                var fullPath = Path.Combine(directory, file);
+                items.Add(new MeteogramItem(
+                    icao,
+                    locality ?? icao,
+                    unit ?? "F",
+                    tz ?? "UTC",
+                    fullPath));
+            }
+        }
+        catch { /* corrupt manifest — skip */ }
+
+        items.Sort((a, b) => string.Compare(a.Icao, b.Icao, StringComparison.Ordinal));
+        return items;
+    }
+
+    /// <summary>Disposes the underlying FileSystemWatchers.</summary>
     public void Dispose()
     {
-        _watcher?.Dispose();
-        _watcher = null;
+        _pngWatcher?.Dispose();
+        _pngWatcher = null;
+        _jsonWatcher?.Dispose();
+        _jsonWatcher = null;
     }
 }

@@ -27,6 +27,10 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private bool           _isAnalysisPlaying;
     private SpeedOption    _selectedAnalysisSpeed;
 
+    // ── Meteogram backing fields ──────────────────────────────────────────────
+
+    private MeteogramRun? _selectedMeteogramRun;
+
     // ── Forecast backing fields ───────────────────────────────────────────────
 
     private ForecastRun?   _selectedForecastRun;
@@ -48,6 +52,12 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
     /// <summary>Available GFS forecast runs, newest first.</summary>
     public ObservableCollection<ForecastRun> ForecastRuns { get; } = new();
+
+    /// <summary>Available GFS model runs for which meteograms have been rendered, newest first.</summary>
+    public ObservableCollection<MeteogramRun> MeteogramRuns { get; } = new();
+
+    /// <summary>Meteogram items for the currently selected run, sorted by ICAO.</summary>
+    public ObservableCollection<MeteogramItem> MeteogramItems { get; } = new();
 
     /// <summary>Animation speed presets shared by both panes.</summary>
     public ObservableCollection<SpeedOption> SpeedOptions { get; } = new();
@@ -266,6 +276,29 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         }
     }
 
+    // ── Meteogram properties ──────────────────────────────────────────────────
+
+    /// <summary>Currently selected meteogram run.</summary>
+    public MeteogramRun? SelectedMeteogramRun
+    {
+        get => _selectedMeteogramRun;
+        set
+        {
+            if (_selectedMeteogramRun == value) return;
+            _selectedMeteogramRun = value;
+            OnPropertyChanged();
+            LoadMeteogramItems();
+        }
+    }
+
+    private void LoadMeteogramItems()
+    {
+        MeteogramItems.Clear();
+        if (_selectedMeteogramRun is null) return;
+        foreach (var item in _selectedMeteogramRun.Items)
+            MeteogramItems.Add(item);
+    }
+
     // ── Status ────────────────────────────────────────────────────────────────
 
     /// <summary>Status bar text.</summary>
@@ -283,8 +316,9 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     /// </summary>
     public void Refresh()
     {
-        var prevLabelName = _selectedAnalysisLabel?.Name;
-        var prevRunUtc    = _selectedForecastRun?.ModelRunUtc;
+        var prevLabelName    = _selectedAnalysisLabel?.Name;
+        var prevRunUtc       = _selectedForecastRun?.ModelRunUtc;
+        var prevMeteogramUtc = _selectedMeteogramRun?.ModelRunUtc;
 
         var analysisList = _scanner.ScanAnalysis();
         AnalysisLabels.Clear();
@@ -295,6 +329,10 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         ForecastRuns.Clear();
         foreach (var r in forecastList) ForecastRuns.Add(r);
 
+        var meteogramList = _scanner.ScanMeteograms();
+        MeteogramRuns.Clear();
+        foreach (var r in meteogramList) MeteogramRuns.Add(r);
+
         SelectedAnalysisLabel = prevLabelName is not null
             ? analysisList.FirstOrDefault(l => l.Name == prevLabelName) ?? analysisList.FirstOrDefault()
             : analysisList.FirstOrDefault();
@@ -302,6 +340,10 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         SelectedForecastRun = prevRunUtc.HasValue
             ? forecastList.FirstOrDefault(r => r.ModelRunUtc == prevRunUtc.Value) ?? forecastList.FirstOrDefault()
             : forecastList.FirstOrDefault();
+
+        SelectedMeteogramRun = prevMeteogramUtc.HasValue
+            ? meteogramList.FirstOrDefault(r => r.ModelRunUtc == prevMeteogramUtc.Value) ?? meteogramList.FirstOrDefault()
+            : meteogramList.FirstOrDefault();
 
         UpdateStatus();
     }

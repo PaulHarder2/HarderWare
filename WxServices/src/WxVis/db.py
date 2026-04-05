@@ -130,6 +130,23 @@ _GFS_LATEST_COMPLETE_RUN_SQL = text("""
     SELECT MAX(ModelRunUtc) FROM GfsModelRuns WHERE IsComplete = 1
 """)
 
+_GFS_NEARBY_SQL = text("""
+    SELECT
+        g.ModelRunUtc,
+        g.ForecastHour,
+        g.Lat,
+        g.Lon,
+        g.TmpC,
+        g.DwpC,
+        g.UGrdMs,
+        g.VGrdMs
+    FROM GfsGrid g
+    WHERE g.ModelRunUtc = :run
+      AND g.Lat BETWEEN :lat_min AND :lat_max
+      AND g.Lon BETWEEN :lon_min AND :lon_max
+    ORDER BY g.ForecastHour, g.Lat, g.Lon
+""")
+
 
 def load_gfs_grid(engine, forecast_hour: int = 0, model_run=None) -> pd.DataFrame:
     """
@@ -155,3 +172,40 @@ def load_gfs_grid(engine, forecast_hour: int = 0, model_run=None) -> pd.DataFram
         if model_run is None:
             model_run = conn.execute(_GFS_LATEST_COMPLETE_RUN_SQL).scalar()
         return pd.read_sql(_GFS_GRID_SQL, conn, params={"fh": forecast_hour, "run": model_run})
+
+
+def load_gfs_nearby(engine, model_run, lat: float, lon: float,
+                    radius_deg: float = 0.5) -> pd.DataFrame:
+    """
+    Return GFS grid points within *radius_deg* degrees of (*lat*, *lon*) for
+    all forecast hours of the specified model run.
+
+    Intended for meteogram rendering where only a single point time-series is
+    required.  The caller should perform nearest-point selection per forecast
+    hour from the returned subset.
+
+    Parameters
+    ----------
+    engine:
+        SQLAlchemy engine from :func:`get_engine`.
+    model_run:
+        Model run timestamp as a ``datetime`` or ISO string.
+    lat:
+        Target latitude in decimal degrees.
+    lon:
+        Target longitude in decimal degrees (negative = west).
+    radius_deg:
+        Half-width of the bounding box in degrees.  Default 0.5 (±2 grid cells
+        at 0.25° resolution).
+
+    Returns a DataFrame with columns:
+        ModelRunUtc, ForecastHour, Lat, Lon, TmpC, DwpC, UGrdMs, VGrdMs
+    """
+    with engine.connect() as conn:
+        return pd.read_sql(_GFS_NEARBY_SQL, conn, params={
+            "run":     model_run,
+            "lat_min": lat - radius_deg,
+            "lat_max": lat + radius_deg,
+            "lon_min": lon - radius_deg,
+            "lon_max": lon + radius_deg,
+        })

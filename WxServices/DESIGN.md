@@ -51,8 +51,9 @@ WxServices is a set of Windows services that:
 - Periodically fetch METAR and TAF aviation weather reports from the Aviation Weather Center API and store them in a local SQL Server database.
 - Download GFS numerical weather prediction model data from NOAA (via the AWS Open Data mirror) and extract gridded medium-range forecasts covering temperature, wind, cloud cover, precipitation rate, and convective energy (CAPE) for the configured region.
 - Generate friendly, plain-English (or other language) weather summaries using Anthropic's Claude AI and email them to a configured list of recipients.
-- Render weather visualisation maps (synoptic analysis and GFS forecast parameter maps) automatically via WxVis.Svc, which invokes the WxVis Python project after each data cycle.
-- Provide a local WPF desktop viewer (WxViewer) for browsing and animating the generated maps side-by-side.
+- Render weather visualisation maps (synoptic analysis, GFS forecast parameter maps, and per-recipient meteograms) automatically via WxVis.Svc, which invokes the WxVis Python project after each data cycle.
+- Embed a 24-hour meteogram in each recipient's weather report email and attach full-period meteograms to the WxViewer Meteograms tab.
+- Provide a local WPF desktop viewer (WxViewer) for browsing and animating the generated maps and meteograms side-by-side.
 - Monitor the health of the above services and send alert emails if errors occur or a service goes silent.
 - Provide a local WPF management GUI (WxManager) for adding and editing recipients and sending operator service announcements to all subscribers.
 
@@ -402,7 +403,8 @@ flowchart TD
     I -->|No| C
     I -->|Yes — scheduled / first / change| J[SnapshotDescriber → structured text]
     J --> K[Claude API → report text]
-    K --> L[Send email]
+    K --> K2[Attach 24h meteogram PNG if available]
+    K2 --> L[Send email with cid: inline image]
     L --> M[Update RecipientState in DB]
     M --> C
 ```
@@ -451,7 +453,7 @@ The config is never updated when a fallback station is used; a warning is logged
 | `GfsInterpreter` | WxInterp | Bilinear interpolation over the four surrounding 0.25° GFS grid points → `GfsForecast` |
 | `SnapshotDescriber` | WxReport.Svc | `WeatherSnapshot` → structured plain-text for Claude; unit-aware (temperature, pressure, wind speed); outputs relative humidity (computed from temperature and dew point) rather than raw dew point |
 | `ClaudeClient` | WxReport.Svc | Anthropic Messages API wrapper; generates HTML email body; accepts `UnitPreferences` and `ChangeSeverity` to tailor the system prompt per recipient |
-| `SmtpSender` | WxServices.Common | MailKit SMTP wrapper; sends `multipart/alternative` (plain-text + HTML) when an HTML body is provided; `fromName` set per-service at construction time |
+| `SmtpSender` | WxServices.Common | MailKit SMTP wrapper; `SendAsync` accepts optional `htmlBody` and `inlineImages`; sends `multipart/alternative` (plain-text + HTML); HTML part is wrapped in `multipart/related` when inline images are provided (`cid:` URI support); `fromName` set per-service at construction time |
 | `SnapshotFingerprint` | WxReport.Svc | Computes an 8-field pipe-delimited fingerprint (W, V, TS, PR, GH, GL, GC, GP) from significant weather fields; `ClassifyChange` compares two fingerprints and returns a `ChangeSeverity` value |
 
 ---
@@ -460,14 +462,15 @@ The config is never updated when a fallback station is used; a warning is logged
 
 **Purpose:** Automatically render weather maps after each data cycle, eliminating the need to run Python scripts manually.
 
-**Two workers:**
+**Three workers:**
 
 | Worker | Trigger | Output filename format |
 |---|---|---|
 | `AnalysisMapWorker` | After each METAR fetch cycle | `synoptic_{label}_{yyyyMMdd_HH}.png` |
 | `ForecastMapWorker` | Progressively, as each forecast hour's data arrives for the latest model run | `forecast_{yyyyMMdd_HH}_f{NNN}.png` |
+| `MeteogramWorker` | Once per complete GFS model run; one pair per unique (ICAO, TempUnit, Timezone) in Recipients | `meteogram_{yyyyMMdd_HH}_{ICAO}_{tzSafe}_24h.png`, `meteogram_{yyyyMMdd_HH}_{ICAO}_{tzSafe}_full.png`; manifest: `meteogram_manifest_{yyyyMMdd_HH}.json` |
 
-Both workers check for an existing output file before invoking Python; if the file is already current the render is skipped.
+All workers check for existing current output files before invoking Python; already-current files are skipped.
 
 **Map rendering (`MapRenderer`):**
 - Invokes the appropriate WxVis Python script via `Process`/`ProcessStartInfo`.
@@ -483,6 +486,7 @@ Both workers check for an existing output file before invoking Python; if the fi
 |---|---|---|
 | `AnalysisMapWorker` | WxVis.Svc | `BackgroundService`; renders synoptic maps after METAR cycles; daily PNG purge |
 | `ForecastMapWorker` | WxVis.Svc | `BackgroundService`; renders forecast hours progressively as data arrives for the latest model run (complete or still ingesting) |
+| `MeteogramWorker` | WxVis.Svc | `BackgroundService`; renders a 24h + full-period meteogram for each recipient location after each complete GFS run; writes manifest JSON |
 | `MapRenderer` | WxVis.Svc | Subprocess launcher; conda PATH augmentation; stdout/stderr capture |
 
 ---
@@ -491,12 +495,13 @@ Both workers check for an existing output file before invoking Python; if the fi
 
 **Purpose:** Render weather maps from the local database. Called automatically by WxVis.Svc; can also be run manually for development and testing.
 
-**Three map types:**
+**Script catalogue:**
 
-| Script | Map type | Data source | Output filename |
+| Script | Output type | Data source | Output filename |
 |---|---|---|---|
-| `synoptic_map.py` | Synoptic analysis (Barnes interpolation) | Latest METAR + WxStations | `synoptic_{label}_{yyyyMMdd_HH}.png` |
-| `forecast_map.py` | GFS forecast parameters | GfsGrid for a specific model run and forecast hour (run passed via `--run`) | `forecast_{yyyyMMdd_HH}_f{NNN}.png` |
+| `synoptic_map.py` | Synoptic analysis map (Barnes interpolation) | Latest METAR + WxStations | `synoptic_{label}_{yyyyMMdd_HH}.png` |
+| `forecast_map.py` | GFS forecast parameter map | GfsGrid for a specific model run and forecast hour | `forecast_{yyyyMMdd_HH}_f{NNN}.png` |
+| `meteogram.py` | Point-forecast meteogram (two PNGs per location) | GfsGrid nearest grid point; bilinear interpolation to recipient lat/lon | `meteogram_{yyyyMMdd_HH}_{ICAO}_{tzSafe}_24h.png`, `meteogram_{yyyyMMdd_HH}_{ICAO}_{tzSafe}_full.png` |
 
 **Rendering details:**
 - All maps use a Lambert Conformal projection centred on the data extent.
@@ -512,6 +517,17 @@ Both workers check for an existing output file before invoking Python; if the fi
 - Both maps use the same fixed `SOUTH_CENTRAL_EXTENT = (-106, -88, 25, 38)` so the displayed geography is identical. `forecast_map.py` accepts `--extent south_central`; WxVis.Svc passes this flag so it doesn't fall back to auto-detecting bounds from the (larger) GFS data footprint.
 - Extrema labels (H/L/W/K): before placing a label, its lat/lon position is converted to projection metres and compared against `ax.get_xlim()`/`ax.get_ylim()` with a 3 % inward margin on all edges; labels outside or too close to the boundary are silently skipped. The margin guards against `plt.tight_layout()`, which adjusts subplot padding after labels are placed and can shift the effective axes boundary enough to push a borderline anchor outside the saved image. `ax.set_xlim`/`ax.set_ylim` are also re-applied after `tight_layout()` for the same reason.
 
+**Meteogram (`meteogram.py`):**
+- Loaded via `db.load_gfs_nearby()` — queries GfsGrid within ±0.5° of the target lat/lon for all forecast hours of the run, then selects the nearest grid point per hour.
+- Two vertical panels: top (1/3 height) = wind barbs (always in knots); bottom (2/3 height) = temperature line (black, left axis) and relative humidity line (green, right axis, 0–100%).
+- Left axis: "T (°F)" or "T (°C)" depending on `--temp-unit`.  Right axis: "RH (%)".
+- Time axis in recipient local time (`--tz`, IANA timezone name, e.g. `America/Chicago`). Bold vertical lines at every local midnight; day-of-week and day-of-month labels centred in each day's segment. X-axis ticks every 6 local hours, labelled HH:MM.
+- Barbs thinned automatically if spacing < 0.18" to prevent overlapping.
+- 24-hour version: first 24 hours, 10" wide × 3.0" @ 100 dpi → 1000 × 300 px.
+- Full-period version: all available hours, width scales with duration (10"–18") × 3.0" @ 100 dpi.
+- RH computed from TmpC and DwpC via Magnus formula.  Wind speed converted m/s → kt.
+- `tzSafe` in output filenames = IANA name with `/` replaced by `-` (e.g. `America-Chicago`).
+
 **Manual use:**
 ```powershell
 conda activate wxvis
@@ -519,6 +535,10 @@ cd C:\Users\PaulH\...\WxServices\src\WxVis
 
 python synoptic_map.py [--extent conus|south_central] [--density 75]
 python forecast_map.py --run 20260402_18 --fh 84 [--extent south_central]
+python meteogram.py --run 20260404_00 --lat 29.97 --lon -95.34 --icao KDWH \
+    --locality "The Woodlands" --temp-unit F --tz "America/Chicago" \
+    --out-24h C:\HarderWare\plots\meteogram_20260404_00_KDWH_America-Chicago_24h.png \
+    --out-full C:\HarderWare\plots\meteogram_20260404_00_KDWH_America-Chicago_full.png
 ```
 
 Output PNGs are saved to the directory configured in `config.json` (default `C:\HarderWare\plots\`).
@@ -526,10 +546,11 @@ Output PNGs are saved to the directory configured in `config.json` (default `C:\
 **Key files:**
 | File | Role |
 |---|---|
-| `db.py` | SQLAlchemy engine; `load_latest_metars`, `load_gfs_grid` (accepts optional `model_run`; defaults to latest complete run), `load_output_dir` |
-| `map_utils.py` | Shared rendering utilities imported by both map scripts: `CONUS_EXTENT`, `SOUTH_CENTRAL_EXTENT`, `_inner_proj_limits`, `_mark_extrema`, `_smooth_with_nans` |
-| `synoptic_map.py` | METAR data-prep helpers (`prepare_plot_data`); Barnes contour analysis; `render_synoptic_map` |
-| `forecast_map.py` | GFS grid contouring + `render_forecast_map` |
+| `db.py` | SQLAlchemy engine; `load_latest_metars`, `load_gfs_grid`, `load_gfs_nearby` (bounding-box query for meteogram point interpolation), `load_output_dir` |
+| `map_utils.py` | Shared rendering utilities: `CONUS_EXTENT`, `SOUTH_CENTRAL_EXTENT`, `_inner_proj_limits`, `_mark_extrema`, `_smooth_with_nans` |
+| `synoptic_map.py` | METAR data-prep helpers; Barnes contour analysis; `render_synoptic_map` |
+| `forecast_map.py` | GFS grid contouring; `render_forecast_map` |
+| `meteogram.py` | Point-forecast meteogram; `_nearest_point_series`, `_compute_rh`, `render_meteogram` |
 
 ---
 
@@ -558,9 +579,11 @@ Output PNGs are saved to the directory configured in `config.json` (default `C:\
 
 ### 4.6 WxViewer — Desktop Map Viewer
 
-**Purpose:** Provide a local WPF desktop application for browsing and animating the PNG maps produced by WxVis.Svc.
+**Purpose:** Provide a local WPF desktop application for browsing and animating the PNG maps and meteograms produced by WxVis.Svc.
 
-**Layout:** A frameless maximised window (no OS title bar) with a custom header bar containing the HarderWare/WxViewer logo and standard window controls (minimise, restore, close). Below the header, the window is split into two independent panes by a draggable `GridSplitter`:
+**Layout:** A frameless maximised window (no OS title bar) with a custom header bar containing the HarderWare/WxViewer logo and standard window controls (minimise, restore, close). Below the header, a `TabControl` hosts two tabs:
+
+**Maps tab** — split into two independent panes by a draggable `GridSplitter`:
 
 | Pane | Content | Controls |
 |---|---|---|
@@ -569,10 +592,16 @@ Output PNGs are saved to the directory configured in `config.json` (default `C:\
 
 Each pane has its own toolbar docked to the top of the pane, immediately above the map image.
 
+**Meteograms tab** — shows full-period meteograms for a selected GFS run:
+- Run selector ComboBox (newest first).
+- Vertically scrollable list of locations sorted by ICAO, each labelled `"KXXX — Locality (°F) · City"` where *City* is the city component of the IANA timezone (e.g. `· Chicago`). Multiple entries for the same ICAO are possible when recipients share a station but use different timezones.
+- Each meteogram image is independently horizontally scrollable (full-period images can be 1800 px wide).
+- Populated from `meteogram_manifest_{yyyyMMdd_HH}.json` files written by `MeteogramWorker`. Each manifest entry carries `Icao`, `LocalityName`, `TempUnit`, `Timezone`, `File24h`, and `FileFull`.
+
 **File discovery (`MapFileScanner`):**
-- Scans the configured output directory for `synoptic_*.png` and `forecast_*.png` files on startup and whenever the directory changes (via `FileSystemWatcher`).
-- Parses the timestamp embedded in each filename to reconstruct obs time (analysis) or model-run + forecast hour (forecast).
-- Analysis files are listed individually, sorted newest-first (matching the GFS run ComboBox); each entry corresponds to one PNG file and is labelled with its obs time (`yyyy-MM-dd HH`Z).
+- Scans the configured output directory for `synoptic_*.png`, `forecast_*.png`, and `meteogram_manifest_*.json` files on startup and whenever the directory changes.
+- Two `FileSystemWatcher` instances: one for `*.png`, one for `*.json`.
+- Parses the timestamp embedded in each filename; analysis entries are sorted newest-first.
 - `DirectoryChanged` events are marshalled back to the WPF UI thread via `Dispatcher.BeginInvoke`.
 
 **Animation:**
@@ -584,9 +613,11 @@ Each pane has its own toolbar docked to the top of the pane, immediately above t
 **Key classes:**
 | Class | Role |
 |---|---|
-| `MapFileScanner` | Directory scan + `FileSystemWatcher`; returns `List<AnalysisLabel>` and `List<ForecastRun>` |
+| `MapFileScanner` | Directory scan + two `FileSystemWatcher`s (PNG + JSON); returns `List<AnalysisLabel>`, `List<ForecastRun>`, `List<MeteogramRun>` |
 | `AnalysisLabel` | Represents one analysis PNG file; `Name` = file path (selection key), `Label` = obs-time string |
-| `MainViewModel` | All bindable state; two timers; two independent sets of animation commands |
+| `MeteogramRun` | One GFS run with a list of `MeteogramItem`s parsed from the manifest JSON |
+| `MeteogramItem` | One location entry; loads and freezes `FullImage` (`BitmapImage`) on construction |
+| `MainViewModel` | All bindable state; two animation timers; meteogram run/item collections; `Refresh()` scans all three file types |
 | `RelayCommand` | `ICommand` implementation; `CanExecuteChanged` wired to `CommandManager.RequerySuggested` |
 | `MainWindow` | Frameless WPF window; `WindowChrome` for correct maximise/resize behaviour; custom title-bar and keyboard event handlers; suppresses ToolBar gripper and overflow button |
 
@@ -668,7 +699,7 @@ Shared utility code referenced by WxReport.Svc and WxMonitor.Svc.
 
 Key types:
 - `SmtpConfig` — POCO holding SMTP host, port, credentials, and sender address (no `FromName`; each service supplies its own display name at construction time)
-- `SmtpSender` — MailKit-based SMTP wrapper; constructed with `SmtpConfig` and a `fromName` string; `SendAsync` accepts a plain-text body and an optional `htmlBody`; when HTML is provided the message is sent as `multipart/alternative` so plain-text clients still receive a readable fallback
+- `SmtpSender` — MailKit-based SMTP wrapper; constructed with `SmtpConfig` and a `fromName` string; `SendAsync` accepts a plain-text body, an optional `htmlBody`, and an optional `inlineImages` dictionary (content-id → file path); when HTML is provided the message is sent as `multipart/alternative`; when inline images are supplied the HTML part is wrapped in `multipart/related` so `<img src="cid:...">` references resolve correctly in email clients
 - `LanguageHelper` — maps natural-language names (English or native script) to BCP 47 IETF tags via `CultureInfo.GetCultures`; also provides localised announcement email subject lines
 - `Util` — static utility class; currently exposes `Ignore(object? obj = null)` for suppressing "unused variable" warnings during debugging sessions
 
@@ -1169,4 +1200,4 @@ All logs are written to `C:\HarderWare\Logs\`. Log paths can be changed by editi
 | No metrics | Cycle duration, API call counts, send success rates, etc. are not tracked. Consider adding structured metrics (Seq, Windows Event Log) in a future session. |
 | WxMonitor does not watch itself | WxMonitor has no watchdog. A Windows Task Scheduler task could serve this purpose if needed. |
 | Nominatim rate limit | Nominatim's terms require a maximum of 1 request/second and a valid User-Agent. Resolution is one-time per recipient, so this is unlikely to be a problem in practice. |
-| WxViewer shows maps only | WxViewer reads PNG files directly with no database access. METAR observation tables and point forecast charts would require a database-connected panel in a future session. |
+| WxViewer has no database access | WxViewer reads PNG files and manifest JSON files directly. METAR observation tables would require a database-connected panel in a future session. |
