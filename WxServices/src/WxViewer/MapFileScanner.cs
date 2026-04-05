@@ -105,7 +105,7 @@ public sealed class MapFileScanner : IDisposable
             labels.Add(new AnalysisLabel(path, [map], displayLabel));
         }
 
-        labels.Sort((a, b) => a.Frames[0].ObsUtc.CompareTo(b.Frames[0].ObsUtc)); // oldest-first
+        labels.Sort((a, b) => b.Frames[0].ObsUtc.CompareTo(a.Frames[0].ObsUtc)); // newest-first
         return labels;
     }
 

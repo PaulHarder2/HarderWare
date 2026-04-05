@@ -296,8 +296,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         foreach (var r in forecastList) ForecastRuns.Add(r);
 
         SelectedAnalysisLabel = prevLabelName is not null
-            ? analysisList.FirstOrDefault(l => l.Name == prevLabelName) ?? analysisList.LastOrDefault()
-            : analysisList.LastOrDefault();
+            ? analysisList.FirstOrDefault(l => l.Name == prevLabelName) ?? analysisList.FirstOrDefault()
+            : analysisList.FirstOrDefault();
 
         SelectedForecastRun = prevRunUtc.HasValue
             ? forecastList.FirstOrDefault(r => r.ModelRunUtc == prevRunUtc.Value) ?? forecastList.FirstOrDefault()
@@ -308,7 +308,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
     // ── Analysis animation ────────────────────────────────────────────────────
 
-    /// <summary>Toggles the analysis animation.  Restarts from frame 0 if at the last frame.</summary>
+    /// <summary>Toggles the analysis animation.  Restarts from the oldest frame if at the newest.</summary>
     public void ToggleAnalysisPlay()
     {
         if (AnalysisLabels.Count <= 1) return;
@@ -320,26 +320,26 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         }
         else
         {
-            if (_analysisFrameIndex >= _maxAnalysisFrameIndex) AnalysisFrameIndex = 0;
+            if (_analysisFrameIndex <= 0) AnalysisFrameIndex = _maxAnalysisFrameIndex;
             _analysisTimer.Start();
             IsAnalysisPlaying = true;
         }
     }
 
-    /// <summary>Stops animation and steps one analysis frame forward.</summary>
+    /// <summary>Stops animation and steps one analysis frame forward (newer observation).</summary>
     public void StepAnalysisForward()
     {
         if (AnalysisLabels.Count == 0) return;
         StopAnalysisAnimation();
-        AnalysisFrameIndex = Math.Min(_analysisFrameIndex + 1, _maxAnalysisFrameIndex);
+        AnalysisFrameIndex = Math.Max(_analysisFrameIndex - 1, 0);
     }
 
-    /// <summary>Stops animation and steps one analysis frame back.</summary>
+    /// <summary>Stops animation and steps one analysis frame back (older observation).</summary>
     public void StepAnalysisBack()
     {
         if (AnalysisLabels.Count == 0) return;
         StopAnalysisAnimation();
-        AnalysisFrameIndex = Math.Max(_analysisFrameIndex - 1, 0);
+        AnalysisFrameIndex = Math.Min(_analysisFrameIndex + 1, _maxAnalysisFrameIndex);
     }
 
     private void StopAnalysisAnimation()
@@ -350,13 +350,13 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
     private void OnAnalysisTimerTick(object? sender, EventArgs e)
     {
-        if (_analysisFrameIndex >= _maxAnalysisFrameIndex)
+        if (_analysisFrameIndex <= 0)
         {
             _analysisTimer.Stop();
             IsAnalysisPlaying = false;
             return;
         }
-        _analysisFrameIndex++;
+        _analysisFrameIndex--;
         _selectedAnalysisLabel = AnalysisLabels[_analysisFrameIndex];
         OnPropertyChanged(nameof(AnalysisFrameIndex));
         OnPropertyChanged(nameof(SelectedAnalysisLabel));
