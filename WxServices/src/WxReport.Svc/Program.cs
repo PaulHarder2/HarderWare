@@ -69,11 +69,18 @@ try
                     [LastScheduledSentUtc]    datetime2     NULL,
                     [LastUnscheduledSentUtc]  datetime2     NULL,
                     [LastSnapshotFingerprint] nvarchar(200) NULL,
+                    [LastMetarIcao]           nchar(4)      NULL,
                     CONSTRAINT [PK_RecipientStates] PRIMARY KEY ([Id])
                 );
                 CREATE UNIQUE INDEX [UX_RecipientStates_RecipientId]
                     ON [RecipientStates] ([RecipientId]);
             END");
+
+        // Column migration: add LastMetarIcao to existing RecipientStates tables.
+        await db.Database.ExecuteSqlRawAsync(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns
+                           WHERE object_id = OBJECT_ID('RecipientStates') AND name = 'LastMetarIcao')
+                ALTER TABLE [RecipientStates] ADD [LastMetarIcao] nchar(4) NULL;");
 
         await db.Database.ExecuteSqlRawAsync(@"
             IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'GfsModelRuns')

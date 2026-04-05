@@ -25,4 +25,11 @@ public class RecipientState
     /// A change in fingerprint value indicates a significant weather change has occurred.
     /// </summary>
     public string?  LastSnapshotFingerprint  { get; set; }
+
+    /// <summary>
+    /// ICAO of the METAR station used for the most recent report sent to this recipient.
+    /// Used to detect station switches caused by the primary station having no recent data,
+    /// so Claude can include context explaining the change in observation source.
+    /// </summary>
+    public string?  LastMetarIcao            { get; set; }
 }

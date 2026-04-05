@@ -56,6 +56,12 @@ public sealed class ClaudeClient
     /// summary of what changed.
     /// <see cref="ChangeSeverity.None"/> (the default) produces no special opening.
     /// </param>
+    /// <param name="previousMetarIcao">
+    /// ICAO of the station used for the previous report, when it differs from the current
+    /// snapshot's station.  When provided, Claude is instructed to briefly note the station
+    /// change so the recipient understands why reported conditions may look different.
+    /// Pass <see langword="null"/> when no station change occurred.
+    /// </param>
     /// <param name="ct">Cancellation token propagated to the HTTP request so that host shutdown aborts an in-flight API call.</param>
     /// <returns>The generated report text, or <see langword="null"/> if the API call or response parsing fails.</returns>
     /// <sideeffects>Makes an HTTP POST request to the Anthropic Messages API. Writes error log entries on failure.</sideeffects>
@@ -63,7 +69,9 @@ public sealed class ClaudeClient
         WeatherSnapshot snapshot, string language, string recipientName,
         TimeZoneInfo tz, bool isFirstReport = false, int scheduledHour = 7,
         UnitPreferences? units = null,
-        ChangeSeverity changeSeverity = ChangeSeverity.None, CancellationToken ct = default)
+        ChangeSeverity changeSeverity = ChangeSeverity.None,
+        string? previousMetarIcao = null,
+        CancellationToken ct = default)
     {
         if (scheduledHour < 0 || scheduledHour > 23)
         {
@@ -87,6 +95,16 @@ public sealed class ClaudeClient
               $"a daily weather update at {scheduledHour}:00 local time, plus additional " +
               $"alerts whenever significant weather changes occur. " +
               $"Then continue with the weather report as normal. "
+            : "";
+
+        var stationChangeInstruction = previousMetarIcao is not null
+            ? $"Note: the METAR observation source has changed this cycle. " +
+              $"The previous report used station {previousMetarIcao}, but that station had no recent data, " +
+              $"so this report uses {snapshot.StationIcao} instead. " +
+              $"Briefly acknowledge this in the report: on an unscheduled update, include one sentence " +
+              $"in the change-summary band noting the station switch; on a scheduled report, include one " +
+              $"sentence in the closing summary. Keep the tone matter-of-fact — this is routine fallback " +
+              $"behaviour, not a cause for concern. "
             : "";
 
         var changeAlertInstruction = changeSeverity switch
@@ -156,6 +174,7 @@ public sealed class ClaudeClient
             "When precipitation is forecast near freezing temperatures, consider whether " +
             "snow, sleet, or a wintry mix is possible and mention it if so. " +
             $"{welcomeInstruction}" +
+            $"{stationChangeInstruction}" +
             $"{changeAlertInstruction}";
 
         var userPrompt =

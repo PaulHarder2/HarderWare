@@ -16,16 +16,19 @@ public static class WxInterpreter
     /// optionally enriched with a GFS model forecast at the recipient's exact
     /// location.
     /// <para>
-    /// METAR stations are tried in the order given by <paramref name="metarIcaos"/>.
-    /// If none have recent data the method falls back to the most recent METAR
-    /// from any station in the database (last-resort, same cycle only).
+    /// METAR stations are tried in the order given by <paramref name="metarIcaos"/>;
+    /// only observations within the last 3 hours are accepted, so a stale primary
+    /// station falls through to the next candidate.  If no configured station has
+    /// recent data the method falls back to the most recent observation from any
+    /// station in the database within the same 3-hour window.
     /// </para>
     /// Returns <see langword="null"/> if no METAR data is available at all.
     /// </summary>
     /// <param name="metarIcaos">
-    /// Preferred METAR station ICAOs in priority order.  Tried in sequence;
-    /// if none have data the method falls back to the most recent station in
-    /// the database.  May be empty.
+    /// Preferred METAR station ICAOs in priority order.  Each is tried in sequence;
+    /// a station is only accepted if its most recent observation is within 3 hours.
+    /// If none qualify, the method falls back to the most recent station in the
+    /// database within the same 3-hour window.  May be empty.
     /// </param>
     /// <param name="tafIcao">
     /// ICAO of the TAF station to include in the snapshot, or
@@ -63,14 +66,17 @@ public static class WxInterpreter
     {
         await using var ctx = new WeatherDataContext(dbOptions);
 
-        // Tier 1: try each configured station in preference order.
+        // Tier 1: try each configured station in preference order, accepting only
+        // observations within the last 3 hours.  A stale primary station causes
+        // fallthrough to the next candidate rather than surfacing old data.
+        var recentCutoff = DateTime.UtcNow.AddHours(-3);
         MetarRecord? metar = null;
         foreach (var icao in metarIcaos)
         {
             metar = await ctx.Metars
                 .Include(m => m.SkyConditions)
                 .Include(m => m.WeatherPhenomena)
-                .Where(m => m.StationIcao == icao)
+                .Where(m => m.StationIcao == icao && m.ObservationUtc >= recentCutoff)
                 .OrderByDescending(m => m.ObservationUtc)
                 .FirstOrDefaultAsync(ct);
             if (metar is not null) break;
@@ -79,11 +85,10 @@ public static class WxInterpreter
         // Tier 2: any station in the database with data in the last 3 hours.
         if (metar is null)
         {
-            var cutoff = DateTime.UtcNow.AddHours(-3);
             metar = await ctx.Metars
                 .Include(m => m.SkyConditions)
                 .Include(m => m.WeatherPhenomena)
-                .Where(m => m.ObservationUtc >= cutoff)
+                .Where(m => m.ObservationUtc >= recentCutoff)
                 .OrderByDescending(m => m.ObservationUtc)
                 .FirstOrDefaultAsync(ct);
         }

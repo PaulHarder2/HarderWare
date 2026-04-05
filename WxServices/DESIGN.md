@@ -432,11 +432,11 @@ flowchart TD
 | GFS precipitation rate | Any forecast day ≥ 2.0 mm/hr |
 
 **METAR station fallback (tiered):**
-1. Try each ICAO in the recipient's `MetarIcao` list (comma-separated, preference order).
+1. Try each ICAO in the recipient's `MetarIcao` list (comma-separated, preference order); a station is only accepted if its most recent observation is within the last 3 hours.
 2. Fall back to any station in the database with data in the last 3 hours.
 3. If no data at all, skip the recipient for this cycle.
 
-The config is never updated when a fallback station is used; a warning is logged.
+The config is never updated when a fallback station is used; a warning is logged.  When the station used differs from the one in `RecipientState.LastMetarIcao` (i.e. the station changed since the last report), Claude is informed via the prompt and includes a brief, matter-of-fact note in the report — in the change-summary band for unscheduled sends, or in the closing summary for scheduled ones.  `LastMetarIcao` is updated on every successful send.
 
 **Recipient resolution (one-time, cached):**
 1. Geocode `Address` via Nominatim → lat/lon + locality name.
@@ -856,6 +856,7 @@ erDiagram
         datetime LastScheduledSentUtc
         datetime LastUnscheduledSentUtc
         string LastSnapshotFingerprint
+        string LastMetarIcao
     }
 
     GfsModelRuns {
@@ -1046,7 +1047,7 @@ WHERE Id = 1;
 - `Address` is used only for one-time geocoding; it is never displayed in reports.
 - `LocalityName` is used in report subjects and body. If absent, it is inferred from geocoding on first run.
 - `ScheduledSendHours` is a comma-separated string of hours (0–23) in the recipient's local timezone (e.g. `"6, 18"` for morning and evening; `"7"` for a single hour). Falls back to `DefaultScheduledSendHours` when omitted.
-- `MetarIcao` accepts a comma-separated list in preference order (e.g. `"KDWH, KHOU"`). The first station with data is used; no DB update occurs when a fallback station is used.
+- `MetarIcao` accepts a comma-separated list in preference order (e.g. `"KDWH, KHOU"`). The first station with an observation within the last 3 hours is used; no DB update occurs when a fallback station is used.
 - `Latitude`, `Longitude`, `MetarIcao`, `TafIcao` are written back to the database automatically by the service on first resolution. To re-trigger resolution (e.g. after a move), set them to `NULL` in the `Recipients` table.
 - `TempUnit`, `PressureUnit`, `WindSpeedUnit` control how values are displayed. Each is independent. Supported values: `TempUnit`: `"F"` or `"C"`; `PressureUnit`: `"inHg"` or `"kPa"`; `WindSpeedUnit`: `"mph"` or `"kph"`. All default to US customary.
 

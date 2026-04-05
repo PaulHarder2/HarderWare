@@ -209,6 +209,7 @@ public sealed class ReportWorker : BackgroundService
 
         state.LastUnscheduledSentUtc  = DateTime.UtcNow;
         state.LastSnapshotFingerprint = SnapshotFingerprint.Compute(snapshot, cfg.SignificantChange);
+        state.LastMetarIcao           = snapshot.StationIcao;
 
         try   { await ctx.SaveChangesAsync(ct); }
         catch (Exception ex) { Logger.Error("Failed to save state after startup report.", ex); }
@@ -323,6 +324,15 @@ public sealed class ReportWorker : BackgroundService
 
             Logger.Info($"Generating {reason} report for {recipient.Email}.");
 
+            // Detect station switch: if the METAR source changed from what was used in
+            // the last report, pass the previous ICAO to Claude so it can note the change.
+            var previousMetarIcao = state.LastMetarIcao is not null
+                && state.LastMetarIcao != snapshot.StationIcao
+                    ? state.LastMetarIcao
+                    : null;
+            if (previousMetarIcao is not null)
+                Logger.Info($"{recipient.Email}: METAR station changed {previousMetarIcao} → {snapshot.StationIcao} — noting in report.");
+
             var language       = recipient.Language ?? cfg.DefaultLanguage;
             var scheduledHours = ParseHourList(recipient.ScheduledSendHours ?? cfg.DefaultScheduledSendHours);
             var scheduledHour  = scheduledHours.Count > 0 ? scheduledHours[0] : 7;
@@ -333,6 +343,7 @@ public sealed class ReportWorker : BackgroundService
                 scheduledHour: scheduledHour,
                 units: recipient.Units,
                 changeSeverity: severity,
+                previousMetarIcao: previousMetarIcao,
                 ct: ct);
 
             if (report is null)
@@ -367,6 +378,7 @@ public sealed class ReportWorker : BackgroundService
                 state.LastUnscheduledSentUtc  = now;
 
             state.LastSnapshotFingerprint = fingerprint;
+            state.LastMetarIcao           = snapshot.StationIcao;
 
             try
             {
