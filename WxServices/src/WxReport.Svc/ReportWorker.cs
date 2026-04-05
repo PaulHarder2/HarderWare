@@ -180,8 +180,9 @@ public sealed class ReportWorker : BackgroundService
 
         var plotsDir = _config["WxVis:OutputDir"] ?? @"C:\HarderWare\plots";
         var meteogramPath = FindMeteogram24hPath(preferredIcaos.Count > 0 ? preferredIcaos[0] : "", recipient.Timezone, plotsDir);
-        if (meteogramPath is not null)
-            report = InsertMeteogramImage(report);
+        report = meteogramPath is not null
+            ? InsertMeteogramImage(report)
+            : report.Replace("<!--meteogram-->", "", StringComparison.Ordinal);
         IReadOnlyDictionary<string, string>? inlineImages = meteogramPath is not null
             ? new Dictionary<string, string> { ["meteogram24h"] = meteogramPath }
             : null;
@@ -357,8 +358,9 @@ public sealed class ReportWorker : BackgroundService
 
             var plotsDir2     = _config["WxVis:OutputDir"] ?? @"C:\HarderWare\plots";
             var meteogramPath = FindMeteogram24hPath(preferredIcaos.Count > 0 ? preferredIcaos[0] : "", recipient.Timezone, plotsDir2);
-            if (meteogramPath is not null)
-                report = InsertMeteogramImage(report);
+            report = meteogramPath is not null
+                ? InsertMeteogramImage(report)
+                : report.Replace("<!--meteogram-->", "", StringComparison.Ordinal);
             IReadOnlyDictionary<string, string>? inlineImages = meteogramPath is not null
                 ? new Dictionary<string, string> { ["meteogram24h"] = meteogramPath }
                 : null;
@@ -708,22 +710,35 @@ public sealed class ReportWorker : BackgroundService
     }
 
     /// <summary>
-    /// Inserts a <c>cid:meteogram24h</c> image tag into the HTML report body,
-    /// just before the closing <c>&lt;/body&gt;</c> tag (or appended if not found).
+    /// Replaces the <c>&lt;!--meteogram--&gt;</c> sentinel (placed inside the footer
+    /// wrapper by <c>ClaudeClient.BuildFooterHtml</c>) with a centred meteogram image tag,
+    /// keeping the image structurally inside the footer's outer div.
+    /// Falls back to inserting before <c>&lt;/body&gt;</c> if the sentinel is absent.
     /// </summary>
-    /// <param name="html">Claude-generated HTML report.</param>
+    /// <param name="html">Claude-generated HTML report containing the sentinel.</param>
     /// <returns>Modified HTML string with the meteogram image included.</returns>
     private static string InsertMeteogramImage(string html)
     {
         const string img =
             "<p style=\"text-align:center;margin-top:16px\">" +
             "<img src=\"cid:meteogram24h\" style=\"width:100%;max-width:1000px\" " +
-            "alt=\"24-hour forecast meteogram\">" +
+            "alt=\"24-hour forecast meteogram\"><br>" +
+            "<span style=\"font-size:11px;color:#888;font-style:italic\">" +
+            "Forecast of temperature, humidity, and wind over time. " +
+            "Wind symbols point in the direction the wind is blowing, " +
+            "with more feathers indicating stronger winds." +
+            "</span>" +
             "</p>";
 
-        var idx = html.IndexOf("</body>", StringComparison.OrdinalIgnoreCase);
-        return idx >= 0
-            ? html[..idx] + img + html[idx..]
+        const string sentinel = "<!--meteogram-->";
+        var idx = html.IndexOf(sentinel, StringComparison.Ordinal);
+        if (idx >= 0)
+            return html[..idx] + img + html[(idx + sentinel.Length)..];
+
+        // Fallback: no sentinel found — insert before </body>.
+        var bodyIdx = html.IndexOf("</body>", StringComparison.OrdinalIgnoreCase);
+        return bodyIdx >= 0
+            ? html[..bodyIdx] + img + html[bodyIdx..]
             : html + img;
     }
 
