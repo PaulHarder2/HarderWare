@@ -41,6 +41,8 @@ public partial class MainWindow : Window
     /// <summary>
     /// Handles arrow-key navigation for both panes.
     /// Left/Right step the forecast pane; Up/Down step the observation pane.
+    /// Ctrl+Left/Right jump to the first/last forecast hour.
+    /// Ctrl+Up/Down jump to the newest/oldest analysis map.
     /// Keys are ignored when a Slider or ComboBox has keyboard focus so those
     /// controls continue to respond to arrow keys normally.
     /// </summary>
@@ -51,12 +53,14 @@ public partial class MainWindow : Window
         if (Keyboard.FocusedElement is Slider or ComboBox or Selector)
             return;
 
+        bool ctrl = (e.KeyboardDevice.Modifiers & ModifierKeys.Control) != 0;
+
         switch (e.Key)
         {
-            case Key.Right: _vm.StepForecastForward();  e.Handled = true; break;
-            case Key.Left:  _vm.StepForecastBack();     e.Handled = true; break;
-            case Key.Up:    _vm.StepAnalysisForward();  e.Handled = true; break;
-            case Key.Down:  _vm.StepAnalysisBack();     e.Handled = true; break;
+            case Key.Right: if (ctrl) _vm.JumpForecastToEnd();     else _vm.StepForecastForward(); e.Handled = true; break;
+            case Key.Left:  if (ctrl) _vm.JumpForecastToStart();   else _vm.StepForecastBack();    e.Handled = true; break;
+            case Key.Up:    if (ctrl) _vm.JumpAnalysisToNewest();  else _vm.StepAnalysisForward(); e.Handled = true; break;
+            case Key.Down:  if (ctrl) _vm.JumpAnalysisToOldest();  else _vm.StepAnalysisBack();    e.Handled = true; break;
         }
     }
 }

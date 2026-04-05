@@ -326,6 +326,22 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         }
     }
 
+    /// <summary>Stops animation and jumps to the newest analysis map (index 0).</summary>
+    public void JumpAnalysisToNewest()
+    {
+        if (AnalysisLabels.Count == 0) return;
+        StopAnalysisAnimation();
+        AnalysisFrameIndex = 0;
+    }
+
+    /// <summary>Stops animation and jumps to the oldest analysis map (last index).</summary>
+    public void JumpAnalysisToOldest()
+    {
+        if (AnalysisLabels.Count == 0) return;
+        StopAnalysisAnimation();
+        AnalysisFrameIndex = _maxAnalysisFrameIndex;
+    }
+
     /// <summary>Stops animation and steps one analysis frame forward (newer observation).</summary>
     public void StepAnalysisForward()
     {
@@ -381,6 +397,22 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             _forecastTimer.Start();
             IsForecastPlaying = true;
         }
+    }
+
+    /// <summary>Stops animation and jumps to forecast frame 0 (earliest hour).</summary>
+    public void JumpForecastToStart()
+    {
+        if (_selectedForecastRun?.Frames.Count is null or 0) return;
+        StopForecastAnimation();
+        ForecastFrameIndex = 0;
+    }
+
+    /// <summary>Stops animation and jumps to the final forecast hour.</summary>
+    public void JumpForecastToEnd()
+    {
+        if (_selectedForecastRun?.Frames.Count is null or 0) return;
+        StopForecastAnimation();
+        ForecastFrameIndex = _maxForecastFrameIndex;
     }
 
     /// <summary>Stops animation and steps one forecast frame forward.</summary>
