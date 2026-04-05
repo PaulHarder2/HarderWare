@@ -105,7 +105,7 @@ public static class MetarFetcher
 
         if (lines.Count == 0)
         {
-            Logger.Warn("No METAR/SPECI reports were returned.");
+            Logger.Error($"No METAR/SPECI reports were returned for: {url}");
             return;
         }
 

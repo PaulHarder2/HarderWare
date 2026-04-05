@@ -8,6 +8,9 @@ public class MonitorState
 {
     public Dictionary<string, ServiceState> Services { get; set; } = new();
 
+    /// <summary>UTC time the most recent METAR-staleness alert was sent.</summary>
+    public DateTime? LastMetarStalenessAlertSentUtc { get; set; }
+
     /// <summary>
     /// Returns the <see cref="ServiceState"/> for the given service name,
     /// creating and registering a new empty entry if one does not yet exist.

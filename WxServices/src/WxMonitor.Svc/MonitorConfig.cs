@@ -29,6 +29,13 @@ public class MonitorConfig
     /// <summary>Minimum minutes between repeat alerts of the same type for the same service.</summary>
     public int    AlertCooldownMinutes { get; set; } = 60;
 
+    /// <summary>
+    /// Age in minutes beyond which the most recent METAR observation in the database is
+    /// considered stale and triggers an alert.  Default 120 (2 hours).
+    /// Set to 0 to disable the staleness check.
+    /// </summary>
+    public int    MetarStalenessThresholdMinutes { get; set; } = 120;
+
     public List<WatchedServiceConfig> WatchedServices { get; set; } = [];
 }
 

@@ -556,13 +556,14 @@ Output PNGs are saved to the directory configured in `config.json` (default `C:\
 
 ### 4.5 WxMonitor.Svc — Health Monitor
 
-**Purpose:** Alert the operator by email when either watched service logs errors or goes silent.
+**Purpose:** Alert the operator by email when either watched service logs errors, goes silent, or METAR data goes stale.
 
 **Cycle (default: every 5 minutes):**
 1. For each watched service, scan its log file for entries at or above `AlertOnSeverity` (default: ERROR) with a timestamp newer than the last one processed.
 2. For each watched service, read its heartbeat file and compare its age to `HeartbeatMaxAgeMinutes`.
-3. Send an alert email if issues are found and the per-service, per-alert-type cooldown (`AlertCooldownMinutes`, default 60) has elapsed.
-4. Persist state (last-seen log timestamp, last-alert timestamps) to `wxmonitor-state.json`.
+3. Query the database for the most recent METAR observation timestamp; if it is older than `MetarStalenessThresholdMinutes` (default 120), send a staleness alert.
+4. Send alert emails for any findings not on cooldown (`AlertCooldownMinutes`, default 60).
+5. Persist state (last-seen log timestamp, last-alert timestamps) to `wxmonitor-state.json`.
 
 **First-run behaviour:** On first run, `LastSeenLogTimestamp` is null. The scanner baselines to the latest entry in the log without sending alerts, so installation does not flood the inbox with historical errors.
 
@@ -1060,6 +1061,7 @@ WHERE Id = 1;
     "AlertEmail": "PaulHarder2@gmail.com",
     "AlertOnSeverity": "ERROR",
     "AlertCooldownMinutes": 60,
+    "MetarStalenessThresholdMinutes": 120,
     "WatchedServices": [
       {
         "Name": "WxParser.Svc",
