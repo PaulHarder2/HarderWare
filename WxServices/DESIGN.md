@@ -572,12 +572,12 @@ Each pane has its own toolbar docked to the top of the pane, immediately above t
 **File discovery (`MapFileScanner`):**
 - Scans the configured output directory for `synoptic_*.png` and `forecast_*.png` files on startup and whenever the directory changes (via `FileSystemWatcher`).
 - Parses the timestamp embedded in each filename to reconstruct obs time (analysis) or model-run + forecast hour (forecast).
-- Analysis files are listed individually, sorted oldest-first; each entry corresponds to one PNG file and is labelled with its obs time (`yyyy-MM-dd HH`Z).
+- Analysis files are listed individually, sorted newest-first (matching the GFS run ComboBox); each entry corresponds to one PNG file and is labelled with its obs time (`yyyy-MM-dd HH`Z).
 - `DirectoryChanged` events are marshalled back to the WPF UI thread via `Dispatcher.BeginInvoke`.
 
 **Animation:**
 - Two independent `DispatcherTimer` instances — one per pane — allow both panes to play simultaneously at their own speeds.
-- Analysis pane defaults to the newest map; the slider and ComboBox stay in sync — selecting a map from either updates the other. Play animates forward in time from the selected map; if already at the newest, it wraps to the oldest.
+- Analysis pane defaults to the newest map; the slider and ComboBox stay in sync — selecting a map from either updates the other. Play animates oldest-to-newest; if already at the newest it restarts from the oldest.
 - Forecast pane starts at forecast hour 0; play steps through all available hours.
 - `BitmapImage` is loaded with `CacheOption.OnLoad` (releases file handle immediately) and `Freeze()`d for cross-thread safety.
 
@@ -589,6 +589,15 @@ Each pane has its own toolbar docked to the top of the pane, immediately above t
 | `MainViewModel` | All bindable state; two timers; two independent sets of animation commands |
 | `RelayCommand` | `ICommand` implementation; `CanExecuteChanged` wired to `CommandManager.RequerySuggested` |
 | `MainWindow` | Frameless WPF window; `WindowChrome` for correct maximise/resize behaviour; custom title-bar event handlers |
+
+**Keyboard navigation:** Arrow keys work when neither a ComboBox nor Slider has focus.
+
+| Key | Action |
+|---|---|
+| `→` / `←` | Forecast: step forward / back one hour |
+| `Ctrl+→` / `Ctrl+←` | Forecast: jump to final / first hour |
+| `↑` / `↓` | Analysis: step to newer / older map |
+| `Ctrl+↑` / `Ctrl+↓` | Analysis: jump to newest / oldest map |
 
 **Configuration (`appsettings.json`):**
 ```json
