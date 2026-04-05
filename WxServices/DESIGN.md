@@ -588,7 +588,7 @@ Each pane has its own toolbar docked to the top of the pane, immediately above t
 | `AnalysisLabel` | Represents one analysis PNG file; `Name` = file path (selection key), `Label` = obs-time string |
 | `MainViewModel` | All bindable state; two timers; two independent sets of animation commands |
 | `RelayCommand` | `ICommand` implementation; `CanExecuteChanged` wired to `CommandManager.RequerySuggested` |
-| `MainWindow` | Frameless WPF window; `WindowChrome` for correct maximise/resize behaviour; custom title-bar event handlers |
+| `MainWindow` | Frameless WPF window; `WindowChrome` for correct maximise/resize behaviour; custom title-bar and keyboard event handlers; suppresses ToolBar gripper and overflow button |
 
 **Keyboard navigation:** Arrow keys work when neither a ComboBox nor Slider has focus.
 

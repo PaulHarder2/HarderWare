@@ -39,6 +39,18 @@ public partial class MainWindow : Window
             : WindowState.Maximized;
 
     /// <summary>
+    /// Hides the ToolBar overflow toggle button (the chevron blob at the right end).
+    /// The gripper (dots at the left end) is already suppressed via
+    /// <c>ToolBarTray.IsLocked="True"</c> in the XAML style.
+    /// </summary>
+    private void ToolBar_Loaded(object sender, RoutedEventArgs e)
+    {
+        var tb = (ToolBar)sender;
+        if (tb.Template.FindName("OverflowGrid", tb) is FrameworkElement overflow)
+            overflow.Visibility = Visibility.Collapsed;
+    }
+
+    /// <summary>
     /// Handles arrow-key navigation for both panes.
     /// Left/Right step the forecast pane; Up/Down step the observation pane.
     /// Ctrl+Left/Right jump to the first/last forecast hour.

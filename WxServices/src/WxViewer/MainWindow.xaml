@@ -18,6 +18,12 @@
             <Setter Property="VerticalAlignment" Value="Center"/>
             <Setter Property="Margin"            Value="4,2"/>
         </Style>
+
+        <!-- Suppress the ToolBar gripper (dots) and overflow toggle button (chevron) -->
+        <Style TargetType="ToolBar">
+            <Setter Property="ToolBarTray.IsLocked" Value="True"/>
+            <EventSetter Event="Loaded" Handler="ToolBar_Loaded"/>
+        </Style>
         <Style TargetType="Button">
             <Setter Property="Padding"           Value="8,3"/>
             <Setter Property="Margin"            Value="2,0"/>
