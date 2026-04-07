@@ -146,7 +146,6 @@ public partial class RecipientsTab : UserControl
             // Temporarily detach handler so programmatic selection change doesn't reload fields.
             RecipientList.SelectionChanged -= RecipientList_SelectionChanged;
             RecipientList.ItemsSource = items;
-            RecipientList.SelectionChanged += RecipientList_SelectionChanged;
 
             if (currentId.HasValue)
             {
@@ -154,6 +153,8 @@ public partial class RecipientsTab : UserControl
                 if (item != null)
                     RecipientList.SelectedItem = item;
             }
+
+            RecipientList.SelectionChanged += RecipientList_SelectionChanged;
         }
         catch (Exception ex)
         {
@@ -257,6 +258,10 @@ public partial class RecipientsTab : UserControl
             LatBox.Text      = lat.ToString("F7");
             LonBox.Text      = lon.ToString("F7");
             LocalityBox.Text = locality;
+
+            // A successful geocode implicitly begins editing; enable Save/Cancel.
+            SaveBtn.IsEnabled   = true;
+            CancelBtn.IsEnabled = true;
 
             // ── Nearby METAR stations ─────────────────────────────────────────
 
@@ -470,7 +475,7 @@ public partial class RecipientsTab : UserControl
             await ctx.SaveChangesAsync();
             _currentRecipientDbId = r.Id;
             DeleteBtn.IsEnabled = true;
-            HideMessages();
+            ShowSuccessMessage("Saved successfully.");
 
             await LoadRecipientListAsync();
         }
@@ -646,14 +651,34 @@ public partial class RecipientsTab : UserControl
     }
 
     /// <summary>
-    /// Displays a message in the Messages border panel, making it visible.
+    /// Displays a warning/error message in the Messages border panel (amber styling).
     /// </summary>
     /// <param name="message">The text to display.</param>
     /// <sideeffects>Sets <c>MessagesText.Text</c>; sets <c>MessagesBorder.Visibility</c> to Visible.</sideeffects>
     private void ShowMessage(string message)
     {
-        MessagesText.Text          = message;
-        MessagesBorder.Visibility  = Visibility.Visible;
+        MessagesText.Text               = message;
+        MessagesBorder.Background       = new SolidColorBrush(Color.FromRgb(0xFF, 0xF3, 0xCD));
+        MessagesBorder.BorderBrush      = new SolidColorBrush(Color.FromRgb(0xFF, 0xC1, 0x07));
+        MessagesText.Foreground         = new SolidColorBrush(Color.FromRgb(0x85, 0x64, 0x04));
+        MessagesBorder.Visibility       = Visibility.Visible;
+    }
+
+    /// <summary>
+    /// Displays a success message in the Messages border panel (green styling) that
+    /// automatically dismisses itself after three seconds.
+    /// </summary>
+    /// <param name="message">The text to display.</param>
+    /// <sideeffects>Sets <c>MessagesText.Text</c>; sets <c>MessagesBorder.Visibility</c> to Visible; schedules auto-hide.</sideeffects>
+    private void ShowSuccessMessage(string message)
+    {
+        MessagesText.Text               = message;
+        MessagesBorder.Background       = new SolidColorBrush(Color.FromRgb(0xD4, 0xED, 0xDA));
+        MessagesBorder.BorderBrush      = new SolidColorBrush(Color.FromRgb(0x28, 0xA7, 0x45));
+        MessagesText.Foreground         = new SolidColorBrush(Color.FromRgb(0x15, 0x57, 0x24));
+        MessagesBorder.Visibility       = Visibility.Visible;
+
+        _ = Task.Delay(3000).ContinueWith(_ => Dispatcher.Invoke(HideMessages));
     }
 
     /// <summary>

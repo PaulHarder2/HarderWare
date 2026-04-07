@@ -112,8 +112,7 @@
             </GroupBox>
 
             <!-- Row 3: Recipient fields ─────────────────────────────────── -->
-            <ScrollViewer Grid.Row="3" VerticalScrollBarVisibility="Auto">
-                <GroupBox Header="Recipient" Margin="8,0,8,4">
+            <GroupBox Grid.Row="3" Header="Recipient" Margin="8,0,8,4">
                     <Grid Margin="6,6,6,6">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="140"/>
@@ -204,8 +203,7 @@
                         <TextBlock Grid.Row="13" Grid.Column="0" Text="Wind Speed" VerticalAlignment="Center" Margin="0,3"/>
                         <ComboBox  Grid.Row="13" Grid.Column="1" x:Name="WindUnitBox" Margin="0,3"/>
                     </Grid>
-                </GroupBox>
-            </ScrollViewer>
+            </GroupBox>
 
             <!-- Row 4: Action buttons ───────────────────────────────────── -->
             <DockPanel Grid.Row="4" Margin="8,4,8,8" LastChildFill="False">
