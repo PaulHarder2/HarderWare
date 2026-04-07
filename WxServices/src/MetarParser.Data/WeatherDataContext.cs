@@ -85,8 +85,9 @@ public sealed class WeatherDataContext : DbContext
 
     /// <summary>
     /// The <c>WxStations</c> table — one row per METAR reporting station, holding
-    /// geographic metadata (name, lat, lon, elevation).  Rows are inserted on first
-    /// encounter during a METAR fetch cycle and are never updated or deleted.
+    /// geographic metadata (name, municipality, lat, lon, elevation).  Rows are
+    /// inserted on first encounter during a METAR fetch cycle and may be updated
+    /// by the OurAirports importer.
     /// </summary>
     public DbSet<WxStation> WxStations => Set<WxStation>();
 
@@ -332,6 +333,7 @@ public sealed class WeatherDataContext : DbContext
 
             e.Property(x => x.IcaoId)     .HasMaxLength(4).IsFixedLength().IsRequired();
             e.Property(x => x.Name)       .HasMaxLength(100);
+            e.Property(x => x.Municipality).HasMaxLength(100);
             e.Property(x => x.Lat);
             e.Property(x => x.Lon);
             e.Property(x => x.ElevationFt);

@@ -367,13 +367,19 @@ graph TD
 5. Assemble `GfsGridPoint` entities (applying unit conversions) and insert into `GfsGrid`.
 6. When all 121 hours are stored, mark the run `IsComplete = true` and purge old runs (retaining the 2 most recent).
 
+**Airport metadata refresh cycle (once per week, and on first startup):**
+1. Download `airports.csv` from OurAirports (`https://davidmegginson.github.io/ourairports-data/airports.csv`), decoded as UTF-8.
+2. Parse the CSV; skip rows where `icao_code` and `ident` are both blank, and skip any identifier not exactly 4 characters long.
+3. Upsert all valid rows into `WxStations`: update existing rows with properly-cased `Name` and `Municipality`; insert new rows for airports not yet seen. Coordinates and elevation are refreshed from OurAirports data.
+
 **Key classes:**
 | Class | Location | Role |
 |---|---|---|
-| `FetchWorker` | WxParser.Svc | `BackgroundService`; owns the METAR/TAF and GFS fetch loops |
+| `FetchWorker` | WxParser.Svc | `BackgroundService`; owns the METAR/TAF, GFS, and airport-refresh cycles |
 | `MetarFetcher` | MetarParser.Data | AWC API call → parse → insert METARs |
 | `TafFetcher` | MetarParser.Data | AWC API call → parse → insert TAFs |
 | `GfsFetcher` | MetarParser.Data | NOMADS byte-range download → wgrib2 → insert GfsGridPoints |
+| `AirportDataImporter` | MetarParser.Data | Downloads OurAirports CSV; upserts `WxStations` with names, municipalities, and coordinates |
 | `GribExtractor` | GribParser | wgrib2 subprocess wrapper; parses CSV output into `GribValue` records |
 | `MetarParser` | MetarParser | Parses raw METAR text into structured objects |
 | `TafParser` | TafParser | Parses raw TAF text into structured objects |
@@ -536,9 +542,10 @@ cd C:\Users\PaulH\...\WxServices\src\WxVis
 python synoptic_map.py [--extent conus|south_central] [--density 75]
 python forecast_map.py --run 20260402_18 --fh 84 [--extent south_central]
 python meteogram.py --run 20260404_00 --lat 29.97 --lon -95.34 --icao KDWH \
-    --locality "The Woodlands" --temp-unit F --tz "America/Chicago" \
+    --locality "Spring" --temp-unit F --tz "America/Chicago" \
     --out-24h C:\HarderWare\plots\meteogram_20260404_00_KDWH_America-Chicago_24h.png \
     --out-full C:\HarderWare\plots\meteogram_20260404_00_KDWH_America-Chicago_full.png
+# Chart title: "Spring (°F)"  — locality name and unit only; no ICAO prefix
 ```
 
 Output PNGs are saved to the directory configured in `config.json` (default `C:\HarderWare\plots\`).
@@ -709,7 +716,7 @@ Key types:
 Translates raw database entities into a language-neutral `WeatherSnapshot` value object, and exposes static helpers to find the nearest METAR/TAF station in the database to a given coordinate.
 
 Key types:
-- `WeatherSnapshot` — current conditions + TAF forecast periods + optional `GfsForecast`
+- `WeatherSnapshot` — current conditions + TAF forecast periods + optional `GfsForecast`; includes `StationMunicipality` and `StationName` (from `WxStations`) used to label the email report sections
 - `WxInterpreter` — queries DB, applies unit conversions, builds snapshot; optionally attaches GFS forecast when lat/lon provided
 - `GfsInterpreter` — queries `GfsGrid` for the most recent complete model run and bilinearly interpolates the four surrounding 0.25° grid points to an exact location; produces a `GfsForecast` covering up to 6 days
 - `GfsForecast` — model run time + list of `GfsDailyForecast`
@@ -884,6 +891,7 @@ erDiagram
     WxStations {
         char IcaoId PK
         nvarchar Name
+        nvarchar Municipality
         float Lat
         float Lon
         float ElevationFt
@@ -914,9 +922,10 @@ erDiagram
 | WxStations | IcaoId | Primary key |
 
 **Notes on WxStations:**
-- Populated opportunistically by `MetarFetcher` after each METAR batch: any ICAO not yet in `WxStations` triggers an AWC Airport API lookup.
-- Stations unresolvable via AWC are inserted with `null` Lat/Lon/ElevationFt (stub rows) to prevent repeated retry attempts.
-- WxVis queries `WxStations` via `INNER JOIN` so stub-row stations are automatically excluded from maps.
+- Seeded from OurAirports (`airports.csv`) by `AirportDataImporter`, which runs on first startup and weekly thereafter. This populates `Name` (properly cased), `Municipality` (city/town), and coordinates for all ~40 000 ICAO-coded airports worldwide.
+- `MetarFetcher` also inserts stub rows for any ICAO not yet present after a METAR batch, so new stations appear immediately even before the next weekly refresh.
+- `Municipality` is used by `WxReport.Svc` to label the Current Conditions section with a human-readable location rather than an ICAO code.
+- WxVis queries `WxStations` via `INNER JOIN` so stub rows (null coordinates) are automatically excluded from maps.
 
 ---
 
@@ -1102,6 +1111,7 @@ SMTP settings come from the top-level `Smtp` block in `appsettings.shared.json` 
 |---|---|---|---|
 | WxParser.Svc | [AWC METAR/TAF API](https://aviationweather.gov/data/api/) | Fetch weather reports | None (public) |
 | WxParser.Svc / WxReport.Svc | AWC Airport API | Resolve ICAO → coordinates; nearest station lookup | None (public) |
+| WxParser.Svc | [OurAirports](https://davidmegginson.github.io/ourairports-data/airports.csv) | Airport names, municipalities, coordinates for all ICAO airports | None (public) |
 | WxParser.Svc | [NOAA GFS / AWS Open Data](https://noaa-gfs-bdp-pds.s3.amazonaws.com) | Download GFS GRIB2 forecast files | None (public) |
 | WxParser.Svc | wgrib2 (WSL) | Extract sub-grid values from GRIB2 files | n/a (local binary) |
 | WxReport.Svc | [Nominatim](https://nominatim.openstreetmap.org/) | Geocode recipient address | None (User-Agent required) |

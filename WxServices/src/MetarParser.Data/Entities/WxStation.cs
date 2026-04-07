@@ -4,6 +4,7 @@ namespace MetarParser.Data.Entities;
 /// Entity representing one row in the <c>WxStations</c> table.
 /// Each row holds the geographic metadata for a METAR reporting station,
 /// populated on first encounter during a METAR fetch cycle.
+/// Rows may be updated by the OurAirports importer to enrich name and municipality data.
 /// </summary>
 public sealed class WxStation
 {
@@ -18,6 +19,14 @@ public sealed class WxStation
     /// <see langword="null"/> if the API did not return a name.
     /// </summary>
     public string? Name { get; set; }
+
+    /// <summary>
+    /// City or municipality in which the station is located, as provided by
+    /// OurAirports (e.g. "College Station").
+    /// <see langword="null"/> until the OurAirports import has run or if the
+    /// station is not present in the OurAirports dataset.
+    /// </summary>
+    public string? Municipality { get; set; }
 
     /// <summary>
     /// Station latitude in decimal degrees North.

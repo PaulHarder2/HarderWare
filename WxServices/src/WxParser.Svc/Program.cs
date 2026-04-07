@@ -129,6 +129,13 @@ try
                 INSERT INTO [GlobalSettings] ([Id]) VALUES (1);
             END");
 
+        await db.Database.ExecuteSqlRawAsync(@"
+            IF NOT EXISTS (
+                SELECT 1 FROM sys.columns
+                WHERE object_id = OBJECT_ID(N'WxStations') AND name = N'Municipality'
+            )
+            ALTER TABLE [WxStations] ADD [Municipality] nvarchar(100) NULL;");
+
         Logger.Info("Database ready.");
     }
 

@@ -82,6 +82,13 @@ public sealed class ClaudeClient
         units ??= new UnitPreferences();
         var weatherData = SnapshotDescriber.Describe(snapshot, tz, units);
 
+        var currentConditionsSubtitle = BuildCurrentConditionsSubtitle(snapshot);
+        var currentConditionsHeading  = currentConditionsSubtitle is null
+            ? "\"Current Conditions\""
+            : $"\"Current Conditions\" followed on a new line by the subtitle \"{currentConditionsSubtitle}\" " +
+              $"(font-size 13px, font-style italic, color #6b8fa8, font-weight normal)";
+        var forecastHeading = $"\"Forecast for {snapshot.LocalityName}\"";
+
         var tempLabel  = units.Temperature == "C" ? "Celsius"    : "Fahrenheit";
         var pressLabel = units.Pressure    == "kPa" ? "kPa"      : "inches of mercury (inHg)";
         var windLabel  = units.WindSpeed   == "kph" ? "km/h"     : "mph";
@@ -97,10 +104,11 @@ public sealed class ClaudeClient
               $"Then continue with the weather report as normal. "
             : "";
 
+        var currentStationLabel = snapshot.StationMunicipality ?? snapshot.StationName ?? snapshot.StationIcao;
         var stationChangeInstruction = previousMetarIcao is not null
-            ? $"Note: the METAR observation source has changed this cycle. " +
-              $"The previous report used station {previousMetarIcao}, but that station had no recent data, " +
-              $"so this report uses {snapshot.StationIcao} instead. " +
+            ? $"Note: the weather data source has changed since the last report. " +
+              $"The previous weather station had no recent data, " +
+              $"so this report uses conditions from {currentStationLabel} instead. " +
               $"Briefly acknowledge this in the report: on an unscheduled update, include one sentence " +
               $"in the change-summary band noting the station switch; on a scheduled report, include one " +
               $"sentence in the closing summary. Keep the tone matter-of-fact — this is routine fallback " +
@@ -131,7 +139,7 @@ public sealed class ClaudeClient
             "Maximum content width: 600px, centred, with a clean and professional visual style. " +
             "Structure the output in this order: " +
             "(1) Header div — background #1a3a5c, white text, left-aligned, padding 20px 24px, border-radius 6px 6px 0 0. " +
-            "Line 1: locality name and station ICAO in bold at 22px. " +
+            "Line 1: the forecast location name in bold at 22px. " +
             "Line 2: local observation time at 14px, color #c8daea. " +
             $"Line 3 (unscheduled reports only): italic text at 13px, color #a0bcd4, " +
             $"reading 'Unscheduled update — see note below', translated into {language}. " +
@@ -141,14 +149,14 @@ public sealed class ClaudeClient
             $"Begin with the bold label 'What's changed:' translated into {language}, " +
             "followed by the change summary text. " +
             "Omit this section entirely on scheduled reports. " +
-            "(3) Current Conditions section — background #f7f9fc, padding 20px 24px. " +
-            "Section heading: bold, 17px, color #1a3a5c, 2px solid #1a3a5c bottom border. " +
+            $"(3) Current Conditions section — background #f7f9fc, padding 20px 24px. " +
+            $"Section heading: bold, 17px, color #1a3a5c, 2px solid #1a3a5c bottom border; text is {currentConditionsHeading}. " +
             "Two-column table (label | value), alternating row shading (#eaf0f7 / white). " +
             "Rows in this exact order: Sky; Visibility; Wind; " +
             "Weather (include only when weather phenomena are present, e.g. rain, fog, drizzle — omit on clear days); " +
             "Temperature; Relative Humidity; Pressure. " +
-            "(4) Extended Forecast section — background white, padding 20px 24px. " +
-            "Section heading styled identically to Current Conditions. " +
+            $"(4) Extended Forecast section — background white, padding 20px 24px. " +
+            $"Section heading styled identically to Current Conditions; text is {forecastHeading}. " +
             "Multi-column table, header row background #1a3a5c white text. " +
             "Columns: Date, High/Low, Wind, Conditions. " +
             "Each Conditions cell: a single sentence of no more than 15 words — " +
@@ -279,6 +287,41 @@ public sealed class ClaudeClient
             </div>
             </div>
             """;
+    }
+
+    // ── subtitle helper ───────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Builds the subtitle string for the Current Conditions section heading,
+    /// or returns <see langword="null"/> when the station city matches the
+    /// recipient's locality (no subtitle needed) or no station metadata is available.
+    /// </summary>
+    private static string? BuildCurrentConditionsSubtitle(WeatherSnapshot snap)
+    {
+        var municipality = snap.StationMunicipality;
+        var airportName  = snap.StationName;
+        var locality     = snap.LocalityName;
+
+        // Cities match — no subtitle
+        if (municipality is not null &&
+            string.Equals(municipality, locality, StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        // Build "at City, Airport Name" from whatever we have.
+        // If the airport name already contains the municipality (e.g. "Brenham Municipal Airport"
+        // already contains "Brenham"), omit the redundant city prefix.
+        if (municipality is not null && airportName is not null)
+        {
+            return airportName.Contains(municipality, StringComparison.OrdinalIgnoreCase)
+                ? $"at {airportName}"
+                : $"at {municipality}, {airportName}";
+        }
+        if (airportName is not null)
+            return $"at {airportName}";
+        if (municipality is not null)
+            return $"at {municipality}";
+
+        return null;
     }
 
     // ── response DTOs ─────────────────────────────────────────────────────────

@@ -100,20 +100,30 @@ public sealed class MeteogramWorker : BackgroundService
             // Remove stale tracking entries for older runs.
             _completedRuns.RemoveWhere(r => r < latestCompleteRun);
 
-            locations = await ctx.Recipients
+            var recipientRows = await ctx.Recipients
                 .Where(r => r.Latitude  != null
                          && r.Longitude != null
                          && r.MetarIcao != null)
-                .Select(r => new RecipientLocation
+                .Select(r => new
                 {
-                    Icao         = r.MetarIcao!,
-                    LocalityName = r.LocalityName ?? r.MetarIcao!,
-                    TempUnit     = r.TempUnit,
-                    Timezone     = r.Timezone,
-                    Latitude     = r.Latitude!.Value,
-                    Longitude    = r.Longitude!.Value,
+                    r.MetarIcao,
+                    r.LocalityName,
+                    r.TempUnit,
+                    r.Timezone,
+                    Latitude  = r.Latitude!.Value,
+                    Longitude = r.Longitude!.Value,
                 })
                 .ToListAsync(ct);
+
+            locations = recipientRows.Select(r => new RecipientLocation
+            {
+                Icao         = r.MetarIcao!,
+                LocalityName = r.LocalityName ?? FirstIcao(r.MetarIcao!),
+                TempUnit     = r.TempUnit,
+                Timezone     = r.Timezone,
+                Latitude     = r.Latitude,
+                Longitude    = r.Longitude,
+            }).ToList();
         }
 
         if (locations.Count == 0)
@@ -230,12 +240,12 @@ public sealed class MeteogramWorker : BackgroundService
     /// <summary>Intermediate record used to hold resolved recipient location data.</summary>
     private record RecipientLocation
     {
-        public string Icao         { get; init; } = "";
-        public string LocalityName { get; init; } = "";
-        public string TempUnit     { get; init; } = "F";
-        public string Timezone     { get; init; } = "UTC";
-        public double Latitude     { get; init; }
-        public double Longitude    { get; init; }
+        public string  Icao                { get; init; } = "";
+        public string  LocalityName        { get; init; } = "";
+        public string  TempUnit            { get; init; } = "F";
+        public string  Timezone            { get; init; } = "UTC";
+        public double  Latitude            { get; init; }
+        public double  Longitude           { get; init; }
     }
 
     /// <summary>One entry in the meteogram manifest JSON file.</summary>

@@ -112,7 +112,7 @@ def render_meteogram(
     output_path:
         Destination file path (PNG).
     title:
-        Chart title displayed above the wind panel (e.g. "KDWH — The Woodlands").
+        Chart title displayed above the wind panel (e.g. "The Woodlands (°F)").
     temp_unit:
         ``"F"`` for Fahrenheit (default) or ``"C"`` for Celsius.
     tz_name:
@@ -306,9 +306,8 @@ if __name__ == "__main__":
                 f"lon={series['Lon'].iloc[0]:.2f}).")
 
     locality = args.locality or args.icao
-    icao_uc  = args.icao.upper()
     unit_lbl = "°F" if args.temp_unit == "F" else "°C"
-    title    = f"{icao_uc} — {locality} ({unit_lbl})"
+    title    = f"{locality} ({unit_lbl})"
 
     # 24-hour version
     render_meteogram(

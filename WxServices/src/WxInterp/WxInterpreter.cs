@@ -1,3 +1,4 @@
+using System.Globalization;
 using MetarParser.Data;
 using MetarParser.Data.Entities;
 using Microsoft.EntityFrameworkCore;
@@ -95,6 +96,8 @@ public static class WxInterpreter
 
         if (metar is null) return null;
 
+        var station = await ctx.WxStations.FindAsync([metar.StationIcao], ct);
+
         TafRecord? taf = null;
         if (tafIcao is not null)
         {
@@ -115,7 +118,7 @@ public static class WxInterpreter
                 homeLat.Value, homeLon.Value, dbOptions, precipThresholdMmHr, ct);
         }
 
-        return BuildSnapshot(metar, taf, localityName, gfsForecast);
+        return BuildSnapshot(metar, taf, localityName, gfsForecast, station);
     }
 
     // ── nearest-station resolution ────────────────────────────────────────────
@@ -227,7 +230,9 @@ public static class WxInterpreter
     /// <param name="gfsForecast">GFS model forecast to attach to the snapshot, or <see langword="null"/> if unavailable.</param>
     /// <returns>A fully populated <see cref="WeatherSnapshot"/> derived from the given records.</returns>
     private static WeatherSnapshot BuildSnapshot(
-        MetarRecord metar, TafRecord? taf, string localityName, GfsForecast? gfsForecast = null)
+        MetarRecord metar, TafRecord? taf, string localityName,
+        GfsForecast? gfsForecast = null,
+        WxStation? station = null)
     {
         var visSm    = metar.VisibilityStatuteMiles
                        ?? (metar.VisibilityM.HasValue ? metar.VisibilityM.Value / 1609.344 : null);
@@ -260,6 +265,8 @@ public static class WxInterpreter
         return new WeatherSnapshot
         {
             StationIcao           = metar.StationIcao,
+            StationMunicipality   = station?.Municipality,
+            StationName           = station?.Name is { Length: > 0 } n ? ToStationTitleCase(n) : null,
             LocalityName          = localityName,
             ObservationTimeUtc    = metar.ObservationUtc,
             IsAutomated           = metar.IsAuto,
@@ -459,4 +466,17 @@ public static class WxInterpreter
         "PROB40 TEMPO"  => ForecastChangeType.Probability40Temporary,
         _               => ForecastChangeType.Base,
     };
+
+    /// <summary>
+    /// Converts an airport name to title case, handling slash and hyphen word
+    /// boundaries that <see cref="TextInfo.ToTitleCase"/> would otherwise miss.
+    /// Always lowercases first so ALL-CAPS AWC names are normalised correctly.
+    /// </summary>
+    private static string ToStationTitleCase(string name)
+    {
+        var ti     = CultureInfo.InvariantCulture.TextInfo;
+        var spaced = name.Replace("/", " / ").Replace("-", " - ").ToLowerInvariant();
+        var titled = ti.ToTitleCase(spaced);
+        return titled.Replace(" / ", "/").Replace(" - ", "-");
+    }
 }

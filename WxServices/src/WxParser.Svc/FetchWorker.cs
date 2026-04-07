@@ -15,6 +15,7 @@ public sealed class FetchWorker : BackgroundService
     private readonly DbContextOptions<WeatherDataContext> _dbOptions;
     private readonly HttpClient _http = new();
     private DateTime _lastPurgeUtc = DateTime.MinValue;
+    private DateTime _lastAirportRefreshUtc = DateTime.MinValue;
 
     /// <summary>Initializes a new instance of <see cref="FetchWorker"/> with the given dependencies.</summary>
     /// <param name="config">Application configuration used to read <c>Fetch:*</c> settings each cycle.</param>
@@ -42,6 +43,7 @@ public sealed class FetchWorker : BackgroundService
         {
             await FetchCycleAsync(stoppingToken);
             await PurgeCycleAsync(stoppingToken);
+            await AirportRefreshCycleAsync(stoppingToken);
 
             var intervalMinutes = int.TryParse(_config["Fetch:IntervalMinutes"], out var m) ? m : 10;
             if (intervalMinutes <= 0)
@@ -237,6 +239,27 @@ public sealed class FetchWorker : BackgroundService
         catch (Exception ex) when (!ct.IsCancellationRequested)
         {
             Logger.Error("Unhandled exception in purge cycle.", ex);
+        }
+    }
+
+    /// <summary>
+    /// Refreshes WxStation metadata from OurAirports once per week (and on first
+    /// startup).  Errors are logged but do not affect the METAR/TAF fetch cycle.
+    /// </summary>
+    /// <param name="ct">Cancellation token.</param>
+    private async Task AirportRefreshCycleAsync(CancellationToken ct)
+    {
+        if ((DateTime.UtcNow - _lastAirportRefreshUtc).TotalDays < 7) return;
+
+        try
+        {
+            Logger.Info("AirportRefreshCycle: refreshing WxStation metadata from OurAirports...");
+            await AirportDataImporter.RefreshAsync(_dbOptions, _http, ct);
+            _lastAirportRefreshUtc = DateTime.UtcNow;
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            Logger.Error("AirportRefreshCycle: unhandled exception.", ex);
         }
     }
 

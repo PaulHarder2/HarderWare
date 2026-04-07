@@ -210,6 +210,18 @@ public sealed class WeatherSnapshot
 
     /// <summary>ICAO identifier of the home METAR station.</summary>
     public string   StationIcao       { get; init; } = "";
+    /// <summary>
+    /// Municipality (city/town) of the METAR station from OurAirports
+    /// (e.g. "College Station"), or <see langword="null"/> if unavailable.
+    /// </summary>
+    public string? StationMunicipality { get; init; }
+
+    /// <summary>
+    /// Human-readable airport name of the METAR station, properly cased
+    /// (e.g. "Easterwood Airport"), or <see langword="null"/> if unavailable.
+    /// </summary>
+    public string? StationName { get; init; }
+
     /// <summary>Human-readable locality name from configuration (e.g. "Spring").</summary>
     public string   LocalityName      { get; init; } = "";
     /// <summary>UTC time of the METAR observation.</summary>

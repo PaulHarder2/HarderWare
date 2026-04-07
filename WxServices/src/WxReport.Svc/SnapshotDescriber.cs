@@ -29,7 +29,12 @@ public static class SnapshotDescriber
         var localObs = TimeZoneInfo.ConvertTimeFromUtc(snap.ObservationTimeUtc, tz);
 
         sb.AppendLine($"Current date/time: {localNow:dddd, yyyy-MM-dd HH:mm} local / {DateTime.UtcNow:HH:mm} UTC");
-        sb.AppendLine($"Station: {snap.StationIcao} ({snap.LocalityName})");
+        sb.AppendLine($"Forecast location: {snap.LocalityName}");
+        sb.AppendLine($"Station ICAO: {snap.StationIcao}");
+        if (snap.StationMunicipality is not null)
+            sb.AppendLine($"Station city: {snap.StationMunicipality}");
+        if (snap.StationName is not null)
+            sb.AppendLine($"Station name: {snap.StationName}");
         sb.AppendLine($"Observed: {localObs:dddd, yyyy-MM-dd HH:mm} local / {snap.ObservationTimeUtc:HH:mm} UTC{(snap.IsAutomated ? " (automated)" : "")}");
 
         // Wind
