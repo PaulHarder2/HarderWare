@@ -156,8 +156,9 @@
 
                         <!-- Timezone -->
                         <TextBlock Grid.Row="4"  Grid.Column="0" Text="Timezone" VerticalAlignment="Center" Margin="0,3"/>
-                        <TextBox   Grid.Row="4"  Grid.Column="1" x:Name="TzBox" Margin="0,3"
-                                   ToolTip="IANA timezone name, e.g. America/Chicago"/>
+                        <ComboBox  Grid.Row="4"  Grid.Column="1" x:Name="TzBox" Margin="0,3"
+                                   IsEditable="True" IsTextSearchEnabled="True"
+                                   ToolTip="IANA timezone name — type to jump (e.g. America/C)"/>
 
                         <!-- Scheduled Hours -->
                         <TextBlock Grid.Row="5"  Grid.Column="0" Text="Scheduled Hours" VerticalAlignment="Center" Margin="0,3"/>
@@ -210,7 +211,11 @@
             <DockPanel Grid.Row="4" Margin="8,4,8,8" LastChildFill="False">
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
                     <Button x:Name="SaveBtn" Content="Save" Width="80"
+                            IsEnabled="False"
                             Margin="0,0,10,0" Click="SaveBtn_Click"/>
+                    <Button x:Name="CancelBtn" Content="Cancel" Width="80"
+                            IsEnabled="False"
+                            Margin="0,0,10,0" Click="CancelBtn_Click"/>
                     <Button x:Name="DeleteBtn" Content="Delete" Width="80"
                             IsEnabled="False" Click="DeleteBtn_Click"/>
                 </StackPanel>

@@ -116,6 +116,9 @@ public partial class RecipientsTab : UserControl
         TempUnitBox.ItemsSource     = new[] { "F", "C" };
         PressureUnitBox.ItemsSource = new[] { "inHg", "kPa" };
         WindUnitBox.ItemsSource     = new[] { "mph", "kph" };
+        TzBox.ItemsSource = BuildIanaTimeZoneList();
+
+        ClearRightPane();   // show defaults; buttons stay disabled (set in XAML)
 
         Loaded += async (_, _) => await LoadRecipientListAsync();
     }
@@ -176,6 +179,8 @@ public partial class RecipientsTab : UserControl
         RecipientList.SelectionChanged += RecipientList_SelectionChanged;
 
         ClearRightPane();
+        SaveBtn.IsEnabled   = true;
+        CancelBtn.IsEnabled = true;
         DeleteBtn.IsEnabled = false;
     }
 
@@ -510,14 +515,32 @@ public partial class RecipientsTab : UserControl
             }
 
             _currentRecipientDbId = null;
-            ClearRightPane();
-            DeleteBtn.IsEnabled = false;
+            SetIdlePane();
             await LoadRecipientListAsync();
         }
         catch (Exception ex)
         {
             ShowMessage($"Delete failed: {ex.Message}");
         }
+    }
+
+    // ── Right pane: Cancel button ─────────────────────────────────────────────
+
+    /// <summary>
+    /// Discards any unsaved edits and returns the form to the idle (no-selection) state.
+    /// </summary>
+    /// <param name="sender">The Cancel button.</param>
+    /// <param name="e">Event arguments (unused).</param>
+    /// <sideeffects>Clears all right-pane fields; deselects the ListBox; disables Save, Cancel, and Delete.</sideeffects>
+    private void CancelBtn_Click(object sender, RoutedEventArgs e)
+    {
+        _currentRecipientDbId = null;
+
+        RecipientList.SelectionChanged -= RecipientList_SelectionChanged;
+        RecipientList.SelectedItem = null;
+        RecipientList.SelectionChanged += RecipientList_SelectionChanged;
+
+        SetIdlePane();
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
@@ -539,7 +562,8 @@ public partial class RecipientsTab : UserControl
         NameBox.Text             = r.Name;
         EmailBox.Text            = r.Email;
         LanguageBox.Text         = r.Language ?? "";
-        TzBox.Text               = r.Timezone;
+        TzBox.SelectedItem       = r.Timezone;
+        if (TzBox.SelectedItem is null) TzBox.Text = r.Timezone;  // preserve unknown values
         ScheduledHoursBox.Text   = r.ScheduledSendHours ?? "";
         AddressBox.Text          = r.Address ?? "";
         LocalityBox.Text         = r.LocalityName ?? "";
@@ -555,6 +579,8 @@ public partial class RecipientsTab : UserControl
         StationsGroup.Visibility  = Visibility.Collapsed;
         StationsGrid.ItemsSource  = null;
         BboxStatusText.Visibility = Visibility.Collapsed;
+        SaveBtn.IsEnabled   = true;
+        CancelBtn.IsEnabled = true;
         DeleteBtn.IsEnabled = true;
     }
 
@@ -568,7 +594,7 @@ public partial class RecipientsTab : UserControl
         NameBox.Clear();
         EmailBox.Clear();
         LanguageBox.Text       = App.DefaultLanguage;
-        TzBox.Text             = "America/Chicago";
+        TzBox.SelectedItem     = "America/Chicago";
         ScheduledHoursBox.Text = "7";
         AddressBox.Clear();
         LocalityBox.Clear();
@@ -576,14 +602,47 @@ public partial class RecipientsTab : UserControl
         LonBox.Clear();
         MetarIcaoBox.Clear();
         TafIcaoBox.Clear();
-        TempUnitBox.SelectedItem     = "F";
-        PressureUnitBox.SelectedItem = "inHg";
-        WindUnitBox.SelectedItem     = "mph";
+        TempUnitBox.SelectedIndex     = 0;  // "F"
+        PressureUnitBox.SelectedIndex = 0;  // "inHg"
+        WindUnitBox.SelectedIndex     = 0;  // "mph"
 
         HideMessages();
         StationsGroup.Visibility  = Visibility.Collapsed;
         StationsGrid.ItemsSource  = null;
         BboxStatusText.Visibility = Visibility.Collapsed;
+    }
+
+    /// <summary>
+    /// Resets the right pane to the idle state: all fields blank, no defaults,
+    /// Save/Cancel/Delete all disabled.  Used after a delete or cancel action.
+    /// </summary>
+    /// <sideeffects>Clears all TextBoxes and ComboBox selections; hides Messages and Stations sections; disables Save, Cancel, and Delete.</sideeffects>
+    private void SetIdlePane()
+    {
+        RecipientIdBox.Clear();
+        NameBox.Clear();
+        EmailBox.Clear();
+        LanguageBox.Clear();
+        TzBox.SelectedItem = null;
+        TzBox.Text         = "";
+        ScheduledHoursBox.Clear();
+        AddressBox.Clear();
+        LocalityBox.Clear();
+        LatBox.Clear();
+        LonBox.Clear();
+        MetarIcaoBox.Clear();
+        TafIcaoBox.Clear();
+        TempUnitBox.SelectedIndex     = -1;
+        PressureUnitBox.SelectedIndex = -1;
+        WindUnitBox.SelectedIndex     = -1;
+
+        HideMessages();
+        StationsGroup.Visibility  = Visibility.Collapsed;
+        StationsGrid.ItemsSource  = null;
+        BboxStatusText.Visibility = Visibility.Collapsed;
+        SaveBtn.IsEnabled   = false;
+        CancelBtn.IsEnabled = false;
+        DeleteBtn.IsEnabled = false;
     }
 
     /// <summary>
@@ -616,6 +675,22 @@ public partial class RecipientsTab : UserControl
     {
         LookUpBtn.IsEnabled = !inProgress;
         LookUpBtn.Content   = inProgress ? "Looking up…" : "Look Up";
+    }
+
+    /// <summary>
+    /// Builds a sorted list of canonical IANA timezone IDs by converting each
+    /// Windows timezone (from <see cref="TimeZoneInfo.GetSystemTimeZones"/>) to
+    /// its IANA equivalent.  "UTC" is always included.
+    /// </summary>
+    private static List<string> BuildIanaTimeZoneList()
+    {
+        var ids = new HashSet<string>(StringComparer.Ordinal) { "UTC" };
+        foreach (var tz in TimeZoneInfo.GetSystemTimeZones())
+        {
+            if (TimeZoneInfo.TryConvertWindowsIdToIanaId(tz.Id, out var ianaId) && ianaId is not null)
+                ids.Add(ianaId);
+        }
+        return ids.OrderBy(id => id, StringComparer.Ordinal).ToList();
     }
 
     /// <summary>
