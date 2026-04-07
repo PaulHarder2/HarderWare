@@ -3,7 +3,9 @@ using MetarParser.Data.Entities;
 using Microsoft.EntityFrameworkCore;
 using System.Net.Http;
 using System.Net.Http.Json;
+using System.Net.Mail;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -431,12 +433,90 @@ public partial class RecipientsTab : UserControl
         if (string.IsNullOrEmpty(name))         { ShowMessage("Name is required.");  return; }
         if (string.IsNullOrEmpty(email))        { ShowMessage("Email is required."); return; }
 
+        if (!Regex.IsMatch(recipientId, @"^[A-Za-z0-9_\-]+$"))
+            { ShowMessage("Id may only contain letters, digits, hyphens, and underscores."); return; }
+
+        try   { _ = new MailAddress(email); }
+        catch { ShowMessage("Email address is not valid."); return; }
+
+        var tzValue = TzBox.Text.Trim().Length > 0 ? TzBox.Text.Trim() : "UTC";
+        if (!BuildIanaTimeZoneList().Contains(tzValue))
+            { ShowMessage($"\"{tzValue}\" is not a recognized IANA timezone ID."); return; }
+
+        var scheduledHoursRaw = ScheduledHoursBox.Text.Trim();
+        if (!string.IsNullOrWhiteSpace(scheduledHoursRaw))
+        {
+            foreach (var token in scheduledHoursRaw.Split(','))
+            {
+                var t = token.Trim();
+                if (!int.TryParse(t, out var h) || h < 0 || h > 23)
+                    { ShowMessage($"Scheduled hours must be integers 0\u201323, comma-separated (got \"{t}\")."); return; }
+            }
+        }
+
+        var metarRaw = MetarIcaoBox.Text.Trim();
+        if (!string.IsNullOrWhiteSpace(metarRaw))
+        {
+            foreach (var token in metarRaw.Split(','))
+            {
+                if (!Regex.IsMatch(token.Trim(), @"^[A-Z0-9]{4}$", RegexOptions.IgnoreCase))
+                    { ShowMessage($"METAR ICAO codes must be exactly 4 alphanumeric characters (got \"{token.Trim()}\")."); return; }
+            }
+        }
+
+        var tafRaw = TafIcaoBox.Text.Trim();
+        if (!string.IsNullOrWhiteSpace(tafRaw) && !tafRaw.Equals("NONE", StringComparison.OrdinalIgnoreCase) &&
+            !Regex.IsMatch(tafRaw, @"^[A-Z0-9]{4}$", RegexOptions.IgnoreCase))
+            { ShowMessage("TAF ICAO code must be exactly 4 alphanumeric characters, \"NONE\", or blank."); return; }
+
         var lat = double.TryParse(LatBox.Text, out var lv) ? lv : (double?)null;
         var lon = double.TryParse(LonBox.Text, out var lnv) ? lnv : (double?)null;
+        if (lat is < -90 or > 90)   { ShowMessage("Latitude must be between \u221290 and +90."); return; }
+        if (lon is < -180 or > 180) { ShowMessage("Longitude must be between \u2212180 and +180."); return; }
 
         try
         {
             await using var ctx = new WeatherDataContext(_dbOptions);
+
+            // ── ICAO station validation ───────────────────────────────────────
+            var bboxWarnings = new List<string>();
+
+            if (!string.IsNullOrWhiteSpace(metarRaw))
+            {
+                foreach (var token in metarRaw.Split(','))
+                {
+                    var icao    = token.Trim().ToUpperInvariant();
+                    var station = await ctx.WxStations.FirstOrDefaultAsync(s => s.IcaoId == icao);
+                    if (station is null)
+                        { ShowMessage($"METAR station \"{icao}\" was not found in the station database."); return; }
+                    if (station.Lat is null || station.Lon is null)
+                        { ShowMessage($"METAR station \"{icao}\" has no coordinates and cannot be used."); return; }
+                    if (App.FetchHomeLat.HasValue && App.FetchHomeLon.HasValue && App.FetchBoxDeg.HasValue)
+                    {
+                        var bd = App.FetchBoxDeg.Value;
+                        if (station.Lat < App.FetchHomeLat - bd || station.Lat > App.FetchHomeLat + bd ||
+                            station.Lon < App.FetchHomeLon - bd || station.Lon > App.FetchHomeLon + bd)
+                            bboxWarnings.Add($"{icao} is outside the fetch bounding box");
+                    }
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(tafRaw) && !tafRaw.Equals("NONE", StringComparison.OrdinalIgnoreCase))
+            {
+                var icao    = tafRaw.ToUpperInvariant();
+                var station = await ctx.WxStations.FirstOrDefaultAsync(s => s.IcaoId == icao);
+                if (station is null)
+                    { ShowMessage($"TAF station \"{icao}\" was not found in the station database."); return; }
+                if (station.Lat is null || station.Lon is null)
+                    { ShowMessage($"TAF station \"{icao}\" has no coordinates and cannot be used."); return; }
+                if (App.FetchHomeLat.HasValue && App.FetchHomeLon.HasValue && App.FetchBoxDeg.HasValue)
+                {
+                    var bd = App.FetchBoxDeg.Value;
+                    if (station.Lat < App.FetchHomeLat - bd || station.Lat > App.FetchHomeLat + bd ||
+                        station.Lon < App.FetchHomeLon - bd || station.Lon > App.FetchHomeLon + bd)
+                        bboxWarnings.Add($"TAF station {icao} is outside the fetch bounding box");
+                }
+            }
 
             Recipient r;
             if (_currentRecipientDbId is null)
@@ -475,7 +555,10 @@ public partial class RecipientsTab : UserControl
             await ctx.SaveChangesAsync();
             _currentRecipientDbId = r.Id;
             DeleteBtn.IsEnabled = true;
-            ShowSuccessMessage("Saved successfully.");
+            if (bboxWarnings.Count > 0)
+                ShowMessage($"Saved. Note: {string.Join("; ", bboxWarnings)} — data may not be fetched for these stations.");
+            else
+                ShowSuccessMessage("Saved successfully.");
 
             await LoadRecipientListAsync();
         }

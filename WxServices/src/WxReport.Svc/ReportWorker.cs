@@ -237,6 +237,9 @@ public sealed class ReportWorker : BackgroundService
         await using var ctx = new WeatherDataContext(_dbOptions);
         var (cfg, smtp, claude_cfg) = await LoadConfigsAsync(ctx, ct);
 
+        try
+        {
+
         if (string.IsNullOrWhiteSpace(claude_cfg.ApiKey))
         {
             Logger.Warn("Claude.ApiKey is not set — skipping report cycle.");
@@ -397,7 +400,11 @@ public sealed class ReportWorker : BackgroundService
             ? $"Report cycle complete. {reportsSent} report(s) sent."
             : "Report cycle complete. No reports due.");
 
-        WriteHeartbeat(cfg.HeartbeatFile);
+        } // try
+        finally
+        {
+            WriteHeartbeat(cfg.HeartbeatFile);
+        }
     }
 
     // ── send-decision logic ───────────────────────────────────────────────────

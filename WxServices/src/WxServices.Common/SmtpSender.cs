@@ -84,55 +84,55 @@ public sealed class SmtpSender
             return false;
         }
 
-        var message = new MimeMessage();
-        message.From.Add(new MailboxAddress(_fromName, _cfg.FromAddress));
-        message.To.Add(new MailboxAddress(toName ?? toAddress, toAddress));
-        message.Subject = subject;
-
-        if (htmlBody is not null)
+        try
         {
-            var htmlPart = new TextPart("html") { Text = htmlBody };
+            var message = new MimeMessage();
+            message.From.Add(new MailboxAddress(_fromName, _cfg.FromAddress));
+            message.To.Add(new MailboxAddress(toName ?? toAddress, toAddress));
+            message.Subject = subject;
 
-            MimeEntity richPart;
-            if (inlineImages is { Count: > 0 })
+            if (htmlBody is not null)
             {
-                // Wrap the HTML and its inline images in multipart/related.
-                var related = new MultipartRelated { htmlPart };
-                foreach (var (cid, filePath) in inlineImages)
+                var htmlPart = new TextPart("html") { Text = htmlBody };
+
+                MimeEntity richPart;
+                if (inlineImages is { Count: > 0 })
                 {
-                    if (!File.Exists(filePath))
+                    // Wrap the HTML and its inline images in multipart/related.
+                    var related = new MultipartRelated { htmlPart };
+                    foreach (var (cid, filePath) in inlineImages)
                     {
-                        Logger.Warn($"{_fromName}: inline image not found, skipping: {filePath}");
-                        continue;
+                        if (!File.Exists(filePath))
+                        {
+                            Logger.Warn($"{_fromName}: inline image not found, skipping: {filePath}");
+                            continue;
+                        }
+                        var img = new MimePart("image", "png")
+                        {
+                            Content            = new MimeContent(File.OpenRead(filePath)),
+                            ContentDisposition = new ContentDisposition(ContentDisposition.Inline),
+                            ContentId          = cid,
+                        };
+                        related.Add(img);
                     }
-                    var img = new MimePart("image", "png")
-                    {
-                        Content            = new MimeContent(File.OpenRead(filePath)),
-                        ContentDisposition = new ContentDisposition(ContentDisposition.Inline),
-                        ContentId          = cid,
-                    };
-                    related.Add(img);
+                    richPart = related;
                 }
-                richPart = related;
+                else
+                {
+                    richPart = htmlPart;
+                }
+
+                message.Body = new MultipartAlternative
+                {
+                    new TextPart("plain") { Text = plainBody },
+                    richPart,
+                };
             }
             else
             {
-                richPart = htmlPart;
+                message.Body = new TextPart("plain") { Text = plainBody };
             }
 
-            message.Body = new MultipartAlternative
-            {
-                new TextPart("plain") { Text = plainBody },
-                richPart,
-            };
-        }
-        else
-        {
-            message.Body = new TextPart("plain") { Text = plainBody };
-        }
-
-        try
-        {
             using var client = new SmtpClient();
             await client.ConnectAsync(_cfg.Host, _cfg.Port, SecureSocketOptions.StartTls, ct);
             await client.AuthenticateAsync(_cfg.Username, _cfg.Password, ct);
