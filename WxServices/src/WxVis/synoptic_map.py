@@ -468,10 +468,10 @@ def render_synoptic_map(
     ax.set_xlim(x_min, x_max)
     ax.set_ylim(y_min, y_max)
     tmp_path = output_path + ".tmp"
-    plt.savefig(tmp_path, dpi=dpi)
+    plt.savefig(tmp_path, dpi=dpi, format="png")
     plt.close(fig)
     os.replace(tmp_path, output_path)
-    logger.info(f"Saved synoptic map → {output_path}")
+    logger.info(f"Saved synoptic map -> {output_path}")
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

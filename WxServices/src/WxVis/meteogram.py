@@ -250,7 +250,7 @@ def render_meteogram(
     plt.savefig(tmp_path, format="png", dpi=dpi, bbox_inches="tight")
     plt.close(fig)
     os.replace(tmp_path, output_path)
-    logger.info(f"Saved meteogram → {output_path}")
+    logger.info(f"Saved meteogram -> {output_path}")
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
