@@ -12,6 +12,7 @@ using WxParser.Svc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.FileProviders;
+using OpenTelemetry.Metrics;
 
 Logger.Initialise();
 Logger.Info("WxParser.Svc starting.");
@@ -38,6 +39,23 @@ var host = Host.CreateDefaultBuilder(args)
         var dbOptions = new DbContextOptionsBuilder<WeatherDataContext>()
             .UseSqlServer(connectionString)
             .Options;
+
+        var otlpEndpoint = ctx.Configuration["Telemetry:OtlpEndpoint"] ?? "http://localhost:4318/v1/metrics";
+
+        services.AddOpenTelemetry()
+            .WithMetrics(m => m
+                .AddMeter("WxParser.Svc")
+                .AddView("wxparser.fetch.cycle.duration.seconds",
+                    new ExplicitBucketHistogramConfiguration
+                    {
+                        Boundaries = [1, 2, 5, 10, 20, 30, 60, 120]
+                    })
+                .AddOtlpExporter((o, r) =>
+                {
+                    o.Endpoint = new Uri(otlpEndpoint);
+                    o.Protocol = OpenTelemetry.Exporter.OtlpExportProtocol.HttpProtobuf;
+                    r.PeriodicExportingMetricReaderOptions.ExportIntervalMilliseconds = 10_000;
+                }));
 
         services.AddSingleton(dbOptions);
         services.AddHostedService<FetchWorker>();
@@ -146,3 +164,4 @@ catch (Exception ex)
     Logger.Error("Fatal error during startup.", ex);
     throw;
 }
+

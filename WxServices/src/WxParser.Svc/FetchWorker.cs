@@ -1,6 +1,8 @@
 using MetarParser.Data;
 using WxServices.Logging;
 using Microsoft.EntityFrameworkCore;
+using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using System.Text.Json.Nodes;
 
 namespace WxParser.Svc;
@@ -17,6 +19,10 @@ public sealed class FetchWorker : BackgroundService
     private DateTime _lastPurgeUtc = DateTime.MinValue;
     private DateTime _lastAirportRefreshUtc = DateTime.MinValue;
 
+    private readonly Meter _meter = new("WxParser.Svc", "1.0.0");
+    private readonly Counter<long> _fetchCycles;
+    private readonly Histogram<double> _fetchDuration;
+
     /// <summary>Initializes a new instance of <see cref="FetchWorker"/> with the given dependencies.</summary>
     /// <param name="config">Application configuration used to read <c>Fetch:*</c> settings each cycle.</param>
     /// <param name="dbOptions">EF Core options for opening a <see cref="WeatherDataContext"/> during fetch cycles.</param>
@@ -24,8 +30,10 @@ public sealed class FetchWorker : BackgroundService
         IConfiguration config,
         DbContextOptions<WeatherDataContext> dbOptions)
     {
-        _config    = config;
-        _dbOptions = dbOptions;
+        _config        = config;
+        _dbOptions     = dbOptions;
+        _fetchCycles   = _meter.CreateCounter<long>("wxparser.fetch.cycles.total", description: "Number of completed METAR/TAF fetch cycles.");
+        _fetchDuration = _meter.CreateHistogram<double>("wxparser.fetch.cycle.duration.seconds", unit: "s", description: "Duration of each METAR/TAF fetch cycle.");
     }
 
     /// <summary>
@@ -84,6 +92,7 @@ public sealed class FetchWorker : BackgroundService
     /// </sideeffects>
     private async Task FetchCycleAsync(CancellationToken cancellationToken)
     {
+        var sw = Stopwatch.StartNew();
         try
         {
             var homeIcao = _config["Fetch:HomeIcao"];
@@ -137,6 +146,8 @@ public sealed class FetchWorker : BackgroundService
 
             Logger.Info("Fetch cycle complete.");
             WriteHeartbeat(_config["Fetch:HeartbeatFile"]);
+            _fetchCycles.Add(1);
+            _fetchDuration.Record(sw.Elapsed.TotalSeconds);
         }
         catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
         {
@@ -266,6 +277,7 @@ public sealed class FetchWorker : BackgroundService
     public override void Dispose()
     {
         _http.Dispose();
+        _meter.Dispose();
         base.Dispose();
     }
 }

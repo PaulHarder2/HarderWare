@@ -41,6 +41,7 @@
 8. [External Dependencies](#8-external-dependencies)
 9. [Installation and Deployment](#9-installation-and-deployment)
 10. [Known Limitations and Future Work](#10-known-limitations-and-future-work)
+11. [Observability](#11-observability)
 
 ---
 
@@ -371,6 +372,15 @@ graph TD
 1. Download `airports.csv` from OurAirports (`https://davidmegginson.github.io/ourairports-data/airports.csv`), decoded as UTF-8.
 2. Parse the CSV; skip rows where `icao_code` and `ident` are both blank, and skip any identifier not exactly 4 characters long.
 3. Upsert all valid rows into `WxStations`: update existing rows with properly-cased `Name` and `Municipality`; insert new rows for airports not yet seen. Coordinates and elevation are refreshed from OurAirports data.
+
+**Metrics emitted (OpenTelemetry):**
+
+| Metric | Type | Description |
+|---|---|---|
+| `wxparser.fetch.cycles.total` | Counter | Incremented on each successful METAR/TAF fetch cycle |
+| `wxparser.fetch.cycle.duration.seconds` | Histogram | Wall-clock duration of each METAR/TAF fetch cycle (buckets: 1 2 5 10 20 30 60 120 s) |
+
+See [Section 11 — Observability](#11-observability) for the collection stack.
 
 **Key classes:**
 | Class | Location | Role |
@@ -1210,7 +1220,48 @@ All logs are written to `C:\HarderWare\Logs\`. Log paths can be changed by editi
 | Single bounding box | All METAR, TAF, and GFS data is fetched for one geographic region. Supporting recipients in widely separated locations would require per-region fetch configuration. |
 | GFS requires WSL | wgrib2 is a Linux binary; the fetcher invokes it via `wsl.exe`. If WSL is unavailable or wgrib2 is not installed, the GFS cycle logs errors and skips ingestion; METAR/TAF reports continue normally without forecast data. |
 | GFS forecast delay | A complete model run takes up to ~4 hours after the nominal run time to appear on NOMADS. During this window the previous run's data is used. |
-| No metrics | Cycle duration, API call counts, send success rates, etc. are not tracked. Consider adding structured metrics (Seq, Windows Event Log) in a future session. |
+| Metrics only on WxParser.Svc | Cycle duration and count metrics are instrumented on WxParser.Svc only. WxReport.Svc, WxVis.Svc, and WxMonitor.Svc have no OTel instrumentation yet. |
 | WxMonitor does not watch itself | WxMonitor has no watchdog. A Windows Task Scheduler task could serve this purpose if needed. |
 | Nominatim rate limit | Nominatim's terms require a maximum of 1 request/second and a valid User-Agent. Resolution is one-time per recipient, so this is unlikely to be a problem in practice. |
 | WxViewer has no database access | WxViewer reads PNG files and manifest JSON files directly. METAR observation tables would require a database-connected panel in a future session. |
+
+---
+
+## 11. Observability
+
+### Stack
+
+Metrics are collected via OpenTelemetry and visualised in Grafana. The stack runs as Docker containers defined in `observability/docker-compose.yml`.
+
+```
+WxParser.Svc  ──OTLP/HTTP──▶  otel-collector  ──Prometheus scrape──▶  Prometheus  ──▶  Grafana
+              (port 4318)      (port 8889)                              (port 9090)      (port 3000)
+```
+
+| Container | Image | Purpose |
+|---|---|---|
+| `otel-collector` | `otel/opentelemetry-collector:latest` | Receives OTLP metrics; exposes Prometheus scrape endpoint |
+| `prometheus` | `prom/prometheus:latest` | Scrapes collector; stores time-series data |
+| `grafana` | `grafana/grafana:latest` | Dashboard UI (admin password: `grafana`) |
+
+Start the stack from the `observability/` directory:
+```
+docker compose up -d
+```
+
+### WxParser.Svc instrumentation
+
+Metrics are emitted via `System.Diagnostics.Metrics` and exported over OTLP/HTTP every 10 seconds.
+
+The OTLP endpoint is configured by `Telemetry:OtlpEndpoint` in `appsettings.json` or `appsettings.local.json`. The default is `http://localhost:4318/v1/metrics`. **The full signal path (`/v1/metrics`) must be included — the SDK does not append it automatically when the endpoint is set in code.**
+
+### Useful Prometheus queries
+
+| Query | What it shows |
+|---|---|
+| `wxparser_fetch_cycles_total` | Cumulative completed fetch cycles |
+| `increase(wxparser_fetch_cycles_total[1h])` | Cycles completed in the last hour |
+| `increase(wxparser_fetch_cycle_duration_seconds_bucket[1h])` | Histogram input for quantile queries |
+| `histogram_quantile(0.95, increase(wxparser_fetch_cycle_duration_seconds_bucket[1h]))` | p95 fetch cycle duration over the last hour |
+
+Use `increase()` rather than `rate()` for these metrics — the fetch cycle fires every 10 minutes, so `rate()` produces near-zero values that cause `histogram_quantile` to return NaN.
