@@ -5,6 +5,7 @@ using System.Net.Http;
 using System.Windows;
 using System.Windows.Controls;
 using WxServices.Common;
+using WxServices.Logging;
 
 namespace WxManager;
 
@@ -137,6 +138,8 @@ public partial class AnnouncementTab : UserControl
             r => r.Language ?? defaultLang,
             StringComparer.OrdinalIgnoreCase);
 
+        Logger.Info($"Announcement send started: {recipients.Count} recipient(s), {languageGroups.Count()} language group(s).");
+
         int sent = 0, failed = 0;
         var errors = new List<string>();
 
@@ -146,6 +149,7 @@ public partial class AnnouncementTab : UserControl
             var groupList = group.ToList();
             SetProgress($"Formatting for {language} ({groupList.Count} recipient(s))...");
 
+            Logger.Info($"Formatting announcement for language '{language}' ({groupList.Count} recipient(s)).");
             string? html;
             try
             {
@@ -153,6 +157,7 @@ public partial class AnnouncementTab : UserControl
             }
             catch (Exception ex)
             {
+                Logger.Error($"Claude formatting failed for language '{language}'.", ex);
                 errors.Add($"Claude error ({language}): {ex.Message}");
                 failed += groupList.Count;
                 continue;
@@ -173,14 +178,19 @@ public partial class AnnouncementTab : UserControl
                 }
                 catch (Exception ex)
                 {
+                    Logger.Error($"Exception sending to {recipient.Name} <{recipient.Email}>.", ex);
                     ok = false;
                     errors.Add($"Send error for {recipient.Name}: {ex.Message}");
                 }
 
                 if (ok)
+                {
+                    Logger.Info($"Sent to {recipient.Name} <{recipient.Email}>.");
                     sent++;
+                }
                 else
                 {
+                    Logger.Warn($"Failed to send to {recipient.Name} <{recipient.Email}>.");
                     failed++;
                     if (errors.Count == 0 || !errors[^1].Contains(recipient.Name))
                         errors.Add($"Failed to send to {recipient.Name} <{recipient.Email}>");
@@ -189,6 +199,8 @@ public partial class AnnouncementTab : UserControl
         }
 
         // ── Report results ────────────────────────────────────────────────────
+
+        Logger.Info($"Announcement send complete: {sent} sent, {failed} failed.");
 
         SendBtn.IsEnabled = true;
         SetProgress("");

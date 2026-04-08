@@ -16,6 +16,14 @@
   <ItemGroup>
     <ProjectReference Include="..\MetarParser.Data\MetarParser.Data.csproj" />
     <ProjectReference Include="..\WxServices.Common\WxServices.Common.csproj" />
+    <ProjectReference Include="..\WxServices.Logging\WxServices.Logging.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Remove="log4net.config" />
+    <Content Include="log4net.config">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
   </ItemGroup>
   <ItemGroup>
     <None Include="..\WxViewer\HarderWare.ico">

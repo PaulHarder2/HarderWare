@@ -214,6 +214,15 @@ function Invoke-ManagerPublish {
         return $false
     }
 
+    # dotnet publish does not reliably copy Content files for WPF projects; copy explicitly.
+    foreach ($configFile in @('log4net.config', 'appsettings.local.json')) {
+        $src = "$projectPath\$configFile"
+        if (Test-Path $src) {
+            Copy-Item $src $outputDir
+            Write-Host "Copied $configFile to $outputDir."
+        }
+    }
+
     Write-Host "WxManager published to $outputDir." -ForegroundColor Green
     return $true
 }

@@ -67,6 +67,8 @@
             <GroupBox x:Name="StationsGroup" Grid.Row="2" Header="Nearby Stations"
                       Margin="8,0,8,4" Visibility="Collapsed">
                 <StackPanel Margin="0,2,0,4">
+                    <TextBlock x:Name="StationsSearchingText" Text="Searching for nearby stations…"
+                               FontStyle="Italic" Margin="6,4,6,4" Visibility="Collapsed"/>
                     <DataGrid x:Name="StationsGrid"
                               MaxHeight="185" AutoGenerateColumns="False"
                               IsReadOnly="True" SelectionMode="Single"

@@ -9,6 +9,7 @@ using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using WxServices.Logging;
 
 namespace WxManager;
 
@@ -265,6 +266,12 @@ public partial class RecipientsTab : UserControl
             SaveBtn.IsEnabled   = true;
             CancelBtn.IsEnabled = true;
 
+            // Show the stations group with a searching advisory while the DB and AWC
+            // queries run — the grid itself stays hidden until results are ready.
+            StationsGroup.Visibility        = Visibility.Visible;
+            StationsSearchingText.Visibility = Visibility.Visible;
+            StationsGrid.Visibility         = Visibility.Collapsed;
+
             // ── Nearby METAR stations ─────────────────────────────────────────
 
             // ── Nearby stations from local WxStations table ───────────────────
@@ -282,18 +289,26 @@ public partial class RecipientsTab : UserControl
                          && s.Lon >= lon - lonDelta && s.Lon <= lon + lonDelta)
                 .ToListAsync();
 
+            // Take more candidates than we intend to display so that non-reporting
+            // airports (which are numerous in the OurAirports dataset) can be filtered
+            // out before the final 5 are chosen.
             var candidates = nearbyStations
                 .Select(s => (Station: s, DistKm: HaversineKm(lat, lon, s.Lat!.Value, s.Lon!.Value)))
                 .Where(x => x.DistKm <= SearchRadiusKm)
                 .OrderBy(x => x.DistKm)
-                .Take(5)
+                .Take(20)
                 .ToList();
 
             if (candidates.Count == 0)
             {
+                Logger.Info($"Station lookup: no WxStations found within {SearchRadiusKm:F0} km of ({lat:F4}, {lon:F4}).");
+                StationsGroup.Visibility = Visibility.Collapsed;
                 ShowMessage($"No stations found within {SearchRadiusKm:F0} km of the resolved coordinates.");
                 return;
             }
+
+            Logger.Info($"Station lookup: {candidates.Count} candidate(s) within {SearchRadiusKm:F0} km of ({lat:F4}, {lon:F4}): " +
+                        string.Join(", ", candidates.Select(c => $"{c.Station.IcaoId} ({c.DistKm:F1} km)")));
 
             // ── DB counts (batched) ───────────────────────────────────────────
 
@@ -332,8 +347,21 @@ public partial class RecipientsTab : UserControl
                         {
                             station.AlwaysFetchDirect = true;
                             await ctx.SaveChangesAsync();
+                            Logger.Info($"  {station.IcaoId}: no local data; AWC returned {awcCount} record(s) — flagged AlwaysFetchDirect.");
+                        }
+                        else
+                        {
+                            Logger.Info($"  {station.IcaoId}: no local data; AWC returned {awcCount} record(s) (already flagged).");
                         }
                     }
+                    else
+                    {
+                        Logger.Info($"  {station.IcaoId}: no local data and AWC returned nothing — suppressed.");
+                    }
+                }
+                else
+                {
+                    Logger.Info($"  {station.IcaoId}: {localCount} local METAR(s), {tafCounts.FirstOrDefault(x => x.Icao == station.IcaoId)?.Count ?? 0} TAF(s).");
                 }
 
                 rows.Add(new StationRow
@@ -346,15 +374,27 @@ public partial class RecipientsTab : UserControl
                 });
             }
 
-            StationsGrid.ItemsSource = rows;
-            StationsGroup.Visibility = Visibility.Visible;
+            // Suppress non-reporting airports so major METAR stations aren't pushed out.
+            rows = rows.Where(r => r.MetarCount > 0).Take(5).ToList();
+
+            if (rows.Count == 0)
+            {
+                Logger.Info("Station lookup: no active METAR stations survived the filter.");
+                StationsGroup.Visibility = Visibility.Collapsed;
+                ShowMessage($"No active METAR stations found within {SearchRadiusKm:F0} km of the resolved coordinates.");
+                return;
+            }
+
+            Logger.Info($"Station lookup: displaying {rows.Count} station(s): " +
+                        string.Join(", ", rows.Select(r => r.Icao)));
+
+            StationsSearchingText.Visibility = Visibility.Collapsed;
+            StationsGrid.Visibility         = Visibility.Visible;
+            StationsGrid.ItemsSource        = rows;
 
             // Suggest MetarIcao only when the field is currently blank.
             if (string.IsNullOrEmpty(MetarIcaoBox.Text))
-            {
-                var bestRow = rows.FirstOrDefault(r => r.MetarCount > 0) ?? rows[0];
-                MetarIcaoBox.Text = bestRow.Icao;
-            }
+                MetarIcaoBox.Text = rows[0].Icao;
 
             // ── Fetch bounding-box advisory ───────────────────────────────────
 
@@ -546,6 +586,8 @@ public partial class RecipientsTab : UserControl
                         $"Recipient DB Id={_currentRecipientDbId} not found — it may have been deleted externally.");
             }
 
+            var isNew = _currentRecipientDbId is null;
+
             r.RecipientId        = recipientId;
             r.Name               = name;
             r.Email              = email;
@@ -562,18 +604,26 @@ public partial class RecipientsTab : UserControl
             r.PressureUnit       = PressureUnitBox.SelectedItem?.ToString() ?? "inHg";
             r.WindSpeedUnit      = WindUnitBox.SelectedItem?.ToString() ?? "mph";
 
+            Logger.Info($"{(isNew ? "Inserting" : "Updating")} recipient '{recipientId}' ({name}, {email}).");
             await ctx.SaveChangesAsync();
             _currentRecipientDbId = r.Id;
             DeleteBtn.IsEnabled = true;
             if (bboxWarnings.Count > 0)
+            {
+                Logger.Warn($"Recipient '{recipientId}' saved with bbox warnings: {string.Join("; ", bboxWarnings)}.");
                 ShowMessage($"Saved. Note: {string.Join("; ", bboxWarnings)} — data may not be fetched for these stations.");
+            }
             else
+            {
+                Logger.Info($"Recipient '{recipientId}' saved successfully.");
                 ShowSuccessMessage("Saved successfully.");
+            }
 
             await LoadRecipientListAsync();
         }
         catch (Exception ex)
         {
+            Logger.Error($"Save failed for recipient '{RecipientIdBox.Text.Trim()}'.", ex);
             ShowMessage($"Save failed: {ex.Message}");
         }
     }
@@ -602,6 +652,7 @@ public partial class RecipientsTab : UserControl
 
         if (result != MessageBoxResult.Yes) return;
 
+        Logger.Info($"Deleting recipient '{displayName}'.");
         try
         {
             await using var ctx = new WeatherDataContext(_dbOptions);
@@ -610,6 +661,7 @@ public partial class RecipientsTab : UserControl
             {
                 ctx.Recipients.Remove(r);
                 await ctx.SaveChangesAsync();
+                Logger.Info($"Recipient '{displayName}' deleted successfully.");
             }
 
             _currentRecipientDbId = null;
@@ -618,6 +670,7 @@ public partial class RecipientsTab : UserControl
         }
         catch (Exception ex)
         {
+            Logger.Error($"Delete failed for recipient '{displayName}'.", ex);
             ShowMessage($"Delete failed: {ex.Message}");
         }
     }

@@ -8,6 +8,7 @@ using Microsoft.Extensions.FileProviders;
 using System.Globalization;
 using System.Windows;
 using WxServices.Common;
+using WxServices.Logging;
 
 namespace WxManager;
 
@@ -57,6 +58,14 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
+        try { Logger.Initialise(); }
+        catch (Exception ex)
+        {
+            // Non-fatal: log4net.config missing or unreadable. App continues without logging.
+            System.Diagnostics.Debug.WriteLine($"Logger.Initialise failed: {ex.Message}");
+        }
+        Logger.Info("WxManager starting.");
+
         var config = new ConfigurationBuilder()
             .SetBasePath(AppContext.BaseDirectory)
             .AddJsonFile("appsettings.shared.json", optional: false)
@@ -88,6 +97,14 @@ public partial class App : Application
         ClaudeModel     = config["Claude:Model"]   ?? "claude-sonnet-4-6";
 
         new MainWindow().Show();
+    }
+
+    /// <summary>Logs application exit.</summary>
+    /// <param name="e">Exit event arguments (unused).</param>
+    protected override void OnExit(ExitEventArgs e)
+    {
+        Logger.Info("WxManager exiting.");
+        base.OnExit(e);
     }
 
     /// <summary>
