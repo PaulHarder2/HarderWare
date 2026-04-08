@@ -267,44 +267,37 @@ public partial class RecipientsTab : UserControl
 
             // ── Nearby METAR stations ─────────────────────────────────────────
 
-            const double SearchRadius = 2.5;
-            var bbox = $"{lat - SearchRadius},{lon - SearchRadius},{lat + SearchRadius},{lon + SearchRadius}";
-            var url  = $"https://aviationweather.gov/api/data/metar?bbox={bbox}&hours=1&format=json";
+            // ── Nearby stations from local WxStations table ───────────────────
+            // Use a bbox pre-filter then Haversine for accuracy.
 
-            AwcMetar[]? awcResults;
-            try
-            {
-                using var req = new HttpRequestMessage(HttpMethod.Get, url);
-                req.Headers.Add("User-Agent", "WxManager/1.0");
-                using var resp = await _http.SendAsync(req);
-                resp.EnsureSuccessStatusCode();
-                awcResults = await resp.Content.ReadFromJsonAsync<AwcMetar[]>();
-            }
-            catch (Exception ex)
-            {
-                ShowMessage($"Aviation Weather API request failed: {ex.Message}");
-                return;
-            }
+            const double SearchRadiusKm = 150.0;
+            double latDelta = SearchRadiusKm / 111.0;
+            double lonDelta = latDelta / Math.Cos(lat * Math.PI / 180.0);
 
-            var candidates = (awcResults ?? [])
-                .Where(s => s.IcaoId is not null && s.Lat.HasValue && s.Lon.HasValue)
-                .DistinctBy(s => s.IcaoId)
+            await using var ctx = new WeatherDataContext(_dbOptions);
+
+            var nearbyStations = await ctx.WxStations
+                .Where(s => s.Lat != null && s.Lon != null
+                         && s.Lat >= lat - latDelta && s.Lat <= lat + latDelta
+                         && s.Lon >= lon - lonDelta && s.Lon <= lon + lonDelta)
+                .ToListAsync();
+
+            var candidates = nearbyStations
                 .Select(s => (Station: s, DistKm: HaversineKm(lat, lon, s.Lat!.Value, s.Lon!.Value)))
+                .Where(x => x.DistKm <= SearchRadiusKm)
                 .OrderBy(x => x.DistKm)
                 .Take(5)
                 .ToList();
 
             if (candidates.Count == 0)
             {
-                ShowMessage($"No active METAR stations found within {SearchRadius}° of the resolved coordinates. " +
-                            "The address may be geocoded correctly — check the fetch bounding box.");
+                ShowMessage($"No stations found within {SearchRadiusKm:F0} km of the resolved coordinates.");
                 return;
             }
 
-            // ── DB lookups (batched) ──────────────────────────────────────────
+            // ── DB counts (batched) ───────────────────────────────────────────
 
-            var icaos = candidates.Select(c => c.Station.IcaoId!).ToList();
-            await using var ctx = new WeatherDataContext(_dbOptions);
+            var icaos = candidates.Select(c => c.Station.IcaoId).ToList();
 
             var metarCounts = await ctx.Metars
                 .Where(m => icaos.Contains(m.StationIcao))
@@ -318,23 +311,40 @@ public partial class RecipientsTab : UserControl
                 .Select(g => new { Icao = g.Key, Count = g.Count() })
                 .ToListAsync();
 
-            var stationNames = await ctx.WxStations
-                .Where(s => icaos.Contains(s.IcaoId))
-                .Select(s => new { s.IcaoId, s.Name })
-                .ToListAsync();
+            // ── AWC single-station fallback for stations with no local data ───
+            // For stations absent from the local METAR table, query AWC directly
+            // with a wider time window. If data exists, flag the station so the
+            // fetch cycle will always request it individually.
 
-            var rows = candidates.Select(c =>
+            var rows = new List<StationRow>();
+            foreach (var (station, distKm) in candidates)
             {
-                var icao = c.Station.IcaoId!;
-                return new StationRow
+                var localCount = metarCounts.FirstOrDefault(x => x.Icao == station.IcaoId)?.Count ?? 0;
+                var displayCount = localCount;
+
+                if (localCount == 0)
                 {
-                    Icao       = icao,
-                    Name       = stationNames.FirstOrDefault(x => x.IcaoId == icao)?.Name ?? "",
-                    DistKm     = c.DistKm,
-                    MetarCount = metarCounts.FirstOrDefault(x => x.Icao == icao)?.Count ?? 0,
-                    TafCount   = tafCounts.FirstOrDefault(x => x.Icao == icao)?.Count ?? 0,
-                };
-            }).ToList();
+                    var awcCount = await FetchAwcSingleStationCountAsync(station.IcaoId);
+                    if (awcCount > 0)
+                    {
+                        displayCount = awcCount;
+                        if (station.AlwaysFetchDirect != true)
+                        {
+                            station.AlwaysFetchDirect = true;
+                            await ctx.SaveChangesAsync();
+                        }
+                    }
+                }
+
+                rows.Add(new StationRow
+                {
+                    Icao       = station.IcaoId,
+                    Name       = station.Name ?? station.Municipality ?? "",
+                    DistKm     = distKm,
+                    MetarCount = displayCount,
+                    TafCount   = tafCounts.FirstOrDefault(x => x.Icao == station.IcaoId)?.Count ?? 0,
+                });
+            }
 
             StationsGrid.ItemsSource = rows;
             StationsGroup.Visibility = Visibility.Visible;
@@ -818,6 +828,29 @@ public partial class RecipientsTab : UserControl
     /// <param name="lat2">Latitude of the second point in decimal degrees.</param>
     /// <param name="lon2">Longitude of the second point in decimal degrees.</param>
     /// <returns>Distance in kilometres.</returns>
+    /// <summary>
+    /// Queries the Aviation Weather Center API for the number of recent METAR reports
+    /// for a single station, used as a fallback when the station has no local database records.
+    /// Returns 0 on any error or if no reports are found.
+    /// </summary>
+    private async Task<int> FetchAwcSingleStationCountAsync(string icao)
+    {
+        try
+        {
+            var url = $"https://aviationweather.gov/api/data/metar?ids={icao}&hours=6&format=json";
+            using var req = new HttpRequestMessage(HttpMethod.Get, url);
+            req.Headers.Add("User-Agent", "WxManager/1.0");
+            using var resp = await _http.SendAsync(req);
+            if (!resp.IsSuccessStatusCode) return 0;
+            var results = await resp.Content.ReadFromJsonAsync<AwcMetar[]>();
+            return results?.Length ?? 0;
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
     private static double HaversineKm(double lat1, double lon1, double lat2, double lon2)
     {
         const double R    = 6371.0;

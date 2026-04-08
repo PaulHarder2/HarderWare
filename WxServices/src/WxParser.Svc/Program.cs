@@ -154,6 +154,13 @@ try
             )
             ALTER TABLE [WxStations] ADD [Municipality] nvarchar(100) NULL;");
 
+        await db.Database.ExecuteSqlRawAsync(@"
+            IF NOT EXISTS (
+                SELECT 1 FROM sys.columns
+                WHERE object_id = OBJECT_ID(N'WxStations') AND name = N'AlwaysFetchDirect'
+            )
+            ALTER TABLE [WxStations] ADD [AlwaysFetchDirect] bit NULL;");
+
         Logger.Info("Database ready.");
     }
 

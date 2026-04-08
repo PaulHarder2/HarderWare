@@ -48,4 +48,12 @@ public sealed class WxStation
     /// <see langword="null"/> if the API did not return an elevation.
     /// </summary>
     public double? ElevationFt { get; set; }
+
+    /// <summary>
+    /// When <see langword="true"/>, the METAR fetch cycle always requests this station via a
+    /// single-station query in addition to the bounding-box query, because the station is known
+    /// to be omitted from bbox results unreliably.
+    /// <see langword="null"/> means the station has not yet been evaluated.
+    /// </summary>
+    public bool? AlwaysFetchDirect { get; set; }
 }

@@ -139,9 +139,23 @@ public sealed class FetchWorker : BackgroundService
             Logger.Info($"Starting fetch cycle for {homeIcao ?? "unknown"} (bbox ±{boxDeg}°).");
 
             await MetarFetcher.FetchAndInsertAsync(homeLat.Value, homeLon.Value, boxDeg, _dbOptions, _http);
+
             // Fetch the home station explicitly in case it is omitted from the bounding box results.
             if (!string.IsNullOrWhiteSpace(homeIcao))
                 await MetarFetcher.FetchAndInsertByStationAsync(homeIcao, _dbOptions, _http);
+
+            // Fetch any additional stations flagged as unreliable in bbox results.
+            await using (var db = new WeatherDataContext(_dbOptions))
+            {
+                var directIcaos = await db.WxStations
+                    .Where(s => s.AlwaysFetchDirect == true && s.IcaoId != homeIcao)
+                    .Select(s => s.IcaoId)
+                    .ToListAsync();
+
+                foreach (var icao in directIcaos)
+                    await MetarFetcher.FetchAndInsertByStationAsync(icao, _dbOptions, _http);
+            }
+
             await TafFetcher.FetchAndInsertAsync(homeLat.Value, homeLon.Value, boxDeg, _dbOptions, _http);
 
             Logger.Info("Fetch cycle complete.");
