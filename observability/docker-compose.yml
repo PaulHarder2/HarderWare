@@ -16,7 +16,7 @@ services:
       - ./otel-collector-config.yml:/etc/otelcol/config.yaml
 
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:11.4.0
     ports:
       - "3000:3000"
     volumes:
