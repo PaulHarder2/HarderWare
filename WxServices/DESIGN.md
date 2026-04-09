@@ -537,6 +537,7 @@ All workers check for existing current output files before invoking Python; alre
 - Loaded via `db.load_gfs_nearby()` — queries GfsGrid within ±0.5° of the target lat/lon for all forecast hours of the run, then selects the nearest grid point per hour.
 - Two vertical panels: top (1/3 height) = wind barbs (always in knots); bottom (2/3 height) = temperature line (black, left axis) and relative humidity line (green, right axis, 0–100%).
 - Left axis: "T (°F)" or "T (°C)" depending on `--temp-unit`.  Right axis: "RH (%)".
+- Thin horizontal grid lines in the bottom panel at each temperature-axis tick position (light grey, `linewidth=0.4`); anchored to the temperature axis so tick labels are always round numbers. RH axis grid suppressed to avoid a second overlapping set of lines.
 - Time axis in recipient local time (`--tz`, IANA timezone name, e.g. `America/Chicago`). Bold vertical lines at every local midnight; day-of-week and day-of-month labels centred in each day's segment. X-axis ticks every 6 local hours, labelled HH:MM.
 - Barbs thinned automatically if spacing < 0.18" to prevent overlapping.
 - Abbreviated version (48-hour, emailed): first 48 hours, 10" wide × 3.0" @ 100 dpi → 1000 × 300 px.
@@ -626,7 +627,7 @@ Each pane has its own toolbar docked to the top of the pane, immediately above t
 
 **Animation:**
 - Two independent `DispatcherTimer` instances — one per pane — allow both panes to play simultaneously at their own speeds.
-- Analysis pane defaults to the newest map; the slider and ComboBox stay in sync — selecting a map from either updates the other. Play animates oldest-to-newest; if already at the newest it restarts from the oldest.
+- Analysis pane defaults to the newest map; the slider and ComboBox stay in sync — selecting a map from either updates the other. Play animates oldest-to-newest; if already at the newest it restarts from the oldest. The analysis slider uses `IsDirectionReversed="True"` so the thumb sits at the right for the newest map and moves left toward older observations.
 - Forecast pane starts at forecast hour 0; play steps through all available hours.
 - `BitmapImage` is loaded with `CacheOption.OnLoad` (releases file handle immediately) and `Freeze()`d for cross-thread safety.
 
@@ -641,7 +642,7 @@ Each pane has its own toolbar docked to the top of the pane, immediately above t
 | `RelayCommand` | `ICommand` implementation; `CanExecuteChanged` wired to `CommandManager.RequerySuggested` |
 | `MainWindow` | Frameless WPF window; `WindowChrome` for correct maximise/resize behaviour; custom title-bar and keyboard event handlers; suppresses ToolBar gripper and overflow button |
 
-**Keyboard navigation:** Arrow keys work when neither a ComboBox nor Slider has focus.
+**Keyboard navigation:** Arrow keys are handled globally by `MainWindow.OnKeyDown`. Both sliders have `Focusable="False"` so they cannot capture keyboard focus and interfere with arrow-key routing; mouse dragging still works normally. ComboBoxes do capture focus, so arrow-key navigation is suppressed while a ComboBox is active.
 
 | Key | Action |
 |---|---|

@@ -211,6 +211,11 @@ def render_meteogram(
                  ha='left', va='top', fontsize=9, color='green', clip_on=False)
     ax_rh.set_ylim(0, 105)
 
+    # Horizontal grid lines anchored to temperature ticks; RH grid suppressed
+    # so only one set of lines appears.
+    ax_data.yaxis.grid(True, color="#cccccc", linewidth=0.4, linestyle="-", zorder=1)
+    ax_rh.yaxis.grid(False)
+
     ax_data.spines["top"].set_visible(False)
     ax_rh.spines["top"].set_visible(False)
 

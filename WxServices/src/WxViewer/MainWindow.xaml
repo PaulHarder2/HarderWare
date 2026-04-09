@@ -260,6 +260,8 @@
                                                         UpdateSourceTrigger=PropertyChanged}"
                                         TickFrequency="1"
                                         IsSnapToTickEnabled="True"
+                                        IsDirectionReversed="True"
+                                        Focusable="False"
                                         VerticalAlignment="Center"
                                         Margin="0,0,4,0"/>
                                 <TextBlock Text="{Binding AnalysisFrameLabel}"
@@ -352,6 +354,7 @@
                                                         UpdateSourceTrigger=PropertyChanged}"
                                         TickFrequency="1"
                                         IsSnapToTickEnabled="True"
+                                        Focusable="False"
                                         VerticalAlignment="Center"
                                         Margin="0,0,4,0"/>
                                 <TextBlock Text="{Binding ForecastFrameLabel}"
