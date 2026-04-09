@@ -394,32 +394,65 @@
                                       ItemsSource="{Binding MeteogramRuns}"
                                       SelectedItem="{Binding SelectedMeteogramRun}"
                                       DisplayMemberPath="Label"/>
+                            <Separator Margin="8,0"/>
+                            <TextBlock Text="Recipient:" Foreground="#d0d0d0"
+                                       VerticalAlignment="Center" Margin="4,0,4,0"/>
+                            <ComboBox Width="240"
+                                      ItemsSource="{Binding Recipients}"
+                                      SelectedItem="{Binding SelectedRecipient}"
+                                      DisplayMemberPath="DisplayText"/>
                         </ToolBar>
                     </ToolBarTray>
 
                     <!-- Meteogram list — vertically scrollable; each image horizontally scrollable -->
-                    <ScrollViewer Grid.Row="1"
+                    <ScrollViewer x:Name="MeteogramScrollViewer"
+                                  Grid.Row="1"
                                   VerticalScrollBarVisibility="Auto"
                                   HorizontalScrollBarVisibility="Disabled"
                                   Background="#1a1a1a">
-                        <ItemsControl ItemsSource="{Binding MeteogramItems}">
+                        <ItemsControl x:Name="MeteogramItemsControl"
+                                      ItemsSource="{Binding MeteogramItems}">
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
-                                    <StackPanel Margin="0,12,0,0">
-                                        <TextBlock Text="{Binding Title}"
-                                                   Foreground="#c8c8c8"
-                                                   FontSize="12"
-                                                   FontWeight="SemiBold"
-                                                   Margin="8,0,0,4"/>
-                                        <ScrollViewer HorizontalScrollBarVisibility="Auto"
-                                                      VerticalScrollBarVisibility="Disabled"
-                                                      PreviewMouseWheel="MeteogramImageScrollViewer_PreviewMouseWheel">
-                                            <Image Source="{Binding FullImage}"
-                                                   Stretch="None"
-                                                   RenderOptions.BitmapScalingMode="HighQuality"
-                                                   HorizontalAlignment="Left"/>
-                                        </ScrollViewer>
-                                    </StackPanel>
+                                    <Border Margin="0,12,0,0">
+                                        <Border.Style>
+                                            <Style TargetType="Border">
+                                                <Setter Property="Background" Value="Transparent"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsHighlighted}" Value="True">
+                                                        <Setter Property="Background" Value="#1e3a5c"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Border.Style>
+                                        <StackPanel>
+                                            <StackPanel Orientation="Horizontal"
+                                                        Margin="8,4,0,4"
+                                                        VerticalAlignment="Center">
+                                                <Button Content="Recipients"
+                                                        Click="RecipientsButton_Click"
+                                                        Padding="6,2"
+                                                        FontSize="11"
+                                                        Margin="0,0,8,0"
+                                                        Foreground="#d0d0d0"
+                                                        Background="#3a3a3a"
+                                                        BorderBrush="#555555"/>
+                                                <TextBlock Text="{Binding Title}"
+                                                           Foreground="#c8c8c8"
+                                                           FontSize="12"
+                                                           FontWeight="SemiBold"
+                                                           VerticalAlignment="Center"/>
+                                            </StackPanel>
+                                            <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                                                          VerticalScrollBarVisibility="Disabled"
+                                                          PreviewMouseWheel="MeteogramImageScrollViewer_PreviewMouseWheel">
+                                                <Image Source="{Binding FullImage}"
+                                                       Stretch="None"
+                                                       RenderOptions.BitmapScalingMode="HighQuality"
+                                                       HorizontalAlignment="Left"/>
+                                            </ScrollViewer>
+                                        </StackPanel>
+                                    </Border>
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>

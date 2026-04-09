@@ -12,8 +12,9 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
-        var outputDir = ReadOutputDir();
-        _viewModel = new MainViewModel(outputDir, Dispatcher);
+        var outputDir        = ReadOutputDir();
+        var connectionString = ReadConnectionString();
+        _viewModel = new MainViewModel(outputDir, connectionString, Dispatcher);
 
         var window = new MainWindow(_viewModel);
         MainWindow = window;
@@ -42,5 +43,24 @@ public partial class App : Application
         catch { /* fall through */ }
 
         return defaultDir;
+    }
+
+    private static string ReadConnectionString()
+    {
+        const string fallback = @"Server=.\SQLEXPRESS;Database=WeatherData;Trusted_Connection=True;TrustServerCertificate=True;";
+        var settingsPath = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
+        if (!File.Exists(settingsPath)) return fallback;
+
+        try
+        {
+            using var stream = File.OpenRead(settingsPath);
+            var doc = JsonDocument.Parse(stream);
+            if (doc.RootElement.TryGetProperty("ConnectionStrings", out var cs) &&
+                cs.TryGetProperty("WeatherData", out var prop))
+                return prop.GetString() ?? fallback;
+        }
+        catch { /* fall through */ }
+
+        return fallback;
     }
 }

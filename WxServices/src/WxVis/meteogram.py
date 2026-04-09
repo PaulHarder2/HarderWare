@@ -272,8 +272,8 @@ if __name__ == "__main__":
                         help="Temperature unit for the T axis (default: F)")
     parser.add_argument("--tz",        default="UTC",
                         help="IANA timezone for the time axis (default: UTC)")
-    parser.add_argument("--out-24h",   required=True,
-                        help="Output path for the 24-hour meteogram PNG")
+    parser.add_argument("--out-abbrev", required=True,
+                        help="Output path for the abbreviated (emailed) meteogram PNG")
     parser.add_argument("--out-full",  required=True,
                         help="Output path for the full-period meteogram PNG")
     args = parser.parse_args()
@@ -309,12 +309,12 @@ if __name__ == "__main__":
     unit_lbl = "°F" if args.temp_unit == "F" else "°C"
     title    = f"{locality} ({unit_lbl})"
 
-    # 24-hour version
+    # 48-hour abbreviated version (emailed)
     render_meteogram(
-        series, args.out_24h, title,
+        series, args.out_abbrev, title,
         temp_unit=args.temp_unit,
         tz_name=args.tz,
-        max_hours=24,
+        max_hours=48,
         fig_width=10.0,
         dpi=100,
     )

@@ -1,4 +1,6 @@
+using System.ComponentModel;
 using System.IO;
+using System.Runtime.CompilerServices;
 using System.Windows.Media.Imaging;
 
 namespace WxViewer;
@@ -7,7 +9,7 @@ namespace WxViewer;
 /// One location entry within a <see cref="MeteogramRun"/>, corresponding to a
 /// single recipient's full-period meteogram PNG.
 /// </summary>
-public sealed class MeteogramItem
+public sealed class MeteogramItem : INotifyPropertyChanged
 {
     /// <summary>ICAO station identifier (e.g. <c>"KDWH"</c>).</summary>
     public string Icao         { get; }
@@ -29,6 +31,23 @@ public sealed class MeteogramItem
 
     /// <summary>Absolute path to the full-period meteogram PNG.</summary>
     public string FullImagePath { get; }
+
+    /// <summary>
+    /// Recipients who receive this meteogram, populated by the ViewModel
+    /// after scanning the manifest.
+    /// </summary>
+    public IReadOnlyList<RecipientSummary> Recipients { get; set; } = [];
+
+    /// <summary>
+    /// <see langword="true"/> while the recipient-search highlight border is visible.
+    /// Reverts to <see langword="false"/> after a short timer fires in the ViewModel.
+    /// </summary>
+    private bool _isHighlighted;
+    public bool IsHighlighted
+    {
+        get => _isHighlighted;
+        set { _isHighlighted = value; OnPropertyChanged(); }
+    }
 
     /// <summary>
     /// Decoded <see cref="BitmapImage"/> for the full-period meteogram, or
@@ -66,6 +85,10 @@ public sealed class MeteogramItem
         var slash = tz.LastIndexOf('/');
         return (slash >= 0 ? tz[(slash + 1)..] : tz).Replace('_', ' ');
     }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+    private void OnPropertyChanged([CallerMemberName] string? name = null)
+        => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 
     private static BitmapImage? LoadBitmap(string path)
     {

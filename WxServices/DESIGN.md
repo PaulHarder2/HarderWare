@@ -53,7 +53,7 @@ WxServices is a set of Windows services that:
 - Download GFS numerical weather prediction model data from NOAA (via the AWS Open Data mirror) and extract gridded medium-range forecasts covering temperature, wind, cloud cover, precipitation rate, and convective energy (CAPE) for the configured region.
 - Generate friendly, plain-English (or other language) weather summaries using Anthropic's Claude AI and email them to a configured list of recipients.
 - Render weather visualisation maps (synoptic analysis, GFS forecast parameter maps, and per-recipient meteograms) automatically via WxVis.Svc, which invokes the WxVis Python project after each data cycle.
-- Embed a 24-hour meteogram in each recipient's weather report email and attach full-period meteograms to the WxViewer Meteograms tab.
+- Embed a 48-hour meteogram in each recipient's weather report email and attach full-period meteograms to the WxViewer Meteograms tab.
 - Provide a local WPF desktop viewer (WxViewer) for browsing and animating the generated maps and meteograms side-by-side.
 - Monitor the health of the above services and send alert emails if errors occur or a service goes silent.
 - Provide a local WPF management GUI (WxManager) for adding and editing recipients and sending operator service announcements to all subscribers.
@@ -419,7 +419,7 @@ flowchart TD
     I -->|No| C
     I -->|Yes — scheduled / first / change| J[SnapshotDescriber → structured text]
     J --> K[Claude API → report text]
-    K --> K2[Attach 24h meteogram PNG if available]
+    K --> K2[Attach 48h meteogram PNG if available]
     K2 --> L[Send email with cid: inline image]
     L --> M[Update RecipientState in DB]
     M --> C
@@ -484,7 +484,7 @@ The config is never updated when a fallback station is used; a warning is logged
 |---|---|---|
 | `AnalysisMapWorker` | After each METAR fetch cycle | `synoptic_{label}_{yyyyMMdd_HH}.png` |
 | `ForecastMapWorker` | Progressively, as each forecast hour's data arrives for the latest model run | `forecast_{yyyyMMdd_HH}_f{NNN}.png` |
-| `MeteogramWorker` | Once per complete GFS model run; one pair per unique (ICAO, TempUnit, Timezone) in Recipients | `meteogram_{yyyyMMdd_HH}_{ICAO}_{tzSafe}_24h.png`, `meteogram_{yyyyMMdd_HH}_{ICAO}_{tzSafe}_full.png`; manifest: `meteogram_manifest_{yyyyMMdd_HH}.json` |
+| `MeteogramWorker` | Once per complete GFS model run; one pair per unique (ICAO, TempUnit, Timezone) in Recipients | `meteogram_{yyyyMMdd_HH}_{ICAO}_{tzSafe}_abbrev.png`, `meteogram_{yyyyMMdd_HH}_{ICAO}_{tzSafe}_full.png`; manifest: `meteogram_manifest_{yyyyMMdd_HH}.json` |
 
 All workers check for existing current output files before invoking Python; already-current files are skipped.
 
@@ -502,7 +502,7 @@ All workers check for existing current output files before invoking Python; alre
 |---|---|---|
 | `AnalysisMapWorker` | WxVis.Svc | `BackgroundService`; renders synoptic maps after METAR cycles; daily PNG purge |
 | `ForecastMapWorker` | WxVis.Svc | `BackgroundService`; renders forecast hours progressively as data arrives for the latest model run (complete or still ingesting) |
-| `MeteogramWorker` | WxVis.Svc | `BackgroundService`; renders a 24h + full-period meteogram for each recipient location after each complete GFS run; writes manifest JSON |
+| `MeteogramWorker` | WxVis.Svc | `BackgroundService`; renders a 48h abbreviated + full-period meteogram for each recipient location after each complete GFS run; writes manifest JSON |
 | `MapRenderer` | WxVis.Svc | Subprocess launcher; conda PATH augmentation; stdout/stderr capture |
 
 ---
@@ -517,7 +517,7 @@ All workers check for existing current output files before invoking Python; alre
 |---|---|---|---|
 | `synoptic_map.py` | Synoptic analysis map (Barnes interpolation) | Latest METAR + WxStations | `synoptic_{label}_{yyyyMMdd_HH}.png` |
 | `forecast_map.py` | GFS forecast parameter map | GfsGrid for a specific model run and forecast hour | `forecast_{yyyyMMdd_HH}_f{NNN}.png` |
-| `meteogram.py` | Point-forecast meteogram (two PNGs per location) | GfsGrid nearest grid point; bilinear interpolation to recipient lat/lon | `meteogram_{yyyyMMdd_HH}_{ICAO}_{tzSafe}_24h.png`, `meteogram_{yyyyMMdd_HH}_{ICAO}_{tzSafe}_full.png` |
+| `meteogram.py` | Point-forecast meteogram (two PNGs per location) | GfsGrid nearest grid point; bilinear interpolation to recipient lat/lon | `meteogram_{yyyyMMdd_HH}_{ICAO}_{tzSafe}_abbrev.png`, `meteogram_{yyyyMMdd_HH}_{ICAO}_{tzSafe}_full.png` |
 
 **Rendering details:**
 - All maps use a Lambert Conformal projection centred on the data extent.
@@ -539,7 +539,7 @@ All workers check for existing current output files before invoking Python; alre
 - Left axis: "T (°F)" or "T (°C)" depending on `--temp-unit`.  Right axis: "RH (%)".
 - Time axis in recipient local time (`--tz`, IANA timezone name, e.g. `America/Chicago`). Bold vertical lines at every local midnight; day-of-week and day-of-month labels centred in each day's segment. X-axis ticks every 6 local hours, labelled HH:MM.
 - Barbs thinned automatically if spacing < 0.18" to prevent overlapping.
-- 24-hour version: first 24 hours, 10" wide × 3.0" @ 100 dpi → 1000 × 300 px.
+- Abbreviated version (48-hour, emailed): first 48 hours, 10" wide × 3.0" @ 100 dpi → 1000 × 300 px.
 - Full-period version: all available hours, width scales with duration (10"–18") × 3.0" @ 100 dpi.
 - RH computed from TmpC and DwpC via Magnus formula.  Wind speed converted m/s → kt.
 - `tzSafe` in output filenames = IANA name with `/` replaced by `-` (e.g. `America-Chicago`).
@@ -553,7 +553,7 @@ python synoptic_map.py [--extent conus|south_central] [--density 75]
 python forecast_map.py --run 20260402_18 --fh 84 [--extent south_central]
 python meteogram.py --run 20260404_00 --lat 29.97 --lon -95.34 --icao KDWH \
     --locality "Spring" --temp-unit F --tz "America/Chicago" \
-    --out-24h C:\HarderWare\plots\meteogram_20260404_00_KDWH_America-Chicago_24h.png \
+    --out-abbrev C:\HarderWare\plots\meteogram_20260404_00_KDWH_America-Chicago_abbrev.png \
     --out-full C:\HarderWare\plots\meteogram_20260404_00_KDWH_America-Chicago_full.png
 # Chart title: "Spring (°F)"  — locality name and unit only; no ICAO prefix
 ```
@@ -612,9 +612,11 @@ Each pane has its own toolbar docked to the top of the pane, immediately above t
 
 **Meteograms tab** — shows full-period meteograms for a selected GFS run:
 - Run selector ComboBox (newest first).
-- Vertically scrollable list of locations sorted by ICAO, each labelled `"KXXX — Locality (°F) · City"` where *City* is the city component of the IANA timezone (e.g. `· Chicago`). Multiple entries for the same ICAO are possible when recipients share a station but use different timezones.
+- Recipient selector ComboBox (next to the Run selector) — lists all recipients from the database as `"recipientId — Name (Language)"`. Selecting a recipient scrolls to their meteogram and briefly highlights it with a coloured background (clears after 2 seconds). If no meteogram exists for the recipient in the current run a modal dialog is shown. Matching uses `(FirstIcao, TempUnit, Timezone)` — the same grouping key used by `MeteogramWorker`.
+- Vertically scrollable list of locations sorted by ICAO, each labelled `"KXXX — Locality (°F) · City"` where *City* is the city component of the IANA timezone (e.g. `· Chicago`). Multiple entries for the same ICAO are possible when recipients share a station but use different timezones or temperature units.
+- Each meteogram item has a **Recipients** button (left of the label) that opens a modal dialog listing every recipient who receives that meteogram: ID, Name, and Language.
 - Each meteogram image is independently horizontally scrollable (full-period images can be 1800 px wide).
-- Populated from `meteogram_manifest_{yyyyMMdd_HH}.json` files written by `MeteogramWorker`. Each manifest entry carries `Icao`, `LocalityName`, `TempUnit`, `Timezone`, `File24h`, and `FileFull`.
+- Populated from `meteogram_manifest_{yyyyMMdd_HH}.json` files written by `MeteogramWorker`. Each manifest entry carries `Icao`, `LocalityName`, `TempUnit`, `Timezone`, `FileAbbrev`, and `FileFull`.
 
 **File discovery (`MapFileScanner`):**
 - Scans the configured output directory for `synoptic_*.png`, `forecast_*.png`, and `meteogram_manifest_*.json` files on startup and whenever the directory changes.

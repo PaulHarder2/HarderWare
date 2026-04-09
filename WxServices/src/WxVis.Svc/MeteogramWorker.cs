@@ -154,19 +154,19 @@ public sealed class MeteogramWorker : BackgroundService
             if (ct.IsCancellationRequested) break;
 
             // Sanitize timezone for use in filenames: "America/Chicago" → "America-Chicago"
-            var tzSafe   = loc.Timezone.Replace('/', '-');
-            var file24h  = $"meteogram_{runTag}_{loc.Icao}_{tzSafe}_24h.png";
-            var fileFull = $"meteogram_{runTag}_{loc.Icao}_{tzSafe}_full.png";
-            var path24h  = Path.Combine(cfg.OutputDir, file24h);
-            var pathFull = Path.Combine(cfg.OutputDir, fileFull);
+            var tzSafe      = loc.Timezone.Replace('/', '-');
+            var fileAbbrev  = $"meteogram_{runTag}_{loc.Icao}_{tzSafe}_abbrev.png";
+            var fileFull    = $"meteogram_{runTag}_{loc.Icao}_{tzSafe}_full.png";
+            var pathAbbrev  = Path.Combine(cfg.OutputDir, fileAbbrev);
+            var pathFull    = Path.Combine(cfg.OutputDir, fileFull);
 
             // Skip if both outputs already exist and are newer than the model run.
-            if (File.Exists(path24h) && File.Exists(pathFull)
-                && File.GetLastWriteTimeUtc(path24h) > latestCompleteRun
-                && File.GetLastWriteTimeUtc(pathFull) > latestCompleteRun)
+            if (File.Exists(pathAbbrev) && File.Exists(pathFull)
+                && File.GetLastWriteTimeUtc(pathAbbrev) > latestCompleteRun
+                && File.GetLastWriteTimeUtc(pathFull)   > latestCompleteRun)
             {
                 Logger.Info($"MeteogramWorker: {loc.Icao}/{loc.Timezone} already rendered — skipping.");
-                manifestEntries.Add(new ManifestEntry(loc.Icao, loc.LocalityName, loc.TempUnit, loc.Timezone, file24h, fileFull));
+                manifestEntries.Add(new ManifestEntry(loc.Icao, loc.LocalityName, loc.TempUnit, loc.Timezone, fileAbbrev, fileFull));
                 continue;
             }
 
@@ -181,7 +181,7 @@ public sealed class MeteogramWorker : BackgroundService
                 $"--locality \"{loc.LocalityName}\" " +
                 $"--temp-unit {loc.TempUnit} " +
                 $"--tz \"{loc.Timezone}\" " +
-                $"--out-24h \"{path24h}\" " +
+                $"--out-abbrev \"{pathAbbrev}\" " +
                 $"--out-full \"{pathFull}\"";
 
             var ok = await MapRenderer.RunAsync(
@@ -191,7 +191,7 @@ public sealed class MeteogramWorker : BackgroundService
 
             if (ok)
             {
-                manifestEntries.Add(new ManifestEntry(loc.Icao, loc.LocalityName, loc.TempUnit, loc.Timezone, file24h, fileFull));
+                manifestEntries.Add(new ManifestEntry(loc.Icao, loc.LocalityName, loc.TempUnit, loc.Timezone, fileAbbrev, fileFull));
             }
             else
             {
@@ -254,6 +254,6 @@ public sealed class MeteogramWorker : BackgroundService
         string LocalityName,
         string TempUnit,
         string Timezone,
-        string File24h,
+        string FileAbbrev,
         string FileFull);
 }

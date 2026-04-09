@@ -179,12 +179,12 @@ public sealed class ReportWorker : BackgroundService
         var plainFallback = SnapshotDescriber.Describe(snapshot, tz, recipient.Units);
 
         var plotsDir = _config["WxVis:OutputDir"] ?? @"C:\HarderWare\plots";
-        var meteogramPath = FindMeteogram24hPath(preferredIcaos.Count > 0 ? preferredIcaos[0] : "", recipient.Timezone, plotsDir);
+        var meteogramPath = FindMeteogramAbbrevPath(preferredIcaos.Count > 0 ? preferredIcaos[0] : "", recipient.Timezone, plotsDir);
         report = meteogramPath is not null
             ? InsertMeteogramImage(report)
             : report.Replace("<!--meteogram-->", "", StringComparison.Ordinal);
         IReadOnlyDictionary<string, string>? inlineImages = meteogramPath is not null
-            ? new Dictionary<string, string> { ["meteogram24h"] = meteogramPath }
+            ? new Dictionary<string, string> { ["meteogramAbbrev"] = meteogramPath }
             : null;
 
         var emailer = new SmtpSender(smtp, "WxReport");
@@ -360,12 +360,12 @@ public sealed class ReportWorker : BackgroundService
             var plainFallback = SnapshotDescriber.Describe(snapshot, tz, recipient.Units);
 
             var plotsDir2     = _config["WxVis:OutputDir"] ?? @"C:\HarderWare\plots";
-            var meteogramPath = FindMeteogram24hPath(preferredIcaos.Count > 0 ? preferredIcaos[0] : "", recipient.Timezone, plotsDir2);
+            var meteogramPath = FindMeteogramAbbrevPath(preferredIcaos.Count > 0 ? preferredIcaos[0] : "", recipient.Timezone, plotsDir2);
             report = meteogramPath is not null
                 ? InsertMeteogramImage(report)
                 : report.Replace("<!--meteogram-->", "", StringComparison.Ordinal);
             IReadOnlyDictionary<string, string>? inlineImages = meteogramPath is not null
-                ? new Dictionary<string, string> { ["meteogram24h"] = meteogramPath }
+                ? new Dictionary<string, string> { ["meteogramAbbrev"] = meteogramPath }
                 : null;
 
             var sent = await emailer.SendAsync(
@@ -677,7 +677,7 @@ public sealed class ReportWorker : BackgroundService
     /// <param name="icao">ICAO station identifier to look up in the manifest.</param>
     /// <param name="timezone">IANA timezone name to match (e.g. <c>"America/Chicago"</c>).</param>
     /// <param name="plotsDir">Directory where WxVis.Svc writes PNGs and manifest files.</param>
-    private static string? FindMeteogram24hPath(string icao, string timezone, string plotsDir)
+    private static string? FindMeteogramAbbrevPath(string icao, string timezone, string plotsDir)
     {
         if (string.IsNullOrWhiteSpace(icao) || !Directory.Exists(plotsDir))
             return null;
@@ -695,12 +695,12 @@ public sealed class ReportWorker : BackgroundService
                 {
                     if (!entry.TryGetProperty("Icao",     out var icaoProp))  continue;
                     if (!entry.TryGetProperty("Timezone", out var tzProp))    continue;
-                    if (!entry.TryGetProperty("File24h",  out var file24hProp)) continue;
+                    if (!entry.TryGetProperty("FileAbbrev", out var fileAbbrevProp)) continue;
 
                     if (!string.Equals(icaoProp.GetString(), icao, StringComparison.OrdinalIgnoreCase)) continue;
                     if (!string.Equals(tzProp.GetString(),   timezone, StringComparison.Ordinal))       continue;
 
-                    var file = file24hProp.GetString();
+                    var file = fileAbbrevProp.GetString();
                     if (string.IsNullOrWhiteSpace(file)) continue;
 
                     var fullPath = Path.Combine(plotsDir, file);
@@ -709,7 +709,7 @@ public sealed class ReportWorker : BackgroundService
             }
             catch (Exception ex)
             {
-                Logger.Warn($"FindMeteogram24hPath: could not read manifest '{manifestPath}': {ex.Message}");
+                Logger.Warn($"FindMeteogramAbbrevPath: could not read manifest '{manifestPath}': {ex.Message}");
             }
         }
 
@@ -728,8 +728,8 @@ public sealed class ReportWorker : BackgroundService
     {
         const string img =
             "<p style=\"text-align:center;margin-top:16px\">" +
-            "<img src=\"cid:meteogram24h\" style=\"width:100%;max-width:1000px\" " +
-            "alt=\"24-hour forecast meteogram\"><br>" +
+            "<img src=\"cid:meteogramAbbrev\" style=\"width:100%;max-width:1000px\" " +
+            "alt=\"48-hour forecast meteogram\"><br>" +
             "<span style=\"font-size:11px;color:#888;font-style:italic\">" +
             "Forecast of temperature, humidity, and wind over time. " +
             "Wind symbols point in the direction the wind is blowing, " +

@@ -14,7 +14,7 @@ namespace WxViewer;
 /// Analysis filename format:   synoptic_{label}_{yyyyMMdd}_{HH}.png<br/>
 /// Forecast filename format:   forecast_{yyyyMMdd}_{HH}_f{NNN}.png<br/>
 /// Meteogram manifest format:  meteogram_manifest_{yyyyMMdd}_{HH}.json<br/>
-/// Meteogram PNG format:       meteogram_{yyyyMMdd}_{HH}_{ICAO}_{24h|full}.png
+/// Meteogram PNG format:       meteogram_{yyyyMMdd}_{HH}_{ICAO}_{abbrev|full}.png
 /// </remarks>
 public sealed class MapFileScanner : IDisposable
 {

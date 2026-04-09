@@ -14,6 +14,29 @@ public partial class MainWindow : Window
         InitializeComponent();
         _vm = viewModel;
         DataContext = _vm;
+        _vm.ScrollToItem      += OnScrollToItem;
+        _vm.RecipientNotFound += OnRecipientNotFound;
+    }
+
+    private void OnScrollToItem(MeteogramItem item)
+    {
+        var index = _vm.MeteogramItems.IndexOf(item);
+        if (index < 0) return;
+        if (MeteogramItemsControl.ItemContainerGenerator.ContainerFromIndex(index)
+                is FrameworkElement container)
+            container.BringIntoView();
+    }
+
+    private void OnRecipientNotFound(string name)
+        => MessageBox.Show($"No meteogram found for {name}.",
+                           "Meteogram Not Found",
+                           MessageBoxButton.OK,
+                           MessageBoxImage.Information);
+
+    private void RecipientsButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (((System.Windows.Controls.Button)sender).DataContext is MeteogramItem item)
+            new RecipientsDialog(item) { Owner = this }.ShowDialog();
     }
 
     private void Header_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)

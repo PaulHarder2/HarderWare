@@ -4,6 +4,7 @@ using System.IO;
 using System.Runtime.CompilerServices;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using Microsoft.Data.SqlClient;
 
 namespace WxViewer;
 
@@ -29,7 +30,11 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
     // ── Meteogram backing fields ──────────────────────────────────────────────
 
-    private MeteogramRun? _selectedMeteogramRun;
+    private MeteogramRun?      _selectedMeteogramRun;
+    private RecipientSummary?  _selectedRecipient;
+    private MeteogramItem?     _highlightedItem;
+    private DispatcherTimer?   _highlightTimer;
+    private readonly string    _connectionString;
 
     // ── Forecast backing fields ───────────────────────────────────────────────
 
@@ -59,6 +64,9 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     /// <summary>Meteogram items for the currently selected run, sorted by ICAO.</summary>
     public ObservableCollection<MeteogramItem> MeteogramItems { get; } = new();
 
+    /// <summary>All recipients from the database, sorted by RecipientId.</summary>
+    public ObservableCollection<RecipientSummary> Recipients { get; } = new();
+
     /// <summary>Animation speed presets shared by both panes.</summary>
     public ObservableCollection<SpeedOption> SpeedOptions { get; } = new();
 
@@ -72,6 +80,14 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     public RelayCommand ForecastStepForwardCommand { get; }
     public RelayCommand ForecastStepBackCommand    { get; }
 
+    // ── Events ────────────────────────────────────────────────────────────────
+
+    /// <summary>Raised when the recipient selector finds a matching meteogram to scroll to.</summary>
+    public event Action<MeteogramItem>? ScrollToItem;
+
+    /// <summary>Raised when the recipient selector finds no meteogram for the selected recipient.</summary>
+    public event Action<string>? RecipientNotFound;
+
     // ── Constructor ───────────────────────────────────────────────────────────
 
     /// <summary>
@@ -79,9 +95,11 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     /// and performs an initial directory scan.
     /// </summary>
     /// <param name="outputDir">Path to the plots output directory.</param>
+    /// <param name="connectionString">SQL Server connection string for the WeatherData database.</param>
     /// <param name="dispatcher">WPF UI dispatcher for marshalling scanner events.</param>
-    public MainViewModel(string outputDir, Dispatcher dispatcher)
+    public MainViewModel(string outputDir, string connectionString, Dispatcher dispatcher)
     {
+        _connectionString = connectionString;
         SpeedOptions.Add(new SpeedOption("Slow",   1500));
         SpeedOptions.Add(new SpeedOption("Medium",  800));
         SpeedOptions.Add(new SpeedOption("Fast",    300));
@@ -105,6 +123,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         _scanner = new MapFileScanner(outputDir, dispatcher);
         _scanner.DirectoryChanged += (_, _) => Refresh();
 
+        LoadRecipients();
         Refresh();
         _scanner.StartWatching();
     }
@@ -291,12 +310,108 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         }
     }
 
+    /// <summary>
+    /// Recipient selected by the user.  Finding a match scrolls to and transiently
+    /// highlights that meteogram; finding no match fires <see cref="RecipientNotFound"/>.
+    /// </summary>
+    public RecipientSummary? SelectedRecipient
+    {
+        get => _selectedRecipient;
+        set
+        {
+            if (_selectedRecipient == value) return;
+            _selectedRecipient = value;
+            OnPropertyChanged();
+            if (value is null) return;
+
+            var item = MeteogramItems.FirstOrDefault(m =>
+                string.Equals(m.Icao,     value.FirstIcao, StringComparison.OrdinalIgnoreCase)
+             && string.Equals(m.TempUnit, value.TempUnit,  StringComparison.OrdinalIgnoreCase)
+             && string.Equals(m.Timezone, value.Timezone,  StringComparison.OrdinalIgnoreCase));
+
+            if (item is not null)
+            {
+                ScrollToItem?.Invoke(item);
+                HighlightItem(item);
+            }
+            else
+            {
+                RecipientNotFound?.Invoke(value.Name);
+            }
+        }
+    }
+
     private void LoadMeteogramItems()
     {
+        // Cancel any in-progress highlight — the item objects are being replaced.
+        _highlightTimer?.Stop();
+        if (_highlightedItem is not null)
+        {
+            _highlightedItem.IsHighlighted = false;
+            _highlightedItem = null;
+        }
+
         MeteogramItems.Clear();
         if (_selectedMeteogramRun is null) return;
         foreach (var item in _selectedMeteogramRun.Items)
+        {
+            item.Recipients = Recipients
+                .Where(r => string.Equals(r.FirstIcao, item.Icao,     StringComparison.OrdinalIgnoreCase)
+                         && string.Equals(r.TempUnit,  item.TempUnit, StringComparison.OrdinalIgnoreCase)
+                         && string.Equals(r.Timezone,  item.Timezone, StringComparison.OrdinalIgnoreCase))
+                .ToList();
             MeteogramItems.Add(item);
+        }
+    }
+
+    private void HighlightItem(MeteogramItem item)
+    {
+        // Clear any previous highlight.
+        _highlightTimer?.Stop();
+        if (_highlightedItem is not null)
+            _highlightedItem.IsHighlighted = false;
+
+        item.IsHighlighted = true;
+        _highlightedItem   = item;
+
+        _highlightTimer          = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+        _highlightTimer.Tick    += (_, _) =>
+        {
+            _highlightTimer!.Stop();
+            if (_highlightedItem is not null)
+            {
+                _highlightedItem.IsHighlighted = false;
+                _highlightedItem = null;
+            }
+        };
+        _highlightTimer.Start();
+    }
+
+    private void LoadRecipients()
+    {
+        try
+        {
+            using var conn = new SqlConnection(_connectionString);
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText =
+                "SELECT RecipientId, Name, Language, MetarIcao, TempUnit, Timezone " +
+                "FROM Recipients " +
+                "ORDER BY RecipientId";
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                var id        = reader.GetString(0);
+                var name      = reader.GetString(1);
+                var lang      = reader.IsDBNull(2) ? "English" : reader.GetString(2);
+                var icaoRaw   = reader.IsDBNull(3) ? null      : reader.GetString(3);
+                var tempUnit  = reader.IsDBNull(4) ? "F"       : reader.GetString(4);
+                var timezone  = reader.IsDBNull(5) ? "UTC"     : reader.GetString(5);
+                var firstIcao = icaoRaw?.Split(',')[0].Trim();
+                Recipients.Add(new RecipientSummary(id, name, lang, firstIcao, tempUnit, timezone));
+            }
+        }
+        catch { /* DB unavailable — leave list empty, selector will be empty */ }
     }
 
     // ── Status ────────────────────────────────────────────────────────────────
@@ -571,6 +686,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     {
         _analysisTimer.Stop();
         _forecastTimer.Stop();
+        _highlightTimer?.Stop();
         _scanner.Dispose();
     }
 }
