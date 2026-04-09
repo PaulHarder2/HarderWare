@@ -130,7 +130,8 @@ public partial class AnnouncementTab : UserControl
         HideMessages();
 
         using var http  = new HttpClient();
-        var formatter   = new AnnouncementFormatter(http, claudeApiKey, App.ClaudeModel);
+        var formatter   = new AnnouncementFormatter(http, claudeApiKey, App.ClaudeModel,
+                              App.ClaudeMessagesEndpoint, App.ClaudeApiVersion, App.ClaudeMaxTokens);
         var emailer     = new SmtpSender(smtpConfig, "WxAnnounce");
         var defaultLang = App.DefaultLanguage;
 

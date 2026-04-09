@@ -277,7 +277,7 @@ public partial class RecipientsTab : UserControl
             // ── Nearby stations from local WxStations table ───────────────────
             // Use a bbox pre-filter then Haversine for accuracy.
 
-            const double SearchRadiusKm = 150.0;
+            double SearchRadiusKm = App.StationLookupRadiusKm;
             double latDelta = SearchRadiusKm / 111.0;
             double lonDelta = latDelta / Math.Cos(lat * Math.PI / 180.0);
 
@@ -296,7 +296,7 @@ public partial class RecipientsTab : UserControl
                 .Select(s => (Station: s, DistKm: HaversineKm(lat, lon, s.Lat!.Value, s.Lon!.Value)))
                 .Where(x => x.DistKm <= SearchRadiusKm)
                 .OrderBy(x => x.DistKm)
-                .Take(20)
+                .Take(App.MaxNearbyStationsInLookup)
                 .ToList();
 
             if (candidates.Count == 0)
@@ -307,8 +307,7 @@ public partial class RecipientsTab : UserControl
                 return;
             }
 
-            Logger.Info($"Station lookup: {candidates.Count} candidate(s) within {SearchRadiusKm:F0} km of ({lat:F4}, {lon:F4}): " +
-                        string.Join(", ", candidates.Select(c => $"{c.Station.IcaoId} ({c.DistKm:F1} km)")));
+            Logger.Info( $"Station lookup: Nearest {candidates.Count} candidate(s) within {SearchRadiusKm:F0} km of ({lat:F4}, {lon:F4})" );
 
             // ── DB counts (batched) ───────────────────────────────────────────
 
@@ -375,7 +374,7 @@ public partial class RecipientsTab : UserControl
             }
 
             // Suppress non-reporting airports so major METAR stations aren't pushed out.
-            rows = rows.Where(r => r.MetarCount > 0).Take(5).ToList();
+            rows = rows.Where(r => r.MetarCount > 0).Take(App.MaxDisplayStations).ToList();
 
             if (rows.Count == 0)
             {
@@ -745,8 +744,8 @@ public partial class RecipientsTab : UserControl
         NameBox.Clear();
         EmailBox.Clear();
         LanguageBox.Text       = App.DefaultLanguage;
-        TzBox.SelectedItem     = "America/Chicago";
-        ScheduledHoursBox.Text = "7";
+        TzBox.SelectedItem     = App.DefaultTimezone;
+        ScheduledHoursBox.Text = App.DefaultScheduledSendHour.ToString();
         AddressBox.Clear();
         LocalityBox.Clear();
         LatBox.Clear();
@@ -824,7 +823,7 @@ public partial class RecipientsTab : UserControl
         MessagesText.Foreground         = new SolidColorBrush(Color.FromRgb(0x15, 0x57, 0x24));
         MessagesBorder.Visibility       = Visibility.Visible;
 
-        _ = Task.Delay(3000).ContinueWith(_ => Dispatcher.Invoke(HideMessages));
+        _ = Task.Delay(App.SuccessMessageDismissMs).ContinueWith(_ => Dispatcher.Invoke(HideMessages));
     }
 
     /// <summary>
@@ -890,9 +889,9 @@ public partial class RecipientsTab : UserControl
     {
         try
         {
-            var url = $"https://aviationweather.gov/api/data/metar?ids={icao}&hours=6&format=json";
+            var url = $"{App.AwcMetarEndpoint}?ids={icao}&hours={App.AwcMetarHours}&format=json";
             using var req = new HttpRequestMessage(HttpMethod.Get, url);
-            req.Headers.Add("User-Agent", "WxManager/1.0");
+            req.Headers.Add("User-Agent", App.UserAgent);
             using var resp = await _http.SendAsync(req);
             if (!resp.IsSuccessStatusCode) return 0;
             var results = await resp.Content.ReadFromJsonAsync<AwcMetar[]>();

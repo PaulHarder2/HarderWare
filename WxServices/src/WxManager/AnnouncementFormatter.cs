@@ -13,22 +13,29 @@ namespace WxManager;
 /// </summary>
 public sealed class AnnouncementFormatter
 {
-    private const string MessagesEndpoint = "https://api.anthropic.com/v1/messages";
-    private const string AnthropicVersion = "2023-06-01";
-
     private readonly HttpClient _http;
     private readonly string     _apiKey;
     private readonly string     _model;
+    private readonly string     _endpoint;
+    private readonly string     _apiVersion;
+    private readonly int        _maxTokens;
 
     /// <summary>Initialises a new instance with the given HTTP client and Claude credentials.</summary>
     /// <param name="http">HTTP client used for all Anthropic API requests.</param>
     /// <param name="apiKey">Anthropic API key.</param>
     /// <param name="model">Claude model ID (e.g. <c>"claude-sonnet-4-6"</c>).</param>
-    public AnnouncementFormatter(HttpClient http, string apiKey, string model)
+    /// <param name="endpoint">Anthropic Messages API endpoint URL.</param>
+    /// <param name="apiVersion">Anthropic API version header value.</param>
+    /// <param name="maxTokens">Maximum tokens for the Claude response.</param>
+    public AnnouncementFormatter(HttpClient http, string apiKey, string model,
+                                 string endpoint, string apiVersion, int maxTokens)
     {
-        _http   = http;
-        _apiKey = apiKey;
-        _model  = model;
+        _http       = http;
+        _apiKey     = apiKey;
+        _model      = model;
+        _endpoint   = endpoint;
+        _apiVersion = apiVersion;
+        _maxTokens  = maxTokens;
     }
 
     /// <summary>
@@ -63,14 +70,14 @@ public sealed class AnnouncementFormatter
         var request = new
         {
             model      = _model,
-            max_tokens = 2048,
+            max_tokens = _maxTokens,
             system     = systemPrompt,
             messages   = new[] { new { role = "user", content = text } },
         };
 
-        using var req = new HttpRequestMessage(HttpMethod.Post, MessagesEndpoint);
+        using var req = new HttpRequestMessage(HttpMethod.Post, _endpoint);
         req.Headers.Add("x-api-key", _apiKey);
-        req.Headers.Add("anthropic-version", AnthropicVersion);
+        req.Headers.Add("anthropic-version", _apiVersion);
         req.Content = JsonContent.Create(request);
 
         HttpResponseMessage resp;

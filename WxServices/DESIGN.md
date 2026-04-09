@@ -695,11 +695,11 @@ WxAddRecipient "34 Stone Springs Circle, The Woodlands, TX 77381"
 
 - **Recipients** — Left pane shows a scrollable list of all recipients from the `Recipients` database table. Right pane provides an address geocoder (Nominatim), a nearby-stations grid, and a full recipient field editor. Selecting a station pre-fills the MetarIcao field.
 
-  **Nearby-stations lookup:** After geocoding, WxManager queries `WxStations` for the 20 nearest known stations within 150 km (Haversine, with a lat/lon bbox pre-filter). For each candidate it counts local METAR and TAF records. If a station has no local METAR records, it issues a single-station AWC query (`hours=6`) as a fallback; stations that respond there but not in bbox results are flagged `AlwaysFetchDirect = true` in the database so the fetch cycle fetches them individually going forward. Non-reporting stations (no local data and no AWC response) are suppressed; up to 5 active stations are shown. A "Searching…" advisory is displayed in the Nearby Stations panel while the queries run. A successful address geocode implicitly begins editing (enabling Save/Cancel without requiring an explicit New click). Save validates all fields before writing: Id must be non-empty and contain only letters, digits, hyphens, and underscores; Email must be a valid RFC 5321 address (`System.Net.Mail.MailAddress`); Timezone must be a recognised IANA ID (from `BuildIanaTimeZoneList`); ScheduledSendHours, if set, must be comma-separated integers in 0–23; MetarIcao and TafIcao tokens must be exactly 4 alphanumeric characters and must exist in the `WxStations` table with non-null coordinates (hard block); if a station's coordinates fall outside the configured fetch bounding box the save proceeds but an amber warning banner is shown in place of the green success banner. Save writes directly to the `Recipients` table and shows a green auto-dismissing banner ("Saved successfully." — 3 seconds) on success (with no bounding-box warnings), or an amber persistent banner on validation failure or bounding-box warning. Delete removes the row after confirmation and returns the form to an idle state (all fields blank, Save/Cancel/Delete disabled). A **Cancel** button discards unsaved edits at any time. The Timezone field is an editable ComboBox populated with canonical IANA timezone IDs (via `TimeZoneInfo.TryConvertWindowsIdToIanaId`); typing narrows the jump target. Default for new recipients: Language = `Report:DefaultLanguage` (typically "English"), Timezone = America/Chicago, Temperature = °F, Pressure = inHg, Wind = mph.
+  **Nearby-stations lookup:** After geocoding, WxManager queries `WxStations` for up to `WxManager:MaxNearbyStationsInLookup` (default 40) nearest known stations within `WxManager:StationLookupRadiusKm` (default 150 km), using a lat/lon bbox pre-filter followed by a Haversine sort. For each candidate it counts local METAR and TAF records. If a station has no local METAR records, it issues a single-station AWC query (lookback window: `WxManager:AwcMetarHours`, default 6 hours) as a fallback; stations that respond there but not in bbox results are flagged `AlwaysFetchDirect = true` in the database so the fetch cycle fetches them individually going forward. Non-reporting stations (no local data and no AWC response) are suppressed; up to `WxManager:MaxDisplayStations` (default 5) active stations are shown. A "Searching…" advisory is displayed in the Nearby Stations panel while the queries run. A successful address geocode implicitly begins editing (enabling Save/Cancel without requiring an explicit New click). Save validates all fields before writing: Id must be non-empty and contain only letters, digits, hyphens, and underscores; Email must be a valid RFC 5321 address (`System.Net.Mail.MailAddress`); Timezone must be a recognised IANA ID (from `BuildIanaTimeZoneList`); ScheduledSendHours, if set, must be comma-separated integers in 0–23; MetarIcao and TafIcao tokens must be exactly 4 alphanumeric characters and must exist in the `WxStations` table with non-null coordinates (hard block); if a station's coordinates fall outside the configured fetch bounding box the save proceeds but an amber warning banner is shown in place of the green success banner. Save writes directly to the `Recipients` table and shows a green auto-dismissing banner ("Saved successfully.") on success — the banner dismisses after `WxManager:SuccessMessageDismissMs` (default 3000 ms) — or an amber persistent banner on validation failure or bounding-box warning. Delete removes the row after confirmation and returns the form to an idle state (all fields blank, Save/Cancel/Delete disabled). A **Cancel** button discards unsaved edits at any time. The Timezone field is an editable ComboBox populated with canonical IANA timezone IDs (via `TimeZoneInfo.TryConvertWindowsIdToIanaId`); typing narrows the jump target. Default for new recipients: Language = `Report:DefaultLanguage` (typically "English"), Timezone = `WxManager:DefaultTimezone` (default "America/Chicago"), ScheduledSendHours = `Report:DefaultScheduledSendHour` (default 7), Temperature = °F, Pressure = inHg, Wind = mph.
 
 - **Announcement** — Multi-line text editor for composing operator service announcements. Clicking **Send** loads the recipient list from the database, groups recipients by language, calls Claude to format the announcement as a professional HTML email for each language group (translating non-English groups), and sends via SMTP. Progress is shown inline. On complete success the text area is cleared; partial failures are reported in a dismissible amber message panel with selectable text.
 
-**Configuration:** Non-secret settings (`Smtp:Host`, `Smtp:Port`, `Claude:Model`, `Report:DefaultLanguage`) are read from `appsettings.shared.json`. Secrets (`Claude:ApiKey`, `Smtp:Username`, `Smtp:Password`, `Smtp:FromAddress`) are read from the `GlobalSettings` database row (Id = 1), with `C:\HarderWare\appsettings.local.json` and a local `appsettings.local.json` beside the executable as fallbacks.
+**Configuration:** Follows the same layered pattern as the services. `appsettings.shared.json` supplies settings shared across projects (`Smtp`, `Claude`, `Fetch`, `Report:DefaultLanguage`, `Report:DefaultScheduledSendHour`). WxManager-specific non-secret settings (`WxManager:` section — station lookup radius, display limits, default timezone, AWC endpoint, User-Agent, success-banner timing) live in WxManager's own `appsettings.json`. Secrets (`Claude:ApiKey`, `Smtp:Username`, `Smtp:Password`, `Smtp:FromAddress`) are read from the `GlobalSettings` database row (Id = 1), with `C:\HarderWare\appsettings.local.json` and a local `appsettings.local.json` beside the executable as fallbacks.
 
 **Deploy:** `.\Deploy-WxService.ps1 WxManager` publishes to `C:\HarderWare\WxManager`.
 
@@ -978,12 +978,34 @@ Each service loads configuration from up to three files, merged in order (later 
   },
   "Claude": {
     "ApiKey": null,
-    "Model": "claude-sonnet-4-6"
+    "Model": "claude-sonnet-4-6",
+    "MessagesEndpoint": "https://api.anthropic.com/v1/messages",
+    "ApiVersion": "2023-06-01",
+    "MaxTokens": 2048
   }
 }
 ```
 
-`Smtp` and `Claude` are top-level so any service can send email or call Claude without duplicating config. Secrets (`Username`, `Password`, `FromAddress`, `ApiKey`) are always `null` here; the authoritative values live in the `GlobalSettings` database table (Id = 1). Each service reads secrets from the DB at the start of every cycle and falls back to any values present in `appsettings.local.json` for backward compatibility.
+`Smtp` and `Claude` are top-level so any service can send email or call Claude without duplicating config. Secrets (`Username`, `Password`, `FromAddress`, `ApiKey`) are always `null` here; the authoritative values live in the `GlobalSettings` database table (Id = 1). Each service reads secrets from the DB at the start of every cycle and falls back to any values present in `appsettings.local.json` for backward compatibility. `Claude:MessagesEndpoint`, `Claude:ApiVersion`, and `Claude:MaxTokens` are defaulted here and can be overridden per-service or per-machine.
+
+### WxManager — appsettings.json
+
+```json
+{
+  "WxManager": {
+    "MaxNearbyStationsInLookup": 40,
+    "StationLookupRadiusKm": 150.0,
+    "MaxDisplayStations": 5,
+    "DefaultTimezone": "America/Chicago",
+    "UserAgent": "WxManager/1.0",
+    "AwcMetarEndpoint": "https://aviationweather.gov/api/data/metar",
+    "AwcMetarHours": 6,
+    "SuccessMessageDismissMs": 3000
+  }
+}
+```
+
+All keys have defaults baked into `App.xaml.cs`; the file exists to make them visible and easy to override without recompiling.
 
 ### WxParser.Svc — appsettings.json
 

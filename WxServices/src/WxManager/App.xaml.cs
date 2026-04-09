@@ -34,6 +34,9 @@ public partial class App : Application
     /// <summary>Default language for new recipients from <c>Report:DefaultLanguage</c>. Defaults to <c>"English"</c>.</summary>
     public static string DefaultLanguage { get; private set; } = "English";
 
+    /// <summary>Default scheduled send hour for new recipients from <c>Report:DefaultScheduledSendHour</c>. Defaults to <c>7</c>.</summary>
+    public static int DefaultScheduledSendHour { get; private set; } = 7;
+
     /// <summary>SMTP connection and credential settings for sending announcements.</summary>
     public static SmtpConfig SmtpConfig { get; private set; } = new SmtpConfig();
 
@@ -42,6 +45,39 @@ public partial class App : Application
 
     /// <summary>Claude model ID from <c>Claude:Model</c>. Defaults to <c>"claude-sonnet-4-6"</c>.</summary>
     public static string ClaudeModel { get; private set; } = "claude-sonnet-4-6";
+
+    /// <summary>Anthropic Messages API endpoint from <c>Claude:MessagesEndpoint</c>.</summary>
+    public static string ClaudeMessagesEndpoint { get; private set; } = "https://api.anthropic.com/v1/messages";
+
+    /// <summary>Anthropic API version header value from <c>Claude:ApiVersion</c>.</summary>
+    public static string ClaudeApiVersion { get; private set; } = "2023-06-01";
+
+    /// <summary>Maximum tokens for Claude responses from <c>Claude:MaxTokens</c>. Defaults to <c>2048</c>.</summary>
+    public static int ClaudeMaxTokens { get; private set; } = 2048;
+
+    /// <summary>Maximum candidate stations evaluated during nearby-station lookup, from <c>WxManager:MaxNearbyStationsInLookup</c>. Defaults to <c>40</c>.</summary>
+    public static int MaxNearbyStationsInLookup { get; private set; } = 40;
+
+    /// <summary>Search radius in kilometres for nearby-station lookup, from <c>WxManager:StationLookupRadiusKm</c>. Defaults to <c>150.0</c>.</summary>
+    public static double StationLookupRadiusKm { get; private set; } = 150.0;
+
+    /// <summary>Maximum number of nearby stations to display after filtering, from <c>WxManager:MaxDisplayStations</c>. Defaults to <c>5</c>.</summary>
+    public static int MaxDisplayStations { get; private set; } = 5;
+
+    /// <summary>Default IANA timezone ID for new recipients, from <c>WxManager:DefaultTimezone</c>. Defaults to <c>"America/Chicago"</c>.</summary>
+    public static string DefaultTimezone { get; private set; } = "America/Chicago";
+
+    /// <summary>HTTP User-Agent header sent to external APIs, from <c>WxManager:UserAgent</c>. Defaults to <c>"WxManager/1.0"</c>.</summary>
+    public static string UserAgent { get; private set; } = "WxManager/1.0";
+
+    /// <summary>Base URL for the Aviation Weather Center METAR API, from <c>WxManager:AwcMetarEndpoint</c>.</summary>
+    public static string AwcMetarEndpoint { get; private set; } = "https://aviationweather.gov/api/data/metar";
+
+    /// <summary>Lookback window in hours for AWC METAR queries, from <c>WxManager:AwcMetarHours</c>. Defaults to <c>6</c>.</summary>
+    public static int AwcMetarHours { get; private set; } = 6;
+
+    /// <summary>Auto-dismiss delay in milliseconds for success messages, from <c>WxManager:SuccessMessageDismissMs</c>. Defaults to <c>3000</c>.</summary>
+    public static int SuccessMessageDismissMs { get; private set; } = 3000;
 
     /// <summary>
     /// Builds the database connection, loads optional fetch/report/announce config,
@@ -69,8 +105,9 @@ public partial class App : Application
         var config = new ConfigurationBuilder()
             .SetBasePath(AppContext.BaseDirectory)
             .AddJsonFile("appsettings.shared.json", optional: false)
+            .AddJsonFile("appsettings.json",         optional: true)
             .AddJsonFile(new PhysicalFileProvider(@"C:\HarderWare"), "appsettings.local.json", optional: true, reloadOnChange: false)
-            .AddJsonFile("appsettings.local.json",  optional: true)
+            .AddJsonFile("appsettings.local.json",   optional: true)
             .Build();
 
         var connStr = config.GetConnectionString("WeatherData");
@@ -92,9 +129,28 @@ public partial class App : Application
         FetchHomeLon    = TryParseDouble(config["Fetch:HomeLongitude"]);
         FetchBoxDeg     = TryParseDouble(config["Fetch:BoundingBoxDegrees"]);
         DefaultLanguage = config["Report:DefaultLanguage"] ?? "English";
-        SmtpConfig      = config.GetSection("Smtp").Get<SmtpConfig>() ?? new SmtpConfig();
-        ClaudeApiKey    = config["Claude:ApiKey"]  ?? "";
-        ClaudeModel     = config["Claude:Model"]   ?? "claude-sonnet-4-6";
+        if (int.TryParse(config["Report:DefaultScheduledSendHour"], out var defHour) && defHour >= 0 && defHour <= 23)
+            DefaultScheduledSendHour = defHour;
+        SmtpConfig             = config.GetSection("Smtp").Get<SmtpConfig>() ?? new SmtpConfig();
+        ClaudeApiKey           = config["Claude:ApiKey"]           ?? "";
+        ClaudeModel            = config["Claude:Model"]            ?? "claude-sonnet-4-6";
+        ClaudeMessagesEndpoint = config["Claude:MessagesEndpoint"] ?? ClaudeMessagesEndpoint;
+        ClaudeApiVersion       = config["Claude:ApiVersion"]       ?? ClaudeApiVersion;
+        if (int.TryParse(config["Claude:MaxTokens"], out var maxTok) && maxTok > 0)
+            ClaudeMaxTokens = maxTok;
+        if (int.TryParse(config["WxManager:MaxNearbyStationsInLookup"], out var maxNearby) && maxNearby > 0)
+            MaxNearbyStationsInLookup = maxNearby;
+        if (TryParseDouble(config["WxManager:StationLookupRadiusKm"]) is { } radiusKm && radiusKm > 0)
+            StationLookupRadiusKm = radiusKm;
+        if (int.TryParse(config["WxManager:MaxDisplayStations"], out var maxDisplay) && maxDisplay > 0)
+            MaxDisplayStations = maxDisplay;
+        DefaultTimezone        = config["WxManager:DefaultTimezone"]        ?? DefaultTimezone;
+        UserAgent              = config["WxManager:UserAgent"]              ?? UserAgent;
+        AwcMetarEndpoint       = config["WxManager:AwcMetarEndpoint"]       ?? AwcMetarEndpoint;
+        if (int.TryParse(config["WxManager:AwcMetarHours"], out var awcHours) && awcHours > 0)
+            AwcMetarHours = awcHours;
+        if (int.TryParse(config["WxManager:SuccessMessageDismissMs"], out var dismissMs) && dismissMs >= 0)
+            SuccessMessageDismissMs = dismissMs;
 
         new MainWindow().Show();
     }
