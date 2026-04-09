@@ -16,10 +16,8 @@
       "title": "Total Fetch Cycles",
       "description": "Cumulative completed METAR/TAF fetch cycles since service start.",
       "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
           "expr": "wxparser_fetch_cycles_total",
           "instant": true,
           "refId": "A"
@@ -51,12 +49,10 @@
       "id": 2,
       "type": "stat",
       "title": "Fetch Cycles (Last Hour)",
-      "description": "Completed cycles in the last 60 minutes. Normal = ~6 (one per 10 min). Green ≥ 5, yellow ≥ 3, red below.",
+      "description": "Completed cycles in the last 60 minutes. Normal = ~6 (one per 10 min). Green >= 5, yellow >= 3, red below.",
       "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
           "expr": "increase(wxparser_fetch_cycles_total[1h])",
           "instant": true,
           "refId": "A"
@@ -92,16 +88,13 @@
       "title": "Fetch Cycle Duration (p50 / p95)",
       "description": "Rolling 30-minute window histogram quantiles. Spikes indicate slow AWC responses or DB contention.",
       "gridPos": { "x": 0, "y": 4, "w": 24, "h": 10 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
           "expr": "histogram_quantile(0.50, sum(increase(wxparser_fetch_cycle_duration_seconds_bucket[30m])) by (le))",
           "legendFormat": "p50",
           "refId": "A"
         },
         {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
           "expr": "histogram_quantile(0.95, sum(increase(wxparser_fetch_cycle_duration_seconds_bucket[30m])) by (le))",
           "legendFormat": "p95",
           "refId": "B"
