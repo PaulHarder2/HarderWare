@@ -8,11 +8,20 @@ public sealed class GfsConfig
 {
     /// <summary>
     /// How many minutes to wait between GFS fetch attempts.
-    /// Defaults to 30 minutes; a new GFS run appears every 6 hours and files
-    /// are posted incrementally, so checking twice per hour allows the fetcher
+    /// Defaults to 10 minutes; a new GFS run appears every 6 hours and files
+    /// are posted incrementally, so checking every 10 minutes allows the fetcher
     /// to resume quickly as new forecast hours become available.
     /// </summary>
-    public int IntervalMinutes { get; set; } = 30;
+    public int IntervalMinutes { get; set; } = 10;
+
+    /// <summary>
+    /// Minimum number of hours after the nominal model-run time before the
+    /// fetcher will attempt to download data for that run.  GFS output
+    /// typically begins appearing on NOMADS/AWS 4–5 hours after initialisation;
+    /// this avoids pointless 404 requests during that window.
+    /// Defaults to 3.5 hours.
+    /// </summary>
+    public double DelayHours { get; set; } = 3.5;
 
     /// <summary>
     /// Highest forecast hour to download (inclusive).

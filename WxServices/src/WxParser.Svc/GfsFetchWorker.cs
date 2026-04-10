@@ -100,6 +100,7 @@ public sealed class GfsFetchWorker : BackgroundService
                 cfg.MaxForecastHours,
                 cfg.RetainModelRuns,
                 cfg.TempPath,
+                cfg.DelayHours,
                 ct);
         }
         catch (Exception ex) when (!ct.IsCancellationRequested)

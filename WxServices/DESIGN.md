@@ -528,7 +528,8 @@ All workers check for existing current output files before invoking Python; alre
 - Precipitation shading (forecast_map only): semi-transparent green (`#66bb6a`, alpha 0.45) `contourf` fill over areas where the Gaussian-smoothed GFS PRATE field exceeds 0.1 mm/hr. Drawn below isopleths so contour lines and station symbols remain legible. The smoothing turns the blocky 0.25° grid into a smooth curved boundary.
 - Pressure extrema: **H** (navy) / **L** (maroon), neighbourhood 12 grid cells (~3°/333 km), minimum prominence 1 hPa.
 - Temperature extrema: **W** (dark red) / **K** (steel blue), neighbourhood 12 grid cells, no minimum prominence filter.
-- Station models (synoptic_map): MetPy StationPlot; stations thinned with `reduce_point_density` (default 75 km). Fields plotted: NW = air temperature (dark red), SW = dew point (dark green), NE = encoded SLP (3-digit), centre = wind barb + sky-cover symbol + present-weather symbol, S = station ICAO ID (navy). Visibility (SE position) is intentionally omitted to avoid overlapping the station ID label.
+- Station models (synoptic_map): MetPy StationPlot; stations thinned with `reduce_point_density` (default 75 km). Fields plotted: NW = air temperature (dark red), SW = dew point (dark green), NE = encoded SLP (3-digit), centre = wind barb + sky-cover symbol + present-weather symbol, SE = station ICAO ID (navy).
+- Station models (forecast_map): MetPy StationPlot at METAR station locations, displaying interpolated GFS values. Fields plotted: NW = air temperature (dark red), SW = dew point (dark green), NE = encoded SLP (3-digit), centre = wind barb + sky-cover symbol, SE = station ICAO ID (navy).
 - Contours (synoptic_map): Barnes-interpolated grid converted from projection metres to lat/lon before plotting so Cartopy clips to the inner viewport, matching forecast_map white-space border behaviour.
 - Both maps use the same fixed `SOUTH_CENTRAL_EXTENT = (-106, -88, 25, 38)` so the displayed geography is identical. `forecast_map.py` accepts `--extent south_central`; WxVis.Svc passes this flag so it doesn't fall back to auto-detecting bounds from the (larger) GFS data footprint.
 - Extrema labels (H/L/W/K): before placing a label, its lat/lon position is converted to projection metres and compared against `ax.get_xlim()`/`ax.get_ylim()` with a 3 % inward margin on all edges; labels outside or too close to the boundary are silently skipped. The margin guards against `plt.tight_layout()`, which adjusts subplot padding after labels are placed and can shift the effective axes boundary enough to push a borderline anchor outside the saved image. `ax.set_xlim`/`ax.set_ylim` are also re-applied after `tight_layout()` for the same reason.
@@ -1019,7 +1020,8 @@ All keys have defaults baked into `App.xaml.cs`; the file exists to make them vi
     "HeartbeatFile": "C:\\HarderWare\\Logs\\wxparser-heartbeat.txt"
   },
   "Gfs": {
-    "IntervalMinutes": 60
+    "IntervalMinutes": 10,
+    "DelayHours": 3.5
   }
 }
 ```

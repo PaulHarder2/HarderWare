@@ -453,7 +453,7 @@ def render_synoptic_map(
             zorder=3,
         )
 
-    stationplot.plot_text("S", station_df["StationIcao"].values, fontsize=7, color="navy")
+    stationplot.plot_text("SE", station_df["StationIcao"].values, fontsize=7, color="navy")
 
     obs_time = pd.to_datetime(station_df["ObservationUtc"]).max()
     ax.set_title(

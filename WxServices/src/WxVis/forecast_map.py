@@ -278,7 +278,8 @@ def render_forecast_map(
         for _, row in stn.iterrows():
             i_lat = int(np.argmin(np.abs(lats - row["Lat"])))
             i_lon = int(np.argmin(np.abs(lons - row["Lon"])))
-            rec = {"lon": float(row["Lon"]), "lat": float(row["Lat"])}
+            rec = {"lon": float(row["Lon"]), "lat": float(row["Lat"]),
+                   "icao": row.get("StationIcao", "")}
             rec["tmp_c"]   = float(tmp_raw[i_lat, i_lon])
             rec["dwp_c"]   = float(dew_raw[i_lat, i_lon]) if has_dwp  else np.nan
             rec["u_kt"]    = float(u_kt[i_lat, i_lon])    if has_wind else np.nan
@@ -316,6 +317,8 @@ def render_forecast_map(
             if has_tcc:
                 ok = stn_df["oktas"].values.astype(int)
                 sp.plot_symbol("C", np.where(ok >= 0, ok, 0), sky_cover)
+            if "icao" in stn_df.columns:
+                sp.plot_text("SE", stn_df["icao"].values, fontsize=7, color="navy")
 
     elif has_wind:
         # ── Fallback: grid-subsampled barbs only ──────────────────────────────
@@ -393,7 +396,7 @@ if __name__ == "__main__":
     else:
         logger.info(f"Loaded {len(df)} grid points for f{args.fh:03d}.")
         metar_df = load_latest_metars(engine)
-        station_locs = metar_df[["Lat", "Lon"]].dropna() if not metar_df.empty else None
+        station_locs = metar_df[["Lat", "Lon", "StationIcao"]].dropna() if not metar_df.empty else None
         if station_locs is not None:
             logger.info(f"Loaded {len(station_locs)} METAR station locations for forecast station models.")
         out_dir = load_output_dir()

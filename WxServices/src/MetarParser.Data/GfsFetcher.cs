@@ -65,6 +65,11 @@ public static class GfsFetcher
     /// Windows directory for temporary GRIB2, sub-grid, and CSV files.
     /// Created automatically if absent.  Defaults to <c>C:\HarderWare\temp</c>.
     /// </param>
+    /// <param name="delayHours">
+    /// Minimum hours after a model run's nominal time before the fetcher will
+    /// attempt to download it.  Avoids 404s during the window before NOAA begins
+    /// posting output.  Default 3.5.
+    /// </param>
     /// <param name="ct">Cancellation token.</param>
     /// <sideeffects>
     /// Makes HTTP requests to NOMADS.
@@ -81,6 +86,7 @@ public static class GfsFetcher
         int maxForecastHours = 120,
         int retainModelRuns  = 2,
         string gfsTempPath   = @"C:\HarderWare\temp",
+        double delayHours    = 3.5,
         CancellationToken ct = default)
     {
         // ── Determine which run to process ────────────────────────────────────
@@ -106,7 +112,7 @@ public static class GfsFetcher
             }
             else
             {
-                modelRun = LatestAvailableModelRun();
+                modelRun = LatestAvailableModelRun(delayHours);
                 Logger.Info($"GfsFetcher: latest available model run is {modelRun:yyyy-MM-dd HH}Z.");
 
                 var runRecord = await ctx.GfsModelRuns
@@ -304,17 +310,19 @@ public static class GfsFetcher
 
     /// <summary>
     /// Returns the UTC <see cref="DateTime"/> of the most recent GFS model run
-    /// to attempt fetching.
+    /// whose data is likely to have started appearing on NOMADS/AWS.
     /// </summary>
     /// <remarks>
-    /// GFS runs at 00Z, 06Z, 12Z, and 18Z.  Files are posted incrementally to
-    /// NOMADS as the model computes; the fetcher discovers availability by
-    /// attempting each forecast hour and stopping on a 404.  This method targets
-    /// the most recent cycle that is no more than 8 hours old, giving NOAA
-    /// sufficient time to start posting files while avoiding stale data.
+    /// GFS runs at 00Z, 06Z, 12Z, and 18Z.  Files are posted incrementally
+    /// starting roughly 4–5 hours after model initialisation.  This method
+    /// skips any run younger than <paramref name="delayHours"/> to avoid
+    /// pointless 404 requests, while still accepting runs up to 8 hours old.
     /// </remarks>
+    /// <param name="delayHours">
+    /// Minimum age (in hours) a run must have before it is considered.
+    /// </param>
     /// <returns>The run time of the most recent eligible model run.</returns>
-    private static DateTime LatestAvailableModelRun()
+    private static DateTime LatestAvailableModelRun(double delayHours = 3.5)
     {
         var now = DateTime.UtcNow;
 
@@ -322,11 +330,17 @@ public static class GfsFetcher
         {
             var runTime  = now.Date.AddHours(cycle);
             var ageHours = (now - runTime).TotalHours;
-            if (ageHours is >= 0 and <= 8)
+            if (ageHours >= delayHours && ageHours <= 8)
                 return runTime;
         }
 
-        // Safety fallback — unreachable with 6-hour GFS cycles and an 8-hour window.
+        // Check yesterday's 18Z if nothing from today qualifies yet.
+        var yesterday18Z = now.Date.AddDays(-1).AddHours(18);
+        var age18Z = (now - yesterday18Z).TotalHours;
+        if (age18Z >= delayHours && age18Z <= 14)
+            return yesterday18Z;
+
+        // Safety fallback.
         return now.Date.AddDays(-1).AddHours(18);
     }
 
