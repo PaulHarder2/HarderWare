@@ -1,5 +1,6 @@
 {
   "title": "WxParser",
+  "timezone": "utc",
   "uid": "wxparser-v1",
   "schemaVersion": 39,
   "version": 1,
