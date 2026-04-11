@@ -36,6 +36,10 @@ var config = new ConfigurationBuilder()
     .AddJsonFile("appsettings.local.json",  optional: true)
     .Build();
 
+await PrerequisiteChecker.LogPrerequisitesAsync(
+    PrerequisiteChecker.Requires.SqlServer,
+    connectionString: config.GetConnectionString("WeatherData") ?? "");
+
 var announceConfig = config.GetSection("Announce").Get<AnnounceConfig>() ?? new AnnounceConfig();
 if (string.IsNullOrEmpty(announceConfig.FilePath))
     announceConfig.FilePath = new WxPaths(config["InstallRoot"]).AnnounceFilePath;

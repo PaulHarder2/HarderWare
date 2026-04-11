@@ -29,6 +29,10 @@ public partial class App : Application
         try
         {
             var connectionString = ReadConnectionString();
+
+            _ = PrerequisiteChecker.LogPrerequisitesAsync(
+                PrerequisiteChecker.Requires.SqlServer,
+                connectionString: connectionString);
             _viewModel = new MainViewModel(paths.PlotsDir, connectionString, Dispatcher);
 
             var window = new MainWindow(_viewModel);
