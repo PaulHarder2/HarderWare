@@ -1165,13 +1165,24 @@ SMTP settings come from the top-level `Smtp` block in `appsettings.shared.json` 
 ## 9. Installation and Deployment
 
 ### Prerequisites
-- Windows (all three projects use `UseWindowsService`)
+- Windows 10/11 (64-bit) — all services use `UseWindowsService`
 - .NET 8 runtime
-- SQL Server (Express is sufficient); instance name `SQLEXPRESS` by default
+- SQL Server Express (or higher); default instance name `SQLEXPRESS`
 - Gmail account with an App Password configured for SMTP
 - WSL with wgrib2 installed (for GFS data ingestion)
+- Miniconda with the wxvis conda environment (for map rendering)
+- Docker Desktop (optional, for Prometheus + Grafana observability)
 
-### Deploy script
+### Installer
+
+`HarderWare_WxServices.iss` is an Inno Setup script that produces a single `HarderWare_WxServices_Setup.exe` installer.  To build it:
+
+1. Run `.\Build-Release.ps1` to publish all components into the `release\` staging directory.
+2. Compile the `.iss` script with Inno Setup: `ISCC.exe HarderWare_WxServices.iss`
+
+The installer copies files to the chosen directory (default `C:\HarderWare`), registers the four Windows services, updates `InstallRoot` in `appsettings.shared.json` to match the install path, creates Start Menu and optional desktop shortcuts, and launches WxManager for first-run configuration.  Uninstall stops and removes the services.
+
+### Developer deploy script
 
 `Deploy-WxService.ps1` (in the solution root) automates stop/publish/start for each service.  It reads `InstallRoot` from `appsettings.shared.json` and uses `$PSScriptRoot` as the solution root — no hardcoded paths to edit.  See `DEVELOPER-README.md` for full developer setup instructions.
 
