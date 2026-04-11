@@ -52,27 +52,8 @@ var host = Host.CreateDefaultBuilder(args)
 try
 {
     var dbOptions = host.Services.GetRequiredService<DbContextOptions<WeatherDataContext>>();
-    await using (var db = new WeatherDataContext(dbOptions))
-    {
-        await db.Database.EnsureCreatedAsync();
-
-        // Ensure GlobalSettings table exists so this service can read SMTP secrets from the DB.
-        await db.Database.ExecuteSqlRawAsync(@"
-            IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'GlobalSettings')
-            BEGIN
-                CREATE TABLE [GlobalSettings] (
-                    [Id]              int            NOT NULL,
-                    [ClaudeApiKey]    nvarchar(500)  NULL,
-                    [SmtpUsername]    nvarchar(200)  NULL,
-                    [SmtpPassword]    nvarchar(200)  NULL,
-                    [SmtpFromAddress] nvarchar(200)  NULL,
-                    CONSTRAINT [PK_GlobalSettings] PRIMARY KEY ([Id])
-                );
-                INSERT INTO [GlobalSettings] ([Id]) VALUES (1);
-            END");
-
-        Logger.Info("Database ready.");
-    }
+    await DatabaseSetup.EnsureSchemaAsync(dbOptions);
+    Logger.Info("Database ready.");
 
     await ValidateConfigAsync(host.Services.GetRequiredService<IConfiguration>(), dbOptions);
 

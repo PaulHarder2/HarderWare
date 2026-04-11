@@ -283,7 +283,7 @@ WxServices/
     ├── MetarParser/                 ← METAR text parser library
     ├── TafParser/                   ← TAF text parser library
     ├── GribParser/                  ← wgrib2 subprocess wrapper; CSV parser → GribValue records
-    ├── MetarParser.Data/            ← EF Core entities, fetchers, DB context, geocoders
+    ├── MetarParser.Data/            ← EF Core entities, fetchers, DB context, geocoders, DatabaseSetup
     ├── WxServices.Logging/          ← log4net wrapper (static Logger class)
     ├── WxServices.Common/           ← shared utilities (WxPaths, SmtpSender, SmtpConfig, Util)
     ├── WxInterp/                    ← snapshot interpreter (METAR+TAF+GFS → WeatherSnapshot)
@@ -1196,6 +1196,10 @@ sc.exe start WxReportSvc
 sc.exe start WxMonitorSvc
 sc.exe start WxVisSvc
 ```
+
+### Database setup
+
+The database schema is managed by `DatabaseSetup.EnsureSchemaAsync()` in `MetarParser.Data`.  Every service calls this method at startup.  The first service to start creates the database (via EF Core `EnsureCreatedAsync`) and all additional tables/columns (via idempotent `IF NOT EXISTS` DDL).  Subsequent services and restarts are no-ops.  No manual SQL scripts or EF migrations are needed.
 
 ### Startup order
 Start `WxParserSvc` first and allow at least one fetch cycle to complete before starting `WxReportSvc`, so METAR data is available for station resolution. GFS data will begin accumulating on the first 60-minute GFS cycle; full temperature forecasts appear in reports once the first complete model run is ingested (up to ~4 hours after the run's nominal time).
