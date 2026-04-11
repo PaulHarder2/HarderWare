@@ -1,3 +1,4 @@
+using WxServices.Common;
 using WxServices.Logging;
 
 namespace WxVis.Svc;
@@ -15,6 +16,7 @@ namespace WxVis.Svc;
 public sealed class AnalysisMapWorker : BackgroundService
 {
     private readonly IConfiguration _config;
+    private Dictionary<string, string> _pythonEnv = new();
     private DateTime _lastCleanupUtc = DateTime.MinValue;
 
     /// <summary>Initialises a new instance with the application configuration.</summary>
@@ -66,7 +68,8 @@ public sealed class AnalysisMapWorker : BackgroundService
                     cfg.ScriptDir,
                     "synoptic_map.py",
                     cfg.SynopticMapArgs,
-                    stoppingToken);
+                    stoppingToken,
+                    _pythonEnv);
 
                 if (ok)
                 {
@@ -131,6 +134,10 @@ public sealed class AnalysisMapWorker : BackgroundService
     {
         var cfg = new WxVisConfig();
         _config.GetSection("WxVis").Bind(cfg);
+        var paths = new WxPaths(_config["InstallRoot"]);
+        cfg.ApplyPaths(paths);
+        _pythonEnv = cfg.BuildPythonEnv(
+            _config.GetConnectionString("WeatherData") ?? "", paths.LogsDir);
         return cfg;
     }
 }

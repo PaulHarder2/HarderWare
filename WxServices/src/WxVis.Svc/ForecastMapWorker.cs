@@ -1,5 +1,6 @@
 using MetarParser.Data;
 using Microsoft.EntityFrameworkCore;
+using WxServices.Common;
 using WxServices.Logging;
 
 namespace WxVis.Svc;
@@ -19,6 +20,7 @@ public sealed class ForecastMapWorker : BackgroundService
 {
     private readonly IConfiguration                          _config;
     private readonly DbContextOptions<WeatherDataContext>    _dbOptions;
+    private Dictionary<string, string> _pythonEnv = new();
 
     // Key: model run UTC.  Value: set of forecast hours already rendered for that run.
     private readonly Dictionary<DateTime, HashSet<int>> _rendered = new();
@@ -132,7 +134,8 @@ public sealed class ForecastMapWorker : BackgroundService
             var ok = await MapRenderer.RunAsync(
                 cfg.CondaPythonExe, cfg.ScriptDir,
                 "forecast_map.py", $"--fh {fh} --run {latestRun:yyyyMMdd_HH} --extent south_central",
-                ct);
+                ct,
+                _pythonEnv);
 
             if (ok)
                 rendered.Add(fh);
@@ -153,6 +156,10 @@ public sealed class ForecastMapWorker : BackgroundService
     {
         var cfg = new WxVisConfig();
         _config.GetSection("WxVis").Bind(cfg);
+        var paths = new WxPaths(_config["InstallRoot"]);
+        cfg.ApplyPaths(paths);
+        _pythonEnv = cfg.BuildPythonEnv(
+            _config.GetConnectionString("WeatherData") ?? "", paths.LogsDir);
         return cfg;
     }
 }

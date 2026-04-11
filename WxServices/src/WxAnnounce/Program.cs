@@ -31,11 +31,13 @@ var config = new ConfigurationBuilder()
     .SetBasePath(AppContext.BaseDirectory)
     .AddJsonFile("appsettings.shared.json", optional: false)
     .AddJsonFile("appsettings.json",        optional: true)
-    .AddJsonFile(new PhysicalFileProvider(@"C:\HarderWare"), "appsettings.local.json", optional: true, reloadOnChange: false)
+    .AddJsonFile(new PhysicalFileProvider(WxPaths.ReadInstallRoot()), "appsettings.local.json", optional: true, reloadOnChange: false)
     .AddJsonFile("appsettings.local.json",  optional: true)
     .Build();
 
 var announceConfig = config.GetSection("Announce").Get<AnnounceConfig>() ?? new AnnounceConfig();
+if (string.IsNullOrEmpty(announceConfig.FilePath))
+    announceConfig.FilePath = new WxPaths(config["InstallRoot"]).AnnounceFilePath;
 var smtpConfig     = config.GetSection("Smtp").Get<SmtpConfig>()         ?? new SmtpConfig();
 var claudeApiKey   = config["Claude:ApiKey"]                              ?? "";
 var claudeModel    = config["Claude:Model"]                               ?? "claude-sonnet-4-6";
@@ -129,7 +131,7 @@ Logger.Info($"WxAnnounce complete. Sent: {sent}, Failed: {failed}.");
 Console.WriteLine($"Done. Sent: {sent}, Failed: {failed}.");
 
 if (failed > 0)
-    return Abort($"Announcement sent to {sent} recipient(s), but {failed} failed.\nCheck the log for details:\nC:\\HarderWare\\Logs\\wxannounce.log", exitCode: 3);
+    return Abort($"Announcement sent to {sent} recipient(s), but {failed} failed.\nCheck the log for details.", exitCode: 3);
 
 return 0;
 

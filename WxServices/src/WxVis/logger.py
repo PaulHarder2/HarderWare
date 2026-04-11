@@ -1,11 +1,14 @@
 """
 logger.py — WxVis logging configuration.
 
-Configures a single 'wxvis' logger that writes to
-C:\\HarderWare\\Logs\\wxvis.log with size-based rotation, using the same
-timestamp format as the C# log4net appenders:
+Configures a single 'wxvis' logger that writes to the Logs directory with
+size-based rotation, using the same timestamp format as the C# log4net
+appenders:
 
     2026-04-02 10:30:45.123 INFO  Saved forecast map → ...
+
+The log directory is read from the WXVIS_LOG_DIR environment variable
+(set by WxVis.Svc), falling back to {InstallRoot}\\Logs.
 
 Import the module-level ``logger`` instance in any WxVis script:
 
@@ -15,10 +18,12 @@ Import the module-level ``logger`` instance in any WxVis script:
 
 import logging
 import logging.handlers
+import os
 import sys
 from pathlib import Path
 
-_LOG_PATH     = Path(r"C:\HarderWare\Logs\wxvis.log")
+_LOG_DIR      = Path(os.environ.get("WXVIS_LOG_DIR", r"C:\HarderWare\Logs"))
+_LOG_PATH     = _LOG_DIR / "wxvis.log"
 _MAX_BYTES    = 10 * 1024 * 1024   # 10 MB
 _BACKUP_COUNT = 10
 _FMT          = "%(asctime)s.%(msecs)03d %(levelname)-5s %(message)s"
@@ -32,9 +37,10 @@ def _configure() -> logging.Logger:
 
     log.setLevel(logging.DEBUG)
     formatter = logging.Formatter(fmt=_FMT, datefmt=_DATEFMT)
+    formatter.converter = logging.Formatter.converter  # keep default (local); Phase 2 switches to UTC
 
     # ── File handler ──────────────────────────────────────────────────────────
-    _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _LOG_DIR.mkdir(parents=True, exist_ok=True)
     fh = logging.handlers.RotatingFileHandler(
         _LOG_PATH,
         maxBytes=_MAX_BYTES,

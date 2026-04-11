@@ -83,9 +83,9 @@ public static class GfsFetcher
         DbContextOptions<WeatherDataContext> dbOptions,
         HttpClient httpClient,
         string wgrib2WslPath,
+        string gfsTempPath,
         int maxForecastHours = 120,
         int retainModelRuns  = 2,
-        string gfsTempPath   = @"C:\HarderWare\temp",
         double delayHours    = 3.5,
         CancellationToken ct = default)
     {

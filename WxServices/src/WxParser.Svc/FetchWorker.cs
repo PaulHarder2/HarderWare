@@ -1,4 +1,5 @@
 using MetarParser.Data;
+using WxServices.Common;
 using WxServices.Logging;
 using Microsoft.EntityFrameworkCore;
 using System.Diagnostics;
@@ -159,7 +160,8 @@ public sealed class FetchWorker : BackgroundService
             await TafFetcher.FetchAndInsertAsync(homeLat.Value, homeLon.Value, boxDeg, _dbOptions, _http);
 
             Logger.Info("Fetch cycle complete.");
-            WriteHeartbeat(_config["Fetch:HeartbeatFile"]);
+            WriteHeartbeat(_config["Fetch:HeartbeatFile"]
+                ?? new WxPaths(_config["InstallRoot"]).HeartbeatFile("wxparser"));
             _fetchCycles.Add(1);
             _fetchDuration.Record(sw.Elapsed.TotalSeconds);
         }

@@ -1,5 +1,6 @@
 using MetarParser.Data;
 using Microsoft.EntityFrameworkCore;
+using WxServices.Common;
 using WxServices.Logging;
 
 namespace WxParser.Svc;
@@ -90,16 +91,19 @@ public sealed class GfsFetchWorker : BackgroundService
             }
 
             var boxDeg = double.TryParse(_config["Fetch:BoundingBoxDegrees"], out var bd) ? bd : 5.0;
-            var cfg    = LoadConfig();
+            var cfg      = LoadConfig();
+            var tempPath = string.IsNullOrEmpty(cfg.TempPath)
+                ? new WxPaths(_config["InstallRoot"]).TempDir
+                : cfg.TempPath;
 
             await GfsFetcher.FetchAndInsertAsync(
                 homeLat, homeLon, boxDeg,
                 _dbOptions,
                 _http,
                 cfg.Wgrib2WslPath,
+                tempPath,
                 cfg.MaxForecastHours,
                 cfg.RetainModelRuns,
-                cfg.TempPath,
                 cfg.DelayHours,
                 ct);
         }

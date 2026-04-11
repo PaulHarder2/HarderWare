@@ -85,7 +85,7 @@ public partial class App : Application
     /// </summary>
     /// <param name="e">Startup event arguments (unused).</param>
     /// <sideeffects>
-    /// Reads <c>appsettings.shared.json</c>, <c>C:\HarderWare\appsettings.local.json</c>,
+    /// Reads <c>appsettings.shared.json</c>, <c>{InstallRoot}\appsettings.local.json</c>,
     /// and <c>appsettings.local.json</c> beside the executable.
     /// Sets all static properties on <see cref="App"/>.
     /// Opens and shows <see cref="MainWindow"/>, or shows an error dialog and calls <see cref="Shutdown"/> if configuration is invalid.
@@ -106,7 +106,7 @@ public partial class App : Application
             .SetBasePath(AppContext.BaseDirectory)
             .AddJsonFile("appsettings.shared.json", optional: false)
             .AddJsonFile("appsettings.json",         optional: true)
-            .AddJsonFile(new PhysicalFileProvider(@"C:\HarderWare"), "appsettings.local.json", optional: true, reloadOnChange: false)
+            .AddJsonFile(new PhysicalFileProvider(WxPaths.ReadInstallRoot()), "appsettings.local.json", optional: true, reloadOnChange: false)
             .AddJsonFile("appsettings.local.json",   optional: true)
             .Build();
 

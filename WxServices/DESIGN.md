@@ -277,7 +277,7 @@ flowchart TD
 WxServices/
 ├── DESIGN.md                        ← this file
 ├── WxServices.sln
-├── appsettings.shared.json          ← shared config (fetch region, GFS, SMTP, Claude) — git-tracked
+├── appsettings.shared.json          ← single source of truth for all config (InstallRoot, DB, SMTP, Claude, WxVis, Monitor, etc.) — git-tracked
 ├── Deploy-WxService.ps1             ← PowerShell deploy script (run as Administrator)
 └── src/
     ├── MetarParser/                 ← METAR text parser library
@@ -285,19 +285,19 @@ WxServices/
     ├── GribParser/                  ← wgrib2 subprocess wrapper; CSV parser → GribValue records
     ├── MetarParser.Data/            ← EF Core entities, fetchers, DB context, geocoders
     ├── WxServices.Logging/          ← log4net wrapper (static Logger class)
-    ├── WxServices.Common/           ← shared utilities (SmtpSender, SmtpConfig, Util)
+    ├── WxServices.Common/           ← shared utilities (WxPaths, SmtpSender, SmtpConfig, Util)
     ├── WxInterp/                    ← snapshot interpreter (METAR+TAF+GFS → WeatherSnapshot)
     ├── WxParser.Svc/                ← Windows service: periodic METAR/TAF + GFS fetch
     ├── WxReport.Svc/                ← Windows service: report generation and email
     ├── WxMonitor.Svc/               ← Windows service: log and heartbeat monitoring
     ├── WxVis.Svc/                   ← Windows service: automated map rendering
     ├── WxViewer/                    ← WPF desktop app: animated weather map viewer
-    ├── WxManager/                   ← WPF management GUI: recipient editor + announcement sender (C:\HarderWare\WxManager)
+    ├── WxManager/                   ← WPF management GUI: recipient editor + announcement sender
     └── WxVis/                       ← Python visualisation project (conda env: wxvis)
         ├── db.py                    ← SQLAlchemy engine + data loading queries
         ├── synoptic_map.py          ← Synoptic analysis maps (Barnes interpolation)
         ├── forecast_map.py          ← GFS forecast parameter maps (contour lines)
-        ├── config.json              ← DB connection string + output directory
+        ├── config.json              ← DB connection string + output directory (standalone fallback; service passes env vars)
         └── requirements.txt         ← conda install list
 tests/
     ├── MetarParser.Tests/
@@ -690,9 +690,10 @@ All log4net configurations use the `%utcdate` conversion pattern so that timesta
 
 ### WxServices.Common
 
-Shared utility code referenced by WxReport.Svc and WxMonitor.Svc.
+Shared utility code referenced by all services and applications.
 
 Key types:
+- `WxPaths` — derives all standard directory paths (Logs, plots, temp, WxVis, services, etc.) from a single `InstallRoot` setting; provides `ReadInstallRoot()` to bootstrap the value from `appsettings.shared.json` before the configuration builder runs
 - `SmtpConfig` — POCO holding SMTP host, port, credentials, and sender address (no `FromName`; each service supplies its own display name at construction time)
 - `SmtpSender` — MailKit-based SMTP wrapper; constructed with `SmtpConfig` and a `fromName` string; `SendAsync` accepts a plain-text body, an optional `htmlBody`, and an optional `inlineImages` dictionary (content-id → file path); when HTML is provided the message is sent as `multipart/alternative`; when inline images are supplied the HTML part is wrapped in `multipart/related` so `<img src="cid:...">` references resolve correctly in email clients; all failures (including invalid addresses and SMTP errors) are caught and return `false` rather than throwing
 - `LanguageHelper` — maps natural-language names (English or native script) to BCP 47 IETF tags via `CultureInfo.GetCultures`; also provides localised announcement email subject lines
@@ -1202,7 +1203,7 @@ sc.exe start WxVisSvc
 Start `WxParserSvc` first and allow at least one fetch cycle to complete before starting `WxReportSvc`, so METAR data is available for station resolution. GFS data will begin accumulating on the first 60-minute GFS cycle; full temperature forecasts appear in reports once the first complete model run is ingested (up to ~4 hours after the run's nominal time).
 
 ### Log files
-All logs are written to `C:\HarderWare\Logs\`. Log files: `wxparser-svc.log`, `wxreport-svc.log`, `wxmonitor-svc.log`, `wxvis-svc.log`, `wxmanager.log`. Log paths can be changed by editing `log4net.config` in each component's output directory.
+All logs are written to `{InstallRoot}\Logs\` (default `C:\HarderWare\Logs\`). Log files: `wxparser-svc.log`, `wxreport-svc.log`, `wxmonitor-svc.log`, `wxvis-svc.log`, `wxmanager.log`, `wxvis.log` (Python). All paths are derived from the `InstallRoot` setting in `appsettings.shared.json` via the `WxPaths` class.
 
 ### Changing a recipient's location
 1. In `appsettings.local.json`, update `Address` and set `Latitude`, `Longitude`, `MetarIcao`, and `TafIcao` to `null`.

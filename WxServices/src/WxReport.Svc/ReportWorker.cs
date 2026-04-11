@@ -178,7 +178,7 @@ public sealed class ReportWorker : BackgroundService
         var subject       = BuildSubject(snapshot, language, tz, recipientName: recipient.Name);
         var plainFallback = SnapshotDescriber.Describe(snapshot, tz, recipient.Units);
 
-        var plotsDir = _config["WxVis:OutputDir"] ?? @"C:\HarderWare\plots";
+        var plotsDir = new WxPaths(_config["InstallRoot"]).PlotsDir;
         var meteogramPath = FindMeteogramAbbrevPath(preferredIcaos.Count > 0 ? preferredIcaos[0] : "", recipient.Timezone, plotsDir);
         report = meteogramPath is not null
             ? InsertMeteogramImage(report)
@@ -359,7 +359,7 @@ public sealed class ReportWorker : BackgroundService
             var subject       = BuildSubject(snapshot, language, tz, severity, recipientName: recipient.Name);
             var plainFallback = SnapshotDescriber.Describe(snapshot, tz, recipient.Units);
 
-            var plotsDir2     = _config["WxVis:OutputDir"] ?? @"C:\HarderWare\plots";
+            var plotsDir2     = new WxPaths(_config["InstallRoot"]).PlotsDir;
             var meteogramPath = FindMeteogramAbbrevPath(preferredIcaos.Count > 0 ? preferredIcaos[0] : "", recipient.Timezone, plotsDir2);
             report = meteogramPath is not null
                 ? InsertMeteogramImage(report)
@@ -643,6 +643,7 @@ public sealed class ReportWorker : BackgroundService
     {
         var report = new ReportConfig();
         _config.GetSection("Report").Bind(report);
+        report.HeartbeatFile ??= new WxPaths(_config["InstallRoot"]).HeartbeatFile("wxreport");
 
         // Prefer DB recipients; fall back to config if the table is empty (e.g. first run).
         var dbRecipients = await ctx.Recipients.OrderBy(r => r.Id).ToListAsync(ct);

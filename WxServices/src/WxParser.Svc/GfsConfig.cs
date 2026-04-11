@@ -55,5 +55,5 @@ public sealed class GfsConfig
     /// during a fetch cycle.  The directory is created automatically if it does
     /// not exist.  Defaults to <c>C:\HarderWare\temp</c>.
     /// </summary>
-    public string TempPath { get; set; } = @"C:\HarderWare\temp";
+    public string TempPath { get; set; } = "";
 }

@@ -332,6 +332,15 @@ public sealed class MonitorWorker : BackgroundService
         var monitor = new MonitorConfig();
         _config.GetSection("Monitor").Bind(monitor);
 
+        // Fill in log/heartbeat paths from InstallRoot if not explicitly configured.
+        var paths = new WxPaths(_config["InstallRoot"]);
+        foreach (var svc in monitor.WatchedServices)
+        {
+            var svcTag = svc.Name.Replace(".", "-", StringComparison.Ordinal).ToLowerInvariant();
+            if (string.IsNullOrEmpty(svc.LogFile))       svc.LogFile       = paths.LogFile(svcTag);
+            if (string.IsNullOrEmpty(svc.HeartbeatFile)) svc.HeartbeatFile = paths.HeartbeatFile(svcTag);
+        }
+
         var smtp = new SmtpConfig();
         _config.GetSection("Smtp").Bind(smtp);
 

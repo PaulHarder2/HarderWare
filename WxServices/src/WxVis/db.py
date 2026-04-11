@@ -1,12 +1,16 @@
 """
 db.py — SQLAlchemy engine and query functions for WxVis.
 
-Uses Windows Authentication (trusted connection) against the local SQLEXPRESS
+Uses Windows Authentication (trusted connection) against the local SQL Server
 instance.  All query functions return pandas DataFrames suitable for direct
 use with MetPy / matplotlib.
+
+Configuration is read from environment variables set by WxVis.Svc, with
+fallback to config.json for standalone / command-line use.
 """
 
 import json
+import os
 import urllib.parse
 import warnings
 from pathlib import Path
@@ -19,6 +23,18 @@ warnings.filterwarnings("ignore", category=SAWarning, message=".*Unrecognized se
 
 
 def _load_config() -> dict:
+    """Load DB config from environment variables, falling back to config.json."""
+    server = os.environ.get("WXVIS_DB_SERVER")
+    if server:
+        return {
+            "db": {
+                "server":   server,
+                "database": os.environ.get("WXVIS_DB_NAME", "WeatherData"),
+                "driver":   os.environ.get("WXVIS_DB_DRIVER", "ODBC Driver 17 for SQL Server"),
+            },
+            "output_dir": os.environ.get("WXVIS_OUTPUT_DIR", r"C:\HarderWare\plots"),
+        }
+
     config_path = Path(__file__).parent / "config.json"
     with open(config_path, encoding="utf-8") as f:
         return json.load(f)

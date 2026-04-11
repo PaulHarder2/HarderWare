@@ -12,7 +12,10 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.FileProviders;
 using WxMonitor.Svc;
+using WxServices.Common;
 using WxServices.Logging;
+
+var installRoot = WxPaths.ReadInstallRoot();
 
 Logger.Initialise();
 Logger.Info("WxMonitor.Svc starting.");
@@ -27,7 +30,7 @@ var host = Host.CreateDefaultBuilder(args)
         cfg.SetBasePath(AppContext.BaseDirectory)
            .AddJsonFile("appsettings.shared.json", optional: false, reloadOnChange: true)
            .AddJsonFile("appsettings.json",        optional: false, reloadOnChange: true)
-           .AddJsonFile(new PhysicalFileProvider(@"C:\HarderWare"), "appsettings.local.json", optional: true, reloadOnChange: true)
+           .AddJsonFile(new PhysicalFileProvider(installRoot), "appsettings.local.json", optional: true, reloadOnChange: true)
            .AddJsonFile("appsettings.local.json",  optional: true,  reloadOnChange: true);
     })
     .ConfigureServices((ctx, services) =>

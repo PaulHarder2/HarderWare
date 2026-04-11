@@ -1,6 +1,7 @@
 using System.Text.Json;
 using MetarParser.Data;
 using Microsoft.EntityFrameworkCore;
+using WxServices.Common;
 using WxServices.Logging;
 
 namespace WxVis.Svc;
@@ -28,6 +29,7 @@ public sealed class MeteogramWorker : BackgroundService
 {
     private readonly IConfiguration                        _config;
     private readonly DbContextOptions<WeatherDataContext>  _dbOptions;
+    private Dictionary<string, string> _pythonEnv = new();
 
     // Model runs for which rendering is complete (all recipient locations done).
     private readonly HashSet<DateTime> _completedRuns = new();
@@ -187,7 +189,8 @@ public sealed class MeteogramWorker : BackgroundService
             var ok = await MapRenderer.RunAsync(
                 cfg.CondaPythonExe, cfg.ScriptDir,
                 "meteogram.py", scriptArgs,
-                ct);
+                ct,
+                _pythonEnv);
 
             if (ok)
             {
@@ -232,6 +235,10 @@ public sealed class MeteogramWorker : BackgroundService
     {
         var cfg = new WxVisConfig();
         _config.GetSection("WxVis").Bind(cfg);
+        var paths = new WxPaths(_config["InstallRoot"]);
+        cfg.ApplyPaths(paths);
+        _pythonEnv = cfg.BuildPythonEnv(
+            _config.GetConnectionString("WeatherData") ?? "", paths.LogsDir);
         return cfg;
     }
 

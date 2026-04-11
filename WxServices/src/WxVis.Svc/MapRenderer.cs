@@ -27,7 +27,8 @@ public static class MapRenderer
         string scriptDir,
         string scriptName,
         string args,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        IDictionary<string, string>? env = null)
     {
         var scriptPath = Path.Combine(scriptDir, scriptName);
 
@@ -64,6 +65,10 @@ public static class MapRenderer
             CreateNoWindow         = true,
         };
         psi.Environment["PATH"] = augmentedPath;
+
+        if (env is not null)
+            foreach (var (key, value) in env)
+                psi.Environment[key] = value;
 
         using var proc = new Process { StartInfo = psi };
         proc.Start();

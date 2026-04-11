@@ -4,7 +4,7 @@ namespace WxAnnounce;
 public class AnnounceConfig
 {
     /// <summary>Path to the plain-text file containing the announcement to send.</summary>
-    public string FilePath { get; set; } = @"C:\HarderWare\announce.txt";
+    public string FilePath { get; set; } = "";
 
     /// <summary>
     /// Maximum age of the announcement file in minutes.
