@@ -16,12 +16,25 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         SetupTab.AllChecksPassed += OnAllChecksPassed;
+        ConfigureTab.ConfigurationSaved += OnConfigurationSaved;
     }
 
     private void OnAllChecksPassed()
     {
+        ConfigureTabItem.IsEnabled = true;
         RecipientsTabItem.IsEnabled = true;
         AnnouncementTabItem.IsEnabled = true;
+    }
+
+    private async void OnConfigurationSaved()
+    {
+        // Re-run prerequisite checks after saving configuration,
+        // in case the user changed paths or connection strings.
+        RecipientsTabItem.IsEnabled = false;
+        AnnouncementTabItem.IsEnabled = false;
+        ConfigureTabItem.IsEnabled = false;
+        MainTabs.SelectedIndex = 0; // switch to Setup tab
+        await SetupTab.RecheckAsync();
     }
 
     /// <summary>

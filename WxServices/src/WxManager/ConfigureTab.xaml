@@ -1,0 +1,201 @@
+<UserControl x:Class="WxManager.ConfigureTab"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Background="#1a1a1a" Foreground="#c8c8c8">
+
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Header -->
+        <StackPanel Grid.Row="0" Margin="0,0,0,8">
+            <TextBlock Text="System Configuration"
+                       FontSize="18" FontWeight="SemiBold" Foreground="#e0e0e0"/>
+            <TextBlock Text="Settings are saved to appsettings.local.json in the install root. Services pick up changes automatically."
+                       FontSize="11" Foreground="#909090" Margin="0,4,0,0"/>
+        </StackPanel>
+
+        <!-- Scrollable settings form -->
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="0,0,8,0">
+            <StackPanel>
+
+                <!-- ── Paths ─────────────────────────────────────────────── -->
+                <GroupBox Header="Paths" Margin="0,4">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="160"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Install Root" VerticalAlignment="Center" Margin="0,4"/>
+                        <TextBox   Grid.Row="0" Grid.Column="1" x:Name="TxtInstallRoot" Margin="0,4"/>
+
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Conda Python Exe" VerticalAlignment="Center" Margin="0,4"/>
+                        <TextBox   Grid.Row="1" Grid.Column="1" x:Name="TxtCondaPythonExe" Margin="0,4"/>
+
+                        <TextBlock Grid.Row="2" Grid.Column="0" Text="wgrib2 WSL Path" VerticalAlignment="Center" Margin="0,4"/>
+                        <TextBox   Grid.Row="2" Grid.Column="1" x:Name="TxtWgrib2WslPath" Margin="0,4"/>
+                    </Grid>
+                </GroupBox>
+
+                <!-- ── Location ──────────────────────────────────────────── -->
+                <GroupBox Header="Home Location" Margin="0,4">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="160"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Home ICAO" VerticalAlignment="Center" Margin="0,4"/>
+                        <TextBox   Grid.Row="0" Grid.Column="1" x:Name="TxtHomeIcao" Margin="0,4" Width="100" HorizontalAlignment="Left"/>
+
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Home Latitude" VerticalAlignment="Center" Margin="0,4"/>
+                        <TextBox   Grid.Row="1" Grid.Column="1" x:Name="TxtHomeLatitude" Margin="0,4" Width="120" HorizontalAlignment="Left"/>
+
+                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Home Longitude" VerticalAlignment="Center" Margin="0,4"/>
+                        <TextBox   Grid.Row="2" Grid.Column="1" x:Name="TxtHomeLongitude" Margin="0,4" Width="120" HorizontalAlignment="Left"/>
+
+                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Bounding Box (deg)" VerticalAlignment="Center" Margin="0,4"/>
+                        <TextBox   Grid.Row="3" Grid.Column="1" x:Name="TxtBoundingBoxDeg" Margin="0,4" Width="80" HorizontalAlignment="Left"/>
+                    </Grid>
+                </GroupBox>
+
+                <!-- ── Database ─────────────────────────────────────────��── -->
+                <GroupBox Header="Database" Margin="0,4">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="160"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Connection String" VerticalAlignment="Center" Margin="0,4"/>
+                        <TextBox   Grid.Row="0" Grid.Column="1" x:Name="TxtConnectionString" Margin="0,4"/>
+                        <Button    Grid.Row="0" Grid.Column="2" Content="Test" Width="60" Margin="4,4,0,4"
+                                   Click="TestDbButton_Click"/>
+                    </Grid>
+                </GroupBox>
+
+                <!-- ── Email (SMTP) ──────────────────────────────────────── -->
+                <GroupBox Header="Email (SMTP)" Margin="0,4">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="160"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="SMTP Host" VerticalAlignment="Center" Margin="0,4"/>
+                        <TextBox   Grid.Row="0" Grid.Column="1" x:Name="TxtSmtpHost" Margin="0,4"/>
+
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="SMTP Port" VerticalAlignment="Center" Margin="0,4"/>
+                        <TextBox   Grid.Row="1" Grid.Column="1" x:Name="TxtSmtpPort" Margin="0,4" Width="80" HorizontalAlignment="Left"/>
+
+                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Username" VerticalAlignment="Center" Margin="0,4"/>
+                        <TextBox   Grid.Row="2" Grid.Column="1" x:Name="TxtSmtpUsername" Margin="0,4"/>
+
+                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Password" VerticalAlignment="Center" Margin="0,4"/>
+                        <PasswordBox Grid.Row="3" Grid.Column="1" x:Name="TxtSmtpPassword" Margin="0,4"
+                                     Background="White" Foreground="Black" BorderBrush="#888888" Padding="3,2"/>
+
+                        <TextBlock Grid.Row="4" Grid.Column="0" Text="From Address" VerticalAlignment="Center" Margin="0,4"/>
+                        <TextBox   Grid.Row="4" Grid.Column="1" x:Name="TxtSmtpFromAddress" Margin="0,4"/>
+                        <Button    Grid.Row="4" Grid.Column="2" Content="Test" Width="60" Margin="4,4,0,4"
+                                   Click="TestSmtpButton_Click"/>
+                    </Grid>
+                </GroupBox>
+
+                <!-- ── Claude API ─────────────────���──────────────────────── -->
+                <GroupBox Header="Claude API" Margin="0,4">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="160"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="API Key" VerticalAlignment="Center" Margin="0,4"/>
+                        <PasswordBox Grid.Row="0" Grid.Column="1" x:Name="TxtClaudeApiKey" Margin="0,4"
+                                     Background="White" Foreground="Black" BorderBrush="#888888" Padding="3,2"/>
+                        <Button    Grid.Row="0" Grid.Column="2" Content="Test" Width="60" Margin="4,4,0,4"
+                                   Click="TestClaudeButton_Click"/>
+
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Model" VerticalAlignment="Center" Margin="0,4"/>
+                        <TextBox   Grid.Row="1" Grid.Column="1" x:Name="TxtClaudeModel" Margin="0,4"/>
+                    </Grid>
+                </GroupBox>
+
+                <!-- ── Map ───────────────────────────────────────────────── -->
+                <GroupBox Header="Map Rendering" Margin="0,4">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="160"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Map Extent" VerticalAlignment="Center" Margin="0,4"/>
+                        <TextBox   Grid.Row="0" Grid.Column="1" x:Name="TxtMapExtent" Margin="0,4"
+                                   ToolTip="Preset name (conus, south_central) or W,E,S,N coordinates. Leave empty for auto-fit."/>
+                    </Grid>
+                </GroupBox>
+
+                <!-- ── Monitor ───────────────────────────────────────────���─ -->
+                <GroupBox Header="Monitoring" Margin="0,4">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="160"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Alert Email" VerticalAlignment="Center" Margin="0,4"/>
+                        <TextBox   Grid.Row="0" Grid.Column="1" x:Name="TxtAlertEmail" Margin="0,4"/>
+                    </Grid>
+                </GroupBox>
+
+            </StackPanel>
+        </ScrollViewer>
+
+        <!-- Actions -->
+        <StackPanel Grid.Row="2" Orientation="Horizontal"
+                    HorizontalAlignment="Right" Margin="0,12,0,0">
+            <TextBlock x:Name="StatusText" VerticalAlignment="Center"
+                       FontSize="12" Foreground="#909090" Margin="0,0,16,0"/>
+            <Button x:Name="SaveButton" Content="Save Configuration"
+                    Width="150" Click="SaveButton_Click"/>
+        </StackPanel>
+    </Grid>
+</UserControl>

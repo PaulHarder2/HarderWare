@@ -29,6 +29,9 @@ public partial class SetupTab : UserControl
         await RunChecksAsync();
     }
 
+    /// <summary>Triggers a prerequisite re-check programmatically.</summary>
+    public async Task RecheckAsync() => await RunChecksAsync();
+
     private async Task RunChecksAsync()
     {
         RecheckButton.IsEnabled = false;

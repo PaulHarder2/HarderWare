@@ -666,7 +666,9 @@ Override with `appsettings.local.json` if the plots directory is in a different 
 
 **Tabs:**
 
-- **Setup** — Prerequisites checklist that runs on application load. Uses `PrerequisiteChecker` from `WxServices.Common` to verify SQL Server, WSL, wgrib2, conda Python, wxvis packages, and Docker (optional). Each check shows a pass/fail indicator with a status message; failed checks include guidance text. A "Re-check" button re-runs all checks. The Recipients and Announcement tabs are disabled until all required prerequisites pass.
+- **Setup** — Prerequisites checklist that runs on application load. Uses `PrerequisiteChecker` from `WxServices.Common` to verify SQL Server, WSL, wgrib2, conda Python, wxvis packages, and Docker (optional). Each check shows a pass/fail indicator with a status message; failed checks include guidance text. A "Re-check" button re-runs all checks. The Configure, Recipients, and Announcement tabs are disabled until all required prerequisites pass.
+
+- **Configure** — Settings editor for the entire system. Pre-populates all fields from the current configuration. Grouped into panels: Paths (InstallRoot, CondaPythonExe, wgrib2 WSL path), Home Location (ICAO, lat/lon, bounding box), Database (connection string + Test button), Email/SMTP (host, port, credentials + Test button that sends a real email), Claude API (key, model + Test button that sends a minimal API request), Map Rendering (extent preset or coordinates), and Monitoring (alert email). Saves all settings to `{InstallRoot}\appsettings.local.json`, which is in every service's config chain as an override layer — no redeployment needed. After save, automatically switches to the Setup tab and re-runs prerequisite checks.
 
 - **Recipients** — Left pane shows a scrollable list of all recipients from the `Recipients` database table. Right pane provides an address geocoder (Nominatim), a nearby-stations grid, and a full recipient field editor. Selecting a station pre-fills the MetarIcao field.
 

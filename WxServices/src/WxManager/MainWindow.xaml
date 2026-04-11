@@ -369,6 +369,9 @@
             <TabItem Header="Setup">
                 <local:SetupTab x:Name="SetupTab"/>
             </TabItem>
+            <TabItem x:Name="ConfigureTabItem" Header="Configure" IsEnabled="False">
+                <local:ConfigureTab x:Name="ConfigureTab"/>
+            </TabItem>
             <TabItem x:Name="RecipientsTabItem" Header="Recipients" IsEnabled="False">
                 <local:RecipientsTab/>
             </TabItem>
