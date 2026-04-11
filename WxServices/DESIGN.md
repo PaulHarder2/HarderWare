@@ -1168,20 +1168,16 @@ SMTP settings come from the top-level `Smtp` block in `appsettings.shared.json` 
 
 ### Deploy script
 
-`Deploy-WxService.ps1` (in the solution root) automates stop/publish/start for each service. Run from an **elevated** PowerShell prompt:
+`Deploy-WxService.ps1` (in the solution root) automates stop/publish/start for each service.  It reads `InstallRoot` from `appsettings.shared.json` and uses `$PSScriptRoot` as the solution root — no hardcoded paths to edit.  See `DEVELOPER-README.md` for full developer setup instructions.
+
+Run from an **elevated** PowerShell prompt:
 
 ```powershell
-# Deploy a single service
-.\Deploy-WxService.ps1 WxReportSvc
-
-# Deploy everything: WxVis scripts, all four Windows services, WxManager, WxViewer
-.\Deploy-WxService.ps1 all
-
-# Publish the WxViewer desktop app to C:\HarderWare\WxViewer
-.\Deploy-WxService.ps1 WxViewer
-
-# Publish the WxManager GUI to C:\HarderWare\WxManager
-.\Deploy-WxService.ps1 WxManager
+.\Deploy-WxService.ps1 all           # Everything
+.\Deploy-WxService.ps1 WxReportSvc   # Single service
+.\Deploy-WxService.ps1 WxManager     # Management GUI only
+.\Deploy-WxService.ps1 WxViewer      # Desktop viewer only
+.\Deploy-WxService.ps1 WxVis         # Python scripts only
 ```
 
 Valid names: `WxParserSvc`, `WxReportSvc`, `WxMonitorSvc`, `WxVisSvc`, `WxViewer`, `WxManager`, `WxVis`, `all`.

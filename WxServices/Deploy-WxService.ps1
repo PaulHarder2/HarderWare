@@ -3,10 +3,15 @@
 .SYNOPSIS
     Publishes and redeploys one or all WxServices Windows services.
 
+.DESCRIPTION
+    Developer deployment script.  Reads InstallRoot from appsettings.shared.json
+    (default C:\HarderWare) and derives all output paths from it.  The solution
+    root is the directory containing this script ($PSScriptRoot).
+
 .PARAMETER ServiceName
     The service or application to deploy, or 'all' to deploy everything:
-    the four Windows services (WxParserSvc, WxReportSvc, WxMonitorSvc, WxVisSvc),
-    then WxManager, WxViewer, and WxVis Python scripts.
+    WxVis Python scripts first, then the four Windows services
+    (WxParserSvc, WxReportSvc, WxMonitorSvc, WxVisSvc), WxManager, and WxViewer.
 
 .EXAMPLE
     .\Deploy-WxService.ps1 WxReportSvc
@@ -25,92 +30,29 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$SolutionRoot = "C:\Users\PaulH\Dropbox\PH\Documents\Code\HarderWare\WxServices"
+# ── Resolve paths ─────────────────────────────────────────────────────────────
+
+$SolutionRoot = $PSScriptRoot
+
+# Read InstallRoot from appsettings.shared.json (default: C:\HarderWare).
+$sharedConfigPath = "$SolutionRoot\appsettings.shared.json"
+$InstallRoot = "C:\HarderWare"
+if (Test-Path $sharedConfigPath) {
+    $sharedConfig = Get-Content $sharedConfigPath -Raw | ConvertFrom-Json
+    if ($sharedConfig.InstallRoot) {
+        $InstallRoot = $sharedConfig.InstallRoot
+    }
+}
+
+Write-Host "Solution root: $SolutionRoot"
+Write-Host "Install root:  $InstallRoot"
+Write-Host ""
 
 $ServiceMap = [ordered]@{
     'WxParserSvc'  = 'WxParser.Svc'
     'WxReportSvc'  = 'WxReport.Svc'
     'WxMonitorSvc' = 'WxMonitor.Svc'
     'WxVisSvc'     = 'WxVis.Svc'
-}
-
-# ---------------------------------------------------------------------------
-# Ensure home location is configured in appsettings.shared.json.
-# Only called for WxParserSvc; skipped if already set.
-# ---------------------------------------------------------------------------
-function Invoke-HomeLocationSetup {
-    $sharedConfig = "$SolutionRoot\appsettings.shared.json"
-    $config = Get-Content $sharedConfig -Raw | ConvertFrom-Json
-
-    if ($config.Fetch.HomeIcao) { return }
-
-    Write-Host "Home location is not configured."
-    $resolved = $false
-
-    while (-not $resolved) {
-        $address = Read-Host "Enter your home address (e.g. '7323 Saddle Tree Drive, Spring, TX 77379')"
-        if ([string]::IsNullOrWhiteSpace($address)) { continue }
-
-        Write-Host "Validating address..."
-        $encoded = [Uri]::EscapeDataString($address)
-        $nomUrl  = "https://nominatim.openstreetmap.org/search?q=$encoded&format=json&addressdetails=1&limit=1"
-        try {
-            $results = Invoke-RestMethod -Uri $nomUrl -Headers @{ 'User-Agent' = 'WxServices/1.0' }
-        } catch {
-            Write-Warning "Nominatim request failed: $_"
-            continue
-        }
-
-        if (-not $results -or $results.Count -eq 0) {
-            Write-Warning "Address not found. Please try again."
-            continue
-        }
-
-        $locality = if     ($results[0].address.suburb)  { $results[0].address.suburb  }
-                    elseif ($results[0].address.town)     { $results[0].address.town    }
-                    elseif ($results[0].address.village)  { $results[0].address.village }
-                    elseif ($results[0].address.city)     { $results[0].address.city    }
-                    elseif ($results[0].address.county)   { $results[0].address.county  }
-                    else                                  { '(unknown locality)'         }
-
-        $homeLat = [double]$results[0].lat
-        $homeLon = [double]$results[0].lon
-        Write-Host "Resolved to: $locality (lat=$homeLat, lon=$homeLon)"
-        $confirm = Read-Host "Is this correct? (Y/N)"
-        if ($confirm -notmatch '^[Yy]') { continue }
-
-        Write-Host "Finding nearest METAR station..."
-        $deg      = 2
-        $bbox     = "$($homeLat - $deg),$($homeLon - $deg),$($homeLat + $deg),$($homeLon + $deg)"
-        $metarUrl = "https://aviationweather.gov/api/data/metar?bbox=$bbox&hours=1&format=json"
-        try {
-            $stations = Invoke-RestMethod -Uri $metarUrl -Headers @{ 'User-Agent' = 'WxServices/1.0' }
-        } catch {
-            Write-Warning "METAR station lookup failed: $_"
-            $stations = @()
-        }
-
-        $nearestIcao = $null
-        if ($stations -and $stations.Count -gt 0) {
-            $nearest     = $stations |
-                Sort-Object { [Math]::Pow($_.lat - $homeLat, 2) + [Math]::Pow($_.lon - $homeLon, 2) } |
-                Select-Object -First 1
-            $nearestIcao = $nearest.icaoId
-            Write-Host "Nearest METAR station: $nearestIcao"
-        } else {
-            Write-Warning "Could not find a nearby METAR station automatically."
-        }
-
-        $icaoInput = Read-Host "Press Enter to use '$nearestIcao', or type a different ICAO"
-        $homeIcao  = if ([string]::IsNullOrWhiteSpace($icaoInput)) { $nearestIcao } else { $icaoInput.Trim().ToUpper() }
-
-        $config.Fetch.HomeIcao      = $homeIcao
-        $config.Fetch.HomeLatitude  = $homeLat
-        $config.Fetch.HomeLongitude = $homeLon
-        $config | ConvertTo-Json -Depth 5 | Set-Content $sharedConfig -Encoding UTF8
-        Write-Host "Saved: HomeIcao='$homeIcao', lat=$homeLat, lon=$homeLon"
-        $resolved = $true
-    }
 }
 
 # ---------------------------------------------------------------------------
@@ -121,11 +63,12 @@ function Invoke-ServiceDeploy {
 
     $projectFolder = $ServiceMap[$SvcName]
     $projectPath   = "$SolutionRoot\src\$projectFolder"
-    $publishDir    = "C:\HarderWare\BuildCache\WxServices\$projectFolder\bin\Release\net8.0\publish"
+    $publishDir    = "$InstallRoot\BuildCache\WxServices\$projectFolder\bin\Release\net8.0\publish"
     $binPath       = "$publishDir\$projectFolder.exe"
 
-    if ($SvcName -eq 'WxParserSvc') {
-        Invoke-HomeLocationSetup
+    # Warn if home location is not yet configured (first-time setup).
+    if ($SvcName -eq 'WxParserSvc' -and $sharedConfig -and -not $sharedConfig.Fetch.HomeIcao) {
+        Write-Warning "Fetch:HomeIcao is not configured in appsettings.shared.json. Services will not fetch data until a home location is set."
     }
 
     # Stop
@@ -178,11 +121,11 @@ function Invoke-ServiceDeploy {
 }
 
 # ---------------------------------------------------------------------------
-# Publish WxManager WPF GUI to C:\HarderWare\WxManager
+# Publish WxManager WPF GUI.
 # ---------------------------------------------------------------------------
 function Invoke-ManagerPublish {
     $projectPath = "$SolutionRoot\src\WxManager"
-    $outputDir   = "C:\HarderWare\WxManager"
+    $outputDir   = "$InstallRoot\WxManager"
 
     Write-Host "Publishing WxManager to $outputDir..."
     dotnet publish $projectPath -c Release -o $outputDir
@@ -209,7 +152,7 @@ function Invoke-ManagerPublish {
 # ---------------------------------------------------------------------------
 function Invoke-WxVisPublish {
     $sourceDir = "$SolutionRoot\src\WxVis"
-    $targetDir = "C:\HarderWare\WxVis"
+    $targetDir = "$InstallRoot\WxVis"
 
     if (-not (Test-Path $sourceDir)) {
         Write-Error "WxVis source directory not found: $sourceDir"
@@ -239,11 +182,11 @@ function Invoke-WxVisPublish {
 }
 
 # ---------------------------------------------------------------------------
-# Publish WxViewer WPF desktop app to C:\HarderWare\WxViewer
+# Publish WxViewer WPF desktop app.
 # ---------------------------------------------------------------------------
 function Invoke-ViewerPublish {
     $projectPath = "$SolutionRoot\src\WxViewer"
-    $outputDir   = "C:\HarderWare\WxViewer"
+    $outputDir   = "$InstallRoot\WxViewer"
 
     Write-Host "Publishing WxViewer to $outputDir..."
     dotnet publish $projectPath -c Release -o $outputDir
