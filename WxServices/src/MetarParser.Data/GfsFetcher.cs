@@ -547,6 +547,7 @@ public static class GfsFetcher
         CancellationToken ct)
     {
         using var ctx = new WeatherDataContext(dbOptions);
+        ctx.Database.SetCommandTimeout(TimeSpan.FromMinutes(5));
 
         var allRuns = await ctx.GfsModelRuns
             .OrderByDescending(r => r.ModelRunUtc)
@@ -557,14 +558,17 @@ public static class GfsFetcher
 
         var runsToDelete = allRuns.Skip(retainCount).ToList();
 
-        await ctx.GfsGrid
-            .Where(g => runsToDelete.Contains(g.ModelRunUtc))
-            .ExecuteDeleteAsync(ct);
+        foreach (var run in runsToDelete)
+        {
+            var deleted = await ctx.GfsGrid
+                .Where(g => g.ModelRunUtc == run)
+                .ExecuteDeleteAsync(ct);
 
-        await ctx.GfsModelRuns
-            .Where(r => runsToDelete.Contains(r.ModelRunUtc))
-            .ExecuteDeleteAsync(ct);
+            await ctx.GfsModelRuns
+                .Where(r => r.ModelRunUtc == run)
+                .ExecuteDeleteAsync(ct);
 
-        Logger.Info($"GfsFetcher: purged {runsToDelete.Count} old model run(s) from GfsGrid and GfsModelRuns.");
+            Logger.Info($"GfsFetcher: purged model run {run:yyyy-MM-dd HH}Z ({deleted:N0} grid rows deleted).");
+        }
     }
 }

@@ -200,30 +200,51 @@ public sealed class ClaudeClient
             },
         };
 
-        using var req = new HttpRequestMessage(HttpMethod.Post, MessagesEndpoint);
-        req.Headers.Add("x-api-key", _apiKey);
-        req.Headers.Add("anthropic-version", AnthropicVersion);
-        req.Content = JsonContent.Create(request);
-
+        const int maxAttempts = 3;
         HttpResponseMessage resp;
-        try
+
+        for (int attempt = 1; ; attempt++)
         {
-            resp = await _http.SendAsync(req, ct);
-        }
-        catch (Exception ex)
-        {
-            Logger.Error($"Claude API request failed: {ex}");
+            using var req = new HttpRequestMessage(HttpMethod.Post, MessagesEndpoint);
+            req.Headers.Add("x-api-key", _apiKey);
+            req.Headers.Add("anthropic-version", AnthropicVersion);
+            req.Content = JsonContent.Create(request);
+
+            try
+            {
+                resp = await _http.SendAsync(req, ct);
+            }
+            catch (Exception ex) when (attempt < maxAttempts && ex is HttpRequestException)
+            {
+                Logger.Warn($"Claude API request failed (attempt {attempt}/{maxAttempts}): {ex.Message}");
+                await Task.Delay(TimeSpan.FromSeconds(attempt * 2), ct);
+                continue;
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"Claude API request failed: {ex}");
+                return null;
+            }
+
+            var statusCode = (int)resp.StatusCode;
+            if (resp.IsSuccessStatusCode) break;
+
+            var body = await resp.Content.ReadAsStringAsync();
+            resp.Dispose();
+
+            if (attempt < maxAttempts && statusCode is 429 or 529 or >= 500)
+            {
+                Logger.Warn($"Claude API returned {statusCode} (attempt {attempt}/{maxAttempts}): {body}");
+                await Task.Delay(TimeSpan.FromSeconds(attempt * 2), ct);
+                continue;
+            }
+
+            Logger.Error($"Claude API returned {statusCode}: {body}");
             return null;
         }
 
         using (resp)
         {
-            if (!resp.IsSuccessStatusCode)
-            {
-                var body = await resp.Content.ReadAsStringAsync();
-                Logger.Error($"Claude API returned {(int)resp.StatusCode}: {body}");
-                return null;
-            }
 
             ClaudeResponse? parsed;
             try

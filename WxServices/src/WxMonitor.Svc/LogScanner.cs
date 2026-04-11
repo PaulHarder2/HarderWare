@@ -127,7 +127,7 @@ public static class LogScanner
                 line[..23],
                 "yyyy-MM-dd HH:mm:ss.fff",
                 null,
-                System.Globalization.DateTimeStyles.None,
+                System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal,
                 out timestamp))
             return false;
 

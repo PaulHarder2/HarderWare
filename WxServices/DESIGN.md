@@ -33,8 +33,7 @@
    - [WxVis — Python Visualisation](#44-wxvis--python-visualisation)
    - [WxMonitor.Svc — Health Monitor](#45-wxmonitorsvc--health-monitor)
    - [WxViewer — Desktop Map Viewer](#46-wxviewer--desktop-map-viewer)
-   - [WxAddRecipient — Recipient Setup Tool](#47-wxaddrecipient--recipient-setup-tool)
-   - [WxManager — Management GUI](#48-wxmanager--management-gui)
+   - [WxManager — Management GUI](#47-wxmanager--management-gui)
 5. [Class Libraries](#5-class-libraries)
 6. [Data Model](#6-data-model)
 7. [Configuration Guide](#7-configuration-guide)
@@ -294,7 +293,6 @@ WxServices/
     ├── WxVis.Svc/                   ← Windows service: automated map rendering
     ├── WxViewer/                    ← WPF desktop app: animated weather map viewer
     ├── WxManager/                   ← WPF management GUI: recipient editor + announcement sender (C:\HarderWare\WxManager)
-    ├── WxAddRecipient/              ← console tool: address geocoding + METAR station verification (C:\bin, legacy)
     └── WxVis/                       ← Python visualisation project (conda env: wxvis)
         ├── db.py                    ← SQLAlchemy engine + data loading queries
         ├── synoptic_map.py          ← Synoptic analysis maps (Barnes interpolation)
@@ -468,7 +466,7 @@ The config is never updated when a fallback station is used; a warning is logged
 | `WxInterpreter` | WxInterp | Queries DB → `WeatherSnapshot` (METAR + TAF + GFS); station fallback logic |
 | `GfsInterpreter` | WxInterp | Bilinear interpolation over the four surrounding 0.25° GFS grid points → `GfsForecast` |
 | `SnapshotDescriber` | WxReport.Svc | `WeatherSnapshot` → structured plain-text for Claude; unit-aware (temperature, pressure, wind speed); outputs relative humidity (computed from temperature and dew point) rather than raw dew point |
-| `ClaudeClient` | WxReport.Svc | Anthropic Messages API wrapper; generates HTML email body; accepts `UnitPreferences` and `ChangeSeverity` to tailor the system prompt per recipient |
+| `ClaudeClient` | WxReport.Svc | Anthropic Messages API wrapper; generates HTML email body; accepts `UnitPreferences` and `ChangeSeverity` to tailor the system prompt per recipient; retries transient failures (429, 529, 5xx, `HttpRequestException`) up to 3 times with linear backoff |
 | `SmtpSender` | WxServices.Common | MailKit SMTP wrapper; `SendAsync` accepts optional `htmlBody` and `inlineImages`; sends `multipart/alternative` (plain-text + HTML); HTML part is wrapped in `multipart/related` when inline images are provided (`cid:` URI support); `fromName` set per-service at construction time; all failures (including invalid addresses and SMTP errors) are caught and return `false` rather than throwing |
 | `SnapshotFingerprint` | WxReport.Svc | Computes an 8-field pipe-delimited fingerprint (W, V, TS, PR, GH, GL, GC, GP) from significant weather fields; `ClassifyChange` compares two fingerprints and returns a `ChangeSeverity` value |
 
@@ -662,36 +660,7 @@ Override with `appsettings.local.json` if the plots directory is in a different 
 
 ---
 
-### 4.7 WxAddRecipient — Recipient Setup Tool
-
-**Purpose:** Interactive command-line tool to geocode a street address, verify nearby METAR stations, and add a fully-configured recipient entry to the WxReport.Svc `appsettings.local.json`.  Handles JSON formatting automatically so commas are never an issue.
-
-**Usage:**
-```
-WxAddRecipient.exe "<street address>"
-WxAddRecipient "34 Stone Springs Circle, The Woodlands, TX 77381"
-```
-
-**Workflow:**
-1. Geocodes the address via the Nominatim API (reuses `AddressGeocoder` from `MetarParser.Data`).
-2. Queries the Aviation Weather API for active METAR stations within ±2.5° of the resolved coordinates, deduplicates by ICAO ID, and ranks the five nearest by Haversine distance.
-3. For each candidate: queries the database for total METAR count, total TAF count, and most-recent METAR observation time.  Pulls the station name from `WxStations` if it has been previously ingested.  The output table has separate **METARs** and **TAFs** columns so it is immediately clear which stations issue forecasts in addition to observations.
-4. Checks whether the resolved coordinates fall within the configured `Fetch:HomeLatitude / HomeLongitude ± BoundingBoxDegrees` bbox; warns if they are outside it (no observations would be collected).
-5. Prompts interactively for recipient fields: Id, Name, Email, Language, Timezone, ScheduledSendHours, MetarIcao (pre-filled from the nearest station with DB observations), and unit preferences (temperature, pressure, wind speed).  `TafIcao` is intentionally omitted — `RecipientResolver` resolves it on the service's first run for the new recipient.
-6. Displays a summary and prompts for confirmation before writing.
-7. Reads `WxAddRecipient:RecipientConfigPath` from config, parses the target JSON file with `JsonNode`, appends the new recipient, and writes it back with proper indentation.  Duplicate Id detection prevents accidental overwrites.
-
-**Exit codes:** 0 = recipient added (or cancelled), 1 = config/network/write error, 2 = address not geocoded.
-
-**Config:** `WxAddRecipient:RecipientConfigPath` in `appsettings.shared.json` points to the **source** `appsettings.local.json` for WxReport.Svc (`C:\Users\PaulH\Dropbox\PH\Documents\Code\HarderWare\WxServices\src\WxReport.Svc\appsettings.local.json`).  Writing to the source file (rather than the publish-directory copy) ensures the new recipient survives redeployment.  Run `.\Deploy-WxService.ps1 WxReportSvc` after adding a recipient to push the change to the live service; the service then picks it up automatically on its next cycle via `reloadOnChange`.
-
-**Deploy:** `.\Deploy-WxService.ps1 WxAddRecipient` publishes to `C:\bin`.
-
-> **Note:** WxManager (section 4.8) provides a GUI-based recipient editor that supersedes WxAddRecipient for day-to-day use. WxAddRecipient remains available as a lightweight command-line alternative.
-
----
-
-### 4.8 WxManager — Management GUI
+### 4.7 WxManager — Management GUI
 
 **Purpose:** WPF desktop application that provides a tabbed GUI for managing the WxServices system. Deployed to `C:\HarderWare\WxManager`.
 
@@ -716,6 +685,8 @@ WxAddRecipient "34 Stone Springs Circle, The Woodlands, TX 77381"
 A thin static wrapper around log4net. All services and WxManager call `Logger.Initialise()` once at startup; thereafter `Logger.Info/Warn/Error/Fatal` are available everywhere. Caller file, method, and line number are captured automatically via `[CallerFilePath]` etc. `Logger.Initialise()` is wrapped in a try/catch in WxManager's `App.OnStartup` so a missing `log4net.config` degrades gracefully rather than crashing the application.
 
 Log format: `yyyy-MM-dd HH:mm:ss.fff LEVEL [File::Method:Line] message`
+
+All log4net configurations use the `%utcdate` conversion pattern so that timestamps are always UTC regardless of the system timezone. `LogScanner` parses these timestamps with `DateTimeStyles.AssumeUniversal`.
 
 ### WxServices.Common
 
@@ -1200,11 +1171,8 @@ SMTP settings come from the top-level `Smtp` block in `appsettings.shared.json` 
 # Deploy a single service
 .\Deploy-WxService.ps1 WxReportSvc
 
-# Deploy all four Windows services in order (stops on first failure)
+# Deploy everything: all four Windows services, WxManager, WxViewer, and WxVis cache clear
 .\Deploy-WxService.ps1 all
-
-# Publish the WxAddRecipient console tool to C:\bin
-.\Deploy-WxService.ps1 WxAddRecipient
 
 # Publish the WxViewer desktop app to C:\HarderWare\WxViewer
 .\Deploy-WxService.ps1 WxViewer
@@ -1213,9 +1181,9 @@ SMTP settings come from the top-level `Smtp` block in `appsettings.shared.json` 
 .\Deploy-WxService.ps1 WxManager
 ```
 
-Valid names: `WxParserSvc`, `WxReportSvc`, `WxMonitorSvc`, `WxVisSvc`, `WxAddRecipient`, `WxViewer`, `WxManager`, `WxVis`, `all`.
+Valid names: `WxParserSvc`, `WxReportSvc`, `WxMonitorSvc`, `WxVisSvc`, `WxViewer`, `WxManager`, `WxVis`, `all`.
 
-`all` deploys the four Windows services only; console tools and the desktop app are published separately.
+`all` deploys the four Windows services, then WxManager, WxViewer, and clears the WxVis Python cache.
 
 ### First-time install (run as Administrator)
 ```

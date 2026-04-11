@@ -4,13 +4,9 @@
     Publishes and redeploys one or all WxServices Windows services.
 
 .PARAMETER ServiceName
-    The service to deploy, or 'all' to deploy all four Windows services in order
-    (WxParserSvc, WxReportSvc, WxMonitorSvc, WxVisSvc), or 'WxViewer' to publish
-    the WPF viewer to C:\HarderWare\WxViewer, or 'WxManager' to publish the WPF
-    management GUI to C:\HarderWare\WxManager, or 'WxVis' to clear the Python
-    bytecode cache so that the next map render picks up any script changes
-    immediately, or 'WxAddRecipient' to publish the address-verification console
-    tool to C:\bin.
+    The service or application to deploy, or 'all' to deploy everything:
+    the four Windows services (WxParserSvc, WxReportSvc, WxMonitorSvc, WxVisSvc),
+    then WxManager, WxViewer, and WxVis cache clear.
 
 .EXAMPLE
     .\Deploy-WxService.ps1 WxReportSvc
@@ -18,12 +14,11 @@
     .\Deploy-WxService.ps1 WxViewer
     .\Deploy-WxService.ps1 WxManager
     .\Deploy-WxService.ps1 WxVis
-    .\Deploy-WxService.ps1 WxAddRecipient
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [ValidateSet('WxParserSvc', 'WxReportSvc', 'WxMonitorSvc', 'WxVisSvc', 'WxViewer', 'WxManager', 'WxVis', 'WxAddRecipient', 'all')]
+    [ValidateSet('WxParserSvc', 'WxReportSvc', 'WxMonitorSvc', 'WxVisSvc', 'WxViewer', 'WxManager', 'WxVis', 'all')]
     [string]$ServiceName
 )
 
@@ -183,24 +178,6 @@ function Invoke-ServiceDeploy {
 }
 
 # ---------------------------------------------------------------------------
-# Publish WxAddRecipient console tool to C:\bin
-# ---------------------------------------------------------------------------
-function Invoke-IdentifyPublish {
-    $projectPath = "$SolutionRoot\src\WxAddRecipient"
-    $outputDir   = "C:\bin"
-
-    Write-Host "Publishing WxAddRecipient to $outputDir..."
-    dotnet publish $projectPath -c Release -o $outputDir
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "dotnet publish failed for WxAddRecipient (exit code $LASTEXITCODE)."
-        return $false
-    }
-
-    Write-Host "WxAddRecipient published to $outputDir." -ForegroundColor Green
-    return $true
-}
-
-# ---------------------------------------------------------------------------
 # Publish WxManager WPF GUI to C:\HarderWare\WxManager
 # ---------------------------------------------------------------------------
 function Invoke-ManagerPublish {
@@ -269,11 +246,6 @@ function Invoke-ViewerPublish {
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
-if ($ServiceName -eq 'WxAddRecipient') {
-    Invoke-IdentifyPublish
-    exit $LASTEXITCODE
-}
-
 if ($ServiceName -eq 'WxViewer') {
     Invoke-ViewerPublish
     exit $LASTEXITCODE
@@ -289,14 +261,33 @@ if ($ServiceName -eq 'WxVis') {
     exit $(if ($ok) { 0 } else { 1 })
 }
 
-$targets = if ($ServiceName -eq 'all') { $ServiceMap.Keys } else { @($ServiceName) }
-
-foreach ($target in $targets) {
-    Write-Host ""
-    Write-Host "=== $target ===" -ForegroundColor Cyan
-    $ok = Invoke-ServiceDeploy -SvcName $target
-    if (-not $ok -and $ServiceName -eq 'all') {
-        Write-Warning "Stopping 'all' deploy due to failure in $target."
-        exit 1
+if ($ServiceName -eq 'all') {
+    foreach ($target in $ServiceMap.Keys) {
+        Write-Host ""
+        Write-Host "=== $target ===" -ForegroundColor Cyan
+        $ok = Invoke-ServiceDeploy -SvcName $target
+        if (-not $ok) {
+            Write-Warning "Stopping 'all' deploy due to failure in $target."
+            exit 1
+        }
     }
+
+    Write-Host ""
+    Write-Host "=== WxManager ===" -ForegroundColor Cyan
+    if (-not (Invoke-ManagerPublish)) { exit 1 }
+
+    Write-Host ""
+    Write-Host "=== WxViewer ===" -ForegroundColor Cyan
+    if (-not (Invoke-ViewerPublish)) { exit 1 }
+
+    Write-Host ""
+    Write-Host "=== WxVis ===" -ForegroundColor Cyan
+    Invoke-WxVisCacheClear | Out-Null
+
+    Write-Host ""
+    Write-Host "All services and applications deployed." -ForegroundColor Green
+} else {
+    Write-Host ""
+    Write-Host "=== $ServiceName ===" -ForegroundColor Cyan
+    Invoke-ServiceDeploy -SvcName $ServiceName
 }
