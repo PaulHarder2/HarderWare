@@ -352,9 +352,9 @@ graph TD
 
 **METAR/TAF cycle (default: every 10 minutes):**
 1. Resolve home coordinates from `appsettings.shared.json` (`HomeLatitude`, `HomeLongitude`). If absent, look up via `AirportLocator` using `HomeIcao` and cache to `appsettings.local.json`.
-2. Fetch all METARs within a configurable bounding box (default ±5°) around home coordinates via the AWC API.
-3. Fetch the home ICAO station explicitly (in case it falls outside the bounding box result).
-4. Fetch all TAFs within the same bounding box.
+2. Fetch all METARs within the configured fetch region via the AWC API.  The region is either explicit bounds (`RegionSouth/North/West/East`) or derived from `HomeLatitude/HomeLongitude ± BoundingBoxDegrees`.
+3. Fetch the home ICAO station explicitly (in case it falls outside the region).
+4. Fetch all TAFs within the same region.
 5. Insert new records; skip duplicates (unique index on station + observation time + report type).
 6. Write the current UTC timestamp to `wxparser-heartbeat.txt`.
 
@@ -362,7 +362,7 @@ graph TD
 1. Check for any incomplete model run registered in `GfsModelRuns`. If one exists, resume it; otherwise compute the most recent GFS cycle (00Z/06Z/12Z/18Z) that should be available on NOMADS.
 2. For each forecast hour 0–120 not yet stored, fetch the `.idx` inventory file for that hour. A 404 means the run is still being computed — stop and resume next cycle.
 3. Download byte-range HTTP requests for the 8 target variables (TMP, SPFH, UGRD, VGRD, PRATE, TCDC, CAPE, PRMSL) and concatenate them into a temporary GRIB2 file.
-4. Invoke wgrib2 (via WSL) to crop to the configured bounding box and emit a CSV of grid values.
+4. Invoke wgrib2 (via WSL) to crop to the configured fetch region and emit a CSV of grid values.
 5. Assemble `GfsGridPoint` entities (applying unit conversions) and insert into `GfsGrid`.
 6. When all 121 hours are stored, mark the run `IsComplete = true` and purge old runs (retaining the 2 most recent).
 

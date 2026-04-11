@@ -43,6 +43,10 @@ public partial class ConfigureTab : UserControl
         TxtHomeLatitude.Text     = cfg["Fetch:HomeLatitude"]       ?? "";
         TxtHomeLongitude.Text    = cfg["Fetch:HomeLongitude"]      ?? "";
         TxtBoundingBoxDeg.Text   = cfg["Fetch:BoundingBoxDegrees"] ?? "9";
+        TxtRegionSouth.Text      = cfg["Fetch:RegionSouth"]       ?? "";
+        TxtRegionNorth.Text      = cfg["Fetch:RegionNorth"]       ?? "";
+        TxtRegionWest.Text       = cfg["Fetch:RegionWest"]        ?? "";
+        TxtRegionEast.Text       = cfg["Fetch:RegionEast"]        ?? "";
 
         TxtConnectionString.Text = cfg["ConnectionStrings:WeatherData"]
             ?? @"Server=.\SQLEXPRESS;Database=WeatherData;Trusted_Connection=True;TrustServerCertificate=True;";
@@ -87,6 +91,10 @@ public partial class ConfigureTab : UserControl
                     ["HomeLatitude"]       = ParseDoubleOrNull(TxtHomeLatitude.Text),
                     ["HomeLongitude"]      = ParseDoubleOrNull(TxtHomeLongitude.Text),
                     ["BoundingBoxDegrees"] = ParseDoubleOrNull(TxtBoundingBoxDeg.Text),
+                    ["RegionSouth"]        = ParseDoubleOrNull(TxtRegionSouth.Text),
+                    ["RegionNorth"]        = ParseDoubleOrNull(TxtRegionNorth.Text),
+                    ["RegionWest"]         = ParseDoubleOrNull(TxtRegionWest.Text),
+                    ["RegionEast"]         = ParseDoubleOrNull(TxtRegionEast.Text),
                 },
                 ["Smtp"] = new JsonObject
                 {

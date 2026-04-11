@@ -397,13 +397,9 @@ public partial class RecipientsTab : UserControl
 
             // ── Fetch bounding-box advisory ───────────────────────────────────
 
-            if (App.FetchHomeLat.HasValue && App.FetchHomeLon.HasValue && App.FetchBoxDeg.HasValue)
+            if (App.FetchRegion is { } fetchRegion)
             {
-                var hl = App.FetchHomeLat.Value;
-                var hlo = App.FetchHomeLon.Value;
-                var bd  = App.FetchBoxDeg.Value;
-                var inBox = lat >= hl  - bd && lat <= hl  + bd
-                         && lon >= hlo - bd && lon <= hlo + bd;
+                var inBox = fetchRegion.Contains(lat, lon);
 
                 if (inBox)
                 {
@@ -540,13 +536,9 @@ public partial class RecipientsTab : UserControl
                         { ShowMessage($"METAR station \"{icao}\" was not found in the station database."); return; }
                     if (station.Lat is null || station.Lon is null)
                         { ShowMessage($"METAR station \"{icao}\" has no coordinates and cannot be used."); return; }
-                    if (App.FetchHomeLat.HasValue && App.FetchHomeLon.HasValue && App.FetchBoxDeg.HasValue)
-                    {
-                        var bd = App.FetchBoxDeg.Value;
-                        if (station.Lat < App.FetchHomeLat - bd || station.Lat > App.FetchHomeLat + bd ||
-                            station.Lon < App.FetchHomeLon - bd || station.Lon > App.FetchHomeLon + bd)
-                            bboxWarnings.Add($"{icao} is outside the fetch bounding box");
-                    }
+                    if (App.FetchRegion is { } fr1 && station.Lat.HasValue && station.Lon.HasValue
+                        && !fr1.Contains(station.Lat.Value, station.Lon.Value))
+                        bboxWarnings.Add($"{icao} is outside the fetch region");
                 }
             }
 
@@ -558,13 +550,9 @@ public partial class RecipientsTab : UserControl
                     { ShowMessage($"TAF station \"{icao}\" was not found in the station database."); return; }
                 if (station.Lat is null || station.Lon is null)
                     { ShowMessage($"TAF station \"{icao}\" has no coordinates and cannot be used."); return; }
-                if (App.FetchHomeLat.HasValue && App.FetchHomeLon.HasValue && App.FetchBoxDeg.HasValue)
-                {
-                    var bd = App.FetchBoxDeg.Value;
-                    if (station.Lat < App.FetchHomeLat - bd || station.Lat > App.FetchHomeLat + bd ||
-                        station.Lon < App.FetchHomeLon - bd || station.Lon > App.FetchHomeLon + bd)
-                        bboxWarnings.Add($"TAF station {icao} is outside the fetch bounding box");
-                }
+                if (App.FetchRegion is { } fr2 && station.Lat.HasValue && station.Lon.HasValue
+                    && !fr2.Contains(station.Lat.Value, station.Lon.Value))
+                    bboxWarnings.Add($"TAF station {icao} is outside the fetch region");
             }
 
             Recipient r;

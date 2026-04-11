@@ -47,13 +47,17 @@
                 </GroupBox>
 
                 <!-- ── Location ──────────────────────────────────────────── -->
-                <GroupBox Header="Home Location" Margin="0,4">
+                <GroupBox Header="Home Location and Fetch Region" Margin="0,4">
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="160"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
                         <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
@@ -69,8 +73,22 @@
                         <TextBlock Grid.Row="2" Grid.Column="0" Text="Home Longitude" VerticalAlignment="Center" Margin="0,4"/>
                         <TextBox   Grid.Row="2" Grid.Column="1" x:Name="TxtHomeLongitude" Margin="0,4" Width="120" HorizontalAlignment="Left"/>
 
-                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Bounding Box (deg)" VerticalAlignment="Center" Margin="0,4"/>
+                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Bounding Box (deg)" VerticalAlignment="Center" Margin="0,4"
+                                   ToolTip="Fallback half-width when explicit region bounds are not set."/>
                         <TextBox   Grid.Row="3" Grid.Column="1" x:Name="TxtBoundingBoxDeg" Margin="0,4" Width="80" HorizontalAlignment="Left"/>
+
+                        <TextBlock Grid.Row="4" Grid.Column="0" Text="Region South" VerticalAlignment="Center" Margin="0,4"/>
+                        <TextBox   Grid.Row="4" Grid.Column="1" x:Name="TxtRegionSouth" Margin="0,4" Width="120" HorizontalAlignment="Left"
+                                   ToolTip="Explicit southern latitude bound. Leave empty to derive from home lat/lon."/>
+
+                        <TextBlock Grid.Row="5" Grid.Column="0" Text="Region North" VerticalAlignment="Center" Margin="0,4"/>
+                        <TextBox   Grid.Row="5" Grid.Column="1" x:Name="TxtRegionNorth" Margin="0,4" Width="120" HorizontalAlignment="Left"/>
+
+                        <TextBlock Grid.Row="6" Grid.Column="0" Text="Region West" VerticalAlignment="Center" Margin="0,4"/>
+                        <TextBox   Grid.Row="6" Grid.Column="1" x:Name="TxtRegionWest" Margin="0,4" Width="120" HorizontalAlignment="Left"/>
+
+                        <TextBlock Grid.Row="7" Grid.Column="0" Text="Region East" VerticalAlignment="Center" Margin="0,4"/>
+                        <TextBox   Grid.Row="7" Grid.Column="1" x:Name="TxtRegionEast" Margin="0,4" Width="120" HorizontalAlignment="Left"/>
                     </Grid>
                 </GroupBox>
 

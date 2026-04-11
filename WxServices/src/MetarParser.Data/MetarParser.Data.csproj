@@ -17,6 +17,7 @@
     <ProjectReference Include="..\GribParser\GribParser.csproj" />
     <ProjectReference Include="..\MetarParser\MetarParser.csproj" />
     <ProjectReference Include="..\TafParser\TafParser.csproj" />
+    <ProjectReference Include="..\WxServices.Common\WxServices.Common.csproj" />
     <ProjectReference Include="..\WxServices.Logging\WxServices.Logging.csproj" />
   </ItemGroup>
   <ItemGroup>

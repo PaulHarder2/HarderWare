@@ -16,30 +16,19 @@ public static class MetarFetcher
     private const string MetarApiBase = "https://aviationweather.gov/api/data/metar";
 
     /// <summary>
-    /// Fetches all METAR and SPECI reports within the bounding box centred on
-    /// (<paramref name="lat"/>, <paramref name="lon"/>) with a half-width of
-    /// <paramref name="boxDegrees"/> degrees, then parses, deduplicates, and
-    /// inserts any reports not already in the database.
+    /// Fetches all METAR and SPECI reports within the given geographic region,
+    /// then parses, deduplicates, and inserts any reports not already in the database.
     /// </summary>
-    /// <param name="lat">Centre latitude of the bounding box in decimal degrees.</param>
-    /// <param name="lon">Centre longitude of the bounding box in decimal degrees.</param>
-    /// <param name="boxDegrees">Half-width of the bounding box in degrees (applied in all four directions). Must be &gt; 0.</param>
+    /// <param name="region">Geographic bounding box for the API query.</param>
     /// <param name="dbOptions">EF Core options for deduplication queries and insertion.</param>
     /// <param name="httpClient">HTTP client for the Aviation Weather Center API request.</param>
     /// <sideeffects>Inserts new <see cref="MetarRecord"/> rows into the database. Writes progress and error log entries.</sideeffects>
     public static async Task FetchAndInsertAsync(
-        double lat, double lon, double boxDegrees,
+        WxServices.Common.FetchRegion region,
         DbContextOptions<WeatherDataContext> dbOptions,
         HttpClient httpClient)
     {
-        if (boxDegrees <= 0)
-        {
-            Logger.Error($"MetarFetcher: boxDegrees must be > 0 (got {boxDegrees}) — skipping fetch.");
-            return;
-        }
-
-        var bbox = $"{lat - boxDegrees},{lon - boxDegrees},{lat + boxDegrees},{lon + boxDegrees}";
-        var url  = $"{MetarApiBase}?bbox={bbox}&hours=1&format=raw";
+        var url = $"{MetarApiBase}?bbox={region.ToAwcBbox()}&hours=1&format=raw";
         await FetchUrlAndInsertAsync(url, dbOptions, httpClient);
     }
 

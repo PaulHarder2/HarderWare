@@ -97,7 +97,6 @@ public sealed class FetchWorker : BackgroundService
         try
         {
             var homeIcao = _config["Fetch:HomeIcao"];
-            var boxDeg   = double.TryParse(_config["Fetch:BoundingBoxDegrees"], out var bd) ? bd : 5.0;
 
             double? homeLat = double.TryParse(_config["Fetch:HomeLatitude"],  out var la) ? la : null;
             double? homeLon = double.TryParse(_config["Fetch:HomeLongitude"], out var lo) ? lo : null;
@@ -137,9 +136,16 @@ public sealed class FetchWorker : BackgroundService
                 }
             }
 
-            Logger.Info($"Starting fetch cycle for {homeIcao ?? "unknown"} (bbox ±{boxDeg}°).");
+            var region = FetchRegion.FromConfig(key => _config[key]);
+            if (region is null)
+            {
+                Logger.Error("No fetch region could be resolved from configuration. Skipping fetch cycle.");
+                return;
+            }
 
-            await MetarFetcher.FetchAndInsertAsync(homeLat.Value, homeLon.Value, boxDeg, _dbOptions, _http);
+            Logger.Info($"Starting fetch cycle for {homeIcao ?? "unknown"} (region {region.South:F1}–{region.North:F1}°N, {region.West:F1}–{region.East:F1}°E).");
+
+            await MetarFetcher.FetchAndInsertAsync(region, _dbOptions, _http);
 
             // Fetch the home station explicitly in case it is omitted from the bounding box results.
             if (!string.IsNullOrWhiteSpace(homeIcao))
@@ -157,7 +163,7 @@ public sealed class FetchWorker : BackgroundService
                     await MetarFetcher.FetchAndInsertByStationAsync(icao, _dbOptions, _http);
             }
 
-            await TafFetcher.FetchAndInsertAsync(homeLat.Value, homeLon.Value, boxDeg, _dbOptions, _http);
+            await TafFetcher.FetchAndInsertAsync(region, _dbOptions, _http);
 
             Logger.Info("Fetch cycle complete.");
             WriteHeartbeat(_config["Fetch:HeartbeatFile"]

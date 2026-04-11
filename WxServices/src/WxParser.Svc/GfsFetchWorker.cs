@@ -83,21 +83,20 @@ public sealed class GfsFetchWorker : BackgroundService
     {
         try
         {
-            if (!double.TryParse(_config["Fetch:HomeLatitude"],  out var homeLat) ||
-                !double.TryParse(_config["Fetch:HomeLongitude"], out var homeLon))
+            var region = FetchRegion.FromConfig(key => _config[key]);
+            if (region is null)
             {
-                Logger.Warn("GfsFetchWorker: Fetch:HomeLatitude/HomeLongitude not set — skipping GFS cycle.");
+                Logger.Warn("GfsFetchWorker: no fetch region configured — skipping GFS cycle.");
                 return;
             }
 
-            var boxDeg = double.TryParse(_config["Fetch:BoundingBoxDegrees"], out var bd) ? bd : 5.0;
             var cfg      = LoadConfig();
             var tempPath = string.IsNullOrEmpty(cfg.TempPath)
                 ? new WxPaths(_config["InstallRoot"]).TempDir
                 : cfg.TempPath;
 
             await GfsFetcher.FetchAndInsertAsync(
-                homeLat, homeLon, boxDeg,
+                region,
                 _dbOptions,
                 _http,
                 cfg.Wgrib2WslPath,

@@ -79,7 +79,7 @@ public static class GfsFetcher
     /// Writes log entries throughout.
     /// </sideeffects>
     public static async Task FetchAndInsertAsync(
-        double homeLat, double homeLon, double boxDegrees,
+        WxServices.Common.FetchRegion region,
         DbContextOptions<WeatherDataContext> dbOptions,
         HttpClient httpClient,
         string wgrib2WslPath,
@@ -145,10 +145,10 @@ public static class GfsFetcher
         var runDate  = modelRun.ToString("yyyyMMdd");
         var runCycle = modelRun.Hour.ToString("D2");
 
-        var latMin = (float)Math.Max(-90, homeLat - boxDegrees);
-        var latMax = (float)Math.Min(90,  homeLat + boxDegrees);
-        var lonMin = (float)(homeLon - boxDegrees);
-        var lonMax = (float)(homeLon + boxDegrees);
+        var latMin = (float)region.South;
+        var latMax = (float)region.North;
+        var lonMin = (float)region.West;
+        var lonMax = (float)region.East;
 
         // ── Ensure temp directory exists and clean up any stale files ────────
         Directory.CreateDirectory(gfsTempPath);

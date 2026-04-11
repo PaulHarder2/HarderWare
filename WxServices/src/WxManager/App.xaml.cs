@@ -34,6 +34,9 @@ public partial class App : Application
     /// <summary>Fetch bounding-box half-width in degrees from <c>Fetch:BoundingBoxDegrees</c>, or <see langword="null"/> if not configured.</summary>
     public static double? FetchBoxDeg { get; private set; }
 
+    /// <summary>Resolved fetch region (explicit bounds or derived from home lat/lon + bounding box).</summary>
+    public static FetchRegion? FetchRegion { get; private set; }
+
     /// <summary>Default language for new recipients from <c>Report:DefaultLanguage</c>. Defaults to <c>"English"</c>.</summary>
     public static string DefaultLanguage { get; private set; } = "English";
 
@@ -137,6 +140,7 @@ public partial class App : Application
         FetchHomeLat    = TryParseDouble(config["Fetch:HomeLatitude"]);
         FetchHomeLon    = TryParseDouble(config["Fetch:HomeLongitude"]);
         FetchBoxDeg     = TryParseDouble(config["Fetch:BoundingBoxDegrees"]);
+        FetchRegion     = FetchRegion.FromConfig(key => config[key]);
         DefaultLanguage = config["Report:DefaultLanguage"] ?? "English";
         if (int.TryParse(config["Report:DefaultScheduledSendHour"], out var defHour) && defHour >= 0 && defHour <= 23)
             DefaultScheduledSendHour = defHour;
