@@ -107,17 +107,20 @@ public sealed class AnalysisMapWorker : BackgroundService
             var cutoff  = DateTime.UtcNow - TimeSpan.FromDays(cfg.PlotRetentionDays);
             int deleted = 0;
 
-            foreach (var file in Directory.EnumerateFiles(cfg.OutputDir, "*.png"))
+            foreach (var pattern in new[] { "*.png", "*.json" })
             {
-                if (File.GetLastWriteTimeUtc(file) < cutoff)
+                foreach (var file in Directory.EnumerateFiles(cfg.OutputDir, pattern))
                 {
-                    File.Delete(file);
-                    deleted++;
+                    if (File.GetLastWriteTimeUtc(file) < cutoff)
+                    {
+                        File.Delete(file);
+                        deleted++;
+                    }
                 }
             }
 
             if (deleted > 0)
-                Logger.Info($"AnalysisMapWorker: deleted {deleted} plot file(s) older than {cfg.PlotRetentionDays} days.");
+                Logger.Info($"AnalysisMapWorker: deleted {deleted} file(s) older than {cfg.PlotRetentionDays} days.");
 
             _lastCleanupUtc = DateTime.UtcNow;
         }

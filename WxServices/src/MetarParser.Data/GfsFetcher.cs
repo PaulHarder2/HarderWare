@@ -549,6 +549,15 @@ public static class GfsFetcher
         using var ctx = new WeatherDataContext(dbOptions);
         ctx.Database.SetCommandTimeout(TimeSpan.FromMinutes(5));
 
+        // Keep at least retainCount runs, but never delete a run that is newer
+        // than the latest complete run — an in-progress run must survive even
+        // if it pushes the total count above retainCount.
+        var latestComplete = await ctx.GfsModelRuns
+            .Where(r => r.IsComplete)
+            .OrderByDescending(r => r.ModelRunUtc)
+            .Select(r => (DateTime?)r.ModelRunUtc)
+            .FirstOrDefaultAsync(ct);
+
         var allRuns = await ctx.GfsModelRuns
             .OrderByDescending(r => r.ModelRunUtc)
             .Select(r => r.ModelRunUtc)
@@ -556,7 +565,11 @@ public static class GfsFetcher
 
         if (allRuns.Count <= retainCount) return;
 
-        var runsToDelete = allRuns.Skip(retainCount).ToList();
+        // Only delete runs older than the latest complete run.
+        var runsToDelete = allRuns
+            .Skip(retainCount)
+            .Where(r => latestComplete.HasValue && r < latestComplete.Value)
+            .ToList();
 
         foreach (var run in runsToDelete)
         {
