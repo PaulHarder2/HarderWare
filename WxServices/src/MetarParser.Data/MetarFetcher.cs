@@ -113,7 +113,7 @@ public static class MetarFetcher
             }
             catch (MetarParseException ex)
             {
-                Logger.Error($"METAR parse error: {ex.Message} — input: {line}");
+                Logger.Warn($"METAR parse error: {ex.Message} — input: {line}");
                 parseErrors++;
             }
         }

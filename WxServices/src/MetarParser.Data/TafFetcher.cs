@@ -66,7 +66,7 @@ public static class TafFetcher
             }
             catch (TafParseException ex)
             {
-                Logger.Error($"TAF parse error: {ex.Message} — input: {line}");
+                Logger.Warn($"TAF parse error: {ex.Message} — input: {line}");
                 parseErrors++;
             }
         }
