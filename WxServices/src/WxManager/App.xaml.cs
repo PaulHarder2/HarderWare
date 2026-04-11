@@ -22,6 +22,9 @@ public partial class App : Application
     /// <summary>EF Core options pointing at the WeatherData SQL Server database.</summary>
     public static DbContextOptions<WeatherDataContext> DbOptions { get; private set; } = null!;
 
+    /// <summary>Loaded application configuration (shared + local overrides).</summary>
+    public static IConfiguration? Configuration { get; private set; }
+
     /// <summary>Fetch bounding-box home latitude from <c>Fetch:HomeLatitude</c>, or <see langword="null"/> if not configured.</summary>
     public static double? FetchHomeLat { get; private set; }
 
@@ -113,6 +116,8 @@ public partial class App : Application
             .AddJsonFile(new PhysicalFileProvider(wxPaths.InstallRoot), "appsettings.local.json", optional: true, reloadOnChange: false)
             .AddJsonFile("appsettings.local.json",   optional: true)
             .Build();
+
+        Configuration = config;
 
         var connStr = config.GetConnectionString("WeatherData");
         if (string.IsNullOrWhiteSpace(connStr))

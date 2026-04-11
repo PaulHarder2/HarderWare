@@ -15,6 +15,13 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        SetupTab.AllChecksPassed += OnAllChecksPassed;
+    }
+
+    private void OnAllChecksPassed()
+    {
+        RecipientsTabItem.IsEnabled = true;
+        AnnouncementTabItem.IsEnabled = true;
     }
 
     /// <summary>

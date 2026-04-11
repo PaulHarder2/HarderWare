@@ -55,7 +55,12 @@ try
     await DatabaseSetup.EnsureSchemaAsync(dbOptions);
     Logger.Info("Database ready.");
 
-    await ValidateConfigAsync(host.Services.GetRequiredService<IConfiguration>(), dbOptions);
+    var cfg = host.Services.GetRequiredService<IConfiguration>();
+    await ValidateConfigAsync(cfg, dbOptions);
+
+    await PrerequisiteChecker.LogPrerequisitesAsync(
+        PrerequisiteChecker.Requires.SqlServer,
+        connectionString: cfg.GetConnectionString("WeatherData") ?? "");
 
     await host.RunAsync();
 }

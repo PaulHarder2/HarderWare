@@ -365,11 +365,14 @@
         </Border>
 
         <!-- ── Tab area ─────────────────────────────────────────────────────── -->
-        <TabControl>
-            <TabItem Header="Recipients">
+        <TabControl x:Name="MainTabs">
+            <TabItem Header="Setup">
+                <local:SetupTab x:Name="SetupTab"/>
+            </TabItem>
+            <TabItem x:Name="RecipientsTabItem" Header="Recipients" IsEnabled="False">
                 <local:RecipientsTab/>
             </TabItem>
-            <TabItem Header="Announcement">
+            <TabItem x:Name="AnnouncementTabItem" Header="Announcement" IsEnabled="False">
                 <local:AnnouncementTab/>
             </TabItem>
         </TabControl>

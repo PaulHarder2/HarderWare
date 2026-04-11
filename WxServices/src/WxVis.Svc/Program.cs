@@ -60,6 +60,12 @@ var host = Host.CreateDefaultBuilder(args)
 
 try
 {
+    var cfg = host.Services.GetRequiredService<IConfiguration>();
+    await PrerequisiteChecker.LogPrerequisitesAsync(
+        PrerequisiteChecker.Requires.SqlServer | PrerequisiteChecker.Requires.CondaPython | PrerequisiteChecker.Requires.WxVisPackages,
+        connectionString: cfg.GetConnectionString("WeatherData") ?? "",
+        condaPythonExe: cfg["WxVis:CondaPythonExe"] ?? "");
+
     await host.RunAsync();
 }
 catch (Exception ex)

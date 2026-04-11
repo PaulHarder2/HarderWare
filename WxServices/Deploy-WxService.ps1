@@ -124,7 +124,7 @@ function Invoke-ServiceDeploy {
 # Publish WxManager WPF GUI.
 # ---------------------------------------------------------------------------
 function Invoke-ManagerPublish {
-    $projectPath = "$SolutionRoot\src\WxManager"
+    $projectPath = "$SolutionRoot\src\WxManager\WxManager.csproj"
     $outputDir   = "$InstallRoot\WxManager"
 
     Write-Host "Publishing WxManager to $outputDir..."
@@ -185,7 +185,7 @@ function Invoke-WxVisPublish {
 # Publish WxViewer WPF desktop app.
 # ---------------------------------------------------------------------------
 function Invoke-ViewerPublish {
-    $projectPath = "$SolutionRoot\src\WxViewer"
+    $projectPath = "$SolutionRoot\src\WxViewer\WxViewer.csproj"
     $outputDir   = "$InstallRoot\WxViewer"
 
     Write-Host "Publishing WxViewer to $outputDir..."

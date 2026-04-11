@@ -136,6 +136,10 @@ try
 
     await ValidateConfigAsync(appConfig, dbOptions);
 
+    await PrerequisiteChecker.LogPrerequisitesAsync(
+        PrerequisiteChecker.Requires.SqlServer,
+        connectionString: appConfig.GetConnectionString("WeatherData") ?? "");
+
     await host.RunAsync();
 }
 catch (Exception ex)

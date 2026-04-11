@@ -1,0 +1,38 @@
+<UserControl x:Class="WxManager.SetupTab"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Background="#1a1a1a" Foreground="#c8c8c8">
+
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- ── Header ──────────────────────────────────────────────────────── -->
+        <StackPanel Grid.Row="0" Margin="0,0,0,16">
+            <TextBlock Text="System Prerequisites"
+                       FontSize="18" FontWeight="SemiBold" Foreground="#e0e0e0"/>
+            <TextBlock Text="Verify that all prerequisites are met before configuring the system."
+                       FontSize="12" Foreground="#909090" Margin="0,4,0,0"/>
+        </StackPanel>
+
+        <!-- ── Checklist ───────────────────────────────────────────────────── -->
+        <Border Grid.Row="1" Background="#222222" CornerRadius="4" Padding="12"
+                BorderBrush="#444444" BorderThickness="1">
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <StackPanel x:Name="CheckList" />
+            </ScrollViewer>
+        </Border>
+
+        <!-- ── Actions ─────────────────────────────────────────────────────── -->
+        <StackPanel Grid.Row="2" Orientation="Horizontal"
+                    HorizontalAlignment="Right" Margin="0,12,0,0">
+            <TextBlock x:Name="StatusText" VerticalAlignment="Center"
+                       FontSize="12" Foreground="#909090" Margin="0,0,16,0"/>
+            <Button x:Name="RecheckButton" Content="Re-check"
+                    Width="100" Click="RecheckButton_Click"/>
+        </StackPanel>
+    </Grid>
+</UserControl>

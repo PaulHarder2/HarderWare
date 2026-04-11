@@ -73,6 +73,12 @@ try
     await DatabaseSetup.EnsureSchemaAsync(dbOptions);
     Logger.Info("Database ready.");
 
+    var cfg = host.Services.GetRequiredService<IConfiguration>();
+    await PrerequisiteChecker.LogPrerequisitesAsync(
+        PrerequisiteChecker.Requires.SqlServer | PrerequisiteChecker.Requires.Wsl | PrerequisiteChecker.Requires.Wgrib2,
+        connectionString: cfg.GetConnectionString("WeatherData") ?? "",
+        wgrib2WslPath: cfg["Gfs:Wgrib2WslPath"] ?? "/usr/local/bin/wgrib2");
+
     await host.RunAsync();
 }
 catch (Exception ex)
