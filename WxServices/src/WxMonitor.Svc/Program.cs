@@ -16,8 +16,9 @@ using WxServices.Common;
 using WxServices.Logging;
 
 var installRoot = WxPaths.ReadInstallRoot();
+var paths = new WxPaths(installRoot);
 
-Logger.Initialise();
+Logger.Initialise(paths.LogFile("wxmonitor-svc"));
 Logger.Info("WxMonitor.Svc starting.");
 
 var host = Host.CreateDefaultBuilder(args)

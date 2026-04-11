@@ -16,8 +16,9 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.FileProviders;
 
 var installRoot = WxPaths.ReadInstallRoot();
+var paths = new WxPaths(installRoot);
 
-Logger.Initialise();
+Logger.Initialise(paths.LogFile("wxreport-svc"));
 Logger.Info("WxReport.Svc starting.");
 
 var host = Host.CreateDefaultBuilder(args)

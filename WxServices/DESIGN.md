@@ -682,11 +682,13 @@ Override with `appsettings.local.json` if the plots directory is in a different 
 
 ### WxServices.Logging
 
-A thin static wrapper around log4net. All services and WxManager call `Logger.Initialise()` once at startup; thereafter `Logger.Info/Warn/Error/Fatal` are available everywhere. Caller file, method, and line number are captured automatically via `[CallerFilePath]` etc. `Logger.Initialise()` is wrapped in a try/catch in WxManager's `App.OnStartup` so a missing `log4net.config` degrades gracefully rather than crashing the application.
+A thin static wrapper around log4net. All services, WxManager, and WxViewer call `Logger.Initialise(logFilePath)` once at startup, passing the full log file path derived from `WxPaths`; thereafter `Logger.Info/Warn/Error/Fatal` are available everywhere. Caller file, method, and line number are captured automatically via `[CallerFilePath]` etc.
+
+A single `log4net.shared.config` in the solution root is shared by all components. It uses `%property{LogFile}` (a log4net `PatternString`) to resolve the log file path set by `Logger.Initialise` at runtime. This replaces the former per-service `log4net.config` files.
 
 Log format: `yyyy-MM-dd HH:mm:ss.fff LEVEL [File::Method:Line] message`
 
-All log4net configurations use the `%utcdate` conversion pattern so that timestamps are always UTC regardless of the system timezone. `LogScanner` parses these timestamps with `DateTimeStyles.AssumeUniversal`.
+All timestamps are UTC: the shared config uses `%utcdate`, and the Python logger uses `time.gmtime`. `LogScanner` parses these timestamps with `DateTimeStyles.AssumeUniversal`.
 
 ### WxServices.Common
 
@@ -1172,7 +1174,7 @@ SMTP settings come from the top-level `Smtp` block in `appsettings.shared.json` 
 # Deploy a single service
 .\Deploy-WxService.ps1 WxReportSvc
 
-# Deploy everything: all four Windows services, WxManager, WxViewer, and WxVis cache clear
+# Deploy everything: WxVis scripts, all four Windows services, WxManager, WxViewer
 .\Deploy-WxService.ps1 all
 
 # Publish the WxViewer desktop app to C:\HarderWare\WxViewer
@@ -1184,7 +1186,7 @@ SMTP settings come from the top-level `Smtp` block in `appsettings.shared.json` 
 
 Valid names: `WxParserSvc`, `WxReportSvc`, `WxMonitorSvc`, `WxVisSvc`, `WxViewer`, `WxManager`, `WxVis`, `all`.
 
-`all` deploys the four Windows services, then WxManager, WxViewer, and clears the WxVis Python cache.
+`all` copies WxVis Python scripts to `{InstallRoot}\WxVis\` first, then deploys the four Windows services, WxManager, and WxViewer.
 
 ### First-time install (run as Administrator)
 ```

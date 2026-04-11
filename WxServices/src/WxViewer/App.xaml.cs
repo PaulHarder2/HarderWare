@@ -2,6 +2,7 @@ using System.IO;
 using System.Text.Json;
 using System.Windows;
 using WxServices.Common;
+using WxServices.Logging;
 
 namespace WxViewer;
 
@@ -13,18 +14,39 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
-        var paths            = new WxPaths(ReadInstallRoot());
-        var outputDir        = paths.PlotsDir;
-        var connectionString = ReadConnectionString();
-        _viewModel = new MainViewModel(outputDir, connectionString, Dispatcher);
+        var paths = new WxPaths(ReadInstallRoot());
 
-        var window = new MainWindow(_viewModel);
-        MainWindow = window;
-        window.Show();
+        try
+        {
+            Logger.Initialise(paths.LogFile("wxviewer"));
+            Logger.Info("WxViewer starting.");
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Logger.Initialise failed: {ex.Message}");
+        }
+
+        try
+        {
+            var connectionString = ReadConnectionString();
+            _viewModel = new MainViewModel(paths.PlotsDir, connectionString, Dispatcher);
+
+            var window = new MainWindow(_viewModel);
+            MainWindow = window;
+            window.Show();
+        }
+        catch (Exception ex)
+        {
+            Logger.Error("Fatal error during startup.", ex);
+            MessageBox.Show($"WxViewer failed to start:\n{ex.Message}",
+                "WxViewer — Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            Shutdown(1);
+        }
     }
 
     protected override void OnExit(ExitEventArgs e)
     {
+        Logger.Info("WxViewer exiting.");
         _viewModel?.Dispose();
         base.OnExit(e);
     }

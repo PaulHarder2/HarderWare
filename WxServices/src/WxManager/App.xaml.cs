@@ -94,19 +94,23 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
-        try { Logger.Initialise(); }
+        var wxPaths = new WxPaths(WxPaths.ReadInstallRoot());
+        try
+        {
+            Logger.Initialise(wxPaths.LogFile("wxmanager"));
+            Logger.Info("WxManager starting.");
+        }
         catch (Exception ex)
         {
-            // Non-fatal: log4net.config missing or unreadable. App continues without logging.
-            System.Diagnostics.Debug.WriteLine($"Logger.Initialise failed: {ex.Message}");
+            MessageBox.Show($"Logger.Initialise failed:\n{ex}",
+                "WxManager — Logging Error", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
-        Logger.Info("WxManager starting.");
 
         var config = new ConfigurationBuilder()
             .SetBasePath(AppContext.BaseDirectory)
             .AddJsonFile("appsettings.shared.json", optional: false)
             .AddJsonFile("appsettings.json",         optional: true)
-            .AddJsonFile(new PhysicalFileProvider(WxPaths.ReadInstallRoot()), "appsettings.local.json", optional: true, reloadOnChange: false)
+            .AddJsonFile(new PhysicalFileProvider(wxPaths.InstallRoot), "appsettings.local.json", optional: true, reloadOnChange: false)
             .AddJsonFile("appsettings.local.json",   optional: true)
             .Build();
 

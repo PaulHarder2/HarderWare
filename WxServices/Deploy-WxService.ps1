@@ -6,7 +6,7 @@
 .PARAMETER ServiceName
     The service or application to deploy, or 'all' to deploy everything:
     the four Windows services (WxParserSvc, WxReportSvc, WxMonitorSvc, WxVisSvc),
-    then WxManager, WxViewer, and WxVis cache clear.
+    then WxManager, WxViewer, and WxVis Python scripts.
 
 .EXAMPLE
     .\Deploy-WxService.ps1 WxReportSvc
@@ -192,7 +192,7 @@ function Invoke-ManagerPublish {
     }
 
     # dotnet publish does not reliably copy Content files for WPF projects; copy explicitly.
-    foreach ($configFile in @('log4net.config', 'appsettings.local.json')) {
+    foreach ($configFile in @('appsettings.local.json')) {
         $src = "$projectPath\$configFile"
         if (Test-Path $src) {
             Copy-Item $src $outputDir
@@ -205,17 +205,36 @@ function Invoke-ManagerPublish {
 }
 
 # ---------------------------------------------------------------------------
-# Clear the WxVis Python bytecode cache so the next map render picks up
-# any script changes without redeploying WxVis.Svc.
+# Copy WxVis Python scripts to InstallRoot\WxVis and clear bytecode cache.
 # ---------------------------------------------------------------------------
-function Invoke-WxVisCacheClear {
-    $cacheDir = "$SolutionRoot\src\WxVis\__pycache__"
+function Invoke-WxVisPublish {
+    $sourceDir = "$SolutionRoot\src\WxVis"
+    $targetDir = "C:\HarderWare\WxVis"
+
+    if (-not (Test-Path $sourceDir)) {
+        Write-Error "WxVis source directory not found: $sourceDir"
+        return $false
+    }
+
+    # Create target directory if needed.
+    if (-not (Test-Path $targetDir)) {
+        New-Item -ItemType Directory -Path $targetDir | Out-Null
+    }
+
+    # Copy Python scripts and supporting files.
+    foreach ($pattern in @('*.py', 'requirements.txt')) {
+        Copy-Item "$sourceDir\$pattern" $targetDir -Force -ErrorAction SilentlyContinue
+    }
+    Write-Host "Copied WxVis Python scripts to $targetDir."
+
+    # Clear bytecode cache in target directory.
+    $cacheDir = "$targetDir\__pycache__"
     if (Test-Path $cacheDir) {
         Remove-Item $cacheDir -Recurse -Force
-        Write-Host "Cleared WxVis __pycache__." -ForegroundColor Green
-    } else {
-        Write-Host "WxVis __pycache__ not present — nothing to clear." -ForegroundColor Yellow
+        Write-Host "Cleared WxVis __pycache__."
     }
+
+    Write-Host "WxVis published to $targetDir." -ForegroundColor Green
     return $true
 }
 
@@ -257,11 +276,16 @@ if ($ServiceName -eq 'WxManager') {
 }
 
 if ($ServiceName -eq 'WxVis') {
-    $ok = Invoke-WxVisCacheClear
+    $ok = Invoke-WxVisPublish
     exit $(if ($ok) { 0 } else { 1 })
 }
 
 if ($ServiceName -eq 'all') {
+    # Copy Python scripts first so WxVisSvc finds them immediately after restart.
+    Write-Host ""
+    Write-Host "=== WxVis ===" -ForegroundColor Cyan
+    if (-not (Invoke-WxVisPublish)) { exit 1 }
+
     foreach ($target in $ServiceMap.Keys) {
         Write-Host ""
         Write-Host "=== $target ===" -ForegroundColor Cyan
@@ -279,10 +303,6 @@ if ($ServiceName -eq 'all') {
     Write-Host ""
     Write-Host "=== WxViewer ===" -ForegroundColor Cyan
     if (-not (Invoke-ViewerPublish)) { exit 1 }
-
-    Write-Host ""
-    Write-Host "=== WxVis ===" -ForegroundColor Cyan
-    Invoke-WxVisCacheClear | Out-Null
 
     Write-Host ""
     Write-Host "All services and applications deployed." -ForegroundColor Green

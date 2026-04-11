@@ -23,8 +23,9 @@ using WxServices.Logging;
 using WxVis.Svc;
 
 var installRoot = WxPaths.ReadInstallRoot();
+var paths = new WxPaths(installRoot);
 
-Logger.Initialise();
+Logger.Initialise(paths.LogFile("wxvis-svc"));
 Logger.Info("WxVis.Svc starting.");
 
 var host = Host.CreateDefaultBuilder(args)

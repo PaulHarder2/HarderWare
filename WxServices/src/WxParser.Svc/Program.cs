@@ -16,8 +16,9 @@ using Microsoft.Extensions.FileProviders;
 using OpenTelemetry.Metrics;
 
 var installRoot = WxPaths.ReadInstallRoot();
+var paths = new WxPaths(installRoot);
 
-Logger.Initialise();
+Logger.Initialise(paths.LogFile("wxparser-svc"));
 Logger.Info("WxParser.Svc starting.");
 
 var host = Host.CreateDefaultBuilder(args)

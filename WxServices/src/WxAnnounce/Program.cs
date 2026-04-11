@@ -20,7 +20,8 @@ using WxAnnounce;
 using WxServices.Common;
 using WxServices.Logging;
 
-Logger.Initialise();
+var wxPaths = new WxPaths(WxPaths.ReadInstallRoot());
+Logger.Initialise(wxPaths.LogFile("wxannounce"));
 
 bool testMode = args.Contains("-test", StringComparer.OrdinalIgnoreCase);
 Logger.Info(testMode ? "WxAnnounce starting (test mode — first recipient only)." : "WxAnnounce starting.");
@@ -31,7 +32,7 @@ var config = new ConfigurationBuilder()
     .SetBasePath(AppContext.BaseDirectory)
     .AddJsonFile("appsettings.shared.json", optional: false)
     .AddJsonFile("appsettings.json",        optional: true)
-    .AddJsonFile(new PhysicalFileProvider(WxPaths.ReadInstallRoot()), "appsettings.local.json", optional: true, reloadOnChange: false)
+    .AddJsonFile(new PhysicalFileProvider(wxPaths.InstallRoot), "appsettings.local.json", optional: true, reloadOnChange: false)
     .AddJsonFile("appsettings.local.json",  optional: true)
     .Build();
 

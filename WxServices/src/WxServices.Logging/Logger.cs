@@ -1,13 +1,12 @@
 using log4net;
 using log4net.Config;
 using System.Runtime.CompilerServices;
-using System.Xml.Linq;
 
 namespace WxServices.Logging;
 
 /// <summary>
 /// Static application logger backed by log4net.
-/// Call <see cref="Initialise"/> once at application startup before any
+/// Call <see cref="Initialise(string)"/> once at application startup before any
 /// logging calls are made.
 /// <para>
 /// All log methods accept an interpolated string and automatically capture
@@ -21,42 +20,65 @@ public static class Logger
     private static readonly ILog _log = LogManager.GetLogger("MetarParser");
 
     /// <summary>
-    /// Configures log4net by loading <c>log4net.config</c> from the same
-    /// directory as the running executable, and watches the file for changes
-    /// so the log level can be adjusted at runtime without restarting.
+    /// Configures log4net by loading <c>log4net.shared.config</c> from the same
+    /// directory as the running executable.  The log file path is set via a
+    /// log4net <c>GlobalContext</c> property before configuration, so the shared
+    /// config can use <c>%property{LogFile}</c> in its appender.
     /// </summary>
+    /// <param name="logFilePath">
+    /// Full path to the log file for this service (e.g.
+    /// <c>C:\HarderWare\Logs\wxparser-svc.log</c>).  The directory is created
+    /// if it does not exist.
+    /// </param>
     /// <sideeffects>
     /// Creates the log directory if it does not exist.
-    /// Initialises and starts watching <c>log4net.config</c> via <see cref="XmlConfigurator"/>.
+    /// Sets <c>log4net.GlobalContext.Properties["LogFile"]</c>.
+    /// Initialises and starts watching <c>log4net.shared.config</c> via <see cref="XmlConfigurator"/>.
     /// Writes a warning to <c>stderr</c> if the log directory cannot be created.
     /// </sideeffects>
-    public static void Initialise()
+    public static void Initialise(string logFilePath)
     {
-        var configPath = Path.Combine(AppContext.BaseDirectory, "log4net.config");
-
-        // Ensure the configured log directory exists before log4net tries to write to it.
-        var logFile = XDocument.Load(configPath)
-            .Descendants("file")
-            .FirstOrDefault()
-            ?.Attribute("value")
-            ?.Value;
-        if (!string.IsNullOrEmpty(logFile))
+        // Ensure the log directory exists.
+        var logDir = Path.GetDirectoryName(logFilePath);
+        if (!string.IsNullOrEmpty(logDir))
         {
-            var logDir = Path.GetDirectoryName(logFile);
-            if (!string.IsNullOrEmpty(logDir))
+            try
             {
-                try
-                {
-                    Directory.CreateDirectory(logDir); // no-op if it already exists
-                }
-                catch (Exception ex)
-                {
-                    Console.Error.WriteLine($"Warning: could not create log directory '{logDir}': {ex.Message}");
-                }
+                Directory.CreateDirectory(logDir);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"Warning: could not create log directory '{logDir}': {ex.Message}");
             }
         }
 
+        // Set the property BEFORE loading the config so PatternString can resolve it.
+        GlobalContext.Properties["LogFile"] = logFilePath;
+
+        var configPath = Path.Combine(AppContext.BaseDirectory, "log4net.shared.config");
         XmlConfigurator.ConfigureAndWatch(new FileInfo(configPath));
+    }
+
+    /// <summary>
+    /// Legacy overload for callers that do not yet supply a log file path.
+    /// Loads <c>log4net.shared.config</c> without setting a log file property;
+    /// the appender will use whatever default log4net assigns (typically the
+    /// working directory).
+    /// </summary>
+    [Obsolete("Pass a log file path via Initialise(string logFilePath).")]
+    public static void Initialise()
+    {
+        var configPath = Path.Combine(AppContext.BaseDirectory, "log4net.shared.config");
+        if (File.Exists(configPath))
+        {
+            XmlConfigurator.ConfigureAndWatch(new FileInfo(configPath));
+            return;
+        }
+
+        // Fallback: try the old per-service config name.
+        configPath = Path.Combine(AppContext.BaseDirectory, "log4net.config");
+        if (File.Exists(configPath))
+            XmlConfigurator.ConfigureAndWatch(new FileInfo(configPath));
     }
 
     /// <summary>Logs a DEBUG-level message.</summary>

@@ -20,6 +20,7 @@ import logging
 import logging.handlers
 import os
 import sys
+import time
 from pathlib import Path
 
 _LOG_DIR      = Path(os.environ.get("WXVIS_LOG_DIR", r"C:\HarderWare\Logs"))
@@ -37,7 +38,7 @@ def _configure() -> logging.Logger:
 
     log.setLevel(logging.DEBUG)
     formatter = logging.Formatter(fmt=_FMT, datefmt=_DATEFMT)
-    formatter.converter = logging.Formatter.converter  # keep default (local); Phase 2 switches to UTC
+    formatter.converter = time.gmtime  # UTC timestamps, matching C# %utcdate
 
     # ── File handler ──────────────────────────────────────────────────────────
     _LOG_DIR.mkdir(parents=True, exist_ok=True)

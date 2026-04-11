@@ -19,10 +19,9 @@
     <ProjectReference Include="..\WxServices.Logging\WxServices.Logging.csproj" />
   </ItemGroup>
   <ItemGroup>
-    <None Remove="log4net.config" />
-    <Content Include="log4net.config">
+    <Content Include="..\..\log4net.shared.config">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <Link>log4net.shared.config</Link>
     </Content>
   </ItemGroup>
   <ItemGroup>

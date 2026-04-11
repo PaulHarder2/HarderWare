@@ -14,6 +14,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\WxServices.Common\WxServices.Common.csproj" />
+    <ProjectReference Include="..\WxServices.Logging\WxServices.Logging.csproj" />
   </ItemGroup>
   <ItemGroup>
     <None Update="HarderWare.ico">
@@ -22,6 +23,10 @@
     <Content Include="..\..\appsettings.shared.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Link>appsettings.shared.json</Link>
+    </Content>
+    <Content Include="..\..\log4net.shared.config">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>log4net.shared.config</Link>
     </Content>
   </ItemGroup>
 </Project>
