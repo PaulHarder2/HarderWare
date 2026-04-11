@@ -15,5 +15,9 @@ __pycache__/
 *.pyc
 *.pyo
 
+# Build/release artifacts
+release/
+installer_output/
+
 # Scratch files
 test_reports.txt

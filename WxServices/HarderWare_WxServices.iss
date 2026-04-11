@@ -85,29 +85,34 @@ Filename: "{app}\WxManager\WxManager.exe"; Description: "Launch WxManager to con
 
 [UninstallRun]
 ; Stop and remove services on uninstall.
-Filename: "sc.exe"; Parameters: "stop WxParserSvc";   Flags: runhidden
-Filename: "sc.exe"; Parameters: "stop WxReportSvc";   Flags: runhidden
-Filename: "sc.exe"; Parameters: "stop WxMonitorSvc";  Flags: runhidden
-Filename: "sc.exe"; Parameters: "stop WxVisSvc";      Flags: runhidden
-Filename: "sc.exe"; Parameters: "delete WxParserSvc";  Flags: runhidden
-Filename: "sc.exe"; Parameters: "delete WxReportSvc";  Flags: runhidden
-Filename: "sc.exe"; Parameters: "delete WxMonitorSvc"; Flags: runhidden
-Filename: "sc.exe"; Parameters: "delete WxVisSvc";     Flags: runhidden
+Filename: "sc.exe"; Parameters: "stop WxParserSvc";    Flags: runhidden; RunOnceId: "StopParser"
+Filename: "sc.exe"; Parameters: "stop WxReportSvc";    Flags: runhidden; RunOnceId: "StopReport"
+Filename: "sc.exe"; Parameters: "stop WxMonitorSvc";   Flags: runhidden; RunOnceId: "StopMonitor"
+Filename: "sc.exe"; Parameters: "stop WxVisSvc";       Flags: runhidden; RunOnceId: "StopVis"
+Filename: "sc.exe"; Parameters: "delete WxParserSvc";  Flags: runhidden; RunOnceId: "DeleteParser"
+Filename: "sc.exe"; Parameters: "delete WxReportSvc";  Flags: runhidden; RunOnceId: "DeleteReport"
+Filename: "sc.exe"; Parameters: "delete WxMonitorSvc"; Flags: runhidden; RunOnceId: "DeleteMonitor"
+Filename: "sc.exe"; Parameters: "delete WxVisSvc";     Flags: runhidden; RunOnceId: "DeleteVis"
 
 [Code]
 // Update InstallRoot in appsettings.shared.json to match the chosen install directory.
 procedure UpdateInstallRoot();
 var
-  ConfigPath, Content, OldValue: string;
+  ConfigPath: string;
+  Content: AnsiString;
+  ContentStr, OldValue, NewValue: string;
 begin
   ConfigPath := ExpandConstant('{app}\appsettings.shared.json');
   if FileExists(ConfigPath) then
   begin
-    LoadStringFromFile(ConfigPath, Content);
-    // Replace the default InstallRoot with the actual install path.
-    OldValue := '"InstallRoot": "C:\\HarderWare"';
-    StringChangeEx(Content, OldValue, '"InstallRoot": "' + ExpandConstant('{app}') + '"', True);
-    SaveStringToFile(ConfigPath, Content, False);
+    if LoadStringFromFile(ConfigPath, Content) then
+    begin
+      ContentStr := String(Content);
+      OldValue := '"InstallRoot": "C:\\HarderWare"';
+      NewValue := '"InstallRoot": "' + ExpandConstant('{app}') + '"';
+      StringChangeEx(ContentStr, OldValue, NewValue, True);
+      SaveStringToFile(ConfigPath, AnsiString(ContentStr), False);
+    end;
   end;
 end;
 
