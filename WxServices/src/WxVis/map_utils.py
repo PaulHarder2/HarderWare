@@ -13,13 +13,58 @@ from scipy.ndimage import gaussian_filter, maximum_filter, minimum_filter
 from scipy.ndimage import label as _connected_components
 
 
-# ── Default map extents ───────────────────────────────────────────────────────
+# ── Named extent presets ──────────────────────────────────────────────────────
 
 #: CONUS with a small buffer.
 CONUS_EXTENT = (-126.0, -65.0, 22.0, 50.0)
 
 #: South-central US (Texas + surrounding states).
 SOUTH_CENTRAL_EXTENT = (-106.0, -88.0, 25.0, 38.0)
+
+EXTENT_PRESETS: dict[str, tuple[float, float, float, float]] = {
+    "conus":         CONUS_EXTENT,
+    "south_central": SOUTH_CENTRAL_EXTENT,
+}
+
+
+def parse_extent(value: str | None) -> tuple[float, float, float, float] | None:
+    """
+    Parse an extent string into a (W, E, S, N) tuple.
+
+    Accepts either a named preset (e.g. ``"south_central"``) or four
+    comma-separated numbers (e.g. ``"-106,-88,25,38"``).  Returns ``None``
+    if *value* is ``None`` or empty (meaning auto-fit).
+    """
+    if not value:
+        return None
+    if value in EXTENT_PRESETS:
+        return EXTENT_PRESETS[value]
+    parts = [float(x) for x in value.split(",")]
+    if len(parts) != 4:
+        raise ValueError(f"Extent must be 4 comma-separated numbers (W,E,S,N), got: {value}")
+    return (parts[0], parts[1], parts[2], parts[3])
+
+
+def choose_projection(extent: tuple[float, float, float, float]) -> ccrs.Projection:
+    """
+    Select a Cartopy map projection suitable for the given extent.
+
+    - Tropics (|centre latitude| < 25°): Mercator
+    - Mid-latitudes (25° ≤ |centre latitude| < 70°): Lambert Conformal
+    - Polar (|centre latitude| ≥ 70°): North/South Polar Stereographic
+
+    The projection is centred on the extent's midpoint.
+    """
+    clon = (extent[0] + extent[1]) / 2
+    clat = (extent[2] + extent[3]) / 2
+    abs_clat = abs(clat)
+
+    if abs_clat < 25:
+        return ccrs.Mercator(central_longitude=clon)
+    elif abs_clat < 70:
+        return ccrs.LambertConformal(central_longitude=clon, central_latitude=clat)
+    else:
+        return ccrs.Stereographic(central_longitude=clon, central_latitude=90.0 if clat > 0 else -90.0)
 
 
 # ── Projection helpers ────────────────────────────────────────────────────────

@@ -63,11 +63,12 @@ public sealed class AnalysisMapWorker : BackgroundService
             {
                 Logger.Info($"AnalysisMapWorker: rendering synoptic analysis map for {nowUtc:yyyy-MM-dd HH}Z.");
 
+                var extentArg = string.IsNullOrEmpty(cfg.MapExtent) ? "" : $"--extent {cfg.MapExtent}";
                 var ok = await MapRenderer.RunAsync(
                     cfg.CondaPythonExe,
                     cfg.ScriptDir,
                     "synoptic_map.py",
-                    cfg.SynopticMapArgs,
+                    extentArg,
                     stoppingToken,
                     _pythonEnv);
 

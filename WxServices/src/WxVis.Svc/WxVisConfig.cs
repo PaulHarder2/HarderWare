@@ -14,8 +14,12 @@ public class WxVisConfig
     /// <summary>Minutes past the UTC hour at which the synoptic analysis map is generated.</summary>
     public int AnalysisMapMinutePastHour { get; set; } = 10;
 
-    /// <summary>Arguments passed to synoptic_map.py for automatic renders (e.g. "--extent south_central").</summary>
-    public string SynopticMapArgs { get; set; } = "--extent south_central";
+    /// <summary>
+    /// Map extent for rendered maps.  Can be a preset name (e.g. <c>"south_central"</c>,
+    /// <c>"conus"</c>) or explicit W,E,S,N coordinates (e.g. <c>"-106,-88,25,38"</c>).
+    /// When empty or null, maps auto-fit to the available data.
+    /// </summary>
+    public string MapExtent { get; set; } = "";
 
     /// <summary>How often the forecast map worker polls the database for new forecast hours (seconds).</summary>
     public int ForecastPollIntervalSeconds { get; set; } = 30;

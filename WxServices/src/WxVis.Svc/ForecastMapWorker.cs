@@ -133,7 +133,7 @@ public sealed class ForecastMapWorker : BackgroundService
             Logger.Info($"ForecastMapWorker: rendering f{fh:D3}...");
             var ok = await MapRenderer.RunAsync(
                 cfg.CondaPythonExe, cfg.ScriptDir,
-                "forecast_map.py", $"--fh {fh} --run {latestRun:yyyyMMdd_HH} --extent south_central",
+                "forecast_map.py", $"--fh {fh} --run {latestRun:yyyyMMdd_HH}{(string.IsNullOrEmpty(cfg.MapExtent) ? "" : $" --extent {cfg.MapExtent}")}",
                 ct,
                 _pythonEnv);
 

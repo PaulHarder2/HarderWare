@@ -518,7 +518,7 @@ All workers check for existing current output files before invoking Python; alre
 | `meteogram.py` | Point-forecast meteogram (two PNGs per location) | GfsGrid nearest grid point; bilinear interpolation to recipient lat/lon | `meteogram_{yyyyMMdd_HH}_{ICAO}_{tzSafe}_abbrev.png`, `meteogram_{yyyyMMdd_HH}_{ICAO}_{tzSafe}_full.png` |
 
 **Rendering details:**
-- All maps use a Lambert Conformal projection centred on the data extent.
+- Map projection is selected automatically by `choose_projection()` based on the centre latitude of the extent: Mercator for tropics (|lat| < 25°), Lambert Conformal for mid-latitudes (25–70°), Stereographic for polar regions (≥ 70°).
 - Map limits are computed by dense boundary sampling (`_inner_proj_limits`, 200 points per edge) so the plotted area fills to the border with no empty corners from projection curvature.
 - Isobars: black solid, 4 hPa interval, labelled.
 - Temperature isopleths: red dashed, 3°C interval, labelled.
@@ -529,7 +529,7 @@ All workers check for existing current output files before invoking Python; alre
 - Station models (synoptic_map): MetPy StationPlot; stations thinned with `reduce_point_density` (default 75 km). Fields plotted: NW = air temperature (dark red), SW = dew point (dark green), NE = encoded SLP (3-digit), centre = wind barb + sky-cover symbol + present-weather symbol, SE = station ICAO ID (navy).
 - Station models (forecast_map): MetPy StationPlot at METAR station locations, displaying interpolated GFS values. Fields plotted: NW = air temperature (dark red), SW = dew point (dark green), NE = encoded SLP (3-digit), centre = wind barb + sky-cover symbol, SE = station ICAO ID (navy).
 - Contours (synoptic_map): Barnes-interpolated grid converted from projection metres to lat/lon before plotting so Cartopy clips to the inner viewport, matching forecast_map white-space border behaviour.
-- Both maps use the same fixed `SOUTH_CENTRAL_EXTENT = (-106, -88, 25, 38)` so the displayed geography is identical. `forecast_map.py` accepts `--extent south_central`; WxVis.Svc passes this flag so it doesn't fall back to auto-detecting bounds from the (larger) GFS data footprint.
+- Map extent is configured via `WxVis:MapExtent` in `appsettings.shared.json`. Accepts a preset name (`south_central`, `conus`) or explicit W,E,S,N coordinates (e.g. `"-106,-88,25,38"`). When empty, maps auto-fit to the available data.
 - Extrema labels (H/L/W/K): before placing a label, its lat/lon position is converted to projection metres and compared against `ax.get_xlim()`/`ax.get_ylim()` with a 3 % inward margin on all edges; labels outside or too close to the boundary are silently skipped. The margin guards against `plt.tight_layout()`, which adjusts subplot padding after labels are placed and can shift the effective axes boundary enough to push a borderline anchor outside the saved image. `ax.set_xlim`/`ax.set_ylim` are also re-applied after `tight_layout()` for the same reason.
 
 **Meteogram (`meteogram.py`):**
@@ -549,8 +549,8 @@ All workers check for existing current output files before invoking Python; alre
 conda activate wxvis
 cd C:\Users\PaulH\...\WxServices\src\WxVis
 
-python synoptic_map.py [--extent conus|south_central] [--density 75]
-python forecast_map.py --run 20260402_18 --fh 84 [--extent south_central]
+python synoptic_map.py [--extent south_central] [--density 75]
+python forecast_map.py --run 20260402_18 --fh 84 [--extent -106,-88,25,38]
 python meteogram.py --run 20260404_00 --lat 29.97 --lon -95.34 --icao KDWH \
     --locality "Spring" --temp-unit F --tz "America/Chicago" \
     --out-abbrev C:\HarderWare\plots\meteogram_20260404_00_KDWH_America-Chicago_abbrev.png \

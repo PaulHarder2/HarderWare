@@ -28,7 +28,7 @@ from metpy.calc import reduce_point_density
 from metpy.interpolate import interpolate_to_grid
 
 from logger import logger
-from map_utils import _inner_proj_limits, _mark_extrema, _smooth_with_nans, CONUS_EXTENT, SOUTH_CENTRAL_EXTENT
+from map_utils import _inner_proj_limits, _mark_extrema, _smooth_with_nans, parse_extent, choose_projection
 
 
 # ── METAR data preparation ───────────────────────────────────────────────────
@@ -385,10 +385,7 @@ def render_synoptic_map(
         logger.warning("No stations within the map extent — nothing to render.")
         return
 
-    proj = ccrs.LambertConformal(
-        central_longitude=(extent[0] + extent[1]) / 2,
-        central_latitude=(extent[2] + extent[3]) / 2,
-    )
+    proj = choose_projection(extent)
 
     # ── Figure setup ─────────────────────────────────────────────────────────
     fig = plt.figure(figsize=(11, 11))
@@ -482,8 +479,8 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Render a synoptic analysis map.")
     parser.add_argument(
-        "--extent", choices=["conus", "south_central"], default=None,
-        help="Map extent preset (default: auto-fit to station data)",
+        "--extent", default=None,
+        help="Map extent: preset name (conus, south_central) or W,E,S,N coordinates (default: auto-fit to station data)",
     )
     parser.add_argument(
         "--density", type=float, default=75.0,
@@ -491,10 +488,7 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    extent_map = {
-        "conus":         CONUS_EXTENT,
-        "south_central": SOUTH_CENTRAL_EXTENT,
-    }
+    extent = parse_extent(args.extent)
 
     engine = get_engine()
     df = load_latest_metars(engine)
@@ -508,6 +502,6 @@ if __name__ == "__main__":
     render_synoptic_map(
         df,
         output_path=str(out_dir / f"synoptic_{label}_{ts}.png"),
-        extent=extent_map.get(args.extent),
+        extent=extent,
         point_density_km=args.density,
     )

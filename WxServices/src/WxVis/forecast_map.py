@@ -31,7 +31,7 @@ from metpy.plots import StationPlot
 from metpy.plots.wx_symbols import sky_cover
 
 from logger import logger
-from map_utils import _inner_proj_limits, _mark_extrema, _smooth_with_nans, CONUS_EXTENT, SOUTH_CENTRAL_EXTENT
+from map_utils import _inner_proj_limits, _mark_extrema, _smooth_with_nans, parse_extent, choose_projection
 
 
 # ── Grid helpers ──────────────────────────────────────────────────────────────
@@ -133,10 +133,7 @@ def render_forecast_map(
             float(df["Lat"].max()) + margin_deg,
         )
 
-    proj = ccrs.LambertConformal(
-        central_longitude=(extent[0] + extent[1]) / 2,
-        central_latitude=(extent[2] + extent[3]) / 2,
-    )
+    proj = choose_projection(extent)
 
     # ── Build 2D grids ────────────────────────────────────────────────────────
     lons, lats, tmp_raw = _to_grid(df, "TmpC")
@@ -376,14 +373,12 @@ if __name__ == "__main__":
         help="GFS model run timestamp in YYYYMMDD_HH format (e.g. 20260402_18)",
     )
     parser.add_argument(
-        "--extent", choices=["south_central"], default=None,
-        help="Fixed map extent preset (default: auto-fit to GFS data bounds)",
+        "--extent", default=None,
+        help="Map extent: preset name (conus, south_central) or W,E,S,N coordinates (default: auto-fit to GFS data bounds)",
     )
     args = parser.parse_args()
 
-    extent_map = {
-        "south_central": SOUTH_CENTRAL_EXTENT,
-    }
+    extent = parse_extent(args.extent)
 
     from datetime import datetime
     model_run = datetime.strptime(args.run, "%Y%m%d_%H")
@@ -403,6 +398,6 @@ if __name__ == "__main__":
         render_forecast_map(
             df,
             str(out_dir / f"forecast_{args.run}_f{args.fh:03d}.png"),
-            extent=extent_map.get(args.extent),
+            extent=extent,
             station_locs=station_locs,
         )
