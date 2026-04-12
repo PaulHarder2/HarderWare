@@ -1065,8 +1065,18 @@ The database schema is managed by `DatabaseSetup.EnsureSchemaAsync()` in `MetarP
 ### Startup order
 Start `WxParserSvc` first and allow at least one fetch cycle to complete before starting `WxReportSvc`, so METAR data is available for station resolution. GFS data will begin accumulating on the first 60-minute GFS cycle; full temperature forecasts appear in reports once the first complete model run is ingested (up to ~4 hours after the run's nominal time).
 
+### Versioning
+
+All assemblies share a single version defined in `Directory.Build.props` (`<Version>`). To bump the version, edit that one element — everything else picks it up automatically. `WxPaths.ProductVersion` reads it at runtime. `WxPaths.GitCommit` reads the short git commit hash embedded at build time via a custom `AssemblyMetadataAttribute`.
+
+Where the version appears:
+- **WxManager / WxViewer title bars** — via a `Run` element in the custom WindowChrome title bar
+- **Email report footer** — `· WxServices 1.0.0` appended to the station/GFS line
+- **All six program log files** — `WxReport.Svc 1.0.0 (commit abc1234) starting.`
+- **Windows Apps list** — from the Inno Setup `AppVersion` (passed via `/DAppVer=` at compile time)
+
 ### Log files
-All logs are written to `{InstallRoot}\Logs\` (default `C:\HarderWare\Logs\`). Log files: `wxparser-svc.log`, `wxreport-svc.log`, `wxmonitor-svc.log`, `wxvis-svc.log`, `wxmanager.log`, `wxvis.log` (Python). All paths are derived from the `InstallRoot` setting in `appsettings.shared.json` via the `WxPaths` class.
+All logs are written to `{InstallRoot}\Logs\` (default `C:\HarderWare\Logs\`). Log files: `wxparser-svc.log`, `wxreport-svc.log`, `wxmonitor-svc.log`, `wxvis-svc.log`, `wxmanager.log`, `wxviewer.log`, `wxvis.log` (Python). All paths are derived from the `InstallRoot` setting in `appsettings.shared.json` via the `WxPaths` class.
 
 ### Changing a recipient's location
 1. In the `Recipients` database table, update `Address` and set `Latitude`, `Longitude`, `MetarIcao`, and `TafIcao` to `NULL` (or use WxManager → Recipients tab to edit the recipient).
