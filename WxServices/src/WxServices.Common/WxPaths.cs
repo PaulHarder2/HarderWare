@@ -49,6 +49,21 @@ public sealed class WxPaths
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
             .InformationalVersion ?? Assembly.GetEntryAssembly()?.GetName().Version?.ToString(3) ?? "0.0.0";
 
+    /// <summary>
+    /// Returns the short git commit hash embedded at build time, or "unknown" if unavailable.
+    /// </summary>
+    public static string GitCommit
+    {
+        get
+        {
+            var full = Assembly.GetEntryAssembly()?
+                .GetCustomAttributes<AssemblyMetadataAttribute>()
+                .FirstOrDefault(a => a.Key == "GitCommit")?.Value;
+            if (string.IsNullOrWhiteSpace(full)) return "unknown";
+            return full.Length > 7 ? full[..7] : full;
+        }
+    }
+
     /// <summary>Root directory for the entire WxServices installation.</summary>
     public string InstallRoot { get; }
 

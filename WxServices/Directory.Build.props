@@ -12,5 +12,14 @@
   <!-- Single version for the entire WxServices system. -->
   <PropertyGroup>
     <Version>1.0.0</Version>
+    <InformationalVersion>$(Version)</InformationalVersion>
   </PropertyGroup>
+
+  <!-- Embed the git commit hash as a separate assembly metadata attribute. -->
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>GitCommit</_Parameter1>
+      <_Parameter2>$(SourceRevisionId)</_Parameter2>
+    </AssemblyAttribute>
+  </ItemGroup>
 </Project>

@@ -26,7 +26,7 @@ var installRoot = WxPaths.ReadInstallRoot();
 var paths = new WxPaths(installRoot);
 
 Logger.Initialise(paths.LogFile("wxvis-svc"));
-Logger.Info($"WxVis.Svc {WxPaths.ProductVersion} starting.");
+Logger.Info($"WxVis.Svc {WxPaths.ProductVersion} (commit {WxPaths.GitCommit}) starting.");
 
 var host = Host.CreateDefaultBuilder(args)
     .UseWindowsService(options =>

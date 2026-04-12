@@ -19,7 +19,7 @@ var installRoot = WxPaths.ReadInstallRoot();
 var paths = new WxPaths(installRoot);
 
 Logger.Initialise(paths.LogFile("wxmonitor-svc"));
-Logger.Info($"WxMonitor.Svc {WxPaths.ProductVersion} starting.");
+Logger.Info($"WxMonitor.Svc {WxPaths.ProductVersion} (commit {WxPaths.GitCommit}) starting.");
 
 var host = Host.CreateDefaultBuilder(args)
     .UseWindowsService(options =>
