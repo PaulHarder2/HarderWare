@@ -157,8 +157,9 @@ public sealed class MeteogramWorker : BackgroundService
 
             // Sanitize timezone for use in filenames: "America/Chicago" → "America-Chicago"
             var tzSafe      = loc.Timezone.Replace('/', '-');
-            var fileAbbrev  = $"meteogram_{runTag}_{loc.Icao}_{tzSafe}_abbrev.png";
-            var fileFull    = $"meteogram_{runTag}_{loc.Icao}_{tzSafe}_full.png";
+            var unitTag     = loc.TempUnit.Equals("C", StringComparison.OrdinalIgnoreCase) ? "C" : "F";
+            var fileAbbrev  = $"meteogram_{runTag}_{loc.Icao}_{tzSafe}_{unitTag}_abbrev.png";
+            var fileFull    = $"meteogram_{runTag}_{loc.Icao}_{tzSafe}_{unitTag}_full.png";
             var pathAbbrev  = Path.Combine(cfg.OutputDir, fileAbbrev);
             var pathFull    = Path.Combine(cfg.OutputDir, fileFull);
 

@@ -151,11 +151,11 @@ public sealed class ReportWorker : BackgroundService
 
         if (snapshot is null)
         {
-            Logger.Warn($"No METAR data for startup report ({recipient.MetarIcao}) — skipping.");
+            Logger.Warn($"{recipient.Id} {recipient.Email} ({recipient.Name}): no METAR data for startup report ({recipient.MetarIcao}) — skipping.");
             return;
         }
 
-        Logger.Info($"Sending startup report to {recipient.Email}.");
+        Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): sending startup report.");
 
         var language       = recipient.Language ?? cfg.DefaultLanguage;
         var scheduledHours = ParseHourList(recipient.ScheduledSendHours ?? cfg.DefaultScheduledSendHours);
@@ -171,7 +171,7 @@ public sealed class ReportWorker : BackgroundService
 
         if (report is null)
         {
-            Logger.Error($"Claude returned no report for startup send to {recipient.Email}.");
+            Logger.Error($"{recipient.Id} {recipient.Email} ({recipient.Name}): Claude returned no report for startup send.");
             return;
         }
 
@@ -179,7 +179,7 @@ public sealed class ReportWorker : BackgroundService
         var plainFallback = SnapshotDescriber.Describe(snapshot, tz, recipient.Units);
 
         var plotsDir = new WxPaths(_config["InstallRoot"]).PlotsDir;
-        var meteogramPath = FindMeteogramAbbrevPath(preferredIcaos.Count > 0 ? preferredIcaos[0] : "", recipient.Timezone, plotsDir);
+        var meteogramPath = FindMeteogramAbbrevPath(preferredIcaos.Count > 0 ? preferredIcaos[0] : "", recipient.Units.Temperature, recipient.Timezone, plotsDir);
         report = meteogramPath is not null
             ? InsertMeteogramImage(report)
             : report.Replace("<!--meteogram-->", "", StringComparison.Ordinal);
@@ -195,7 +195,7 @@ public sealed class ReportWorker : BackgroundService
 
         if (!sent) return;
 
-        Logger.Info($"Startup report sent to {recipient.Email}.");
+        Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): startup report sent.");
 
         // Update state so the MinGap check prevents an immediate duplicate
         // from the first normal cycle.
@@ -273,7 +273,7 @@ public sealed class ReportWorker : BackgroundService
             if (string.IsNullOrWhiteSpace(recipient.Email)) continue;
             if (string.IsNullOrWhiteSpace(recipient.Id))
             {
-                Logger.Warn($"{recipient.Email}: no Id configured — skipping. Add a unique Id via WxManager → Recipients.");
+                Logger.Warn($"{recipient.Email} ({recipient.Name}): no Id configured — skipping. Add a unique Id via WxManager → Recipients.");
                 continue;
             }
             if (duplicateIds.Contains(recipient.Id)) continue;
@@ -301,18 +301,21 @@ public sealed class ReportWorker : BackgroundService
 
             if (snapshot is null)
             {
-                Logger.Warn($"No METAR data for {recipient.Email} ({recipient.MetarIcao}) — skipping.");
+                Logger.Warn($"{recipient.Id} {recipient.Email} ({recipient.Name}): no METAR data ({recipient.MetarIcao}) — skipping.");
                 continue;
             }
 
             if (preferredIcaos.Count > 0 && !preferredIcaos.Contains(snapshot.StationIcao))
-                Logger.Warn($"{recipient.Email}: preferred station(s) [{string.Join(", ", preferredIcaos)}] had no data — fell back to {snapshot.StationIcao}.");
+                Logger.Warn($"{recipient.Id} {recipient.Email} ({recipient.Name}): preferred station(s) [{string.Join(", ", preferredIcaos)}] had no data — fell back to {snapshot.StationIcao}.");
 
+            var useC = recipient.Units.Temperature.Equals("C", StringComparison.OrdinalIgnoreCase);
             if (snapshot.GfsForecast is { } gfs)
-                Logger.Info($"{recipient.Email} ({recipient.Name}): GFS run {gfs.ModelRunUtc:yyyy-MM-dd HH}Z — {gfs.Days.Count} day(s); " +
-                    string.Join(", ", gfs.Days.Select(d => $"{d.Date:MM/dd} {d.HighTempF:F0}°/{d.LowTempF:F0}°F")));
+                Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): GFS run {gfs.ModelRunUtc:yyyy-MM-dd HH}Z — {gfs.Days.Count} day(s); " +
+                    string.Join(", ", gfs.Days.Select(d => useC
+                        ? $"{d.Date:MM/dd} {d.HighTempC:F0}°/{d.LowTempC:F0}°C"
+                        : $"{d.Date:MM/dd} {d.HighTempF:F0}°/{d.LowTempF:F0}°F")));
             else
-                Logger.Warn($"{recipient.Email} ({recipient.Name}): no GFS forecast available.");
+                Logger.Warn($"{recipient.Id} {recipient.Email} ({recipient.Name}): no GFS forecast available.");
 
             var fingerprint      = SnapshotFingerprint.Compute(snapshot, cfg.SignificantChange);
             var (shouldSend, reason, severity) = ShouldSend(recipient, state, fingerprint, cfg, now);
@@ -321,12 +324,12 @@ public sealed class ReportWorker : BackgroundService
             {
                 var changeDesc = SnapshotFingerprint.DescribeChanges(
                     state.LastSnapshotFingerprint, fingerprint, snapshot, cfg.SignificantChange);
-                Logger.Info($"{recipient.Email}: unscheduled send triggered — {changeDesc}");
+                Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): unscheduled send triggered — {changeDesc}");
             }
 
             if (!shouldSend) continue;
 
-            Logger.Info($"Generating {reason} report for {recipient.Email}.");
+            Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): generating {reason} report.");
 
             // Detect station switch: if the METAR source changed from what was used in
             // the last report, pass the previous ICAO to Claude so it can note the change.
@@ -335,7 +338,7 @@ public sealed class ReportWorker : BackgroundService
                     ? state.LastMetarIcao
                     : null;
             if (previousMetarIcao is not null)
-                Logger.Info($"{recipient.Email}: METAR station changed {previousMetarIcao} → {snapshot.StationIcao} — noting in report.");
+                Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): METAR station changed {previousMetarIcao} → {snapshot.StationIcao} — noting in report.");
 
             var language       = recipient.Language ?? cfg.DefaultLanguage;
             var scheduledHours = ParseHourList(recipient.ScheduledSendHours ?? cfg.DefaultScheduledSendHours);
@@ -352,7 +355,7 @@ public sealed class ReportWorker : BackgroundService
 
             if (report is null)
             {
-                Logger.Error($"Claude returned no report for {recipient.Email} — skipping send.");
+                Logger.Error($"{recipient.Id} {recipient.Email} ({recipient.Name}): Claude returned no report — skipping send.");
                 continue;
             }
 
@@ -360,7 +363,7 @@ public sealed class ReportWorker : BackgroundService
             var plainFallback = SnapshotDescriber.Describe(snapshot, tz, recipient.Units);
 
             var plotsDir2     = new WxPaths(_config["InstallRoot"]).PlotsDir;
-            var meteogramPath = FindMeteogramAbbrevPath(preferredIcaos.Count > 0 ? preferredIcaos[0] : "", recipient.Timezone, plotsDir2);
+            var meteogramPath = FindMeteogramAbbrevPath(preferredIcaos.Count > 0 ? preferredIcaos[0] : "", recipient.Units.Temperature, recipient.Timezone, plotsDir2);
             report = meteogramPath is not null
                 ? InsertMeteogramImage(report)
                 : report.Replace("<!--meteogram-->", "", StringComparison.Ordinal);
@@ -375,7 +378,7 @@ public sealed class ReportWorker : BackgroundService
 
             if (!sent) continue;
 
-            Logger.Info($"Report sent to {recipient.Email}.");
+            Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): report sent.");
 
             if (reason is "scheduled" or "first")
                 state.LastScheduledSentUtc   = now;
@@ -392,7 +395,7 @@ public sealed class ReportWorker : BackgroundService
             }
             catch (Exception ex)
             {
-                Logger.Error($"Failed to save recipient state for {recipient.Email}.", ex);
+                Logger.Error($"{recipient.Id} {recipient.Email} ({recipient.Name}): failed to save recipient state.", ex);
             }
         }
 
@@ -661,15 +664,16 @@ public sealed class ReportWorker : BackgroundService
 
     /// <summary>
     /// Searches the most recent meteogram manifest in <paramref name="plotsDir"/>
-    /// for the 24-hour PNG file matching the given <paramref name="icao"/> and
-    /// <paramref name="timezone"/>.
+    /// for the 24-hour PNG file matching the given <paramref name="icao"/>,
+    /// <paramref name="tempUnit"/>, and <paramref name="timezone"/>.
     /// Returns the full path to the PNG if found and the file exists; otherwise
     /// <see langword="null"/>.
     /// </summary>
     /// <param name="icao">ICAO station identifier to look up in the manifest.</param>
+    /// <param name="tempUnit">Temperature unit (<c>"F"</c> or <c>"C"</c>) to match.</param>
     /// <param name="timezone">IANA timezone name to match (e.g. <c>"America/Chicago"</c>).</param>
     /// <param name="plotsDir">Directory where WxVis.Svc writes PNGs and manifest files.</param>
-    private static string? FindMeteogramAbbrevPath(string icao, string timezone, string plotsDir)
+    private static string? FindMeteogramAbbrevPath(string icao, string tempUnit, string timezone, string plotsDir)
     {
         if (string.IsNullOrWhiteSpace(icao) || !Directory.Exists(plotsDir))
             return null;
@@ -685,11 +689,13 @@ public sealed class ReportWorker : BackgroundService
                 using var doc = JsonDocument.Parse(File.ReadAllText(manifestPath));
                 foreach (var entry in doc.RootElement.EnumerateArray())
                 {
-                    if (!entry.TryGetProperty("Icao",     out var icaoProp))  continue;
-                    if (!entry.TryGetProperty("Timezone", out var tzProp))    continue;
+                    if (!entry.TryGetProperty("Icao",       out var icaoProp))      continue;
+                    if (!entry.TryGetProperty("TempUnit",   out var tuProp))        continue;
+                    if (!entry.TryGetProperty("Timezone",   out var tzProp))        continue;
                     if (!entry.TryGetProperty("FileAbbrev", out var fileAbbrevProp)) continue;
 
                     if (!string.Equals(icaoProp.GetString(), icao, StringComparison.OrdinalIgnoreCase)) continue;
+                    if (!string.Equals(tuProp.GetString(),   tempUnit, StringComparison.OrdinalIgnoreCase)) continue;
                     if (!string.Equals(tzProp.GetString(),   timezone, StringComparison.Ordinal))       continue;
 
                     var file = fileAbbrevProp.GetString();

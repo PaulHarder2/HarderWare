@@ -486,7 +486,7 @@ The config is never updated when a fallback station is used; a warning is logged
 |---|---|---|
 | `AnalysisMapWorker` | After each METAR fetch cycle | `synoptic_{label}_{yyyyMMdd_HH}.png` |
 | `ForecastMapWorker` | Progressively, as each forecast hour's data arrives for the latest model run | `forecast_{yyyyMMdd_HH}_f{NNN}.png` |
-| `MeteogramWorker` | Once per complete GFS model run; one pair per unique (ICAO, TempUnit, Timezone) in Recipients | `meteogram_{yyyyMMdd_HH}_{ICAO}_{tzSafe}_abbrev.png`, `meteogram_{yyyyMMdd_HH}_{ICAO}_{tzSafe}_full.png`; manifest: `meteogram_manifest_{yyyyMMdd_HH}.json` |
+| `MeteogramWorker` | Once per complete GFS model run; one pair per unique (ICAO, TempUnit, Timezone) in Recipients | `meteogram_{yyyyMMdd_HH}_{ICAO}_{tzSafe}_{F\|C}_abbrev.png`, `meteogram_{yyyyMMdd_HH}_{ICAO}_{tzSafe}_{F\|C}_full.png`; manifest: `meteogram_manifest_{yyyyMMdd_HH}.json` |
 
 All workers check for existing current output files before invoking Python; already-current files are skipped.
 
@@ -519,7 +519,7 @@ All workers check for existing current output files before invoking Python; alre
 |---|---|---|---|
 | `synoptic_map.py` | Synoptic analysis map (Barnes interpolation) | Latest METAR + WxStations | `synoptic_{label}_{yyyyMMdd_HH}.png` |
 | `forecast_map.py` | GFS forecast parameter map | GfsGrid for a specific model run and forecast hour | `forecast_{yyyyMMdd_HH}_f{NNN}.png` |
-| `meteogram.py` | Point-forecast meteogram (two PNGs per location) | GfsGrid nearest grid point; bilinear interpolation to recipient lat/lon | `meteogram_{yyyyMMdd_HH}_{ICAO}_{tzSafe}_abbrev.png`, `meteogram_{yyyyMMdd_HH}_{ICAO}_{tzSafe}_full.png` |
+| `meteogram.py` | Point-forecast meteogram (two PNGs per location) | GfsGrid nearest grid point; bilinear interpolation to recipient lat/lon | `meteogram_{yyyyMMdd_HH}_{ICAO}_{tzSafe}_{F\|C}_abbrev.png`, `meteogram_{yyyyMMdd_HH}_{ICAO}_{tzSafe}_{F\|C}_full.png` |
 
 **Rendering details:**
 - Map projection is selected automatically by `choose_projection()` based on the centre latitude of the extent: Mercator for tropics (|lat| < 25°), Lambert Conformal for mid-latitudes (25–70°), Stereographic for polar regions (≥ 70°).
@@ -557,8 +557,8 @@ python synoptic_map.py [--extent south_central] [--density 75]
 python forecast_map.py --run 20260402_18 --fh 84 [--extent -106,-88,25,38]
 python meteogram.py --run 20260404_00 --lat 29.97 --lon -95.34 --icao KDWH \
     --locality "Spring" --temp-unit F --tz "America/Chicago" \
-    --out-abbrev C:\HarderWare\plots\meteogram_20260404_00_KDWH_America-Chicago_abbrev.png \
-    --out-full C:\HarderWare\plots\meteogram_20260404_00_KDWH_America-Chicago_full.png
+    --out-abbrev C:\HarderWare\plots\meteogram_20260404_00_KDWH_America-Chicago_F_abbrev.png \
+    --out-full C:\HarderWare\plots\meteogram_20260404_00_KDWH_America-Chicago_F_full.png
 # Chart title: "Spring (°F)"  — locality name and unit only; no ICAO prefix
 ```
 
@@ -616,7 +616,7 @@ Each pane has its own toolbar docked to the top of the pane, immediately above t
 
 **Meteograms tab** — shows full-period meteograms for a selected GFS run:
 - Run selector ComboBox (newest first).
-- Recipient selector ComboBox (next to the Run selector) — lists all recipients from the database as `"recipientId — Name (Language)"`. Selecting a recipient scrolls to their meteogram and briefly highlights it with a coloured background (clears after 2 seconds). If no meteogram exists for the recipient in the current run a modal dialog is shown. Matching uses `(FirstIcao, TempUnit, Timezone)` — the same grouping key used by `MeteogramWorker`.
+- Recipient selector ComboBox (next to the Run selector) — lists all recipients from the database as `"recipientId — Name (Language)"`. Selecting a recipient scrolls to their meteogram and briefly highlights it with a coloured background (clears after 2 seconds). If no meteogram exists for the recipient in the current run a modal dialog is shown. Matching uses `(FirstIcao, TempUnit, Timezone)` — the same grouping key used by `MeteogramWorker`. `FindMeteogramAbbrevPath` also filters by `TempUnit` so each recipient gets the meteogram rendered in their configured temperature unit.
 - Vertically scrollable list of locations sorted by ICAO, each labelled `"KXXX — Locality (°F) · City"` where *City* is the city component of the IANA timezone (e.g. `· Chicago`). Multiple entries for the same ICAO are possible when recipients share a station but use different timezones or temperature units.
 - Each meteogram item has a **Recipients** button (left of the label) that opens a modal dialog listing every recipient who receives that meteogram: ID, Name, and Language.
 - Each meteogram image is independently horizontally scrollable (full-period images can be 1800 px wide).
@@ -689,6 +689,8 @@ A thin static wrapper around log4net. All services, WxManager, and WxViewer call
 A single `log4net.shared.config` in the solution root is shared by all components. It uses `%property{LogFile}` (a log4net `PatternString`) to resolve the log file path set by `Logger.Initialise` at runtime. This replaces the former per-service `log4net.config` files.
 
 Log format: `yyyy-MM-dd HH:mm:ss.fff LEVEL [File::Method:Line] message`
+
+ReportWorker log messages that refer to a specific recipient are prefixed with `{Id} {Email} ({Name})` — e.g. `pablo_es PaulHarder2@gmail.com (Pablo): generating scheduled report.` The GFS forecast summary also logs temperatures in the recipient's configured unit (°F or °C).
 
 All timestamps are UTC: the shared config uses `%utcdate`, and the Python logger uses `time.gmtime`. `LogScanner` parses these timestamps with `DateTimeStyles.AssumeUniversal`.
 
