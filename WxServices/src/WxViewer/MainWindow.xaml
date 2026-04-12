@@ -150,6 +150,7 @@
                 <TextBlock Grid.Column="0" VerticalAlignment="Center" Margin="14,8">
                     <Run Text="HarderWare" FontWeight="Bold"   FontSize="18" Foreground="#e0e0e0"/>
                     <Run Text=" WxViewer"  FontWeight="Normal" FontSize="18" Foreground="#c8c8c8"/>
+                    <Run x:Name="VersionRun" FontWeight="Light" FontSize="13" Foreground="#909090"/>
                 </TextBlock>
 
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Stretch">

@@ -13,7 +13,7 @@ public partial class MainWindow : Window
     public MainWindow(MainViewModel viewModel)
     {
         InitializeComponent();
-        Title = $"WxViewer {WxPaths.ProductVersion}";
+        VersionRun.Text = $"  {WxPaths.ProductVersion}";
         _vm = viewModel;
         DataContext = _vm;
         _vm.ScrollToItem      += OnScrollToItem;

@@ -16,7 +16,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        Title = $"WxManager {WxPaths.ProductVersion}";
+        VersionRun.Text = $"  {WxPaths.ProductVersion}";
         SetupTab.AllChecksPassed += OnAllChecksPassed;
         ConfigureTab.ConfigurationSaved += OnConfigurationSaved;
     }
