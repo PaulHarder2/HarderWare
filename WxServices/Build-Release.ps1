@@ -97,7 +97,7 @@ if (Test-Path $obsSource) {
 # ── Copy documentation ───────────────────────────────────────────────────────
 
 Write-Host "Copying documentation..."
-foreach ($doc in @('INSTALL.md', 'DESIGN.md')) {
+foreach ($doc in @('INSTALL.md', 'DESIGN.md', 'PRE-INSTALL.txt')) {
     $src = "$SolutionRoot\$doc"
     if (Test-Path $src) { Copy-Item $src $ReleaseDir }
 }

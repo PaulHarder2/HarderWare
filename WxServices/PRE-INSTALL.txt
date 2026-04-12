@@ -1,0 +1,30 @@
+HARDERWARE WXSERVICES - BEFORE YOU INSTALL
+
+Please ensure the following prerequisites are installed before running
+this installer.  Detailed instructions are in INSTALL.md (installed
+with the product and opened for you at the end of setup).
+
+REQUIRED:
+  1. .NET 8 Runtime (64-bit)
+     https://dotnet.microsoft.com/download/dotnet/8.0
+
+  2. SQL Server Express (free)
+     https://www.microsoft.com/sql-server/sql-server-downloads
+     Enable TCP/IP after installation.
+
+  3. WSL (Windows Subsystem for Linux) with wgrib2
+     Run "wsl --install" from an administrator PowerShell prompt.
+
+  4. Miniconda with the wxvis Python environment
+     https://docs.conda.io/en/latest/miniconda.html
+
+OPTIONAL:
+  5. Docker Desktop (only if you want Grafana/Prometheus dashboards)
+     https://www.docker.com/products/docker-desktop/
+
+AFTER INSTALLATION:
+  - The installer will offer to open INSTALL.md for you.
+  - Use WxManager (launched automatically) to configure the system.
+  - Enter your SMTP credentials and Claude API key on the Configure tab.
+  - Add weather report recipients on the Recipients tab.
+  - Start the services using the Windows Services app (services.msc).

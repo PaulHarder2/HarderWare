@@ -31,7 +31,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
 DisableProgramGroupPage=yes
 LicenseFile=
-InfoBeforeFile=INSTALL.md
+InfoBeforeFile=PRE-INSTALL.txt
 
 ; Shown on the final wizard page. Markdown renders as plain text in Notepad,
 ; which is fine — the file is written to be readable either way.

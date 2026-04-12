@@ -5,6 +5,30 @@ on a fresh Windows machine.  The system fetches weather data (METAR, TAF,
 GFS forecasts), generates natural-language weather reports via Claude AI,
 renders weather maps, and emails personalised reports to subscribers.
 
+> **Installed via the Setup.exe installer?**  The installer handles steps
+> 3 (file placement) and 5 (service registration) automatically.  You
+> still need to install the prerequisites (step 2), configure the system
+> (step 4), start the services (step 6), and add recipients (step 7).
+
+## Before You Begin — Windows Tools You'll Need
+
+Several steps in this guide ask you to type commands.  Here's where to
+type them:
+
+- **PowerShell (as Administrator):** Click the **Start** button, type
+  `PowerShell`, right-click **Windows PowerShell**, and choose
+  **Run as administrator**.  Click **Yes** when prompted.
+
+- **Command Prompt:** Click the **Start** button, type `cmd`, and press
+  **Enter**.
+
+- **Windows Services app:** Press **Win+R**, type `services.msc`, and
+  press **Enter**.  This shows all Windows services with Start/Stop
+  controls — a visual alternative to `sc.exe` commands.
+
+When this guide says "open PowerShell as administrator," follow the first
+set of instructions above.
+
 ## 1. System Requirements
 
 - Windows 10 or 11 (64-bit)
@@ -21,7 +45,8 @@ to develop):
 
 > https://dotnet.microsoft.com/download/dotnet/8.0
 
-Verify: open a command prompt and run `dotnet --info`.
+Verify: open a **Command Prompt** (see Before You Begin) and type
+`dotnet --info`, then press Enter.
 
 ### 2.2 SQL Server Express
 
@@ -47,13 +72,14 @@ service startup — no manual SQL scripts are needed.
 WSL (Windows Subsystem for Linux) is required for GFS forecast data
 processing.
 
-1. Open an **elevated** command prompt and run:
+1. Open **PowerShell as administrator** (see Before You Begin) and type:
    ```
    wsl --install
    ```
    Reboot if prompted.  Ubuntu is installed by default.
 
-2. Open a WSL terminal and install wgrib2:
+2. Open a **Command Prompt** and type `wsl` to enter the Linux environment.
+   Then install wgrib2:
    ```bash
    sudo apt update
    sudo apt install wgrib2
@@ -61,7 +87,8 @@ processing.
    If `wgrib2` is not in your distribution's package manager, build from
    source: https://www.cpc.ncep.noaa.gov/products/wesley/wgrib2/
 
-3. Verify: `wsl wgrib2 --version`
+3. Type `exit` to leave the Linux environment, then verify from the
+   Command Prompt: `wsl wgrib2 --version`
 
 ### 2.4 Miniconda and the wxvis Environment
 
@@ -70,7 +97,8 @@ Miniconda provides the Python environment for weather map rendering.
 1. Download and install Miniconda:
    > https://docs.conda.io/en/latest/miniconda.html
 
-2. Open the **Anaconda Prompt** and create the wxvis environment:
+2. Open the **Anaconda Prompt** (click Start, type `Anaconda Prompt`,
+   press Enter) and create the wxvis environment:
    ```
    conda create -n wxvis python=3.11 -y
    conda activate wxvis
@@ -92,7 +120,7 @@ dashboard.
 1. Download and install Docker Desktop:
    > https://www.docker.com/products/docker-desktop/
 
-2. Verify: open a command prompt and run `docker info`.
+2. Verify: open a **Command Prompt** and type `docker info`.
 
 ## 3. Install the Product
 
@@ -174,34 +202,50 @@ an API key.
 
 ## 5. Register Windows Services
 
-Open an **elevated** PowerShell prompt and register the four services.
-Adjust the path if your `InstallRoot` is not `C:\HarderWare`:
+> **Installed via Setup.exe?** Skip this step — the installer already
+> registered the services.
+
+If you installed manually (without the installer), open **PowerShell as
+administrator** (see Before You Begin) and type these commands.  Adjust
+the path if your install directory is not `C:\HarderWare`:
 
 ```powershell
 $ir = "C:\HarderWare"
 
-sc.exe create WxParserSvc  binPath= "$ir\BuildCache\WxServices\WxParser.Svc\bin\Release\net8.0\publish\WxParser.Svc.exe"
-sc.exe create WxReportSvc  binPath= "$ir\BuildCache\WxServices\WxReport.Svc\bin\Release\net8.0\publish\WxReport.Svc.exe"
-sc.exe create WxMonitorSvc binPath= "$ir\BuildCache\WxServices\WxMonitor.Svc\bin\Release\net8.0\publish\WxMonitor.Svc.exe"
-sc.exe create WxVisSvc     binPath= "$ir\BuildCache\WxServices\WxVis.Svc\bin\Release\net8.0\publish\WxVis.Svc.exe"
+sc.exe create WxParserSvc  binPath= "$ir\services\WxParser.Svc\WxParser.Svc.exe"
+sc.exe create WxReportSvc  binPath= "$ir\services\WxReport.Svc\WxReport.Svc.exe"
+sc.exe create WxMonitorSvc binPath= "$ir\services\WxMonitor.Svc\WxMonitor.Svc.exe"
+sc.exe create WxVisSvc     binPath= "$ir\services\WxVis.Svc\WxVis.Svc.exe"
 ```
 
 ## 6. Start Services
+
+**Startup order matters:** WxParserSvc must run first so weather data is
+available when WxReportSvc starts.
+
+**Using the Windows Services app (recommended for most users):**
+
+1. Open the **Windows Services app** (see Before You Begin).
+2. Scroll down to find **WxParserSvc**.  Right-click it and choose **Start**.
+3. Wait ~10 minutes for the first data fetch cycle to complete.
+4. Start the remaining three services the same way: **WxReportSvc**,
+   **WxMonitorSvc**, **WxVisSvc**.
+
+**Using PowerShell (alternative):**
+
+Open **PowerShell as administrator** and type:
 
 ```powershell
 sc.exe start WxParserSvc
 ```
 
-Wait ~10 minutes for the first METAR fetch cycle to complete, then:
+Wait ~10 minutes, then:
 
 ```powershell
 sc.exe start WxReportSvc
 sc.exe start WxMonitorSvc
 sc.exe start WxVisSvc
 ```
-
-**Startup order matters:** WxParserSvc must run first so weather data is
-available when WxReportSvc starts.
 
 ## 7. Add Recipients
 
@@ -214,6 +258,10 @@ Recipients tab to add email subscribers:
 4. Click **Save**.
 
 The report service picks up new recipients automatically on its next cycle.
+
+> **Tip:** WxManager's **Setup tab** runs prerequisite checks with
+> pass/fail indicators for SQL Server, WSL, wgrib2, conda, and Docker.
+> Use it to verify that everything is working before adding recipients.
 
 ## 8. Start the Observability Stack (Optional)
 
@@ -235,18 +283,17 @@ To enable it:
    metrics at all (no background HTTP traffic, nothing in the logs
    beyond a single "Telemetry disabled" line at startup).
 
-2. **Start the Docker stack.**  From a command prompt (Docker Desktop
-   must be running):
+2. **Start the Docker stack.**  Open a **Command Prompt** (Docker Desktop
+   must be running) and type these two commands:
    ```
    cd C:\HarderWare\observability
    docker compose up -d
    ```
 
-3. **Restart WxParserSvc** so it picks up the new configuration:
-   ```powershell
-   sc.exe stop WxParserSvc
-   sc.exe start WxParserSvc
-   ```
+3. **Restart WxParserSvc** so it picks up the new configuration.
+   Open the **Windows Services app**, find **WxParserSvc**, right-click
+   it, choose **Restart**.  (Or in PowerShell as administrator:
+   `sc.exe stop WxParserSvc` then `sc.exe start WxParserSvc`.)
 
 4. **Open the dashboards:**
    - **Grafana:** http://localhost:3000 (admin / grafana)
@@ -261,11 +308,11 @@ directory, and set `Telemetry:Enabled` back to `false`.
 
 | Check | How |
 |---|---|
-| Services running | `sc.exe query WxParserSvc` (and the other three) |
-| Data being fetched | Look for new entries in `C:\HarderWare\Logs\wxparser-svc.log` |
-| Reports sending | Check `C:\HarderWare\Logs\wxreport-svc.log` for "report(s) sent" |
-| Maps rendering | Check `C:\HarderWare\plots\` for recent PNG files |
-| Monitoring active | Check `C:\HarderWare\Logs\wxmonitor-svc.log` |
+| Services running | Open the **Windows Services app** and confirm WxParserSvc, WxReportSvc, WxMonitorSvc, and WxVisSvc all show **Running** |
+| Data being fetched | Open `C:\HarderWare\Logs\wxparser-svc.log` in Notepad — look for recent entries |
+| Reports sending | Open `C:\HarderWare\Logs\wxreport-svc.log` in Notepad — look for "report(s) sent" |
+| Maps rendering | Open `C:\HarderWare\plots\` in File Explorer — look for recent PNG files |
+| Monitoring active | Open `C:\HarderWare\Logs\wxmonitor-svc.log` in Notepad |
 
 All log files use UTC timestamps.
 
@@ -275,7 +322,7 @@ All log files use UTC timestamps.
 |---|---|
 | "Connection string not found" | `appsettings.shared.json` missing or `ConnectionStrings:WeatherData` not set |
 | No METAR data | `Fetch:HomeIcao` / `HomeLatitude` / `HomeLongitude` not configured |
-| No reports sent | SMTP credentials or Claude API key missing from `appsettings.local.json` |
+| No reports sent | SMTP credentials or Claude API key not set — use WxManager → Configure |
 | Maps not rendering | `WxVis:CondaPythonExe` incorrect, or conda packages not installed |
 | GFS fetch errors | WSL not running, or wgrib2 not installed |
 | SQL timeout on GFS purge | Normal for large datasets; the system retries automatically |
@@ -284,7 +331,17 @@ For all issues, check the relevant log file in `{InstallRoot}\Logs\`.
 
 ## Uninstall
 
-To remove the services:
+**If you used the Setup.exe installer:**
+
+1. Open **Windows Settings → Apps → Installed apps** (or **Add or Remove
+   Programs** on older Windows 10 builds).
+2. Find **HarderWare WxServices** in the list and click **Uninstall**.
+
+The uninstaller stops and removes all four services automatically.
+
+**If you installed manually:**
+
+Open **PowerShell as administrator** and type:
 
 ```powershell
 sc.exe stop WxParserSvc;  sc.exe delete WxParserSvc
