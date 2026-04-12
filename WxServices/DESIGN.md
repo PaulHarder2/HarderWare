@@ -277,8 +277,12 @@ flowchart TD
 WxServices/
 ├── DESIGN.md                        ← this file
 ├── WxServices.sln
+├── Directory.Build.props            ← single product version (e.g. 1.0.0) applied to all assemblies
 ├── appsettings.shared.json          ← single source of truth for all config (InstallRoot, DB, SMTP, Claude, WxVis, Monitor, etc.) — git-tracked
 ├── Deploy-WxService.ps1             ← PowerShell deploy script (run as Administrator)
+├── tools/
+│   ├── wgrib2                       ← pre-built Linux binary (executed via WSL); path derived from InstallRoot at runtime
+│   └── wgrib2-version.txt           ← version stamp; Build-Release.ps1 prints a reminder to check for updates
 └── src/
     ├── MetarParser/                 ← METAR text parser library
     ├── TafParser/                   ← TAF text parser library
@@ -999,7 +1003,7 @@ This single file contains every non-secret setting for all services and applicat
 | Prerequisite | Notes |
 |---|---|
 | WSL (Windows Subsystem for Linux) | Required for wgrib2; Ubuntu recommended |
-| wgrib2 | Install inside WSL: `sudo apt install wgrib2` or build from source; default path `/usr/local/bin/wgrib2` |
+| wgrib2 | Bundled in `tools/wgrib2`; path derived from InstallRoot at runtime via `WxPaths.Wgrib2BundledWslPath` |
 
 ---
 
@@ -1010,7 +1014,7 @@ This single file contains every non-secret setting for all services and applicat
 - .NET 8 runtime
 - SQL Server Express (or higher); default instance name `SQLEXPRESS`
 - Gmail account with an App Password configured for SMTP
-- WSL with wgrib2 installed (for GFS data ingestion)
+- WSL (wgrib2 is bundled in `tools/` and runs via WSL automatically)
 - Miniconda with the wxvis conda environment (for map rendering)
 - Docker Desktop (optional, for Prometheus + Grafana observability)
 
@@ -1018,8 +1022,8 @@ This single file contains every non-secret setting for all services and applicat
 
 `HarderWare_WxServices.iss` is an Inno Setup script that produces a single `HarderWare_WxServices_Setup.exe` installer.  To build it:
 
-1. Run `.\Build-Release.ps1` to publish all components into the `release\` staging directory.
-2. Compile the `.iss` script with Inno Setup: `ISCC.exe HarderWare_WxServices.iss`
+1. Run `.\Build-Release.ps1` to publish all components into the `release\` staging directory. The script reads the product version from `Directory.Build.props` and prints the ISCC command to run.
+2. Compile the `.iss` script with Inno Setup: `ISCC.exe /DAppVer=1.0.0 HarderWare_WxServices.iss` (use the version printed by the build script).
 
 The installer copies files to the chosen directory (default `C:\HarderWare`), registers the four Windows services, updates `InstallRoot` in `appsettings.shared.json` to match the install path, creates Start Menu and optional desktop shortcuts, and launches WxManager for first-run configuration.  Uninstall stops and removes the services.
 
@@ -1075,7 +1079,7 @@ All logs are written to `{InstallRoot}\Logs\` (default `C:\HarderWare\Logs\`). L
 | Item | Notes |
 |---|---|
 | Single bounding box | All METAR, TAF, and GFS data is fetched for one geographic region. Supporting recipients in widely separated locations would require per-region fetch configuration. |
-| GFS requires WSL | wgrib2 is a Linux binary; the fetcher invokes it via `wsl.exe`. If WSL is unavailable or wgrib2 is not installed, the GFS cycle logs errors and skips ingestion; METAR/TAF reports continue normally without forecast data. |
+| GFS requires WSL | wgrib2 is a bundled Linux binary invoked via `wsl.exe`. If WSL is unavailable, the GFS cycle logs errors and skips ingestion; METAR/TAF reports continue normally without forecast data. |
 | GFS forecast delay | A complete model run takes up to ~4 hours after the nominal run time to appear on NOMADS. During this window the previous run's data is used. |
 | Metrics only on WxParser.Svc | Cycle duration and count metrics are instrumented on WxParser.Svc only. WxReport.Svc, WxVis.Svc, and WxMonitor.Svc have no OTel instrumentation yet. |
 | WxMonitor does not watch itself | WxMonitor has no watchdog. A Windows Task Scheduler task could serve this purpose if needed. |
