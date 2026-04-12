@@ -1,0 +1,3 @@
+wgrib2 3.8.0
+Bundled: 2026-04-12
+Source: built from NOAA CPC source, installed in WSL Ubuntu

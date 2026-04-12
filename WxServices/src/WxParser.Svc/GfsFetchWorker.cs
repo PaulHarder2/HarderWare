@@ -95,11 +95,16 @@ public sealed class GfsFetchWorker : BackgroundService
                 ? new WxPaths(_config["InstallRoot"]).TempDir
                 : cfg.TempPath;
 
+            var paths = new WxPaths(_config["InstallRoot"]);
+            var wgrib2Path = string.IsNullOrWhiteSpace(cfg.Wgrib2WslPath)
+                ? paths.Wgrib2BundledWslPath
+                : cfg.Wgrib2WslPath;
+
             await GfsFetcher.FetchAndInsertAsync(
                 region,
                 _dbOptions,
                 _http,
-                cfg.Wgrib2WslPath,
+                wgrib2Path,
                 tempPath,
                 cfg.MaxForecastHours,
                 cfg.RetainModelRuns,

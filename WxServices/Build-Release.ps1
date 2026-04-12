@@ -94,6 +94,14 @@ if (Test-Path $obsSource) {
     Copy-Item $obsSource "$ReleaseDir\observability" -Recurse
 }
 
+# ── Copy bundled tools (wgrib2) ──────────────────────────────────────────────
+
+Write-Host "Copying bundled tools..."
+$toolsSource = "$SolutionRoot\tools"
+if (Test-Path $toolsSource) {
+    Copy-Item $toolsSource "$ReleaseDir\tools" -Recurse
+}
+
 # ── Copy documentation ───────────────────────────────────────────────────────
 
 Write-Host "Copying documentation..."
@@ -114,3 +122,14 @@ $itemCount = (Get-ChildItem $ReleaseDir -Recurse -File).Count
 Write-Host ""
 Write-Host "Release staged: $ReleaseDir ($itemCount files)" -ForegroundColor Green
 Write-Host "Next: compile the Inno Setup script to produce the installer."
+
+# ── Reminder: check bundled wgrib2 version ───────────────────────────────────
+
+$versionFile = "$SolutionRoot\tools\wgrib2-version.txt"
+if (Test-Path $versionFile) {
+    $bundled = Get-Content $versionFile -TotalCount 1
+    Write-Host ""
+    Write-Host "REMINDER: Bundled $bundled" -ForegroundColor Yellow
+    Write-Host "  Check for a newer version: https://www.cpc.ncep.noaa.gov/products/wesley/wgrib2/" -ForegroundColor Yellow
+    Write-Host "  To update: replace tools\wgrib2 and edit tools\wgrib2-version.txt" -ForegroundColor Yellow
+}

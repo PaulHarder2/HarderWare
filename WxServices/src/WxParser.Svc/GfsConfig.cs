@@ -45,10 +45,10 @@ public sealed class GfsConfig
     public int RetainModelRuns { get; set; } = 2;
 
     /// <summary>
-    /// Absolute path to the <c>wgrib2</c> binary inside the WSL environment,
-    /// e.g. <c>/usr/local/bin/wgrib2</c>.
+    /// WSL path to the <c>wgrib2</c> binary.  When empty, the bundled copy
+    /// at <c>{InstallRoot}\tools\wgrib2</c> is used automatically.
     /// </summary>
-    public string Wgrib2WslPath { get; set; } = "/usr/local/bin/wgrib2";
+    public string Wgrib2WslPath { get; set; } = "";
 
     /// <summary>
     /// Windows directory used for temporary GRIB2, sub-grid, and CSV files

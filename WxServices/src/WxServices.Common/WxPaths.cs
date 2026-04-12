@@ -72,6 +72,12 @@ public sealed class WxPaths
     /// <summary>Path to <c>announce.txt</c> in the install root.</summary>
     public string AnnounceFilePath { get; }
 
+    /// <summary>Directory containing bundled Linux tools (wgrib2).</summary>
+    public string ToolsDir { get; }
+
+    /// <summary>WSL path to the bundled wgrib2 binary, derived from <see cref="InstallRoot"/>.</summary>
+    public string Wgrib2BundledWslPath { get; }
+
     /// <summary>Creates a new <see cref="WxPaths"/> instance with all paths derived from <paramref name="installRoot"/>.</summary>
     /// <param name="installRoot">
     /// The installation root directory.  Pass <see langword="null"/> or empty to use <see cref="DefaultInstallRoot"/>.
@@ -90,6 +96,16 @@ public sealed class WxPaths
         Log4NetConfigPath = Path.Combine(InstallRoot, "log4net.shared.config");
         LocalConfigPath  = Path.Combine(InstallRoot, "appsettings.local.json");
         AnnounceFilePath = Path.Combine(InstallRoot, "announce.txt");
+        ToolsDir         = Path.Combine(InstallRoot, "tools");
+        Wgrib2BundledWslPath = ToWslPath(Path.Combine(ToolsDir, "wgrib2"));
+    }
+
+    private static string ToWslPath(string windowsPath)
+    {
+        var full  = Path.GetFullPath(windowsPath);
+        var drive = char.ToLower(full[0]);
+        var rest  = full[3..].Replace('\\', '/');
+        return $"/mnt/{drive}/{rest}";
     }
 
     /// <summary>Returns the heartbeat file path for a given service name.</summary>

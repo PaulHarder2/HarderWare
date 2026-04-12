@@ -67,6 +67,9 @@ Source: "release\WxViewer\*";  DestDir: "{app}\WxViewer";  Flags: ignoreversion 
 ; Python scripts
 Source: "release\WxVis\*"; DestDir: "{app}\WxVis"; Flags: ignoreversion
 
+; Bundled tools (wgrib2 Linux binary, executed via WSL)
+Source: "release\tools\*"; DestDir: "{app}\tools"; Flags: ignoreversion
+
 ; Observability stack (Docker Compose)
 Source: "release\observability\*"; DestDir: "{app}\observability"; Flags: ignoreversion recursesubdirs
 

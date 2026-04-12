@@ -67,10 +67,11 @@ After installation:
 The database itself (`WeatherData`) is created automatically on first
 service startup — no manual SQL scripts are needed.
 
-### 2.3 WSL and wgrib2
+### 2.3 WSL (Windows Subsystem for Linux)
 
-WSL (Windows Subsystem for Linux) is required for GFS forecast data
-processing.
+WSL is required for GFS forecast data processing.  The `wgrib2` tool
+that processes forecast files is bundled with the installer — you do not
+need to install it separately.
 
 1. Open **PowerShell as administrator** (see Before You Begin) and type:
    ```
@@ -78,17 +79,8 @@ processing.
    ```
    Reboot if prompted.  Ubuntu is installed by default.
 
-2. Open a **Command Prompt** and type `wsl` to enter the Linux environment.
-   Then install wgrib2:
-   ```bash
-   sudo apt update
-   sudo apt install wgrib2
-   ```
-   If `wgrib2` is not in your distribution's package manager, build from
-   source: https://www.cpc.ncep.noaa.gov/products/wesley/wgrib2/
-
-3. Type `exit` to leave the Linux environment, then verify from the
-   Command Prompt: `wsl wgrib2 --version`
+2. Verify WSL is working: open a **Command Prompt** and type `wsl echo ok`.
+   You should see `ok` printed.
 
 ### 2.4 Miniconda and the wxvis Environment
 

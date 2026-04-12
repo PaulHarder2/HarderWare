@@ -84,10 +84,13 @@ try
     Logger.Info("Database ready.");
 
     var cfg = host.Services.GetRequiredService<IConfiguration>();
+    var wgrib2Path = cfg["Gfs:Wgrib2WslPath"];
+    if (string.IsNullOrWhiteSpace(wgrib2Path))
+        wgrib2Path = paths.Wgrib2BundledWslPath;
     await PrerequisiteChecker.LogPrerequisitesAsync(
         PrerequisiteChecker.Requires.SqlServer | PrerequisiteChecker.Requires.Wsl | PrerequisiteChecker.Requires.Wgrib2,
         connectionString: cfg.GetConnectionString("WeatherData") ?? "",
-        wgrib2WslPath: cfg["Gfs:Wgrib2WslPath"] ?? "/usr/local/bin/wgrib2");
+        wgrib2WslPath: wgrib2Path);
 
     await host.RunAsync();
 }

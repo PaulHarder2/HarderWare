@@ -39,7 +39,9 @@ public partial class SetupTab : UserControl
         CheckList.Children.Clear();
 
         var connStr    = App.Configuration?["ConnectionStrings:WeatherData"] ?? "";
-        var wgrib2Path = App.Configuration?["Gfs:Wgrib2WslPath"] ?? "/usr/local/bin/wgrib2";
+        var wgrib2Path = App.Configuration?["Gfs:Wgrib2WslPath"];
+        if (string.IsNullOrWhiteSpace(wgrib2Path))
+            wgrib2Path = new WxPaths(App.Configuration?["InstallRoot"]).Wgrib2BundledWslPath;
         var pythonExe  = App.Configuration?["WxVis:CondaPythonExe"] ?? "";
 
         var checks = new (string Label, string Hint, Func<Task<CheckResult>> Check)[]
