@@ -7,15 +7,19 @@ using System.Text.Json.Nodes;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using MetarParser.Data;
+using MetarParser.Data.Entities;
+using Microsoft.EntityFrameworkCore;
 using WxServices.Common;
 using WxServices.Logging;
 
 namespace WxManager;
 
 /// <summary>
-/// Settings editor tab.  Reads current configuration values on load and
-/// writes changes to <c>{InstallRoot}\appsettings.local.json</c>, which
-/// is in every service's config chain as an override layer.
+/// Settings editor tab.  Non-secret settings are read from configuration
+/// files and written to <c>{InstallRoot}\appsettings.local.json</c>.
+/// Secrets (SMTP credentials, Claude API key) are stored in the
+/// <see cref="GlobalSettings"/> database row and never touch the filesystem.
 /// </summary>
 public partial class ConfigureTab : UserControl
 {
@@ -25,12 +29,12 @@ public partial class ConfigureTab : UserControl
     public ConfigureTab()
     {
         InitializeComponent();
-        Loaded += (_, _) => LoadCurrentValues();
+        Loaded += async (_, _) => await LoadCurrentValuesAsync();
     }
 
-    // ── Load ─────────────��───────────────────────────────────────────────────
+    // ── Load ────────────────────────────────────────────────────────────────
 
-    private void LoadCurrentValues()
+    private async Task LoadCurrentValuesAsync()
     {
         var cfg = App.Configuration;
         if (cfg is null) return;
@@ -53,20 +57,32 @@ public partial class ConfigureTab : UserControl
 
         TxtSmtpHost.Text         = cfg["Smtp:Host"]        ?? "smtp.gmail.com";
         TxtSmtpPort.Text         = cfg["Smtp:Port"]        ?? "587";
-        TxtSmtpUsername.Text     = cfg["Smtp:Username"]     ?? "";
-        TxtSmtpPassword.Password = cfg["Smtp:Password"]     ?? "";
-        TxtSmtpFromAddress.Text  = cfg["Smtp:FromAddress"]  ?? "";
-
-        TxtClaudeApiKey.Password = cfg["Claude:ApiKey"]     ?? "";
         TxtClaudeModel.Text      = cfg["Claude:Model"]      ?? "claude-sonnet-4-6";
-
         TxtMapExtent.Text        = cfg["WxVis:MapExtent"]   ?? "";
         TxtAlertEmail.Text       = cfg["Monitor:AlertEmail"] ?? "";
+
+        // Secrets come from the database, not config files.
+        try
+        {
+            await using var db = new WeatherDataContext(App.DbOptions);
+            var gs = await db.GlobalSettings.FirstOrDefaultAsync(x => x.Id == 1);
+            if (gs is not null)
+            {
+                TxtSmtpUsername.Text     = gs.SmtpUsername    ?? "";
+                TxtSmtpPassword.Password = gs.SmtpPassword    ?? "";
+                TxtSmtpFromAddress.Text  = gs.SmtpFromAddress ?? "";
+                TxtClaudeApiKey.Password = gs.ClaudeApiKey    ?? "";
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"Could not load secrets from database: {ex.Message}");
+        }
     }
 
     // ── Save ─��───────────────────────────────────────────────────────────────
 
-    private void SaveButton_Click(object sender, RoutedEventArgs e)
+    private async void SaveButton_Click(object sender, RoutedEventArgs e)
     {
         try
         {
@@ -77,7 +93,7 @@ public partial class ConfigureTab : UserControl
                 return;
             }
 
-            // Build the JSON object to write.
+            // Non-secret settings → appsettings.local.json
             var root = new JsonObject
             {
                 ["InstallRoot"] = installRoot,
@@ -98,16 +114,12 @@ public partial class ConfigureTab : UserControl
                 },
                 ["Smtp"] = new JsonObject
                 {
-                    ["Host"]        = TxtSmtpHost.Text.Trim(),
-                    ["Port"]        = int.TryParse(TxtSmtpPort.Text, out var port) ? port : 587,
-                    ["Username"]    = TxtSmtpUsername.Text.Trim(),
-                    ["Password"]    = TxtSmtpPassword.Password,
-                    ["FromAddress"] = TxtSmtpFromAddress.Text.Trim(),
+                    ["Host"] = TxtSmtpHost.Text.Trim(),
+                    ["Port"] = int.TryParse(TxtSmtpPort.Text, out var port) ? port : 587,
                 },
                 ["Claude"] = new JsonObject
                 {
-                    ["ApiKey"] = TxtClaudeApiKey.Password,
-                    ["Model"]  = TxtClaudeModel.Text.Trim(),
+                    ["Model"] = TxtClaudeModel.Text.Trim(),
                 },
                 ["Gfs"] = new JsonObject
                 {
@@ -124,20 +136,33 @@ public partial class ConfigureTab : UserControl
                 },
             };
 
-            // Ensure InstallRoot directories exist.
             var paths = new WxPaths(installRoot);
             Directory.CreateDirectory(paths.LogsDir);
             Directory.CreateDirectory(paths.PlotsDir);
             Directory.CreateDirectory(paths.TempDir);
 
-            // Write to {InstallRoot}\appsettings.local.json.
             var localConfigPath = paths.LocalConfigPath;
             var json = root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(localConfigPath, json);
-
             Logger.Info($"Configuration saved to {localConfigPath}.");
-            SetStatus("Configuration saved.", true);
 
+            // Secrets → GlobalSettings database row
+            await using var db = new WeatherDataContext(App.DbOptions);
+            var gs = await db.GlobalSettings.FirstOrDefaultAsync(x => x.Id == 1);
+            if (gs is null)
+            {
+                gs = new GlobalSettings { Id = 1 };
+                db.GlobalSettings.Add(gs);
+            }
+
+            gs.SmtpUsername    = TxtSmtpUsername.Text.Trim();
+            gs.SmtpPassword    = TxtSmtpPassword.Password;
+            gs.SmtpFromAddress = TxtSmtpFromAddress.Text.Trim();
+            gs.ClaudeApiKey    = TxtClaudeApiKey.Password;
+            await db.SaveChangesAsync();
+            Logger.Info("Secrets saved to GlobalSettings.");
+
+            SetStatus("Configuration saved.", true);
             ConfigurationSaved?.Invoke();
         }
         catch (Exception ex)

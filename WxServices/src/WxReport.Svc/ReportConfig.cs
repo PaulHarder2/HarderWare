@@ -1,10 +1,7 @@
 // Configuration model for the WxReport.Svc service.
-// Populated from the "Report" section of appsettings files.
-// Secrets (ApiKey, Smtp.Password) must be provided in appsettings.local.json,
-// which is excluded from source control.
-//
-// SmtpConfig is defined in WxServices.Common and bound from the top-level
-// "Smtp" section, shared with other services.
+// Non-secret settings are populated from the "Report" section of appsettings files.
+// Secrets (SMTP credentials, Claude API key) are stored in the GlobalSettings
+// database row and loaded at runtime — they never appear in config files.
 
 using WxServices.Common;
 
@@ -13,7 +10,6 @@ namespace WxReport.Svc;
 /// <summary>
 /// Root configuration model for WxReport.Svc.
 /// Bound from the <c>Report</c> section of appsettings files at runtime.
-/// Secrets (Claude API key, SMTP password) must be placed in <c>appsettings.local.json</c>.
 /// </summary>
 public class ReportConfig
 {
@@ -89,8 +85,7 @@ public class SignificantChangeConfig
 /// <summary>
 /// Claude API connection settings shared across all services.
 /// Bound from the top-level <c>Claude</c> section of appsettings files.
-/// The API key must come from <c>appsettings.local.json</c>.
-/// The model can be overridden per-service in that service's own appsettings files.
+/// The API key is stored in the <c>GlobalSettings</c> database row.
 /// </summary>
 public class ClaudeConfig
 {
@@ -119,16 +114,14 @@ public class UnitPreferences
 }
 
 /// <summary>
-/// Per-recipient configuration.  Static fields (email, name, language, timezone, schedule)
-/// live in <c>appsettings.json</c>; resolved location fields (coordinates, station ICAOs)
-/// are written by <see cref="RecipientResolver"/> to <c>appsettings.local.json</c>.
+/// Per-recipient configuration.  Recipients are stored in the database <c>Recipients</c>
+/// table and managed via WxManager's Recipients tab.
 /// </summary>
 public class RecipientConfig
 {
     /// <summary>
-    /// Stable identifier used to match this entry when writing resolved data back
-    /// to appsettings.local.json (e.g. "paul-en", "kat").  Should be unique across
-    /// all recipients.  Falls back to Email matching if absent.
+    /// Stable identifier (e.g. "paul-en", "kat").  Should be unique across
+    /// all recipients.
     /// </summary>
     public string? Id                { get; set; }
 
@@ -144,7 +137,7 @@ public class RecipientConfig
     /// <summary>Hour(s) of day (0–23) in the recipient's timezone at which the daily report is sent.  Comma-separated when multiple hours are desired (e.g. "6, 12").  Null falls back to <see cref="ReportConfig.DefaultScheduledSendHours"/>.</summary>
     public string? ScheduledSendHours { get; set; }
 
-    // ── location fields (all stored in appsettings.local.json) ───────────────
+    // ── location fields ────────────────────────────────────────────────────────
 
     /// <summary>
     /// Physical address used solely for one-time geocoding to resolve the

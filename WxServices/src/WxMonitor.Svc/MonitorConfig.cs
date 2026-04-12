@@ -1,10 +1,6 @@
 // Configuration model for WxMonitor.Svc.
-// Populated from the "Monitor" section of appsettings files.
-// SMTP secrets (Username, Password, FromAddress) come from the top-level "Smtp" section
-// in appsettings.local.json, shared with other services.
-//
-// SmtpConfig is defined in WxServices.Common and bound from the top-level
-// "Smtp" section, shared with other services.
+// Non-secret settings are populated from the "Monitor" section of appsettings files.
+// SMTP secrets are stored in the GlobalSettings database row.
 
 using WxServices.Common;
 

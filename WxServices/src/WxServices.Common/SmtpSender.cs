@@ -9,7 +9,8 @@ namespace WxServices.Common;
 /// Sends plain-text or HTML emails via SMTP using MailKit.
 /// Configured for STARTTLS on port 587 (compatible with Gmail App Password authentication).
 /// The From display name is fixed at construction time; credentials are supplied via
-/// <see cref="SmtpConfig"/> and must be set in <c>appsettings.local.json</c>.
+/// <see cref="SmtpConfig"/>.  SMTP secrets are stored in the <c>GlobalSettings</c> database
+/// row and loaded by each service at runtime.
 /// Supports inline image attachments referenced by <c>cid:</c> URIs in the HTML body.
 /// </summary>
 public sealed class SmtpSender
@@ -80,7 +81,7 @@ public sealed class SmtpSender
             string.IsNullOrWhiteSpace(_cfg.Password)   ||
             string.IsNullOrWhiteSpace(_cfg.FromAddress))
         {
-            Logger.Error("SMTP credentials are not configured. Set Smtp.Username, Password, and FromAddress in appsettings.local.json.");
+            Logger.Error("SMTP credentials are not configured. Use WxManager → Configure to set SMTP credentials.");
             return false;
         }
 

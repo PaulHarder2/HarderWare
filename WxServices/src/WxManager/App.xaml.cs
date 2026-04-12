@@ -46,7 +46,7 @@ public partial class App : Application
     /// <summary>SMTP connection and credential settings for sending announcements.</summary>
     public static SmtpConfig SmtpConfig { get; private set; } = new SmtpConfig();
 
-    /// <summary>Anthropic API key for Claude, from <c>Claude:ApiKey</c> in <c>appsettings.local.json</c>.</summary>
+    /// <summary>Anthropic API key for Claude (loaded from <c>GlobalSettings</c> DB at runtime).</summary>
     public static string ClaudeApiKey { get; private set; } = "";
 
     /// <summary>Claude model ID from <c>Claude:Model</c>. Defaults to <c>"claude-sonnet-4-6"</c>.</summary>
@@ -91,8 +91,7 @@ public partial class App : Application
     /// </summary>
     /// <param name="e">Startup event arguments (unused).</param>
     /// <sideeffects>
-    /// Reads <c>appsettings.shared.json</c>, <c>{InstallRoot}\appsettings.local.json</c>,
-    /// and <c>appsettings.local.json</c> beside the executable.
+    /// Reads <c>appsettings.shared.json</c> and <c>{InstallRoot}\appsettings.local.json</c>.
     /// Sets all static properties on <see cref="App"/>.
     /// Opens and shows <see cref="MainWindow"/>, or shows an error dialog and calls <see cref="Shutdown"/> if configuration is invalid.
     /// </sideeffects>
@@ -115,9 +114,7 @@ public partial class App : Application
         var config = new ConfigurationBuilder()
             .SetBasePath(AppContext.BaseDirectory)
             .AddJsonFile("appsettings.shared.json", optional: false)
-            .AddJsonFile("appsettings.json",         optional: true)
             .AddJsonFile(new PhysicalFileProvider(wxPaths.InstallRoot), "appsettings.local.json", optional: true, reloadOnChange: false)
-            .AddJsonFile("appsettings.local.json",   optional: true)
             .Build();
 
         Configuration = config;

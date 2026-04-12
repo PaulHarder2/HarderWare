@@ -50,8 +50,7 @@ public partial class AnnouncementTab : UserControl
     }
 
     /// <summary>
-    /// Loads secrets from <see cref="GlobalSettings"/> (falling back to
-    /// <c>appsettings.local.json</c> values on <see cref="App"/>), validates
+    /// Loads secrets from <see cref="GlobalSettings"/>, validates
     /// configuration, loads all recipients from the database, groups them by language,
     /// asks Claude to format the announcement HTML for each language group, and emails
     /// each recipient. On complete success the announcement text is cleared. Send
@@ -96,17 +95,15 @@ public partial class AnnouncementTab : UserControl
             return;
         }
 
-        // ── Merge secrets: DB row takes priority, config file is fallback ──────
-
         var smtpConfig = new SmtpConfig
         {
             Host        = App.SmtpConfig.Host,
             Port        = App.SmtpConfig.Port,
-            Username    = gs?.SmtpUsername    ?? App.SmtpConfig.Username,
-            Password    = gs?.SmtpPassword    ?? App.SmtpConfig.Password,
-            FromAddress = gs?.SmtpFromAddress ?? App.SmtpConfig.FromAddress,
+            Username    = gs?.SmtpUsername    ?? "",
+            Password    = gs?.SmtpPassword    ?? "",
+            FromAddress = gs?.SmtpFromAddress ?? "",
         };
-        var claudeApiKey = gs?.ClaudeApiKey ?? App.ClaudeApiKey;
+        var claudeApiKey = gs?.ClaudeApiKey ?? "";
 
         // ── Validate ──────────────────────────────────────────────────────────
 
@@ -119,7 +116,7 @@ public partial class AnnouncementTab : UserControl
         if (missing.Count > 0)
         {
             ShowMessages(
-                $"Missing configuration — populate these in the GlobalSettings database row or appsettings.local.json:\n" +
+                $"Missing configuration — use the Configure tab to set these:\n" +
                 string.Join(", ", missing));
             return;
         }

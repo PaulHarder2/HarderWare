@@ -7,8 +7,8 @@ namespace WxReport.Svc;
 
 /// <summary>
 /// Resolves a recipient's address to geographic coordinates and the nearest
-/// METAR and TAF station ICAOs, then caches the results back to
-/// appsettings.local.json so subsequent service starts skip the API calls.
+/// METAR and TAF station ICAOs.  Results are stored in the database
+/// <c>Recipients</c> table so subsequent service starts skip the API calls.
 /// </summary>
 public sealed class RecipientResolver
 {
@@ -28,9 +28,8 @@ public sealed class RecipientResolver
 
     /// <summary>
     /// Ensures <paramref name="recipient"/> has resolved coordinates and station
-    /// ICAOs.  If any cached values are missing the method geocodes the address,
-    /// queries the database for the nearest stations, and writes the results back
-    /// to appsettings.local.json.
+    /// ICAOs.  If any cached values are missing the method geocodes the address
+    /// and queries the database for the nearest stations.
     /// Returns <see langword="false"/> if resolution fails and the recipient
     /// cannot be used for report generation.
     /// </summary>
@@ -44,7 +43,7 @@ public sealed class RecipientResolver
     /// </returns>
     /// <sideeffects>
     /// May mutate <paramref name="recipient"/>'s Latitude, Longitude, LocalityName, MetarIcao, and TafIcao fields.
-    /// If any field was newly resolved, writes the updated values back to <c>appsettings.local.json</c>.
+    /// If any field was newly resolved, the caller persists the updated values to the database.
     /// Makes HTTP calls to the Nominatim geocoding API and AWC airport API.
     /// Writes log entries for each resolution step.
     /// </sideeffects>

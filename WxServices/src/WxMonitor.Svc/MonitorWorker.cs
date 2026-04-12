@@ -316,23 +316,15 @@ public sealed class MonitorWorker : BackgroundService
     // ── helpers ───────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Loads and returns the current configuration, merging appsettings with database
-    /// secrets.  Non-secret settings (intervals, alert email, watched services) come
-    /// from config.  SMTP secrets are read from <c>GlobalSettings</c> (Id = 1) and
-    /// override any corresponding config values so that <c>appsettings.local.json</c>
-    /// is no longer required for credentials.
+    /// Loads and returns the current configuration.  Non-secret settings come from
+    /// config files.  SMTP secrets are read exclusively from <see cref="GlobalSettings"/>
+    /// (Id = 1) in the database.
     /// </summary>
-    /// <param name="ct">Cancellation token propagated to the database query.</param>
-    /// <returns>
-    /// A tuple of freshly loaded <see cref="MonitorConfig"/> and <see cref="SmtpConfig"/>
-    /// with SMTP secrets sourced from the database when available.
-    /// </returns>
     private async Task<(MonitorConfig monitor, SmtpConfig smtp)> LoadConfigsAsync(CancellationToken ct)
     {
         var monitor = new MonitorConfig();
         _config.GetSection("Monitor").Bind(monitor);
 
-        // Fill in log/heartbeat paths from InstallRoot if not explicitly configured.
         var paths = new WxPaths(_config["InstallRoot"]);
         foreach (var svc in monitor.WatchedServices)
         {
@@ -346,9 +338,9 @@ public sealed class MonitorWorker : BackgroundService
 
         await using var ctx = new WeatherDataContext(_dbOptions);
         var gs = await ctx.GlobalSettings.FirstOrDefaultAsync(x => x.Id == 1, ct);
-        if (!string.IsNullOrWhiteSpace(gs?.SmtpUsername))    smtp.Username    = gs.SmtpUsername;
-        if (!string.IsNullOrWhiteSpace(gs?.SmtpPassword))    smtp.Password    = gs.SmtpPassword;
-        if (!string.IsNullOrWhiteSpace(gs?.SmtpFromAddress)) smtp.FromAddress = gs.SmtpFromAddress;
+        smtp.Username    = gs?.SmtpUsername    ?? "";
+        smtp.Password    = gs?.SmtpPassword    ?? "";
+        smtp.FromAddress = gs?.SmtpFromAddress ?? "";
 
         return (monitor, smtp);
     }

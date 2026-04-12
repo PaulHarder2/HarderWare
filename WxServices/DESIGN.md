@@ -122,7 +122,7 @@ flowchart TD
     START([Cycle starts]) --> COORDS{Coordinates configured?}
     COORDS -->|Yes| FETCH
     COORDS -->|No| LOOKUP["Look up HomeIcao via AWC Airport API"]
-    LOOKUP --> SAVE["Cache to appsettings.local.json"]
+    LOOKUP --> SAVE["Cache to config"]
     SAVE --> FETCH
 
     FETCH["Fetch METARs + TAFs for bounding box"] --> AWC
@@ -351,7 +351,7 @@ graph TD
 **Purpose:** Keep the local database populated with current METAR, TAF, and GFS forecast data.
 
 **METAR/TAF cycle (default: every 10 minutes):**
-1. Resolve home coordinates from `appsettings.shared.json` (`HomeLatitude`, `HomeLongitude`). If absent, look up via `AirportLocator` using `HomeIcao` and cache to `appsettings.local.json`.
+1. Resolve home coordinates from config (`HomeLatitude`, `HomeLongitude`). If absent, look up via `AirportLocator` using `HomeIcao` and cache to `appsettings.local.json`.
 2. Fetch all METARs within the configured fetch region via the AWC API.  The region is either explicit bounds (`RegionSouth/North/West/East`) or derived from `HomeLatitude/HomeLongitude ± BoundingBoxDegrees`.
 3. Fetch the home ICAO station explicitly (in case it falls outside the region).
 4. Fetch all TAFs within the same region.
@@ -456,7 +456,7 @@ The config is never updated when a fallback station is used; a warning is logged
 1. Geocode `Address` via Nominatim → lat/lon + locality name.
 2. Query the database for METAR stations active within the last 3 hours; use the AWC bbox API to find the nearest station from that active set (falling back to the full API result on first run before local data exists).
 3. Query the AWC TAF bbox API for the nearest TAF station. If none is found, store the sentinel value `"NONE"` to prevent repeated lookups.
-4. Write lat, lon, `MetarIcao`, `TafIcao`, and `LocalityName` back to `appsettings.local.json`.
+4. Write lat, lon, `MetarIcao`, `TafIcao`, and `LocalityName` back to the `Recipients` database table.
 
 **Key classes:**
 | Class | Location | Role |
@@ -650,13 +650,7 @@ Each pane has its own toolbar docked to the top of the pane, immediately above t
 | `↑` / `↓` | Analysis: step to newer / older map |
 | `Ctrl+↑` / `Ctrl+↓` | Analysis: jump to newest / oldest map |
 
-**Configuration (`appsettings.json`):**
-```json
-{
-  "OutputDir": "C:\\HarderWare\\plots"
-}
-```
-Override with `appsettings.local.json` if the plots directory is in a different location.
+**Configuration:** The plots directory is derived from `InstallRoot` via `WxPaths`. Override `WxVis:PlotRetentionDays` in `appsettings.shared.json` to control how long plot files are retained.
 
 ---
 
@@ -928,147 +922,32 @@ erDiagram
 
 ### File layering
 
-Each service loads configuration from up to three files, merged in order (later files win):
+Each service loads configuration from up to two files, merged in order (later file wins):
 
 | File | Tracked by git | Purpose |
 |---|---|---|
-| `appsettings.shared.json` | Yes | Fetch-region settings shared by all services |
-| `appsettings.json` | Yes | Service-specific non-secret settings |
-| `appsettings.local.json` | **No** | Secrets, per-recipient data, and cached resolved values |
+| `appsettings.shared.json` | Yes | All non-secret settings for every service and application |
+| `appsettings.local.json` | **No** | Per-machine overrides written by WxManager → Configure tab |
+
+Secrets (SMTP credentials, Claude API key) are stored exclusively in the `GlobalSettings` database row (Id = 1) and never appear in any configuration file. Use WxManager → Configure tab to set them.
 
 ### appsettings.shared.json (WxServices root)
 
-```json
-{
-  "Fetch": {
-    "HomeIcao": "KDWH",
-    "HomeLatitude": 30.0,
-    "HomeLongitude": -95.5,
-    "BoundingBoxDegrees": 5.0
-  },
-  "Gfs": {
-    "Wgrib2WslPath": "/usr/local/bin/wgrib2",
-    "MaxForecastHours": 120,
-    "RetainModelRuns": 2,
-    "TempPath": "C:\\HarderWare\\temp"
-  },
-  "Smtp": {
-    "Host": "smtp.gmail.com",
-    "Port": 587,
-    "Username": null,
-    "Password": null,
-    "FromAddress": null
-  },
-  "Claude": {
-    "ApiKey": null,
-    "Model": "claude-sonnet-4-6",
-    "MessagesEndpoint": "https://api.anthropic.com/v1/messages",
-    "ApiVersion": "2023-06-01",
-    "MaxTokens": 2048
-  }
-}
-```
+This single file contains every non-secret setting for all services and applications. Key sections:
 
-`Smtp` and `Claude` are top-level so any service can send email or call Claude without duplicating config. Secrets (`Username`, `Password`, `FromAddress`, `ApiKey`) are always `null` here; the authoritative values live in the `GlobalSettings` database table (Id = 1). Each service reads secrets from the DB at the start of every cycle and falls back to any values present in `appsettings.local.json` for backward compatibility. `Claude:MessagesEndpoint`, `Claude:ApiVersion`, and `Claude:MaxTokens` are defaulted here and can be overridden per-service or per-machine.
+- **`Fetch`** — METAR/TAF fetch interval, home station, bounding box / explicit region bounds, retention
+- **`Gfs`** — GFS fetch interval, delay, wgrib2 path, forecast hours, retention
+- **`Smtp`** — Host and port only (credentials are in the database)
+- **`Claude`** — Model, endpoint, API version, max tokens (API key is in the database)
+- **`Telemetry`** — `Enabled` flag and OTLP endpoint (disabled by default)
+- **`WxVis`** — Conda Python path, map extent, plot retention
+- **`Monitor`** — Alert interval, email, severity threshold, watched services
+- **`Report`** — Report interval, language, schedule, thresholds, significant-change config
+- **`WxManager`** — Station lookup radius, AWC endpoint, display settings
 
-### WxManager — appsettings.json
+### Recipients — database
 
-```json
-{
-  "WxManager": {
-    "MaxNearbyStationsInLookup": 40,
-    "StationLookupRadiusKm": 150.0,
-    "MaxDisplayStations": 5,
-    "DefaultTimezone": "America/Chicago",
-    "UserAgent": "WxManager/1.0",
-    "AwcMetarEndpoint": "https://aviationweather.gov/api/data/metar",
-    "AwcMetarHours": 6,
-    "SuccessMessageDismissMs": 3000
-  }
-}
-```
-
-All keys have defaults baked into `App.xaml.cs`; the file exists to make them visible and easy to override without recompiling.
-
-### WxParser.Svc — appsettings.json
-
-```json
-{
-  "Fetch": {
-    "IntervalMinutes": 10,
-    "HeartbeatFile": "C:\\HarderWare\\Logs\\wxparser-heartbeat.txt"
-  },
-  "Gfs": {
-    "IntervalMinutes": 10,
-    "DelayHours": 3.5
-  }
-}
-```
-
-### WxReport.Svc — appsettings.json
-
-```json
-{
-  "Report": {
-    "IntervalMinutes": 5,
-    "HeartbeatFile": "C:\\HarderWare\\Logs\\wxreport-heartbeat.txt",
-    "DefaultLanguage": "English",
-    "DefaultScheduledSendHours": "7",
-    "MinGapMinutes": 60,
-    "PrecipRateThresholdMmHr": 0.1,
-    "SignificantChange": {
-      "WindThresholdKt": 25,
-      "VisibilityThresholdSm": 3.0,
-      "CeilingThresholdFt": 3000,
-      "ForecastHighChangeDegF": 15,
-      "ForecastLowChangeDegF": 15,
-      "CapeThresholdJKg": 1000,
-      "GfsPrecipThresholdMmHr": 2.0
-    }
-  },
-  "Claude": {
-    "Model": "claude-haiku-4-5-20251001"
-  }
-}
-```
-
-`Claude.Model` can be overridden per-service to use a cheaper/faster model for report generation.
-
-### Recipients and secrets — database (primary)
-
-Recipients and secrets are stored in the `WeatherData` database. On first startup after upgrade, WxReport.Svc automatically seeds the `Recipients` table from the `Report:Recipients` config section and seeds the `GlobalSettings` row from the config secret values if they are present. After seeding, config values are ignored.
-
-**Recipients** (`Recipients` table): managed via WxManager (the GUI tool). Fields mirror the legacy config schema. `RecipientId` is the stable key; `Latitude`, `Longitude`, `MetarIcao`, `TafIcao`, and `LocalityName` are written back by `RecipientResolver` on first resolution.
-
-**Secrets** (`GlobalSettings` table, Id = 1): set these directly in SQL Server after first run:
-```sql
-UPDATE GlobalSettings SET
-    ClaudeApiKey    = 'sk-ant-...',
-    SmtpUsername    = 'you@gmail.com',
-    SmtpPassword    = 'your-app-password',
-    SmtpFromAddress = 'you@gmail.com'
-WHERE Id = 1;
-```
-
-### WxReport.Svc — appsettings.local.json (legacy / fallback only)
-
-`appsettings.local.json` is no longer required once the database is seeded. It is still supported as a fallback: any non-null values in it override `null` fields from `GlobalSettings`. This allows existing installations to continue working without a database update.
-
-```json
-{
-  "ConnectionStrings": {
-    "WeatherData": "Server=.\\SQLEXPRESS;Database=WeatherData;Trusted_Connection=True;..."
-  },
-  "Smtp": {
-    "Username": "you@gmail.com",
-    "Password": "your-app-password",
-    "FromAddress": "you@gmail.com"
-  },
-  "Claude": {
-    "ApiKey": "sk-ant-..."
-  }
-}
-```
+**Recipients** (`Recipients` table): managed via WxManager → Recipients tab. `RecipientId` is the stable key; `Latitude`, `Longitude`, `MetarIcao`, `TafIcao`, and `LocalityName` are written back by `RecipientResolver` on first resolution.
 
 **Notes on recipient fields:**
 - `RecipientId` must be unique across all recipients. It is the stable key linking `Recipients` to `RecipientStates`.
@@ -1079,47 +958,9 @@ WHERE Id = 1;
 - `Latitude`, `Longitude`, `MetarIcao`, `TafIcao` are written back to the database automatically by the service on first resolution. To re-trigger resolution (e.g. after a move), set them to `NULL` in the `Recipients` table.
 - `TempUnit`, `PressureUnit`, `WindSpeedUnit` control how values are displayed. Each is independent. Supported values: `TempUnit`: `"F"` or `"C"`; `PressureUnit`: `"inHg"` or `"kPa"`; `WindSpeedUnit`: `"mph"` or `"kph"`. All default to US customary.
 
-### WxMonitor.Svc — appsettings.json
+### Secrets — database
 
-```json
-{
-  "Monitor": {
-    "IntervalMinutes": 5,
-    "AlertEmail": "PaulHarder2@gmail.com",
-    "AlertOnSeverity": "ERROR",
-    "AlertCooldownMinutes": 60,
-    "MetarStalenessThresholdMinutes": 120,
-    "WatchedServices": [
-      {
-        "Name": "WxParser.Svc",
-        "LogFile": "C:\\HarderWare\\Logs\\wxparser-svc.log",
-        "HeartbeatFile": "C:\\HarderWare\\Logs\\wxparser-heartbeat.txt",
-        "HeartbeatMaxAgeMinutes": 90
-      },
-      {
-        "Name": "WxReport.Svc",
-        "LogFile": "C:\\HarderWare\\Logs\\wxreport-svc.log",
-        "HeartbeatFile": "C:\\HarderWare\\Logs\\wxreport-heartbeat.txt",
-        "HeartbeatMaxAgeMinutes": 15
-      }
-    ]
-  }
-}
-```
-
-SMTP settings come from the top-level `Smtp` block in `appsettings.shared.json` + `appsettings.local.json`. WxMonitor.Svc does not need any service-specific Smtp overrides.
-
-### WxMonitor.Svc — appsettings.local.json
-
-```json
-{
-  "Smtp": {
-    "Username": "you@gmail.com",
-    "Password": "your-app-password",
-    "FromAddress": "you@gmail.com"
-  }
-}
-```
+**Secrets** (`GlobalSettings` table, Id = 1): managed via WxManager → Configure tab. Stored exclusively in the database — never in configuration files. Fields: `ClaudeApiKey`, `SmtpUsername`, `SmtpPassword`, `SmtpFromAddress`. Services read these at the start of every cycle.
 
 ---
 
@@ -1224,7 +1065,7 @@ Start `WxParserSvc` first and allow at least one fetch cycle to complete before 
 All logs are written to `{InstallRoot}\Logs\` (default `C:\HarderWare\Logs\`). Log files: `wxparser-svc.log`, `wxreport-svc.log`, `wxmonitor-svc.log`, `wxvis-svc.log`, `wxmanager.log`, `wxvis.log` (Python). All paths are derived from the `InstallRoot` setting in `appsettings.shared.json` via the `WxPaths` class.
 
 ### Changing a recipient's location
-1. In `appsettings.local.json`, update `Address` and set `Latitude`, `Longitude`, `MetarIcao`, and `TafIcao` to `null`.
+1. In the `Recipients` database table, update `Address` and set `Latitude`, `Longitude`, `MetarIcao`, and `TafIcao` to `NULL` (or use WxManager → Recipients tab to edit the recipient).
 2. The service will re-geocode and re-resolve on the next cycle.
 
 ---
@@ -1269,7 +1110,7 @@ docker compose up -d
 
 Metrics are emitted via `System.Diagnostics.Metrics` and exported over OTLP/HTTP every 10 seconds.
 
-The OTLP endpoint is configured by `Telemetry:OtlpEndpoint` in `appsettings.json` or `appsettings.local.json`. The default is `http://localhost:4318/v1/metrics`. **The full signal path (`/v1/metrics`) must be included — the SDK does not append it automatically when the endpoint is set in code.**
+Telemetry is disabled by default. To enable it, set `Telemetry:Enabled` to `true` in `appsettings.shared.json`. The OTLP endpoint is configured by `Telemetry:OtlpEndpoint` (default `http://localhost:4318/v1/metrics`). When disabled, no exporter is registered and no background HTTP traffic occurs. **The full signal path (`/v1/metrics`) must be included — the SDK does not append it automatically when the endpoint is set in code.**
 
 ### Useful Prometheus queries
 

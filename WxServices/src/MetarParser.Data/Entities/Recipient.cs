@@ -2,8 +2,7 @@ namespace MetarParser.Data.Entities;
 
 /// <summary>
 /// Persists the configuration and resolved location data for a weather report recipient.
-/// Supersedes the <c>Report:Recipients</c> array that previously lived in
-/// <c>appsettings.local.json</c>.
+/// Managed via WxManager's Recipients tab.
 /// </summary>
 /// <remarks>
 /// Unit-preference columns (<see cref="TempUnit"/>, <see cref="PressureUnit"/>,

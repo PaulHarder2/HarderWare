@@ -33,6 +33,13 @@ DisableProgramGroupPage=yes
 LicenseFile=
 InfoBeforeFile=INSTALL.md
 
+; Shown on the final wizard page. Markdown renders as plain text in Notepad,
+; which is fine — the file is written to be readable either way.
+[Messages]
+FinishedHeadingLabel=Setup complete — please read INSTALL.md before starting the services
+FinishedLabelNoIcons=Installation placed the HarderWare WxServices files in [name]. Before starting any services, read INSTALL.md (installed in the application directory). You can open it in Notepad, WordPad, Visual Studio Code, or any text editor — it is plain text with some Markdown formatting. The installer can open it for you below.
+FinishedLabel=Installation placed the HarderWare WxServices files in [name]. Before starting any services, read INSTALL.md (installed in the application directory). You can open it in Notepad, WordPad, Visual Studio Code, or any text editor — it is plain text with some Markdown formatting. The installer can open it for you below.
+
 [Dirs]
 Name: "{app}\Logs"
 Name: "{app}\plots"
@@ -80,8 +87,13 @@ Filename: "sc.exe"; Parameters: "create WxReportSvc  binPath= ""{app}\services\W
 Filename: "sc.exe"; Parameters: "create WxMonitorSvc binPath= ""{app}\services\WxMonitor.Svc\WxMonitor.Svc.exe"""; Flags: runhidden; StatusMsg: "Registering WxMonitorSvc..."
 Filename: "sc.exe"; Parameters: "create WxVisSvc     binPath= ""{app}\services\WxVis.Svc\WxVis.Svc.exe""";         Flags: runhidden; StatusMsg: "Registering WxVisSvc..."
 
+; Open INSTALL.md in Notepad so the customer sees the setup guide immediately.
+; Checked by default — customers without VS Code or another Markdown viewer can
+; still read it (the file is plain text with Markdown formatting).
+Filename: "notepad.exe"; Parameters: """{app}\INSTALL.md"""; Description: "View installation guide (INSTALL.md)"; Flags: nowait postinstall skipifsilent
+
 ; Launch WxManager for first-run configuration.
-Filename: "{app}\WxManager\WxManager.exe"; Description: "Launch WxManager to configure the system"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\WxManager\WxManager.exe"; Description: "Launch WxManager to configure the system"; Flags: nowait postinstall skipifsilent unchecked
 
 [UninstallRun]
 ; Stop and remove services on uninstall.

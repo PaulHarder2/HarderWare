@@ -23,9 +23,6 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Link>appsettings.shared.json</Link>
     </Content>
-    <Content Update="appsettings.json">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
     <Content Include="..\..\log4net.shared.config">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Link>log4net.shared.config</Link>

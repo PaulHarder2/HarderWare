@@ -192,14 +192,12 @@ public sealed class FetchWorker : BackgroundService
     }
 
     /// <summary>
-    /// Persists the resolved home station ICAO to <c>appsettings.local.json</c> so
-    /// subsequent service restarts do not need to call the nearest-station API again.
+    /// Persists the resolved home station ICAO to <c>appsettings.local.json</c> in
+    /// the install root so subsequent restarts skip the nearest-station API call.
     /// </summary>
-    /// <param name="homeIcao">The ICAO identifier to save (e.g. <c>"KDWH"</c>).</param>
-    /// <sideeffects>Creates or updates the <c>Fetch.HomeIcao</c> key in <c>appsettings.local.json</c> alongside the executable.</sideeffects>
     private void SaveLocalHomeIcao(string homeIcao)
     {
-        var path = Path.Combine(AppContext.BaseDirectory, "appsettings.local.json");
+        var path = new WxPaths(_config["InstallRoot"]).LocalConfigPath;
         JsonNode root = File.Exists(path)
             ? JsonNode.Parse(File.ReadAllText(path)) ?? new JsonObject()
             : new JsonObject();
@@ -219,15 +217,12 @@ public sealed class FetchWorker : BackgroundService
     }
 
     /// <summary>
-    /// Persists resolved home coordinates to <c>appsettings.local.json</c> so
-    /// subsequent service restarts do not need to call the airport lookup API again.
+    /// Persists resolved home coordinates to <c>appsettings.local.json</c> in
+    /// the install root so subsequent restarts skip the airport lookup API call.
     /// </summary>
-    /// <param name="lat">Resolved latitude to cache.</param>
-    /// <param name="lon">Resolved longitude to cache.</param>
-    /// <sideeffects>Creates or updates the <c>Fetch.HomeLatitude</c> and <c>Fetch.HomeLongitude</c> keys in <c>appsettings.local.json</c> alongside the executable.</sideeffects>
     private void SaveLocalCoordinates(double lat, double lon)
     {
-        var path = Path.Combine(AppContext.BaseDirectory, "appsettings.local.json");
+        var path = new WxPaths(_config["InstallRoot"]).LocalConfigPath;
 
         JsonNode root = File.Exists(path)
             ? JsonNode.Parse(File.ReadAllText(path)) ?? new JsonObject()

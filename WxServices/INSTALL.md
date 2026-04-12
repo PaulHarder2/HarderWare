@@ -121,11 +121,14 @@ setting in `appsettings.shared.json` (see below).
 
 ## 4. Configure
 
-Edit `appsettings.shared.json` in the install root.  This is the single
-configuration file for the entire system.
+The easiest way to configure the system is to use **WxManager → Configure
+tab**, which provides a graphical editor with test buttons for database
+connectivity, SMTP, and the Claude API.
 
-> **Future:** The WxManager application will provide a graphical Configure
-> tab that handles all of this.  For now, edit the JSON file directly.
+Alternatively, you can edit `appsettings.shared.json` in the install root
+directly.  The Configure tab writes non-secret settings to
+`appsettings.local.json` (an override layer) and stores credentials in
+the database.
 
 ### Required settings
 
@@ -140,24 +143,18 @@ configuration file for the entire system.
 To find your nearest METAR station, search for your location at:
 > https://aviationweather.gov/data/metar/
 
-### Secrets
+### Secrets (SMTP Credentials and Claude API Key)
 
-Create a file called `appsettings.local.json` in the install root (next to
-`appsettings.shared.json`).  This file holds credentials and is never
-included in distributions:
+Secrets are stored in the database, not in configuration files.  Use
+**WxManager → Configure tab** to enter:
 
-```json
-{
-  "Smtp": {
-    "Username": "your-email@gmail.com",
-    "Password": "your-gmail-app-password",
-    "FromAddress": "your-email@gmail.com"
-  },
-  "Claude": {
-    "ApiKey": "sk-ant-..."
-  }
-}
-```
+- **SMTP Username** — your Gmail address
+- **SMTP Password** — a Gmail App Password (not your regular password)
+- **SMTP From Address** — typically the same Gmail address
+- **Claude API Key** — begins with `sk-ant-...`
+
+Click **Save** in the Configure tab and the credentials are written
+directly to the database.  They never appear in any file on disk.
 
 **Gmail App Password:** Go to https://myaccount.google.com/apppasswords
 to generate an app-specific password (requires 2-factor authentication).
@@ -220,17 +217,45 @@ The report service picks up new recipients automatically on its next cycle.
 
 ## 8. Start the Observability Stack (Optional)
 
-If you installed Docker Desktop and want the Grafana dashboard:
+The observability stack (OpenTelemetry Collector + Prometheus + Grafana)
+is entirely optional.  If you skip it, the services run normally and no
+metrics are exported — you simply won't have the Grafana dashboard.
 
-```bash
-cd C:\HarderWare\observability
-docker compose up -d
-```
+To enable it:
 
-- **Grafana:** http://localhost:3000 (admin / grafana)
-- **Prometheus:** http://localhost:9090
+1. **Turn telemetry on in configuration.**  In `appsettings.shared.json`,
+   set `Telemetry:Enabled` to `true`:
+   ```json
+   "Telemetry": {
+     "Enabled": true,
+     "OtlpEndpoint": "http://localhost:4318/v1/metrics"
+   }
+   ```
+   If telemetry is left `false`, WxParserSvc will not attempt to export
+   metrics at all (no background HTTP traffic, nothing in the logs
+   beyond a single "Telemetry disabled" line at startup).
+
+2. **Start the Docker stack.**  From a command prompt (Docker Desktop
+   must be running):
+   ```
+   cd C:\HarderWare\observability
+   docker compose up -d
+   ```
+
+3. **Restart WxParserSvc** so it picks up the new configuration:
+   ```powershell
+   sc.exe stop WxParserSvc
+   sc.exe start WxParserSvc
+   ```
+
+4. **Open the dashboards:**
+   - **Grafana:** http://localhost:3000 (admin / grafana)
+   - **Prometheus:** http://localhost:9090
 
 The WxParser dashboard is provisioned automatically and displays in UTC.
+
+To turn the stack off again: `docker compose down` from the same
+directory, and set `Telemetry:Enabled` back to `false`.
 
 ## 9. Verify
 

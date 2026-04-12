@@ -30,9 +30,7 @@ var host = Host.CreateDefaultBuilder(args)
     {
         cfg.SetBasePath(AppContext.BaseDirectory)
            .AddJsonFile("appsettings.shared.json", optional: false, reloadOnChange: true)
-           .AddJsonFile("appsettings.json",        optional: false, reloadOnChange: true)
-           .AddJsonFile(new PhysicalFileProvider(installRoot), "appsettings.local.json", optional: true, reloadOnChange: true)
-           .AddJsonFile("appsettings.local.json",  optional: true,  reloadOnChange: true);
+           .AddJsonFile(new PhysicalFileProvider(installRoot), "appsettings.local.json", optional: true, reloadOnChange: true);
     })
     .ConfigureServices((ctx, services) =>
     {
@@ -77,14 +75,14 @@ static async Task ValidateConfigAsync(IConfiguration config, DbContextOptions<We
     await using var ctx = new WeatherDataContext(dbOptions);
     var gs = await ctx.GlobalSettings.FirstOrDefaultAsync(x => x.Id == 1);
 
-    if (string.IsNullOrWhiteSpace(gs?.SmtpUsername    ?? config["Smtp:Username"]))    issues.Add("SmtpUsername");
-    if (string.IsNullOrWhiteSpace(gs?.SmtpPassword    ?? config["Smtp:Password"]))    issues.Add("SmtpPassword");
-    if (string.IsNullOrWhiteSpace(gs?.SmtpFromAddress ?? config["Smtp:FromAddress"])) issues.Add("SmtpFromAddress");
-    if (string.IsNullOrWhiteSpace(config["Monitor:AlertEmail"]))                      issues.Add("Monitor:AlertEmail");
+    if (string.IsNullOrWhiteSpace(gs?.SmtpUsername))    issues.Add("SmtpUsername");
+    if (string.IsNullOrWhiteSpace(gs?.SmtpPassword))    issues.Add("SmtpPassword");
+    if (string.IsNullOrWhiteSpace(gs?.SmtpFromAddress)) issues.Add("SmtpFromAddress");
+    if (string.IsNullOrWhiteSpace(config["Monitor:AlertEmail"])) issues.Add("Monitor:AlertEmail");
 
     if (issues.Count > 0)
         Logger.Warn($"Missing required configuration — alerts will not send until resolved: {string.Join(", ", issues)}. " +
-                    "Set SMTP secrets via GlobalSettings (database) or appsettings.local.json.");
+                    "Use WxManager → Configure to set credentials.");
     else
         Logger.Info("Configuration validated.");
 }

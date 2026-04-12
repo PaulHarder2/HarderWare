@@ -273,7 +273,7 @@ public sealed class ReportWorker : BackgroundService
             if (string.IsNullOrWhiteSpace(recipient.Email)) continue;
             if (string.IsNullOrWhiteSpace(recipient.Id))
             {
-                Logger.Warn($"{recipient.Email}: no Id configured — skipping. Add a unique Id to appsettings.local.json.");
+                Logger.Warn($"{recipient.Email}: no Id configured — skipping. Add a unique Id via WxManager → Recipients.");
                 continue;
             }
             if (duplicateIds.Contains(recipient.Id)) continue;
@@ -514,7 +514,7 @@ public sealed class ReportWorker : BackgroundService
         try { return TimeZoneInfo.FindSystemTimeZoneById(id); }
         catch
         {
-            Logger.Warn($"Timezone '{id}' was not recognised on this system — falling back to UTC. Check the Timezone setting in appsettings.local.json.");
+            Logger.Warn($"Timezone '{id}' was not recognised on this system — falling back to UTC. Check the Timezone setting in WxManager → Recipients.");
             return TimeZoneInfo.Utc;
         }
     }
@@ -625,19 +625,12 @@ public sealed class ReportWorker : BackgroundService
     }
 
     /// <summary>
-    /// Loads and returns the current configuration, merging database values with
-    /// appsettings files.  Recipients are loaded from the <c>Recipients</c> table;
-    /// if the table is empty, the <c>Report:Recipients</c> config section is used as
-    /// a fallback.  SMTP and Claude secrets are read from <c>GlobalSettings</c> (Id = 1)
-    /// and override any corresponding values from appsettings files.
-    /// Non-secret settings (intervals, thresholds, SMTP host/port) come from config only.
+    /// Loads and returns the current configuration.  Recipients are loaded from the
+    /// <c>Recipients</c> table; if the table is empty, the <c>Report:Recipients</c>
+    /// config section is used as a fallback.  Non-secret settings (intervals,
+    /// thresholds, SMTP host/port) come from config files.  Secrets (SMTP credentials,
+    /// Claude API key) are read exclusively from <see cref="GlobalSettings"/> (Id = 1).
     /// </summary>
-    /// <param name="ctx">Open database context to query recipients and global settings.</param>
-    /// <param name="ct">Cancellation token propagated to database queries.</param>
-    /// <returns>
-    /// A tuple of <see cref="ReportConfig"/> (with recipients populated from the DB),
-    /// <see cref="SmtpConfig"/>, and <see cref="ClaudeConfig"/> with secrets from the DB.
-    /// </returns>
     private async Task<(ReportConfig report, SmtpConfig smtp, ClaudeConfig claude)> LoadConfigsAsync(
         WeatherDataContext ctx, CancellationToken ct)
     {
@@ -645,12 +638,10 @@ public sealed class ReportWorker : BackgroundService
         _config.GetSection("Report").Bind(report);
         report.HeartbeatFile ??= new WxPaths(_config["InstallRoot"]).HeartbeatFile("wxreport");
 
-        // Prefer DB recipients; fall back to config if the table is empty (e.g. first run).
         var dbRecipients = await ctx.Recipients.OrderBy(r => r.Id).ToListAsync(ct);
         if (dbRecipients.Count > 0)
             report.Recipients = dbRecipients.Select(ToConfig).ToList();
 
-        // Load non-secret SMTP settings from config, then override secrets from DB.
         var smtp = new SmtpConfig();
         _config.GetSection("Smtp").Bind(smtp);
 
@@ -658,10 +649,10 @@ public sealed class ReportWorker : BackgroundService
         _config.GetSection("Claude").Bind(claude);
 
         var gs = await ctx.GlobalSettings.FirstOrDefaultAsync(x => x.Id == 1, ct);
-        if (!string.IsNullOrWhiteSpace(gs?.SmtpUsername))    smtp.Username    = gs.SmtpUsername;
-        if (!string.IsNullOrWhiteSpace(gs?.SmtpPassword))    smtp.Password    = gs.SmtpPassword;
-        if (!string.IsNullOrWhiteSpace(gs?.SmtpFromAddress)) smtp.FromAddress = gs.SmtpFromAddress;
-        if (!string.IsNullOrWhiteSpace(gs?.ClaudeApiKey))    claude.ApiKey    = gs.ClaudeApiKey;
+        smtp.Username    = gs?.SmtpUsername    ?? "";
+        smtp.Password    = gs?.SmtpPassword    ?? "";
+        smtp.FromAddress = gs?.SmtpFromAddress ?? "";
+        claude.ApiKey    = gs?.ClaudeApiKey    ?? "";
 
         return (report, smtp, claude);
     }
