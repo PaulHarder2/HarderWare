@@ -103,7 +103,7 @@ public partial class App : Application
         try
         {
             Logger.Initialise(wxPaths.LogFile("wxmanager"));
-            Logger.Info("WxManager starting.");
+            Logger.Info($"WxManager {WxPaths.ProductVersion} (commit {WxPaths.GitCommit}) starting.");
         }
         catch (Exception ex)
         {

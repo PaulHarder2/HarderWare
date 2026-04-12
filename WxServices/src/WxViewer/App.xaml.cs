@@ -19,7 +19,7 @@ public partial class App : Application
         try
         {
             Logger.Initialise(paths.LogFile("wxviewer"));
-            Logger.Info("WxViewer starting.");
+            Logger.Info($"WxViewer {WxPaths.ProductVersion} (commit {WxPaths.GitCommit}) starting.");
         }
         catch (Exception ex)
         {
