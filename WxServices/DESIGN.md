@@ -484,8 +484,8 @@ The config is never updated when a fallback station is used; a warning is logged
 
 | Worker | Trigger | Output filename format |
 |---|---|---|
-| `AnalysisMapWorker` | After each METAR fetch cycle | `synoptic_{label}_{yyyyMMdd_HH}.png` |
-| `ForecastMapWorker` | Progressively, as each forecast hour's data arrives for the latest model run | `forecast_{yyyyMMdd_HH}_f{NNN}.png` |
+| `AnalysisMapWorker` | After each METAR fetch cycle; one PNG per zoom level | `synoptic_{label}_{yyyyMMdd_HH}_z{N}.png` |
+| `ForecastMapWorker` | Progressively, as each forecast hour's data arrives; one PNG per zoom level | `forecast_{yyyyMMdd_HH}_f{NNN}_z{N}.png` |
 | `MeteogramWorker` | Once per complete GFS model run; one pair per unique (ICAO, TempUnit, Timezone) in Recipients | `meteogram_{yyyyMMdd_HH}_{ICAO}_{tzSafe}_{F\|C}_abbrev.png`, `meteogram_{yyyyMMdd_HH}_{ICAO}_{tzSafe}_{F\|C}_full.png`; manifest: `meteogram_manifest_{yyyyMMdd_HH}.json` |
 
 All workers check for existing current output files before invoking Python; already-current files are skipped.
@@ -517,8 +517,8 @@ All workers check for existing current output files before invoking Python; alre
 
 | Script | Output type | Data source | Output filename |
 |---|---|---|---|
-| `synoptic_map.py` | Synoptic analysis map (Barnes interpolation) | Latest METAR + WxStations | `synoptic_{label}_{yyyyMMdd_HH}.png` |
-| `forecast_map.py` | GFS forecast parameter map | GfsGrid for a specific model run and forecast hour | `forecast_{yyyyMMdd_HH}_f{NNN}.png` |
+| `synoptic_map.py` | Synoptic analysis map (Barnes interpolation) | Latest METAR + WxStations | `synoptic_{label}_{yyyyMMdd_HH}_z{N}.png` |
+| `forecast_map.py` | GFS forecast parameter map | GfsGrid for a specific model run and forecast hour | `forecast_{yyyyMMdd_HH}_f{NNN}_z{N}.png` |
 | `meteogram.py` | Point-forecast meteogram (two PNGs per location) | GfsGrid nearest grid point; bilinear interpolation to recipient lat/lon | `meteogram_{yyyyMMdd_HH}_{ICAO}_{tzSafe}_{F\|C}_abbrev.png`, `meteogram_{yyyyMMdd_HH}_{ICAO}_{tzSafe}_{F\|C}_full.png` |
 
 **Rendering details:**
@@ -533,7 +533,8 @@ All workers check for existing current output files before invoking Python; alre
 - Station models (synoptic_map): MetPy StationPlot; stations thinned with `reduce_point_density` (default 75 km). Fields plotted: NW = air temperature (dark red), SW = dew point (dark green), NE = encoded SLP (3-digit), centre = wind barb + sky-cover symbol + present-weather symbol, SE = station ICAO ID (navy).
 - Station models (forecast_map): MetPy StationPlot at METAR station locations, displaying interpolated GFS values. Fields plotted: NW = air temperature (dark red), SW = dew point (dark green), NE = encoded SLP (3-digit), centre = wind barb + sky-cover symbol, SE = station ICAO ID (navy).
 - Contours (synoptic_map): Barnes-interpolated grid converted from projection metres to lat/lon before plotting so Cartopy clips to the inner viewport, matching forecast_map white-space border behaviour.
-- Map extent is configured via `WxVis:MapExtent` in `appsettings.shared.json`. Accepts a preset name (`south_central`, `conus`) or explicit W,E,S,N coordinates (e.g. `"-106,-88,25,38"`). When empty, maps auto-fit to the available data.
+- Map extent is configured via `WxVis:MapExtent` in `appsettings.shared.json`. Accepts a preset name (`south_central`, `conus`) or explicit W,E,S,N coordinates (e.g. `"-106,-88,25,38"`). When empty, maps auto-fit to the available data.  `CONUS_EXTENT` is `(-136, -60, 17, 55)`.
+- **Multi-zoom rendering:** `WxVis:ZoomLevels` (default 3) controls how many zoom levels are rendered per map. Each level doubles the figure size (`11" × 2^(N-1)`) and halves the station density (`150 km / 2^(N-1)`). Font sizes and line widths scale by `sqrt(2^(N-1))` to maintain visual proportion. DPI is 150 for z1 and 100 for z2+. Contour intervals are fixed at 8 hPa (isobars) and 5°C (isotherms) across all levels. Dewpoint isopleths are suppressed at z1. Both `synoptic_map.py` and `forecast_map.py` accept `--zoom-level N`; station density thinning via `reduce_point_density` is applied in both scripts.
 - Extrema labels (H/L/W/K): before placing a label, its lat/lon position is converted to projection metres and compared against `ax.get_xlim()`/`ax.get_ylim()` with a 3 % inward margin on all edges; labels outside or too close to the boundary are silently skipped. The margin guards against `plt.tight_layout()`, which adjusts subplot padding after labels are placed and can shift the effective axes boundary enough to push a borderline anchor outside the saved image. `ax.set_xlim`/`ax.set_ylim` are also re-applied after `tight_layout()` for the same reason.
 
 **Meteogram (`meteogram.py`):**
@@ -553,8 +554,8 @@ All workers check for existing current output files before invoking Python; alre
 conda activate wxvis
 cd C:\Users\PaulH\...\WxServices\src\WxVis
 
-python synoptic_map.py [--extent south_central] [--density 75]
-python forecast_map.py --run 20260402_18 --fh 84 [--extent -106,-88,25,38]
+python synoptic_map.py [--extent south_central] [--density 150] [--zoom-level 1]
+python forecast_map.py --run 20260402_18 --fh 84 [--extent -106,-88,25,38] [--zoom-level 2]
 python meteogram.py --run 20260404_00 --lat 29.97 --lon -95.34 --icao KDWH \
     --locality "Spring" --temp-unit F --tz "America/Chicago" \
     --out-abbrev C:\HarderWare\plots\meteogram_20260404_00_KDWH_America-Chicago_F_abbrev.png \
@@ -609,10 +610,10 @@ Output PNGs are saved to the directory configured in `config.json` (default `C:\
 
 | Pane | Content | Controls |
 |---|---|---|
-| Left | Synoptic analysis maps | Map selector (by obs time), step back/play/step forward, speed, time slider, obs-time label |
-| Right | GFS forecast maps | Run selector, step back/play/step forward, speed, hour slider, valid-time label |
+| Left | Synoptic analysis maps | Map selector (by obs time), step back/play/step forward, speed, time slider, obs-time label, zoom level indicator (Z1/Z2/Z3), Reset Zoom, Link Panes toggle |
+| Right | GFS forecast maps | Run selector, step back/play/step forward, speed, hour slider, valid-time label, zoom level indicator, Reset Zoom |
 
-Each pane has its own toolbar docked to the top of the pane, immediately above the map image.
+Each pane has its own toolbar docked to the top of the pane, immediately above the map image. Maps support multi-zoom with mouse-wheel zoom, click-drag pan, and automatic image swapping at zoom thresholds. The **Link Panes** toggle (on by default, green when active) synchronises zoom and pan between both panes. **Reset Zoom** (or double-click the map) returns to fit-to-window at zoom level 1. The zoom level indicator (e.g. "Z2") updates live. Each zoom level is pre-rendered at progressively higher resolution by the workers (configured via `WxVis:ZoomLevels`). During active zoom/pan, bitmap scaling switches to low-quality for responsiveness, restoring high-quality after 200 ms of inactivity. A brief crossfade animation smooths zoom-level transitions.
 
 **Meteograms tab** — shows full-period meteograms for a selected GFS run:
 - Run selector ComboBox (newest first).
@@ -623,9 +624,9 @@ Each pane has its own toolbar docked to the top of the pane, immediately above t
 - Populated from `meteogram_manifest_{yyyyMMdd_HH}.json` files written by `MeteogramWorker`. Each manifest entry carries `Icao`, `LocalityName`, `TempUnit`, `Timezone`, `FileAbbrev`, and `FileFull`.
 
 **File discovery (`MapFileScanner`):**
-- Scans the configured output directory for `synoptic_*.png`, `forecast_*.png`, and `meteogram_manifest_*.json` files on startup and whenever the directory changes.
+- Scans the configured output directory for `synoptic_*_z*.png`, `forecast_*_z*.png`, and `meteogram_manifest_*.json` files on startup and whenever the directory changes.
 - Two `FileSystemWatcher` instances: one for `*.png`, one for `*.json`.
-- Parses the timestamp embedded in each filename; analysis entries are sorted newest-first.
+- Parses the timestamp and zoom level embedded in each filename. Analysis and forecast files are grouped by observation/run time, collecting all zoom-level variants into a `ZoomPaths` dictionary on each `AnalysisMap` or `ForecastFrame` record. Entries are sorted newest-first.
 - `DirectoryChanged` events are marshalled back to the WPF UI thread via `Dispatcher.BeginInvoke`.
 
 **Animation:**
@@ -946,7 +947,7 @@ This single file contains every non-secret setting for all services and applicat
 - **`Smtp`** — Host and port only (credentials are in the database)
 - **`Claude`** — Model, endpoint, API version, max tokens (API key is in the database)
 - **`Telemetry`** — `Enabled` flag and OTLP endpoint (disabled by default)
-- **`WxVis`** — Conda Python path, map extent, plot retention
+- **`WxVis`** — Conda Python path, map extent, plot retention, zoom levels (default 3)
 - **`Monitor`** — Alert interval, email, severity threshold, watched services
 - **`Report`** — Report interval, language, schedule, thresholds, significant-change config
 - **`WxManager`** — Station lookup radius, AWC endpoint, display settings

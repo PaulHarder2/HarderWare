@@ -168,9 +168,11 @@ def _add_analysis_contours(
     proj,
     isobar_interval_hpa: float = 4.0,
     isotherm_interval_c: float = 3.0,
+    draw_dewpoint: bool = True,
     hres_km: float = 25.0,
     search_radius_km: float = 400.0,
     smooth_sigma: float = 2.5,
+    font_scale: float = 1.0,
 ) -> None:
     """
     Interpolate station SLP and temperature to a regular grid and overlay
@@ -251,14 +253,14 @@ def _add_analysis_contours(
         grid_lon, grid_lat, slp_smooth,
         levels=isobar_levels,
         colors="black",
-        linewidths=1.2,
+        linewidths=0.8 * font_scale,
         transform=_pc,
         zorder=2,
     )
-    ax.clabel(cs, inline=True, fontsize=8, fmt="%d")
+    ax.clabel(cs, inline=True, fontsize=int(8 * font_scale), fmt="%d")
     _mark_extrema(ax, grid_lon, grid_lat, slp_smooth, "H", "L",
                   high_color="navy", low_color="maroon", neighborhood=12, min_depth=1.0,
-                  transform=_pc)
+                  transform=_pc, font_scale=font_scale)
 
     # ── Isotherms ─────────────────────────────────────────────────────────────
     _, _, tmp_raw = interpolate_to_grid(
@@ -278,19 +280,19 @@ def _add_analysis_contours(
         grid_lon, grid_lat, tmp_smooth,
         levels=isotherm_levels,
         colors="red",
-        linewidths=0.8,
+        linewidths=0.5 * font_scale,
         linestyles="dashed",
         transform=_pc,
         zorder=2,
     )
-    ax.clabel(ct, inline=True, fontsize=7, fmt="%d°C")
+    ax.clabel(ct, inline=True, fontsize=int(7 * font_scale), fmt="%d°C")
     _mark_extrema(ax, grid_lon, grid_lat, tmp_smooth, "W", "K",
                   high_color="darkred", low_color="steelblue", neighborhood=12,
-                  transform=_pc)
+                  transform=_pc, font_scale=font_scale)
 
     # ── Dewpoint isopleths ────────────────────────────────────────────────────
     dew_data = data.dropna(subset=["DewPointCelsius"])
-    if len(dew_data) >= 6:
+    if draw_dewpoint and len(dew_data) >= 6:
         dew_proj = proj.transform_points(
             ccrs.PlateCarree(), dew_data["Lon"].values, dew_data["Lat"].values
         )
@@ -311,12 +313,12 @@ def _add_analysis_contours(
             grid_lon, grid_lat, dew_smooth,
             levels=dew_levels,
             colors="green",
-            linewidths=0.8,
+            linewidths=0.8 * font_scale,
             linestyles="dashed",
             transform=_pc,
             zorder=2,
         )
-        ax.clabel(cd, inline=True, fontsize=7, fmt="%d°C")
+        ax.clabel(cd, inline=True, fontsize=int(7 * font_scale), fmt="%d°C")
 
 
 # ── Rendering ─────────────────────────────────────────────────────────────────
@@ -328,6 +330,8 @@ def render_synoptic_map(
     margin_deg: float = 0.5,
     point_density_km: float = 75.0,
     dpi: int = 150,
+    figsize_in: float = 11.0,
+    font_scale: float = 1.0,
 ) -> None:
     """
     Render a regional synoptic analysis map and save it to *output_path*.
@@ -388,7 +392,7 @@ def render_synoptic_map(
     proj = choose_projection(extent)
 
     # ── Figure setup ─────────────────────────────────────────────────────────
-    fig = plt.figure(figsize=(11, 11))
+    fig = plt.figure(figsize=(figsize_in, figsize_in))
     ax = fig.add_subplot(1, 1, 1, projection=proj)
     x_min, x_max, y_min, y_max = _inner_proj_limits(proj, extent)
     ax.set_xlim(x_min, x_max)
@@ -403,7 +407,17 @@ def render_synoptic_map(
     ax.add_feature(cfeature.RIVERS.with_scale("50m"),     linewidth=0.3, edgecolor="#9ec8d8")
 
     # ── Isobars and isotherms (drawn first, beneath station symbols) ──────────
-    _add_analysis_contours(ax, plot_df, extent, proj)
+    # Use uniform contour intervals across zoom levels.  Higher zooms have more
+    # canvas per line, so they appear less crowded naturally.  Dewpoint isopleths
+    # are suppressed at z1 (font_scale == 1) to reduce visual clutter.
+    _add_analysis_contours(
+        ax, plot_df, extent, proj,
+        isobar_interval_hpa=8.0,
+        isotherm_interval_c=5.0,
+        smooth_sigma=5.0,
+        draw_dewpoint=(font_scale > 1.0),
+        font_scale=font_scale,
+    )
 
     # ── Apply density reduction for station model plotting ────────────────────
     proj_coords = proj.transform_points(
@@ -425,7 +439,7 @@ def render_synoptic_map(
         station_df["Lat"].values,
         clip_on=True,
         transform=ccrs.PlateCarree(),
-        fontsize=9,
+        fontsize=int(9 * font_scale),
     )
 
     stationplot.plot_parameter("NW", station_df["AirTemperatureCelsius"].values, color="darkred")
@@ -450,12 +464,12 @@ def render_synoptic_map(
             zorder=3,
         )
 
-    stationplot.plot_text("SE", station_df["StationIcao"].values, fontsize=7, color="navy")
+    stationplot.plot_text("SE", station_df["StationIcao"].values, fontsize=int(7 * font_scale), color="navy")
 
     obs_time = pd.to_datetime(station_df["ObservationUtc"]).max()
     ax.set_title(
         f"Synoptic Analysis  —  {obs_time.strftime('%Y-%m-%d %H%MZ')}",
-        fontsize=11, fontweight="bold",
+        fontsize=int(11 * font_scale), fontweight="bold",
     )
 
     plt.tight_layout()
@@ -483,10 +497,21 @@ if __name__ == "__main__":
         help="Map extent: preset name (conus, south_central) or W,E,S,N coordinates (default: auto-fit to station data)",
     )
     parser.add_argument(
-        "--density", type=float, default=75.0,
-        help="Minimum station spacing in km (default: 75)",
+        "--density", type=float, default=None,
+        help="Minimum station spacing in km (default: derived from zoom level)",
+    )
+    parser.add_argument(
+        "--zoom-level", type=int, default=1,
+        help="Zoom level (1 = base, each successive level doubles the scale factor; default: 1)",
     )
     args = parser.parse_args()
+
+    zoom = max(1, args.zoom_level)
+    scale_factor = 2 ** (zoom - 1)
+    figsize_in   = 11.0 * scale_factor
+    density_km   = args.density if args.density is not None else 150.0 / scale_factor
+    font_scale   = scale_factor ** 0.5   # sqrt: z1=1.0, z2=1.41, z3=2.0
+    dpi          = 150 if zoom == 1 else 100
 
     extent = parse_extent(args.extent)
 
@@ -501,7 +526,10 @@ if __name__ == "__main__":
     label = args.extent or "auto"
     render_synoptic_map(
         df,
-        output_path=str(out_dir / f"synoptic_{label}_{ts}.png"),
+        output_path=str(out_dir / f"synoptic_{label}_{ts}_z{zoom}.png"),
         extent=extent,
-        point_density_km=args.density,
+        point_density_km=density_km,
+        dpi=dpi,
+        figsize_in=figsize_in,
+        font_scale=font_scale,
     )

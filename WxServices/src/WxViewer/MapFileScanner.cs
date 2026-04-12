@@ -11,21 +11,21 @@ namespace WxViewer;
 /// when files appear or disappear.
 /// </summary>
 /// <remarks>
-/// Analysis filename format:   synoptic_{label}_{yyyyMMdd}_{HH}.png<br/>
-/// Forecast filename format:   forecast_{yyyyMMdd}_{HH}_f{NNN}.png<br/>
+/// Analysis filename format:   synoptic_{label}_{yyyyMMdd}_{HH}_z{N}.png<br/>
+/// Forecast filename format:   forecast_{yyyyMMdd}_{HH}_f{NNN}_z{N}.png<br/>
 /// Meteogram manifest format:  meteogram_manifest_{yyyyMMdd}_{HH}.json<br/>
-/// Meteogram PNG format:       meteogram_{yyyyMMdd}_{HH}_{ICAO}_{abbrev|full}.png
+/// Meteogram PNG format:       meteogram_{yyyyMMdd}_{HH}_{ICAO}_{F|C}_{abbrev|full}.png
 /// </remarks>
 public sealed class MapFileScanner : IDisposable
 {
-    // synoptic_{label}_{yyyyMMdd}_{HH}.png
+    // synoptic_{label}_{yyyyMMdd}_{HH}_z{N}.png
     private static readonly Regex AnalysisRegex = new(
-        @"^synoptic_(?<label>.+?)_(?<date>\d{8})_(?<hour>\d{2})\.png$",
+        @"^synoptic_(?<label>.+?)_(?<date>\d{8})_(?<hour>\d{2})_z(?<zoom>\d+)\.png$",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-    // forecast_{yyyyMMdd}_{HH}_f{NNN}.png
+    // forecast_{yyyyMMdd}_{HH}_f{NNN}_z{N}.png
     private static readonly Regex ForecastRegex = new(
-        @"^forecast_(?<date>\d{8})_(?<hour>\d{2})_f(?<fh>\d{3})\.png$",
+        @"^forecast_(?<date>\d{8})_(?<hour>\d{2})_f(?<fh>\d{3})_z(?<zoom>\d+)\.png$",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     // meteogram_manifest_{yyyyMMdd}_{HH}.json
@@ -100,13 +100,15 @@ public sealed class MapFileScanner : IDisposable
 
     /// <summary>
     /// Reads the directory and returns one <see cref="AnalysisLabel"/> per
-    /// recognised analysis PNG file, sorted newest-first.
+    /// unique observation time, with zoom-level paths collected on each
+    /// <see cref="AnalysisMap"/>.  Sorted newest-first.
     /// </summary>
     public List<AnalysisLabel> ScanAnalysis()
     {
         if (!Directory.Exists(_directory)) return [];
 
-        var labels = new List<AnalysisLabel>();
+        // Key: (label, obsUtc).  Value: zoom → path.
+        var groups = new Dictionary<(string label, DateTime obsUtc), Dictionary<int, string>>();
 
         foreach (var path in Directory.EnumerateFiles(_directory, "synoptic_*.png"))
         {
@@ -116,10 +118,23 @@ public sealed class MapFileScanner : IDisposable
 
             if (!TryParseDateTime(match.Groups["date"].Value, match.Groups["hour"].Value,
                                   out var obsUtc)) continue;
+            if (!int.TryParse(match.Groups["zoom"].Value, out var zoom)) continue;
 
+            var label = match.Groups["label"].Value;
+            var key   = (label, obsUtc);
+
+            if (!groups.TryGetValue(key, out var zoomPaths))
+                groups[key] = zoomPaths = new Dictionary<int, string>();
+            zoomPaths[zoom] = path;
+        }
+
+        var labels = new List<AnalysisLabel>();
+        foreach (var ((label, obsUtc), zoomPaths) in groups)
+        {
+            if (!zoomPaths.TryGetValue(1, out var z1Path)) continue; // require z1
             var displayLabel = $"{obsUtc:yyyy-MM-dd HH}Z";
-            var map          = new AnalysisMap(obsUtc, path, displayLabel);
-            labels.Add(new AnalysisLabel(path, [map], displayLabel));
+            var map = new AnalysisMap(obsUtc, z1Path, displayLabel, zoomPaths);
+            labels.Add(new AnalysisLabel(z1Path, [map], displayLabel));
         }
 
         labels.Sort((a, b) => b.Frames[0].ObsUtc.CompareTo(a.Frames[0].ObsUtc)); // newest-first
@@ -128,14 +143,15 @@ public sealed class MapFileScanner : IDisposable
 
     /// <summary>
     /// Reads the directory and returns all recognised GFS model runs, each
-    /// containing its frames ordered by forecast hour.  Runs are ordered
-    /// newest-first.
+    /// containing its frames ordered by forecast hour, with zoom-level paths
+    /// collected on each <see cref="ForecastFrame"/>.  Runs are ordered newest-first.
     /// </summary>
     public List<ForecastRun> ScanForecasts()
     {
         if (!Directory.Exists(_directory)) return [];
 
-        var byRun = new Dictionary<DateTime, List<ForecastFrame>>();
+        // Key: (runUtc, forecastHour).  Value: zoom → path.
+        var zoomGroups = new Dictionary<(DateTime runUtc, int fh), Dictionary<int, string>>();
 
         foreach (var path in Directory.EnumerateFiles(_directory, "forecast_*.png"))
         {
@@ -145,12 +161,23 @@ public sealed class MapFileScanner : IDisposable
 
             if (!TryParseDateTime(match.Groups["date"].Value, match.Groups["hour"].Value,
                                   out var runUtc)) continue;
-
             if (!int.TryParse(match.Groups["fh"].Value, out var fh)) continue;
+            if (!int.TryParse(match.Groups["zoom"].Value, out var zoom)) continue;
 
+            var key = (runUtc, fh);
+            if (!zoomGroups.TryGetValue(key, out var zoomPaths))
+                zoomGroups[key] = zoomPaths = new Dictionary<int, string>();
+            zoomPaths[zoom] = path;
+        }
+
+        // Group frames by model run.
+        var byRun = new Dictionary<DateTime, List<ForecastFrame>>();
+        foreach (var ((runUtc, fh), zoomPaths) in zoomGroups)
+        {
+            if (!zoomPaths.TryGetValue(1, out var z1Path)) continue; // require z1
             var validUtc  = runUtc.AddHours(fh);
             var hourLabel = $"+{fh:D3}h  Valid: {validUtc:yyyy-MM-dd HH}Z";
-            var frame     = new ForecastFrame(fh, validUtc, path, hourLabel);
+            var frame     = new ForecastFrame(fh, validUtc, z1Path, hourLabel, zoomPaths);
 
             if (!byRun.TryGetValue(runUtc, out var list))
                 byRun[runUtc] = list = [];

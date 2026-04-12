@@ -27,6 +27,7 @@ import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 from datetime import timedelta
 
+from metpy.calc import reduce_point_density
 from metpy.plots import StationPlot
 from metpy.plots.wx_symbols import sky_cover
 
@@ -75,7 +76,10 @@ def render_forecast_map(
     barb_spacing_deg: float = 1.0,
     station_locs: pd.DataFrame | None = None,
     precip_threshold_mmhr: float = 0.1,
+    point_density_km: float = 75.0,
     dpi: int = 150,
+    figsize_in: float = 11.0,
+    font_scale: float = 1.0,
 ) -> None:
     """
     Render a GFS forecast map and save it to *output_path*.
@@ -162,7 +166,7 @@ def render_forecast_map(
         has_prate = np.nanmax(prate_mm_hr) >= precip_threshold_mmhr
 
     # ── Figure setup ─────────────────────────────────────────────────────────
-    fig = plt.figure(figsize=(11, 11))
+    fig = plt.figure(figsize=(figsize_in, figsize_in))
     ax = fig.add_subplot(1, 1, 1, projection=proj)
 
     x_min, x_max, y_min, y_max = _inner_proj_limits(proj, extent)
@@ -199,15 +203,15 @@ def render_forecast_map(
         lon_grid, lat_grid, tmp_smooth,
         levels=tmp_levels,
         colors="red",
-        linewidths=0.8,
+        linewidths=0.5 * font_scale,
         linestyles="dashed",
         transform=ccrs.PlateCarree(),
         zorder=2,
     )
-    ax.clabel(ct, inline=True, fontsize=7, fmt="%d°C")
+    ax.clabel(ct, inline=True, fontsize=int(7 * font_scale), fmt="%d°C")
     _mark_extrema(ax, lon_grid, lat_grid, tmp_smooth, "W", "K",
                   high_color="darkred", low_color="steelblue", neighborhood=12,
-                  transform=ccrs.PlateCarree())
+                  transform=ccrs.PlateCarree(), font_scale=font_scale)
 
     # ── Dewpoint isopleths (green dashed) ─────────────────────────────────────
     if has_dwp:
@@ -221,12 +225,12 @@ def render_forecast_map(
             lon_grid, lat_grid, dew_smooth,
             levels=dew_levels,
             colors="#00838f",  # teal — distinct from the green precip fill
-            linewidths=0.8,
+            linewidths=0.5 * font_scale,
             linestyles="dashed",
             transform=ccrs.PlateCarree(),
             zorder=2,
         )
-        ax.clabel(cd, inline=True, fontsize=7, fmt="%d°C")
+        ax.clabel(cd, inline=True, fontsize=int(7 * font_scale), fmt="%d°C")
 
     # ── Isobars (black solid) ─────────────────────────────────────────────────
     if has_slp:
@@ -240,14 +244,14 @@ def render_forecast_map(
             lon_grid, lat_grid, slp_hpa,
             levels=slp_levels,
             colors="black",
-            linewidths=1.2,
+            linewidths=0.8 * font_scale,
             transform=ccrs.PlateCarree(),
             zorder=3,
         )
-        ax.clabel(cs, inline=True, fontsize=8, fmt="%d")
+        ax.clabel(cs, inline=True, fontsize=int(8 * font_scale), fmt="%d")
         _mark_extrema(ax, lon_grid, lat_grid, slp_hpa, "H", "L",
                       high_color="navy", low_color="maroon", neighborhood=12, min_depth=1.0,
-                      transform=ccrs.PlateCarree())
+                      transform=ccrs.PlateCarree(), font_scale=font_scale)
 
     # ── Wind / station model ──────────────────────────────────────────────────
     has_wind = "UGrdMs" in df.columns and "VGrdMs" in df.columns \
@@ -271,6 +275,16 @@ def render_forecast_map(
             (stn["Lon"] >= extent[0]) & (stn["Lon"] <= extent[1]) &
             (stn["Lat"] >= extent[2]) & (stn["Lat"] <= extent[3])
         ]
+
+        # Thin stations by density (same approach as synoptic_map.py).
+        if len(stn) > 0:
+            proj_coords = proj.transform_points(
+                ccrs.PlateCarree(), stn["Lon"].values, stn["Lat"].values,
+            )
+            keep = reduce_point_density(proj_coords[:, :2], point_density_km * 1000.0)
+            stn = stn[keep].reset_index(drop=True)
+            logger.info(f"Rendering {len(stn)} forecast station models after density reduction.")
+
         records = []
         for _, row in stn.iterrows():
             i_lat = int(np.argmin(np.abs(lats - row["Lat"])))
@@ -301,7 +315,7 @@ def render_forecast_map(
                 stn_df["lon"].values, stn_df["lat"].values,
                 clip_on=True,
                 transform=ccrs.PlateCarree(),
-                fontsize=8,
+                fontsize=int(8 * font_scale),
             )
             sp.plot_parameter("NW", stn_df["tmp_c"].values,   color="darkred")
             if has_dwp:
@@ -315,7 +329,7 @@ def render_forecast_map(
                 ok = stn_df["oktas"].values.astype(int)
                 sp.plot_symbol("C", np.where(ok >= 0, ok, 0), sky_cover)
             if "icao" in stn_df.columns:
-                sp.plot_text("SE", stn_df["icao"].values, fontsize=7, color="navy")
+                sp.plot_text("SE", stn_df["icao"].values, fontsize=int(7 * font_scale), color="navy")
 
     elif has_wind:
         # ── Fallback: grid-subsampled barbs only ──────────────────────────────
@@ -341,7 +355,7 @@ def render_forecast_map(
     ax.set_title(
         f"GFS Forecast  —  Init: {model_run.strftime('%Y-%m-%d %H%MZ')}  "
         f"Valid: {valid_time.strftime('%Y-%m-%d %H%MZ')}  (f{fh:03d})",
-        fontsize=11, fontweight="bold",
+        fontsize=int(11 * font_scale), fontweight="bold",
     )
 
     plt.tight_layout()
@@ -376,7 +390,18 @@ if __name__ == "__main__":
         "--extent", default=None,
         help="Map extent: preset name (conus, south_central) or W,E,S,N coordinates (default: auto-fit to GFS data bounds)",
     )
+    parser.add_argument(
+        "--zoom-level", type=int, default=1,
+        help="Zoom level (1 = base, each successive level doubles the scale factor; default: 1)",
+    )
     args = parser.parse_args()
+
+    zoom = max(1, args.zoom_level)
+    scale_factor = 2 ** (zoom - 1)
+    figsize_in   = 11.0 * scale_factor
+    density_km   = 150.0 / scale_factor
+    font_scale   = scale_factor ** 0.5   # sqrt: z1=1.0, z2=1.41, z3=2.0
+    dpi          = 150 if zoom == 1 else 100
 
     extent = parse_extent(args.extent)
 
@@ -397,7 +422,13 @@ if __name__ == "__main__":
         out_dir = load_output_dir()
         render_forecast_map(
             df,
-            str(out_dir / f"forecast_{args.run}_f{args.fh:03d}.png"),
+            str(out_dir / f"forecast_{args.run}_f{args.fh:03d}_z{zoom}.png"),
             extent=extent,
+            isobar_interval_hpa=8.0,
+            isotherm_interval_c=5.0,
             station_locs=station_locs,
+            point_density_km=density_km,
+            dpi=dpi,
+            figsize_in=figsize_in,
+            font_scale=font_scale,
         )

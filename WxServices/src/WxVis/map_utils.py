@@ -15,8 +15,8 @@ from scipy.ndimage import label as _connected_components
 
 # ── Named extent presets ──────────────────────────────────────────────────────
 
-#: CONUS with a small buffer.
-CONUS_EXTENT = (-126.0, -65.0, 22.0, 50.0)
+#: CONUS with margin to prevent Lambert Conformal clipping at edges.
+CONUS_EXTENT = (-136.0, -60.0, 17.0, 55.0)
 
 #: South-central US (Texas + surrounding states).
 SOUTH_CENTRAL_EXTENT = (-106.0, -88.0, 25.0, 38.0)
@@ -113,6 +113,7 @@ def _mark_extrema(
     neighborhood: int = 16,
     min_depth: float = 0.0,
     transform=None,
+    font_scale: float = 1.0,
 ) -> None:
     """
     Annotate local extrema in a 2-D gridded field with bold text labels.
@@ -172,7 +173,7 @@ def _mark_extrema(
     local_max &= interior
     local_min &= interior
 
-    txt_kw = dict(fontsize=16, fontweight="bold", ha="center", va="center", zorder=6, clip_on=True)
+    txt_kw = dict(fontsize=int(16 * font_scale), fontweight="bold", ha="center", va="center", zorder=6, clip_on=True)
     if transform is not None:
         txt_kw["transform"] = transform
 

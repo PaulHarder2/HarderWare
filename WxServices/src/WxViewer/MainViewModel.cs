@@ -5,6 +5,7 @@ using System.Runtime.CompilerServices;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using Microsoft.Data.SqlClient;
+using WxServices.Logging;
 
 namespace WxViewer;
 
@@ -27,6 +28,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private string         _analysisFrameLabel = "";
     private bool           _isAnalysisPlaying;
     private SpeedOption    _selectedAnalysisSpeed;
+    private int            _analysisCurrentZoom = 1;
+    private IReadOnlyDictionary<int, string>? _analysisZoomPaths;
 
     // ── Meteogram backing fields ──────────────────────────────────────────────
 
@@ -45,6 +48,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private string         _forecastFrameLabel = "";
     private bool           _isForecastPlaying;
     private SpeedOption    _selectedForecastSpeed;
+    private int            _forecastCurrentZoom = 1;
+    private IReadOnlyDictionary<int, string>? _forecastZoomPaths;
 
     // ── Shared ────────────────────────────────────────────────────────────────
 
@@ -80,7 +85,13 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     public RelayCommand ForecastStepForwardCommand { get; }
     public RelayCommand ForecastStepBackCommand    { get; }
 
+    public RelayCommand ResetAnalysisZoomCommand  { get; }
+    public RelayCommand ResetForecastZoomCommand  { get; }
+
     // ── Events ────────────────────────────────────────────────────────────────
+
+    /// <summary>Raised when a zoom reset is requested so code-behind can reset the transforms.</summary>
+    public event Action<string>? ZoomResetRequested;
 
     /// <summary>Raised when the recipient selector finds a matching meteogram to scroll to.</summary>
     public event Action<MeteogramItem>? ScrollToItem;
@@ -119,6 +130,9 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         ForecastPlayPauseCommand   = new RelayCommand(ToggleForecastPlay,   () => _selectedForecastRun?.Frames.Count > 1);
         ForecastStepForwardCommand = new RelayCommand(StepForecastForward,  () => _selectedForecastRun?.Frames.Count > 1);
         ForecastStepBackCommand    = new RelayCommand(StepForecastBack,     () => _selectedForecastRun?.Frames.Count > 1);
+
+        ResetAnalysisZoomCommand  = new RelayCommand(ResetAnalysisZoom);
+        ResetForecastZoomCommand  = new RelayCommand(ResetForecastZoom);
 
         _scanner = new MapFileScanner(outputDir, dispatcher);
         _scanner.DirectoryChanged += (_, _) => Refresh();
@@ -609,22 +623,38 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
     // ── Image loading ─────────────────────────────────────────────────────────
 
+    private string? _lastAnalysisPath;
     private void LoadAnalysisImage()
     {
         var frame = CurrentAnalysisFrame;
-        AnalysisImage      = LoadBitmap(frame?.FilePath);
+        _analysisZoomPaths = frame?.ZoomPaths;
+        var path = ResolveZoomPath(_analysisZoomPaths, _analysisCurrentZoom);
+        AnalysisImage      = LoadBitmap(path);
         AnalysisFrameLabel = frame is null ? "" : $"{frame.ObsUtc:yyyy-MM-dd HH}Z";
+        if (path != _lastAnalysisPath)
+        {
+            Logger.Info($"Analysis: loaded z{_analysisCurrentZoom} — {Path.GetFileName(path ?? "(none)")}");
+            _lastAnalysisPath = path;
+        }
         UpdateStatus();
     }
 
     private AnalysisMap? CurrentAnalysisFrame =>
         _selectedAnalysisLabel?.Frames.Count > 0 ? _selectedAnalysisLabel.Frames[0] : null;
 
+    private string? _lastForecastPath;
     private void LoadForecastImage()
     {
         var frame = CurrentForecastFrame;
-        ForecastImage      = LoadBitmap(frame?.FilePath);
+        _forecastZoomPaths = frame?.ZoomPaths;
+        var path = ResolveZoomPath(_forecastZoomPaths, _forecastCurrentZoom);
+        ForecastImage      = LoadBitmap(path);
         ForecastFrameLabel = frame?.HourLabel ?? "";
+        if (path != _lastForecastPath)
+        {
+            Logger.Info($"Forecast: loaded z{_forecastCurrentZoom} — {Path.GetFileName(path ?? "(none)")}");
+            _lastForecastPath = path;
+        }
         UpdateStatus();
     }
 
@@ -632,6 +662,98 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         _selectedForecastRun?.Frames.Count > 0
             ? _selectedForecastRun.Frames[Math.Clamp(_forecastFrameIndex, 0, _selectedForecastRun.Frames.Count - 1)]
             : null;
+
+    // ── Zoom support ─────────────────────────────────────────────────────────
+
+    /// <summary>Current zoom level for the analysis pane (1-based).</summary>
+    public int AnalysisCurrentZoom => _analysisCurrentZoom;
+
+    /// <summary>Display string for the analysis zoom level, e.g. "Z1".</summary>
+    public string AnalysisZoomLabel => $"Z{_analysisCurrentZoom}";
+
+    /// <summary>Current zoom level for the forecast pane (1-based).</summary>
+    public int ForecastCurrentZoom => _forecastCurrentZoom;
+
+    /// <summary>Display string for the forecast zoom level, e.g. "Z1".</summary>
+    public string ForecastZoomLabel => $"Z{_forecastCurrentZoom}";
+
+    /// <summary>
+    /// Swaps the analysis image to a different zoom level.
+    /// Returns the actual zoom level loaded (may differ if requested level is unavailable).
+    /// </summary>
+    public int SwapAnalysisZoomLevel(int newZoom)
+    {
+        var prevZoom = _analysisCurrentZoom;
+        _analysisCurrentZoom = ResolveAvailableZoom(_analysisZoomPaths, newZoom);
+        if (_analysisCurrentZoom == prevZoom) return _analysisCurrentZoom;
+        var path = ResolveZoomPath(_analysisZoomPaths, _analysisCurrentZoom);
+        AnalysisImage = LoadBitmap(path);
+        var direction = _analysisCurrentZoom > prevZoom ? "zoom IN" : "zoom OUT";
+        Logger.Info($"Analysis: {direction} z{prevZoom} → z{_analysisCurrentZoom} — {Path.GetFileName(path ?? "(none)")}");
+        OnPropertyChanged(nameof(AnalysisZoomLabel));
+        return _analysisCurrentZoom;
+    }
+
+    /// <summary>
+    /// Swaps the forecast image to a different zoom level.
+    /// Returns the actual zoom level loaded (may differ if requested level is unavailable).
+    /// </summary>
+    public int SwapForecastZoomLevel(int newZoom)
+    {
+        var prevZoom = _forecastCurrentZoom;
+        _forecastCurrentZoom = ResolveAvailableZoom(_forecastZoomPaths, newZoom);
+        if (_forecastCurrentZoom == prevZoom) return _forecastCurrentZoom;
+        var path = ResolveZoomPath(_forecastZoomPaths, _forecastCurrentZoom);
+        ForecastImage = LoadBitmap(path);
+        var direction = _forecastCurrentZoom > prevZoom ? "zoom IN" : "zoom OUT";
+        Logger.Info($"Forecast: {direction} z{prevZoom} → z{_forecastCurrentZoom} — {Path.GetFileName(path ?? "(none)")}");
+        OnPropertyChanged(nameof(ForecastZoomLabel));
+        return _forecastCurrentZoom;
+    }
+
+    /// <summary>Resets analysis zoom to level 1 and notifies code-behind to reset transforms.</summary>
+    public void ResetAnalysisZoom()
+    {
+        if (_analysisCurrentZoom == 1) { ZoomResetRequested?.Invoke("Analysis"); return; }
+        _analysisCurrentZoom = 1;
+        var path = ResolveZoomPath(_analysisZoomPaths, 1);
+        AnalysisImage = LoadBitmap(path);
+        Logger.Info($"Analysis: reset to z1 — {Path.GetFileName(path ?? "(none)")}");
+        OnPropertyChanged(nameof(AnalysisZoomLabel));
+        ZoomResetRequested?.Invoke("Analysis");
+    }
+
+    /// <summary>Resets forecast zoom to level 1 and notifies code-behind to reset transforms.</summary>
+    public void ResetForecastZoom()
+    {
+        if (_forecastCurrentZoom == 1) { ZoomResetRequested?.Invoke("Forecast"); return; }
+        _forecastCurrentZoom = 1;
+        var path = ResolveZoomPath(_forecastZoomPaths, 1);
+        ForecastImage = LoadBitmap(path);
+        Logger.Info($"Forecast: reset to z1 — {Path.GetFileName(path ?? "(none)")}");
+        OnPropertyChanged(nameof(ForecastZoomLabel));
+        ZoomResetRequested?.Invoke("Forecast");
+    }
+
+    /// <summary>Resolves the best available path for the requested zoom level.</summary>
+    private static string? ResolveZoomPath(IReadOnlyDictionary<int, string>? zoomPaths, int zoom)
+    {
+        if (zoomPaths is null || zoomPaths.Count == 0) return null;
+        if (zoomPaths.TryGetValue(zoom, out var path)) return path;
+        // Fall back to highest available, then z1.
+        var best = zoomPaths.Keys.Where(k => k <= zoom).OrderByDescending(k => k).FirstOrDefault();
+        if (best > 0 && zoomPaths.TryGetValue(best, out path)) return path;
+        return zoomPaths.TryGetValue(1, out path) ? path : zoomPaths.Values.FirstOrDefault();
+    }
+
+    /// <summary>Returns the best available zoom level closest to the requested one.</summary>
+    private static int ResolveAvailableZoom(IReadOnlyDictionary<int, string>? zoomPaths, int requested)
+    {
+        if (zoomPaths is null || zoomPaths.Count == 0) return 1;
+        if (zoomPaths.ContainsKey(requested)) return requested;
+        var best = zoomPaths.Keys.Where(k => k <= requested).OrderByDescending(k => k).FirstOrDefault();
+        return best > 0 ? best : 1;
+    }
 
     /// <summary>
     /// Loads a PNG as a frozen BitmapImage using CacheOption.OnLoad so the

@@ -1,13 +1,19 @@
 namespace WxViewer;
 
 /// <summary>
-/// One frame within a GFS model run.
+/// One frame within a GFS model run, with PNG files at each zoom level.
 /// </summary>
 /// <param name="ForecastHour">The integer forecast hour (e.g. 24).</param>
 /// <param name="ValidUtc">The valid time = ModelRunUtc + ForecastHour hours.</param>
-/// <param name="FilePath">Absolute path to the PNG file.</param>
+/// <param name="FilePath">Absolute path to the z1 (base zoom) PNG file.</param>
 /// <param name="HourLabel">Short label shown in the status bar, e.g. "+024h  Valid: 2026-04-03 18Z".</param>
-public sealed record ForecastFrame(int ForecastHour, DateTime ValidUtc, string FilePath, string HourLabel);
+/// <param name="ZoomPaths">Zoom level → absolute file path mapping (1-based).</param>
+public sealed record ForecastFrame(
+    int ForecastHour,
+    DateTime ValidUtc,
+    string FilePath,
+    string HourLabel,
+    IReadOnlyDictionary<int, string> ZoomPaths);
 
 /// <summary>
 /// Represents one GFS model run, grouping all its forecast-hour PNG files.

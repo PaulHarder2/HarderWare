@@ -27,6 +27,13 @@ public class WxVisConfig
     /// <summary>Number of days to retain PNG plot files before deleting them.</summary>
     public int PlotRetentionDays { get; set; } = 14;
 
+    /// <summary>
+    /// Number of zoom levels to render for analysis and forecast maps.
+    /// Each successive level doubles the scale factor (and image size).
+    /// Level 1 is the base; level 2 is 2x, level 3 is 4x, etc.
+    /// </summary>
+    public int ZoomLevels { get; set; } = 3;
+
     /// <summary>ODBC driver name for the Python DB connection.</summary>
     public string DbDriver { get; set; } = "ODBC Driver 17 for SQL Server";
 

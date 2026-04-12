@@ -126,27 +126,35 @@ public sealed class ForecastMapWorker : BackgroundService
 
         Logger.Info($"ForecastMapWorker: {pending.Count} forecast hour(s) to render for run {latestRun:yyyy-MM-dd HH}Z.");
 
+        var extentSuffix = string.IsNullOrEmpty(cfg.MapExtent) ? "" : $" --extent {cfg.MapExtent}";
+
         foreach (var fh in pending)
         {
             if (ct.IsCancellationRequested) break;
 
-            Logger.Info($"ForecastMapWorker: rendering f{fh:D3}...");
-            var ok = await MapRenderer.RunAsync(
-                cfg.CondaPythonExe, cfg.ScriptDir,
-                "forecast_map.py", $"--fh {fh} --run {latestRun:yyyyMMdd_HH}{(string.IsNullOrEmpty(cfg.MapExtent) ? "" : $" --extent {cfg.MapExtent}")}",
-                ct,
-                _pythonEnv);
+            Logger.Info($"ForecastMapWorker: rendering f{fh:D3} ({cfg.ZoomLevels} zoom level(s))...");
+            var allOk = true;
+            for (int z = 1; z <= cfg.ZoomLevels; z++)
+            {
+                var ok = await MapRenderer.RunAsync(
+                    cfg.CondaPythonExe, cfg.ScriptDir,
+                    "forecast_map.py", $"--fh {fh} --run {latestRun:yyyyMMdd_HH} --zoom-level {z}{extentSuffix}",
+                    ct,
+                    _pythonEnv);
 
-            if (ok)
+                if (!ok) { allOk = false; break; }
+            }
+
+            if (allOk)
                 rendered.Add(fh);
             else
                 Logger.Error($"ForecastMapWorker: render failed for f{fh:D3} — will retry next poll.");
         }
     }
 
-    /// <summary>Returns the expected PNG output path for a given model run and forecast hour.</summary>
+    /// <summary>Returns the expected z1 PNG output path for a given model run and forecast hour.</summary>
     private static string PngPath(string outputDir, DateTime modelRun, int forecastHour) =>
-        Path.Combine(outputDir, $"forecast_{modelRun:yyyyMMdd_HH}_f{forecastHour:D3}.png");
+        Path.Combine(outputDir, $"forecast_{modelRun:yyyyMMdd_HH}_f{forecastHour:D3}_z1.png");
 
     /// <summary>
     /// Loads and returns the current <see cref="WxVisConfig"/> from the

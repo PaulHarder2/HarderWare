@@ -46,7 +46,7 @@ public sealed class AnalysisMapWorker : BackgroundService
         {
             var hourStart  = new DateTime(nowUtc.Year, nowUtc.Month, nowUtc.Day, nowUtc.Hour, 0, 0, DateTimeKind.Utc);
             var hourTag    = nowUtc.ToString("yyyyMMdd_HH");
-            var alreadyDone = Directory.EnumerateFiles(cfg.OutputDir, $"synoptic_*_{hourTag}.png").Any();
+            var alreadyDone = Directory.EnumerateFiles(cfg.OutputDir, $"synoptic_*_{hourTag}_z1.png").Any();
             if (alreadyDone)
             {
                 lastRenderedHour = nowUtc.Hour;
@@ -61,18 +61,24 @@ public sealed class AnalysisMapWorker : BackgroundService
 
             if (nowUtc.Minute >= cfg.AnalysisMapMinutePastHour && lastRenderedHour != nowUtc.Hour)
             {
-                Logger.Info($"AnalysisMapWorker: rendering synoptic analysis map for {nowUtc:yyyy-MM-dd HH}Z.");
+                Logger.Info($"AnalysisMapWorker: rendering synoptic analysis map for {nowUtc:yyyy-MM-dd HH}Z ({cfg.ZoomLevels} zoom level(s)).");
 
                 var extentArg = string.IsNullOrEmpty(cfg.MapExtent) ? "" : $"--extent {cfg.MapExtent}";
-                var ok = await MapRenderer.RunAsync(
-                    cfg.CondaPythonExe,
-                    cfg.ScriptDir,
-                    "synoptic_map.py",
-                    extentArg,
-                    stoppingToken,
-                    _pythonEnv);
+                var allOk = true;
+                for (int z = 1; z <= cfg.ZoomLevels; z++)
+                {
+                    var ok = await MapRenderer.RunAsync(
+                        cfg.CondaPythonExe,
+                        cfg.ScriptDir,
+                        "synoptic_map.py",
+                        $"{extentArg} --zoom-level {z}",
+                        stoppingToken,
+                        _pythonEnv);
 
-                if (ok)
+                    if (!ok) { allOk = false; break; }
+                }
+
+                if (allOk)
                 {
                     lastRenderedHour = nowUtc.Hour;
                     Logger.Info("AnalysisMapWorker: synoptic analysis map rendered successfully.");
