@@ -298,7 +298,8 @@ public sealed class ClaudeClient
             ? $" &middot; GFS: {gfs.ModelRunUtc:yyyy-MM-dd HHmm}Z"
             : " &middot; GFS: n/a";
 
-        var line = $"{snap.StationIcao}: {snap.ObservationTimeUtc:yyyy-MM-dd HHmm}Z{gfsPart}";
+        var line = $"{snap.StationIcao}: {snap.ObservationTimeUtc:yyyy-MM-dd HHmm}Z{gfsPart}"
+                 + $" &middot; WxServices {WxServices.Common.WxPaths.ProductVersion}";
 
         return $"""
             <div style="max-width:600px;margin:0 auto;">

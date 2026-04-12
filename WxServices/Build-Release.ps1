@@ -116,14 +116,25 @@ foreach ($dir in @('Logs', 'plots', 'temp')) {
     New-Item -ItemType Directory -Path "$ReleaseDir\$dir" -Force | Out-Null
 }
 
+# ── Read product version from Directory.Build.props ──────────────────────────
+
+$propsPath = "$SolutionRoot\Directory.Build.props"
+$productVersion = "0.0.0"
+if (Test-Path $propsPath) {
+    [xml]$props = Get-Content $propsPath
+    $v = $props.Project.PropertyGroup | ForEach-Object { $_.Version } | Where-Object { $_ }
+    if ($v) { $productVersion = $v }
+}
+
 # ── Done ──────────────────────────────────────────────────────────────────────
 
 $itemCount = (Get-ChildItem $ReleaseDir -Recurse -File).Count
 Write-Host ""
-Write-Host "Release staged: $ReleaseDir ($itemCount files)" -ForegroundColor Green
-Write-Host "Next: compile the Inno Setup script to produce the installer."
+Write-Host "Release staged: $ReleaseDir ($itemCount files) — WxServices $productVersion" -ForegroundColor Green
+Write-Host "Next: compile the Inno Setup script to produce the installer:"
+Write-Host "  ISCC /DAppVer=$productVersion HarderWare_WxServices.iss" -ForegroundColor Cyan
 
-# ── Reminder: check bundled wgrib2 version ───────────────────────────────────
+# ── Reminders ────────────────────────────────────────────────────────────────
 
 $versionFile = "$SolutionRoot\tools\wgrib2-version.txt"
 if (Test-Path $versionFile) {

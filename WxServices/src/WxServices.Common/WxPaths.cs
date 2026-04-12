@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text.Json;
 
 namespace WxServices.Common;
@@ -38,6 +39,15 @@ public sealed class WxPaths
 
     /// <summary>Default installation root used when the setting is absent from configuration.</summary>
     public const string DefaultInstallRoot = @"C:\HarderWare";
+
+    /// <summary>
+    /// Returns the WxServices product version string (e.g. "1.0.0") from the
+    /// calling assembly's informational version, or the assembly version as fallback.
+    /// </summary>
+    public static string ProductVersion =>
+        Assembly.GetEntryAssembly()?
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+            .InformationalVersion ?? Assembly.GetEntryAssembly()?.GetName().Version?.ToString(3) ?? "0.0.0";
 
     /// <summary>Root directory for the entire WxServices installation.</summary>
     public string InstallRoot { get; }

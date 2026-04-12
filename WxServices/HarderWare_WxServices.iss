@@ -15,9 +15,13 @@
 ;   2. Open this file in Inno Setup Compiler and click Build, or run:
 ;      "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" HarderWare_WxServices.iss
 
+#ifndef AppVer
+  #define AppVer "1.0.0"
+#endif
+
 [Setup]
 AppName=HarderWare WxServices
-AppVersion=1.0
+AppVersion={#AppVer}
 AppPublisher=Paul H. Harder II
 DefaultDirName=C:\HarderWare
 DefaultGroupName=HarderWare

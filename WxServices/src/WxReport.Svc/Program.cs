@@ -18,7 +18,7 @@ var installRoot = WxPaths.ReadInstallRoot();
 var paths = new WxPaths(installRoot);
 
 Logger.Initialise(paths.LogFile("wxreport-svc"));
-Logger.Info("WxReport.Svc starting.");
+Logger.Info($"WxReport.Svc {WxPaths.ProductVersion} starting.");
 
 var host = Host.CreateDefaultBuilder(args)
     .UseWindowsService(options =>

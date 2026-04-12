@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Input;
+using WxServices.Common;
 
 namespace WxManager;
 
@@ -15,6 +16,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        Title = $"WxManager {WxPaths.ProductVersion}";
         SetupTab.AllChecksPassed += OnAllChecksPassed;
         ConfigureTab.ConfigurationSaved += OnConfigurationSaved;
     }

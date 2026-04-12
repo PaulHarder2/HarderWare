@@ -19,7 +19,7 @@ var installRoot = WxPaths.ReadInstallRoot();
 var paths = new WxPaths(installRoot);
 
 Logger.Initialise(paths.LogFile("wxparser-svc"));
-Logger.Info("WxParser.Svc starting.");
+Logger.Info($"WxParser.Svc {WxPaths.ProductVersion} starting.");
 
 var host = Host.CreateDefaultBuilder(args)
     .UseWindowsService(options =>

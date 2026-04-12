@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
+using WxServices.Common;
 
 namespace WxViewer;
 
@@ -12,6 +13,7 @@ public partial class MainWindow : Window
     public MainWindow(MainViewModel viewModel)
     {
         InitializeComponent();
+        Title = $"WxViewer {WxPaths.ProductVersion}";
         _vm = viewModel;
         DataContext = _vm;
         _vm.ScrollToItem      += OnScrollToItem;
