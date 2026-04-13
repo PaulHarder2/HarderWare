@@ -5,7 +5,7 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 
 | Version | Commit  | Date       | Summary |
 |---------|---------|------------|---------|
-| 1.2.0   | pending | 2026-04-13 | Metrics instrumentation across all services; report footer branding |
+| 1.2.0   | 211282c | 2026-04-13 | Metrics instrumentation across all services; report footer branding |
 | 1.1.1   | a0a3b5c | 2026-04-13 | Bug fixes, logging audit, meteogram cosmetic fix |
 | 1.1.0   | f6fd52c | 2026-04-12 | Multi-zoom map rendering with interactive zoom/pan |
 | 1.0.2   | d55384e | 2026-04-12 | Meteogram temp-unit bug fix; log format cleanup |
