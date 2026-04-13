@@ -646,7 +646,7 @@ Each pane has its own toolbar docked to the top of the pane, immediately above t
 | `RelayCommand` | `ICommand` implementation; `CanExecuteChanged` wired to `CommandManager.RequerySuggested` |
 | `MainWindow` | Frameless WPF window; `WindowChrome` for correct maximise/resize behaviour; custom title-bar and keyboard event handlers; suppresses ToolBar gripper and overflow button |
 
-**Keyboard navigation:** Arrow keys are handled globally by `MainWindow.OnKeyDown`. Both sliders have `Focusable="False"` so they cannot capture keyboard focus and interfere with arrow-key routing; mouse dragging still works normally. ComboBoxes do capture focus, so arrow-key navigation is suppressed while a ComboBox is active.
+**Keyboard navigation:** Arrow keys are handled globally by `MainWindow.OnKeyDown`. Both sliders have `Focusable="False"` so they cannot capture keyboard focus and interfere with arrow-key routing; mouse dragging still works normally. ComboBoxes return keyboard focus to the window via `DropDownClosed`, so arrow-key navigation resumes immediately after a selection is made; it is suppressed only while a dropdown is open.
 
 | Key | Action |
 |---|---|

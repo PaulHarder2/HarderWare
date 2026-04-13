@@ -216,7 +216,8 @@
                                 <ComboBox Width="118"
                                           ItemsSource="{Binding AnalysisLabels}"
                                           SelectedItem="{Binding SelectedAnalysisLabel}"
-                                          DisplayMemberPath="Label"/>
+                                          DisplayMemberPath="Label"
+                                          DropDownClosed="ComboBox_DropDownClosed"/>
 
                                 <Separator/>
 
@@ -250,7 +251,8 @@
                                 <ComboBox Width="72"
                                           ItemsSource="{Binding SpeedOptions}"
                                           SelectedItem="{Binding SelectedAnalysisSpeed}"
-                                          DisplayMemberPath="Label"/>
+                                          DisplayMemberPath="Label"
+                                          DropDownClosed="ComboBox_DropDownClosed"/>
 
                                 <Separator/>
 
@@ -352,7 +354,8 @@
                                 <ComboBox Width="145"
                                           ItemsSource="{Binding ForecastRuns}"
                                           SelectedItem="{Binding SelectedForecastRun}"
-                                          DisplayMemberPath="Label"/>
+                                          DisplayMemberPath="Label"
+                                          DropDownClosed="ComboBox_DropDownClosed"/>
 
                                 <Separator/>
 
@@ -386,7 +389,8 @@
                                 <ComboBox Width="72"
                                           ItemsSource="{Binding SpeedOptions}"
                                           SelectedItem="{Binding SelectedForecastSpeed}"
-                                          DisplayMemberPath="Label"/>
+                                          DisplayMemberPath="Label"
+                                          DropDownClosed="ComboBox_DropDownClosed"/>
 
                                 <Separator/>
 
@@ -467,14 +471,16 @@
                             <ComboBox Width="200"
                                       ItemsSource="{Binding MeteogramRuns}"
                                       SelectedItem="{Binding SelectedMeteogramRun}"
-                                      DisplayMemberPath="Label"/>
+                                      DisplayMemberPath="Label"
+                                      DropDownClosed="ComboBox_DropDownClosed"/>
                             <Separator Margin="8,0"/>
                             <TextBlock Text="Recipient:" Foreground="#d0d0d0"
                                        VerticalAlignment="Center" Margin="4,0,4,0"/>
                             <ComboBox Width="240"
                                       ItemsSource="{Binding Recipients}"
                                       SelectedItem="{Binding SelectedRecipient}"
-                                      DisplayMemberPath="DisplayText"/>
+                                      DisplayMemberPath="DisplayText"
+                                      DropDownClosed="ComboBox_DropDownClosed"/>
                         </ToolBar>
                     </ToolBarTray>
 

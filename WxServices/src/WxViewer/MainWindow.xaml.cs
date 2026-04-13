@@ -367,6 +367,9 @@ public partial class MainWindow : Window
             translate.Y = Math.Clamp(translate.Y, vh - ih, 0);
     }
 
+    private void ComboBox_DropDownClosed(object sender, EventArgs e)
+        => Keyboard.Focus(this);
+
     /// <summary>
     /// Handles arrow-key navigation for both panes.
     /// Left/Right step the forecast pane; Up/Down step the observation pane.
