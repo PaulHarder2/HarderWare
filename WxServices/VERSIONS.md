@@ -9,6 +9,7 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 | 1.0.1   | ef49de4 | 2026-04-11 | Version display and startup logging |
 | 1.0.2   | d55384e | 2026-04-12 | Meteogram temp-unit bug fix; log format cleanup |
 | 1.1.0   | f6fd52c | 2026-04-12 | Multi-zoom map rendering with interactive zoom/pan |
+| 1.1.1   | pending | 2026-04-13 | Bug fixes, logging audit, meteogram cosmetic fix |
 
 ---
 
@@ -39,3 +40,14 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 - CONUS map extent expanded from (-126, -65, 22, 50) to (-136, -60, 17, 55) to prevent Lambert Conformal clipping at edges
 - Low-quality bitmap scaling during active interaction for responsiveness, restored to high-quality after 200 ms idle
 - Maximized window constrained to working area to avoid taskbar overlap
+
+## 1.1.1 — Bug fixes, logging audit, meteogram cosmetic fix (2026-04-13)
+
+- **Bug fix:** ComboBoxes (Analysis selector, GFS Run selector, speed selectors, meteogram run/recipient selectors) retained keyboard focus after selection, trapping arrow keys. All six ComboBoxes now return focus to the main window via `DropDownClosed` + `Keyboard.Focus(this)`.
+- **WxViewer logging and error-handling audit:**
+  - Global exception handlers: `DispatcherUnhandledException`, `AppDomain.UnhandledException`, and `TaskScheduler.UnobservedTaskException` registered at startup so unhandled exceptions are logged before the process terminates.
+  - All previously-silent catch blocks now log via `Logger.Warn`: settings parsing, database queries, image loading, manifest parsing, and `FileSystemWatcher` errors.
+  - `MainWindow.OnClosed` unsubscribes ViewModel event handlers and stops the quality-restoration timer.
+  - `MainViewModel.Dispose` unsubscribes `MapFileScanner.DirectoryChanged` (converted from lambda to named method).
+  - Highlight timer reused as a single instance with a named tick handler instead of being recreated on each highlight call.
+- **Meteogram cosmetic fix:** Right-axis tick labels now rendered in green to match the RH line and axis label.
