@@ -9,7 +9,7 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 | 1.0.1   | ef49de4 | 2026-04-11 | Version display and startup logging |
 | 1.0.2   | d55384e | 2026-04-12 | Meteogram temp-unit bug fix; log format cleanup |
 | 1.1.0   | f6fd52c | 2026-04-12 | Multi-zoom map rendering with interactive zoom/pan |
-| 1.1.1   | pending | 2026-04-13 | Bug fixes, logging audit, meteogram cosmetic fix |
+| 1.1.1   | a0a3b5c | 2026-04-13 | Bug fixes, logging audit, meteogram cosmetic fix |
 
 ---
 
