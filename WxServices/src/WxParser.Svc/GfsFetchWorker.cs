@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using MetarParser.Data;
 using Microsoft.EntityFrameworkCore;
 using WxServices.Common;
@@ -21,6 +23,11 @@ public sealed class GfsFetchWorker : BackgroundService
     private readonly DbContextOptions<WeatherDataContext> _dbOptions;
     private readonly HttpClient _http = new() { DefaultRequestHeaders = { { "User-Agent", "GfsFetcher/1.0 (WxServices)" } } };
 
+    private readonly Meter _meter = new("WxParser.Svc.Gfs", "1.0.0");
+    private readonly Counter<long> _gfsCycles;
+    private readonly Counter<long> _gfsFailures;
+    private readonly Histogram<double> _gfsDuration;
+
     /// <summary>
     /// Initialises a new instance of <see cref="GfsFetchWorker"/> with the given dependencies.
     /// </summary>
@@ -30,8 +37,11 @@ public sealed class GfsFetchWorker : BackgroundService
         IConfiguration config,
         DbContextOptions<WeatherDataContext> dbOptions)
     {
-        _config    = config;
-        _dbOptions = dbOptions;
+        _config      = config;
+        _dbOptions   = dbOptions;
+        _gfsCycles   = _meter.CreateCounter<long>("wxparser.gfs.cycles.total", description: "Number of completed GFS fetch cycles.");
+        _gfsFailures = _meter.CreateCounter<long>("wxparser.gfs.failures.total", description: "Number of failed GFS fetch cycles.");
+        _gfsDuration = _meter.CreateHistogram<double>("wxparser.gfs.cycle.duration.seconds", unit: "s", description: "Duration of each GFS fetch cycle.");
     }
 
     /// <summary>
@@ -81,6 +91,7 @@ public sealed class GfsFetchWorker : BackgroundService
     /// </sideeffects>
     private async Task GfsCycleAsync(CancellationToken ct)
     {
+        var sw = Stopwatch.StartNew();
         try
         {
             var region = FetchRegion.FromConfig(key => _config[key]);
@@ -110,9 +121,14 @@ public sealed class GfsFetchWorker : BackgroundService
                 cfg.RetainModelRuns,
                 cfg.DelayHours,
                 ct);
+
+            _gfsCycles.Add(1);
+            _gfsDuration.Record(sw.Elapsed.TotalSeconds);
         }
         catch (Exception ex) when (!ct.IsCancellationRequested)
         {
+            _gfsFailures.Add(1);
+            _gfsDuration.Record(sw.Elapsed.TotalSeconds);
             Logger.Error("GfsFetchWorker: unhandled exception in GFS fetch cycle.", ex);
         }
     }
@@ -134,6 +150,7 @@ public sealed class GfsFetchWorker : BackgroundService
     public override void Dispose()
     {
         _http.Dispose();
+        _meter.Dispose();
         base.Dispose();
     }
 }

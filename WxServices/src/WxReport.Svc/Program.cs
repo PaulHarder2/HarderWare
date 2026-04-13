@@ -13,6 +13,7 @@ using WxReport.Svc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.FileProviders;
+using OpenTelemetry.Metrics;
 
 var installRoot = WxPaths.ReadInstallRoot();
 var paths = new WxPaths(installRoot);
@@ -40,6 +41,40 @@ var host = Host.CreateDefaultBuilder(args)
         var dbOptions = new DbContextOptionsBuilder<WeatherDataContext>()
             .UseSqlServer(connectionString)
             .Options;
+
+        var telemetryEnabled = ctx.Configuration.GetValue<bool>("Telemetry:Enabled", false);
+        var otlpEndpoint = ctx.Configuration["Telemetry:OtlpEndpoint"] ?? "http://localhost:4318/v1/metrics";
+
+        services.AddOpenTelemetry()
+            .WithMetrics(m =>
+            {
+                m.AddMeter("WxReport.Svc")
+                 .AddView("wxreport.cycle.duration.seconds",
+                    new ExplicitBucketHistogramConfiguration
+                    {
+                        Boundaries = [1, 2, 5, 10, 20, 30, 60, 120]
+                    })
+                 .AddView("wxreport.claude.duration.seconds",
+                    new ExplicitBucketHistogramConfiguration
+                    {
+                        Boundaries = [1, 2, 5, 10, 15, 20, 30, 60]
+                    });
+
+                if (telemetryEnabled)
+                {
+                    m.AddOtlpExporter((o, r) =>
+                    {
+                        o.Endpoint = new Uri(otlpEndpoint);
+                        o.Protocol = OpenTelemetry.Exporter.OtlpExportProtocol.HttpProtobuf;
+                        r.PeriodicExportingMetricReaderOptions.ExportIntervalMilliseconds = 10_000;
+                    });
+                    Logger.Info($"Telemetry enabled. Exporting metrics to {otlpEndpoint}.");
+                }
+                else
+                {
+                    Logger.Info("Telemetry disabled. Set Telemetry:Enabled=true in appsettings to export metrics.");
+                }
+            });
 
         services.AddSingleton(dbOptions);
         services.AddHttpClient("WxReport", c =>

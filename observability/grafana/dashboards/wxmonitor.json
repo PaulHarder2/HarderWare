@@ -1,0 +1,143 @@
+{
+  "title": "WxMonitor",
+  "timezone": "utc",
+  "uid": "wxmonitor-v1",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "1m",
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "graphTooltip": 1,
+  "tags": ["wxservices"],
+  "editable": true,
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Total Monitor Cycles",
+      "description": "Cumulative completed monitor cycles since service start.",
+      "gridPos": { "x": 0, "y": 0, "w": 8, "h": 4 },
+      "targets": [
+        {
+          "expr": "wxmonitor_cycles_total",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "green", "value": null }]
+          }
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Monitor Cycles (Last Hour)",
+      "description": "Monitor cycles in the last 60 minutes. Normal = ~12 (one per 5 min). Green >= 10, yellow >= 5, red below.",
+      "gridPos": { "x": 8, "y": 0, "w": 8, "h": 4 },
+      "targets": [
+        {
+          "expr": "increase(wxmonitor_cycles_total[1h])",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 5 },
+              { "color": "green", "value": 10 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Alerts Sent (Last Hour)",
+      "description": "Alert emails sent in the last 60 minutes. Green = 0 (no problems), yellow = some, red = many.",
+      "gridPos": { "x": 16, "y": 0, "w": 8, "h": 4 },
+      "targets": [
+        {
+          "expr": "increase(wxmonitor_alerts_total[1h])",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 5 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Alert Activity",
+      "description": "Alerts sent over time. Spikes indicate detected issues in watched services.",
+      "gridPos": { "x": 0, "y": 4, "w": 24, "h": 10 },
+      "targets": [
+        {
+          "expr": "increase(wxmonitor_alerts_total[10m])",
+          "legendFormat": "Alerts (10m window)",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "none" },
+        "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["sum"] }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "fixed", "fixedColor": "orange" },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "showPoints": "never",
+            "drawStyle": "bars"
+          }
+        }
+      }
+    }
+  ]
+}

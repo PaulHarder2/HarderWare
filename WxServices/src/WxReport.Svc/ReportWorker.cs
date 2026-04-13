@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using System.Text.Json;
 using MetarParser.Data;
 using MetarParser.Data.Entities;
@@ -26,6 +28,14 @@ public sealed class ReportWorker : BackgroundService
     private readonly DbContextOptions<WeatherDataContext>   _dbOptions;
     private readonly HttpClient                             _httpClient;
 
+    private readonly Meter _meter = new("WxReport.Svc", "1.0.0");
+    private readonly Counter<long> _reportCycles;
+    private readonly Counter<long> _reportsSent;
+    private readonly Counter<long> _sendFailures;
+    private readonly Counter<long> _claudeCalls;
+    private readonly Histogram<double> _cycleDuration;
+    private readonly Histogram<double> _claudeDuration;
+
     /// <summary>Initializes a new instance of <see cref="ReportWorker"/> with the given dependencies.</summary>
     /// <param name="config">Application configuration used to load the <c>Report</c> config section each cycle.</param>
     /// <param name="dbOptions">EF Core options for opening a <see cref="WeatherDataContext"/> to read/write recipient state.</param>
@@ -35,9 +45,15 @@ public sealed class ReportWorker : BackgroundService
         DbContextOptions<WeatherDataContext> dbOptions,
         IHttpClientFactory httpClientFactory)
     {
-        _config     = config;
-        _dbOptions  = dbOptions;
-        _httpClient = httpClientFactory.CreateClient("WxReport");
+        _config        = config;
+        _dbOptions     = dbOptions;
+        _httpClient    = httpClientFactory.CreateClient("WxReport");
+        _reportCycles  = _meter.CreateCounter<long>("wxreport.cycles.total", description: "Number of completed report cycles.");
+        _reportsSent   = _meter.CreateCounter<long>("wxreport.sends.total", description: "Number of reports successfully sent.");
+        _sendFailures  = _meter.CreateCounter<long>("wxreport.send.failures.total", description: "Number of failed email sends.");
+        _claudeCalls   = _meter.CreateCounter<long>("wxreport.claude.calls.total", description: "Number of Claude API calls.");
+        _cycleDuration = _meter.CreateHistogram<double>("wxreport.cycle.duration.seconds", unit: "s", description: "Duration of each report cycle.");
+        _claudeDuration = _meter.CreateHistogram<double>("wxreport.claude.duration.seconds", unit: "s", description: "Duration of each Claude API call.");
     }
 
     /// <summary>
@@ -234,6 +250,7 @@ public sealed class ReportWorker : BackgroundService
     private async Task RunCycleAsync(CancellationToken ct)
     {
         Logger.Info("Starting report cycle.");
+        var cycleSw = Stopwatch.StartNew();
         await using var ctx = new WeatherDataContext(_dbOptions);
         var (cfg, smtp, claude_cfg) = await LoadConfigsAsync(ctx, ct);
 
@@ -344,6 +361,7 @@ public sealed class ReportWorker : BackgroundService
             var scheduledHours = ParseHourList(recipient.ScheduledSendHours ?? cfg.DefaultScheduledSendHours);
             var scheduledHour  = scheduledHours.Count > 0 ? scheduledHours[0] : 7;
             var tz             = ResolveTimezone(recipient.Timezone);
+            var claudeSw      = Stopwatch.StartNew();
             var report        = await claude.GenerateReportAsync(
                 snapshot, language, recipient.Name, tz,
                 isFirstReport: reason == "first",
@@ -352,6 +370,8 @@ public sealed class ReportWorker : BackgroundService
                 changeSeverity: severity,
                 previousMetarIcao: previousMetarIcao,
                 ct: ct);
+            _claudeDuration.Record(claudeSw.Elapsed.TotalSeconds);
+            _claudeCalls.Add(1);
 
             if (report is null)
             {
@@ -376,8 +396,9 @@ public sealed class ReportWorker : BackgroundService
                 htmlBody: report, inlineImages: inlineImages,
                 toName: recipient.Name, ct: ct);
 
-            if (!sent) continue;
+            if (!sent) { _sendFailures.Add(1); continue; }
 
+            _reportsSent.Add(1);
             Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): report sent.");
 
             if (reason is "scheduled" or "first")
@@ -403,9 +424,12 @@ public sealed class ReportWorker : BackgroundService
             ? $"Report cycle complete. {reportsSent} report(s) sent."
             : "Report cycle complete. No reports due.");
 
+        _reportCycles.Add(1);
+
         } // try
         finally
         {
+            _cycleDuration.Record(cycleSw.Elapsed.TotalSeconds);
             WriteHeartbeat(cfg.HeartbeatFile);
         }
     }

@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using MetarParser.Data;
 using Microsoft.EntityFrameworkCore;
 using WxServices.Common;
@@ -24,6 +26,10 @@ public sealed class ForecastMapWorker : BackgroundService
 
     // Key: model run UTC.  Value: set of forecast hours already rendered for that run.
     private readonly Dictionary<DateTime, HashSet<int>> _rendered = new();
+
+    private static readonly Meter _meter = new("WxVis.Svc", "1.0.0");
+    private static readonly Counter<long> _forecastRenders = _meter.CreateCounter<long>("wxvis.forecast.renders.total", description: "Number of completed forecast frame renders.");
+    private static readonly Counter<long> _forecastFailures = _meter.CreateCounter<long>("wxvis.forecast.failures.total", description: "Number of failed forecast frame renders.");
 
     /// <summary>Initialises a new instance with the application configuration and DB options.</summary>
     /// <param name="config">Application configuration used to read <c>WxVis:*</c> settings each cycle.</param>
@@ -146,9 +152,15 @@ public sealed class ForecastMapWorker : BackgroundService
             }
 
             if (allOk)
+            {
+                _forecastRenders.Add(1);
                 rendered.Add(fh);
+            }
             else
+            {
+                _forecastFailures.Add(1);
                 Logger.Error($"ForecastMapWorker: render failed for f{fh:D3} — will retry next poll.");
+            }
         }
     }
 

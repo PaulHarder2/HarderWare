@@ -11,6 +11,7 @@ using MetarParser.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.FileProviders;
+using OpenTelemetry.Metrics;
 using WxMonitor.Svc;
 using WxServices.Common;
 using WxServices.Logging;
@@ -41,6 +42,30 @@ var host = Host.CreateDefaultBuilder(args)
         var dbOptions = new DbContextOptionsBuilder<WeatherDataContext>()
             .UseSqlServer(connectionString)
             .Options;
+
+        var telemetryEnabled = ctx.Configuration.GetValue<bool>("Telemetry:Enabled", false);
+        var otlpEndpoint = ctx.Configuration["Telemetry:OtlpEndpoint"] ?? "http://localhost:4318/v1/metrics";
+
+        services.AddOpenTelemetry()
+            .WithMetrics(m =>
+            {
+                m.AddMeter("WxMonitor.Svc");
+
+                if (telemetryEnabled)
+                {
+                    m.AddOtlpExporter((o, r) =>
+                    {
+                        o.Endpoint = new Uri(otlpEndpoint);
+                        o.Protocol = OpenTelemetry.Exporter.OtlpExportProtocol.HttpProtobuf;
+                        r.PeriodicExportingMetricReaderOptions.ExportIntervalMilliseconds = 10_000;
+                    });
+                    Logger.Info($"Telemetry enabled. Exporting metrics to {otlpEndpoint}.");
+                }
+                else
+                {
+                    Logger.Info("Telemetry disabled. Set Telemetry:Enabled=true in appsettings to export metrics.");
+                }
+            });
 
         services.AddSingleton(dbOptions);
         services.AddHostedService<MonitorWorker>();

@@ -1,0 +1,175 @@
+{
+  "title": "WxVis",
+  "timezone": "utc",
+  "uid": "wxvis-v1",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "1m",
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "graphTooltip": 1,
+  "tags": ["wxservices"],
+  "editable": true,
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Analysis Maps Rendered",
+      "description": "Cumulative completed analysis map renders since service start.",
+      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
+      "targets": [
+        {
+          "expr": "wxvis_analysis_renders_total",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "green", "value": null }]
+          }
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Forecast Frames Rendered",
+      "description": "Cumulative completed forecast frame renders since service start.",
+      "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
+      "targets": [
+        {
+          "expr": "wxvis_forecast_renders_total",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "green", "value": null }]
+          }
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Analysis Failures (Last Hour)",
+      "description": "Failed analysis map renders in the last 60 minutes. Should be 0.",
+      "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 },
+      "targets": [
+        {
+          "expr": "increase(wxvis_analysis_failures_total[1h])",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Forecast Failures (Last Hour)",
+      "description": "Failed forecast frame renders in the last 60 minutes. Should be 0.",
+      "gridPos": { "x": 18, "y": 0, "w": 6, "h": 4 },
+      "targets": [
+        {
+          "expr": "increase(wxvis_forecast_failures_total[1h])",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Analysis Map Render Duration (p50 / p95)",
+      "description": "Rolling 1-hour window histogram quantiles for analysis map render duration.",
+      "gridPos": { "x": 0, "y": 4, "w": 24, "h": 10 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(increase(wxvis_render_duration_seconds_bucket{map_type=\"analysis\"}[1h])) by (le))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(increase(wxvis_render_duration_seconds_bucket{map_type=\"analysis\"}[1h])) by (le))",
+          "legendFormat": "p95",
+          "refId": "B"
+        }
+      ],
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "none" },
+        "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["mean", "max"] }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        }
+      }
+    }
+  ]
+}

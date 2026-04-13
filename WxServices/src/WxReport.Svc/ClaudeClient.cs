@@ -299,7 +299,7 @@ public sealed class ClaudeClient
             : " &middot; GFS: n/a";
 
         var line = $"{snap.StationIcao}: {snap.ObservationTimeUtc:yyyy-MM-dd HHmm}Z{gfsPart}"
-                 + $" &middot; WxServices {WxServices.Common.WxPaths.ProductVersion}";
+                 + $" &middot; HarderWare WxServices {WxServices.Common.WxPaths.ProductVersion}";
 
         return $"""
             <div style="max-width:600px;margin:0 auto;">

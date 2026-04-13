@@ -381,6 +381,9 @@ graph TD
 |---|---|---|
 | `wxparser.fetch.cycles.total` | Counter | Incremented on each successful METAR/TAF fetch cycle |
 | `wxparser.fetch.cycle.duration.seconds` | Histogram | Wall-clock duration of each METAR/TAF fetch cycle (buckets: 1 2 5 10 20 30 60 120 s) |
+| `wxparser.gfs.cycles.total` | Counter | Incremented on each successful GFS fetch cycle |
+| `wxparser.gfs.failures.total` | Counter | Incremented on each failed GFS fetch cycle |
+| `wxparser.gfs.cycle.duration.seconds` | Histogram | Wall-clock duration of each GFS fetch cycle (buckets: 30 60 120 300 600 900 1800 s) |
 
 See [Section 11 — Observability](#11-observability) for the collection stack.
 
@@ -474,6 +477,17 @@ The config is never updated when a fallback station is used; a warning is logged
 | `SmtpSender` | WxServices.Common | MailKit SMTP wrapper; `SendAsync` accepts optional `htmlBody` and `inlineImages`; sends `multipart/alternative` (plain-text + HTML); HTML part is wrapped in `multipart/related` when inline images are provided (`cid:` URI support); `fromName` set per-service at construction time; all failures (including invalid addresses and SMTP errors) are caught and return `false` rather than throwing |
 | `SnapshotFingerprint` | WxReport.Svc | Computes an 8-field pipe-delimited fingerprint (W, V, TS, PR, GH, GL, GC, GP) from significant weather fields; `ClassifyChange` compares two fingerprints and returns a `ChangeSeverity` value |
 
+**Metrics emitted (OpenTelemetry):**
+
+| Metric | Type | Description |
+|---|---|---|
+| `wxreport.cycles.total` | Counter | Completed report cycles |
+| `wxreport.sends.total` | Counter | Reports successfully sent |
+| `wxreport.send.failures.total` | Counter | Failed email sends |
+| `wxreport.claude.calls.total` | Counter | Claude API calls |
+| `wxreport.cycle.duration.seconds` | Histogram | Report cycle duration (buckets: 1 2 5 10 20 30 60 120 s) |
+| `wxreport.claude.duration.seconds` | Histogram | Claude API call duration (buckets: 1 2 5 10 15 20 30 60 s) |
+
 ---
 
 ### 4.3 WxVis.Svc — Map Renderer
@@ -506,6 +520,16 @@ All workers check for existing current output files before invoking Python; alre
 | `ForecastMapWorker` | WxVis.Svc | `BackgroundService`; renders forecast hours progressively as data arrives for the latest model run (complete or still ingesting) |
 | `MeteogramWorker` | WxVis.Svc | `BackgroundService`; renders a 48h abbreviated + full-period meteogram for each recipient location after each complete GFS run; writes manifest JSON |
 | `MapRenderer` | WxVis.Svc | Subprocess launcher; conda PATH augmentation; stdout/stderr capture |
+
+**Metrics emitted (OpenTelemetry):**
+
+| Metric | Type | Description |
+|---|---|---|
+| `wxvis.analysis.renders.total` | Counter | Completed analysis map renders |
+| `wxvis.analysis.failures.total` | Counter | Failed analysis map renders |
+| `wxvis.forecast.renders.total` | Counter | Completed forecast frame renders |
+| `wxvis.forecast.failures.total` | Counter | Failed forecast frame renders |
+| `wxvis.render.duration.seconds` | Histogram | Render duration (buckets: 5 10 20 30 60 120 300 s); tagged with `map_type` |
 
 ---
 
@@ -597,6 +621,13 @@ Output PNGs are saved to the directory configured in `config.json` (default `C:\
 | `HeartbeatChecker` | WxMonitor.Svc | Reads heartbeat file; returns age |
 | `SmtpSender` | WxServices.Common | MailKit SMTP wrapper; `fromName` set per-service at construction time |
 | `MonitorStateStore` | WxMonitor.Svc | Reads/writes `wxmonitor-state.json` |
+
+**Metrics emitted (OpenTelemetry):**
+
+| Metric | Type | Description |
+|---|---|---|
+| `wxmonitor.cycles.total` | Counter | Completed monitor cycles |
+| `wxmonitor.alerts.total` | Counter | Alert emails sent |
 
 ---
 
@@ -1096,7 +1127,6 @@ All logs are written to `{InstallRoot}\Logs\` (default `C:\HarderWare\Logs\`). L
 | Single bounding box | All METAR, TAF, and GFS data is fetched for one geographic region. Supporting recipients in widely separated locations would require per-region fetch configuration. |
 | GFS requires WSL | wgrib2 is a bundled Linux binary invoked via `wsl.exe`. If WSL is unavailable, the GFS cycle logs errors and skips ingestion; METAR/TAF reports continue normally without forecast data. |
 | GFS forecast delay | A complete model run takes up to ~4 hours after the nominal run time to appear on NOMADS. During this window the previous run's data is used. |
-| Metrics only on WxParser.Svc | Cycle duration and count metrics are instrumented on WxParser.Svc only. WxReport.Svc, WxVis.Svc, and WxMonitor.Svc have no OTel instrumentation yet. |
 | WxMonitor does not watch itself | WxMonitor has no watchdog. A Windows Task Scheduler task could serve this purpose if needed. |
 | Nominatim rate limit | Nominatim's terms require a maximum of 1 request/second and a valid User-Agent. Resolution is one-time per recipient, so this is unlikely to be a problem in practice. |
 | WxViewer has no database access | WxViewer reads PNG files and manifest JSON files directly. METAR observation tables would require a database-connected panel in a future session. |
@@ -1110,7 +1140,7 @@ All logs are written to `{InstallRoot}\Logs\` (default `C:\HarderWare\Logs\`). L
 Metrics are collected via OpenTelemetry and visualised in Grafana. The stack runs as Docker containers defined in `observability/docker-compose.yml`.
 
 ```
-WxParser.Svc  ──OTLP/HTTP──▶  otel-collector  ──Prometheus scrape──▶  Prometheus  ──▶  Grafana
+All services  ──OTLP/HTTP──▶  otel-collector  ──Prometheus scrape──▶  Prometheus  ──▶  Grafana
               (port 4318)      (port 8889)                              (port 9090)      (port 3000)
 ```
 
@@ -1125,19 +1155,33 @@ Start the stack from the `observability/` directory:
 docker compose up -d
 ```
 
-### WxParser.Svc instrumentation
+### Instrumentation
 
-Metrics are emitted via `System.Diagnostics.Metrics` and exported over OTLP/HTTP every 10 seconds.
+All four services (WxParser.Svc, WxReport.Svc, WxVis.Svc, WxMonitor.Svc) emit metrics via `System.Diagnostics.Metrics` and export over OTLP/HTTP every 10 seconds. Each service registers its own `Meter` and instruments; see the metrics tables in each service's section above.
 
 Telemetry is disabled by default. To enable it, set `Telemetry:Enabled` to `true` in `appsettings.shared.json`. The OTLP endpoint is configured by `Telemetry:OtlpEndpoint` (default `http://localhost:4318/v1/metrics`). When disabled, no exporter is registered and no background HTTP traffic occurs. **The full signal path (`/v1/metrics`) must be included — the SDK does not append it automatically when the endpoint is set in code.**
+
+### Grafana dashboards
+
+Four provisioned dashboards in `observability/grafana/dashboards/`, auto-loaded by Grafana:
+
+| Dashboard | File | UID | Key panels |
+|---|---|---|---|
+| WxParser | `wxparser.json` | `wxparser-v1` | Fetch cycles, cycle duration p50/p95 |
+| WxReport | `wxreport.json` | `wxreport-v1` | Cycle count, sends, failures, Claude calls/duration |
+| WxVis | `wxvis.json` | `wxvis-v1` | Analysis/forecast render counts, failures, render duration |
+| WxMonitor | `wxmonitor.json` | `wxmonitor-v1` | Monitor cycles, alerts sent, alert activity |
+
+All dashboards are tagged `wxservices` for easy filtering.
 
 ### Useful Prometheus queries
 
 | Query | What it shows |
 |---|---|
-| `wxparser_fetch_cycles_total` | Cumulative completed fetch cycles |
-| `increase(wxparser_fetch_cycles_total[1h])` | Cycles completed in the last hour |
-| `increase(wxparser_fetch_cycle_duration_seconds_bucket[1h])` | Histogram input for quantile queries |
-| `histogram_quantile(0.95, increase(wxparser_fetch_cycle_duration_seconds_bucket[1h]))` | p95 fetch cycle duration over the last hour |
+| `wxparser_fetch_cycles_total` | Cumulative completed METAR/TAF fetch cycles |
+| `increase(wxreport_sends_total[1h])` | Reports sent in the last hour |
+| `wxvis_forecast_renders_total` | Cumulative forecast frames rendered |
+| `increase(wxmonitor_alerts_total[1h])` | Monitor alerts sent in the last hour |
+| `histogram_quantile(0.95, sum(increase(wxreport_claude_duration_seconds_bucket[30m])) by (le))` | p95 Claude API call duration |
 
-Use `increase()` rather than `rate()` for these metrics — the fetch cycle fires every 10 minutes, so `rate()` produces near-zero values that cause `histogram_quantile` to return NaN.
+Use `increase()` rather than `rate()` for these metrics — service cycles fire infrequently, so `rate()` produces near-zero values that cause `histogram_quantile` to return NaN.

@@ -5,6 +5,7 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 
 | Version | Commit  | Date       | Summary |
 |---------|---------|------------|---------|
+| 1.2.0   | pending | 2026-04-13 | Metrics instrumentation across all services; report footer branding |
 | 1.1.1   | a0a3b5c | 2026-04-13 | Bug fixes, logging audit, meteogram cosmetic fix |
 | 1.1.0   | f6fd52c | 2026-04-12 | Multi-zoom map rendering with interactive zoom/pan |
 | 1.0.2   | d55384e | 2026-04-12 | Meteogram temp-unit bug fix; log format cleanup |
@@ -12,6 +13,15 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 | 1.0.0   | 7a2a268 | 2026-04-07 | Initial versioned release |
 
 ---
+
+## 1.2.0 — Metrics instrumentation across all services (2026-04-13)
+
+- **OpenTelemetry metrics added to all four services**, exporting via OTLP to the existing Prometheus/Grafana observability stack. All services share the `Telemetry:Enabled` and `Telemetry:OtlpEndpoint` settings in `appsettings.shared.json`.
+- **WxParser.Svc (GFS):** Added `wxparser.gfs.cycles.total`, `wxparser.gfs.failures.total`, and `wxparser.gfs.cycle.duration.seconds` (histogram, buckets 30s–30min) to the existing METAR/TAF metrics.
+- **WxReport.Svc:** New meter with `wxreport.cycles.total`, `wxreport.sends.total`, `wxreport.send.failures.total`, `wxreport.claude.calls.total`, `wxreport.cycle.duration.seconds`, and `wxreport.claude.duration.seconds`.
+- **WxVis.Svc:** New meter with `wxvis.analysis.renders.total`, `wxvis.analysis.failures.total`, `wxvis.forecast.renders.total`, `wxvis.forecast.failures.total`, and `wxvis.render.duration.seconds`.
+- **WxMonitor.Svc:** New meter with `wxmonitor.cycles.total` and `wxmonitor.alerts.total`.
+- **Report footer branding:** Email footer now reads "HarderWare WxServices 1.2.0" instead of "WxServices 1.2.0".
 
 ## 1.1.1 — Bug fixes, logging audit, meteogram cosmetic fix (2026-04-13)
 

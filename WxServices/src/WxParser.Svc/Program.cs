@@ -49,10 +49,16 @@ var host = Host.CreateDefaultBuilder(args)
             .WithMetrics(m =>
             {
                 m.AddMeter("WxParser.Svc")
+                 .AddMeter("WxParser.Svc.Gfs")
                  .AddView("wxparser.fetch.cycle.duration.seconds",
                     new ExplicitBucketHistogramConfiguration
                     {
                         Boundaries = [1, 2, 5, 10, 20, 30, 60, 120]
+                    })
+                 .AddView("wxparser.gfs.cycle.duration.seconds",
+                    new ExplicitBucketHistogramConfiguration
+                    {
+                        Boundaries = [30, 60, 120, 300, 600, 900, 1800]
                     });
 
                 if (telemetryEnabled)

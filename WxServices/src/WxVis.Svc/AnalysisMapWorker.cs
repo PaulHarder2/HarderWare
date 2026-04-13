@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using WxServices.Common;
 using WxServices.Logging;
 
@@ -18,6 +20,11 @@ public sealed class AnalysisMapWorker : BackgroundService
     private readonly IConfiguration _config;
     private Dictionary<string, string> _pythonEnv = new();
     private DateTime _lastCleanupUtc = DateTime.MinValue;
+
+    private static readonly Meter _meter = new("WxVis.Svc", "1.0.0");
+    private static readonly Counter<long> _analysisRenders = _meter.CreateCounter<long>("wxvis.analysis.renders.total", description: "Number of completed analysis map renders.");
+    private static readonly Counter<long> _analysisFailures = _meter.CreateCounter<long>("wxvis.analysis.failures.total", description: "Number of failed analysis map renders.");
+    private static readonly Histogram<double> _analysisRenderDuration = _meter.CreateHistogram<double>("wxvis.render.duration.seconds", unit: "s", description: "Duration of each map render.");
 
     /// <summary>Initialises a new instance with the application configuration.</summary>
     /// <param name="config">Application configuration used to read <c>WxVis:*</c> settings each cycle.</param>
@@ -63,6 +70,7 @@ public sealed class AnalysisMapWorker : BackgroundService
             {
                 Logger.Info($"AnalysisMapWorker: rendering synoptic analysis map for {nowUtc:yyyy-MM-dd HH}Z ({cfg.ZoomLevels} zoom level(s)).");
 
+                var renderSw = Stopwatch.StartNew();
                 var extentArg = string.IsNullOrEmpty(cfg.MapExtent) ? "" : $"--extent {cfg.MapExtent}";
                 var allOk = true;
                 for (int z = 1; z <= cfg.ZoomLevels; z++)
@@ -78,13 +86,16 @@ public sealed class AnalysisMapWorker : BackgroundService
                     if (!ok) { allOk = false; break; }
                 }
 
+                _analysisRenderDuration.Record(renderSw.Elapsed.TotalSeconds, new KeyValuePair<string, object?>("map_type", "analysis"));
                 if (allOk)
                 {
+                    _analysisRenders.Add(1);
                     lastRenderedHour = nowUtc.Hour;
                     Logger.Info("AnalysisMapWorker: synoptic analysis map rendered successfully.");
                 }
                 else
                 {
+                    _analysisFailures.Add(1);
                     Logger.Error("AnalysisMapWorker: synoptic map render failed — will retry next minute.");
                 }
             }

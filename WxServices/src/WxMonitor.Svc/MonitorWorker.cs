@@ -1,3 +1,4 @@
+using System.Diagnostics.Metrics;
 using MetarParser.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -24,13 +25,19 @@ public sealed class MonitorWorker : BackgroundService
     private readonly IConfiguration                        _config;
     private readonly DbContextOptions<WeatherDataContext>  _dbOptions;
 
+    private readonly Meter _meter = new("WxMonitor.Svc", "1.0.0");
+    private readonly Counter<long> _monitorCycles;
+    private readonly Counter<long> _alertsSent;
+
     /// <summary>Initializes a new instance of <see cref="MonitorWorker"/> with the given dependencies.</summary>
     /// <param name="config">Application configuration used to load the <c>Monitor</c> config section each cycle.</param>
     /// <param name="dbOptions">EF Core options used to open a <see cref="WeatherDataContext"/> to read SMTP secrets from <c>GlobalSettings</c>.</param>
     public MonitorWorker(IConfiguration config, DbContextOptions<WeatherDataContext> dbOptions)
     {
-        _config    = config;
-        _dbOptions = dbOptions;
+        _config        = config;
+        _dbOptions     = dbOptions;
+        _monitorCycles = _meter.CreateCounter<long>("wxmonitor.cycles.total", description: "Number of completed monitor cycles.");
+        _alertsSent    = _meter.CreateCounter<long>("wxmonitor.alerts.total", description: "Number of alert emails sent.");
     }
 
     /// <summary>
@@ -145,6 +152,7 @@ public sealed class MonitorWorker : BackgroundService
 
                         if (await emailer.SendAsync(cfg.AlertEmail, subject, body))
                         {
+                            _alertsSent.Add(1);
                             svcState.LastLogAlertSentUtc = now;
                             dirty = true;
                         }
@@ -180,6 +188,7 @@ public sealed class MonitorWorker : BackgroundService
 
                         if (await emailer.SendAsync(cfg.AlertEmail, subject, body))
                         {
+                            _alertsSent.Add(1);
                             svcState.LastHeartbeatAlertSentUtc = now;
                             dirty = true;
                         }
@@ -218,6 +227,7 @@ public sealed class MonitorWorker : BackgroundService
 
                     if (await emailer.SendAsync(cfg.AlertEmail, subject, body))
                     {
+                        _alertsSent.Add(1);
                         state.LastMetarStalenessAlertSentUtc = now;
                         dirty = true;
                     }
@@ -232,6 +242,7 @@ public sealed class MonitorWorker : BackgroundService
         if (dirty)
             MonitorStateStore.Save(state);
 
+        _monitorCycles.Add(1);
         Logger.Info("Monitor cycle complete.");
     }
 
