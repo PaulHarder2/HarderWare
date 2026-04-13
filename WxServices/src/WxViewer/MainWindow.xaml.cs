@@ -367,6 +367,15 @@ public partial class MainWindow : Window
             translate.Y = Math.Clamp(translate.Y, vh - ih, 0);
     }
 
+    protected override void OnClosed(EventArgs e)
+    {
+        _qualityTimer.Stop();
+        _vm.ScrollToItem      -= OnScrollToItem;
+        _vm.RecipientNotFound -= OnRecipientNotFound;
+        _vm.ZoomResetRequested -= OnZoomResetRequested;
+        base.OnClosed(e);
+    }
+
     private void ComboBox_DropDownClosed(object sender, EventArgs e)
         => Keyboard.Focus(this);
 

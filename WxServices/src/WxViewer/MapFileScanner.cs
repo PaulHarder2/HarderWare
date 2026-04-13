@@ -3,6 +3,7 @@ using System.IO;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Windows.Threading;
+using WxServices.Logging;
 
 namespace WxViewer;
 
@@ -91,12 +92,16 @@ public sealed class MapFileScanner : IDisposable
         _dispatcher.BeginInvoke(DispatcherPriority.Background,
             () => DirectoryChanged?.Invoke(this, EventArgs.Empty));
 
-    private void OnWatcherError(object sender, ErrorEventArgs e) =>
+    private void OnWatcherError(object sender, ErrorEventArgs e)
+    {
+        var ex = e.GetException();
+        Logger.Warn($"FileSystemWatcher error; restarting watchers.", ex);
         _dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
         {
             StartWatching();
             DirectoryChanged?.Invoke(this, EventArgs.Empty);
         });
+    }
 
     /// <summary>
     /// Reads the directory and returns one <see cref="AnalysisLabel"/> per
@@ -267,7 +272,7 @@ public sealed class MapFileScanner : IDisposable
                     fullPath));
             }
         }
-        catch { /* corrupt manifest — skip */ }
+        catch (Exception ex) { Logger.Warn($"Failed to parse manifest: {Path.GetFileName(manifestPath)}", ex); }
 
         items.Sort((a, b) => string.Compare(a.Icao, b.Icao, StringComparison.Ordinal));
         return items;

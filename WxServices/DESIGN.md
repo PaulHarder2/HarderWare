@@ -655,6 +655,8 @@ Each pane has its own toolbar docked to the top of the pane, immediately above t
 | `↑` / `↓` | Analysis: step to newer / older map |
 | `Ctrl+↑` / `Ctrl+↓` | Analysis: jump to newest / oldest map |
 
+**Logging and error handling:** WxViewer uses the same `WxServices.Logging` static `Logger` as the services. Startup and exit are logged. Three global exception handlers are registered at startup: `DispatcherUnhandledException` (WPF UI thread), `AppDomain.CurrentDomain.UnhandledException` (non-UI threads), and `TaskScheduler.UnobservedTaskException` (fire-and-forget tasks). All catch blocks that previously swallowed exceptions now log via `Logger.Warn` — this covers settings parsing, database queries, image loading, manifest parsing, and `FileSystemWatcher` errors. `MainWindow.OnClosed` unsubscribes ViewModel event handlers and stops the quality-restoration timer. `MainViewModel.Dispose` stops all timers and unsubscribes from `MapFileScanner.DirectoryChanged`. The highlight timer is created once and reused rather than recreated on each highlight.
+
 **Configuration:** The plots directory is derived from `InstallRoot` via `WxPaths`. Override `WxVis:PlotRetentionDays` in `appsettings.shared.json` to control how long plot files are retained.
 
 ---

@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Windows.Media.Imaging;
+using WxServices.Logging;
 
 namespace WxViewer;
 
@@ -104,6 +105,10 @@ public sealed class MeteogramItem : INotifyPropertyChanged
             bmp.Freeze();
             return bmp;
         }
-        catch { return null; }
+        catch (Exception ex)
+        {
+            Logger.Warn($"Failed to load meteogram image: {Path.GetFileName(path)}", ex);
+            return null;
+        }
     }
 }

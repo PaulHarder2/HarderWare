@@ -1,6 +1,8 @@
 using System.IO;
 using System.Text.Json;
+using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Threading;
 using WxServices.Common;
 using WxServices.Logging;
 
@@ -26,6 +28,11 @@ public partial class App : Application
             System.Diagnostics.Debug.WriteLine($"Logger.Initialise failed: {ex.Message}");
         }
 
+        // Global exception handlers — log before the process terminates.
+        DispatcherUnhandledException += OnDispatcherUnhandledException;
+        AppDomain.CurrentDomain.UnhandledException += OnAppDomainUnhandledException;
+        TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
+
         try
         {
             var connectionString = ReadConnectionString();
@@ -48,6 +55,25 @@ public partial class App : Application
         }
     }
 
+    private static void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
+    {
+        Logger.Fatal("Unhandled dispatcher exception.", e.Exception);
+    }
+
+    private static void OnAppDomainUnhandledException(object sender, UnhandledExceptionEventArgs e)
+    {
+        if (e.ExceptionObject is Exception ex)
+            Logger.Fatal("Unhandled AppDomain exception.", ex);
+        else
+            Logger.Fatal($"Unhandled AppDomain exception: {e.ExceptionObject}");
+    }
+
+    private static void OnUnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs e)
+    {
+        Logger.Error("Unobserved task exception.", e.Exception);
+        e.SetObserved();
+    }
+
     protected override void OnExit(ExitEventArgs e)
     {
         Logger.Info("WxViewer exiting.");
@@ -67,7 +93,7 @@ public partial class App : Application
             if (doc.RootElement.TryGetProperty("InstallRoot", out var prop))
                 return prop.GetString() ?? WxPaths.DefaultInstallRoot;
         }
-        catch { /* fall through */ }
+        catch (Exception ex) { Logger.Warn($"Failed to read InstallRoot from appsettings: {ex.Message}"); }
 
         return WxPaths.DefaultInstallRoot;
     }
@@ -86,7 +112,7 @@ public partial class App : Application
                 cs.TryGetProperty("WeatherData", out var prop))
                 return prop.GetString() ?? fallback;
         }
-        catch { /* fall through */ }
+        catch (Exception ex) { Logger.Warn($"Failed to read ConnectionString from appsettings: {ex.Message}"); }
 
         return fallback;
     }

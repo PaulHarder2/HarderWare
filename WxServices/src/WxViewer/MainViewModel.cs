@@ -135,12 +135,14 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         ResetForecastZoomCommand  = new RelayCommand(ResetForecastZoom);
 
         _scanner = new MapFileScanner(outputDir, dispatcher);
-        _scanner.DirectoryChanged += (_, _) => Refresh();
+        _scanner.DirectoryChanged += OnDirectoryChanged;
 
         LoadRecipients();
         Refresh();
         _scanner.StartWatching();
     }
+
+    private void OnDirectoryChanged(object? sender, EventArgs e) => Refresh();
 
     // ── Analysis properties ───────────────────────────────────────────────────
 
@@ -381,24 +383,32 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private void HighlightItem(MeteogramItem item)
     {
         // Clear any previous highlight.
-        _highlightTimer?.Stop();
+        if (_highlightTimer is null)
+        {
+            _highlightTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+            _highlightTimer.Tick += OnHighlightTimerTick;
+        }
+        else
+        {
+            _highlightTimer.Stop();
+        }
+
         if (_highlightedItem is not null)
             _highlightedItem.IsHighlighted = false;
 
         item.IsHighlighted = true;
         _highlightedItem   = item;
-
-        _highlightTimer          = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
-        _highlightTimer.Tick    += (_, _) =>
-        {
-            _highlightTimer!.Stop();
-            if (_highlightedItem is not null)
-            {
-                _highlightedItem.IsHighlighted = false;
-                _highlightedItem = null;
-            }
-        };
         _highlightTimer.Start();
+    }
+
+    private void OnHighlightTimerTick(object? sender, EventArgs e)
+    {
+        _highlightTimer!.Stop();
+        if (_highlightedItem is not null)
+        {
+            _highlightedItem.IsHighlighted = false;
+            _highlightedItem = null;
+        }
     }
 
     private void LoadRecipients()
@@ -425,7 +435,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
                 Recipients.Add(new RecipientSummary(id, name, lang, firstIcao, tempUnit, timezone));
             }
         }
-        catch { /* DB unavailable — leave list empty, selector will be empty */ }
+        catch (Exception ex) { Logger.Warn("Failed to load recipients from database.", ex); }
     }
 
     // ── Status ────────────────────────────────────────────────────────────────
@@ -773,8 +783,9 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             bmp.Freeze();
             return bmp;
         }
-        catch
+        catch (Exception ex)
         {
+            Logger.Warn($"Failed to load image: {Path.GetFileName(path)}", ex);
             return null;
         }
     }
@@ -809,6 +820,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         _analysisTimer.Stop();
         _forecastTimer.Stop();
         _highlightTimer?.Stop();
+        _scanner.DirectoryChanged -= OnDirectoryChanged;
         _scanner.Dispose();
     }
 }
