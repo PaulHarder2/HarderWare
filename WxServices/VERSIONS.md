@@ -5,6 +5,7 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 
 | Version | Commit  | Date       | Summary |
 |---------|---------|------------|---------|
+| 1.2.1   | 83b9a29 | 2026-04-14 | WxViewer zoom-swap fix; numpad zoom controls |
 | 1.2.0   | 211282c | 2026-04-13 | Metrics instrumentation across all services; report footer branding |
 | 1.1.1   | a0a3b5c | 2026-04-13 | Bug fixes, logging audit, meteogram cosmetic fix |
 | 1.1.0   | f6fd52c | 2026-04-12 | Multi-zoom map rendering with interactive zoom/pan |
@@ -13,6 +14,14 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 | 1.0.0   | 7a2a268 | 2026-04-07 | Initial versioned release |
 
 ---
+
+## 1.2.1 — WxViewer zoom-swap fix; numpad zoom controls (2026-04-14)
+
+- **Zoom-level transitions no longer jump the view.** The Z1↔Z2 and Z2↔Z3 swaps previously multiplied the WPF scale and translate by 0.5/2.0 to compensate for what was assumed to be a 2x-sized bitmap. Because the `Image` controls use `Stretch="Uniform"`, a bitmap of any Z-level fills the same viewport at `ScaleX=1`, so the compensation was *introducing* the jump rather than undoing one. The swap now leaves scale and translate untouched — the point under the cursor stays put and magnification is monotonic across transitions.
+- **Level-dependent swap thresholds.** Each Z-level has 2x the pixel density of the one below it, so the "stretched enough to look blurry" scale doubles per level: Z1→Z2 at `ScaleX ≥ 3.0`, Z2→Z3 at `≥ 6.0`; swap-down coincides with the previous level's up threshold.
+- **Direction-aware swap checks.** A zoom-in step can only trigger a swap-up, a zoom-out step only a swap-down. Up and down thresholds can therefore coincide without ping-pong, and the same keypress that triggered a swap-up also reverses it.
+- **Crossfade tuning.** Duration raised from 200 ms to 1000 ms with starting opacity dropped to 0.1, so the transition reads as a fade rather than a flash.
+- **Numpad zoom controls.** NumPad 8 zooms in one step (×1.15, matching one mouse-wheel click), NumPad 2 zooms out one step, anchored on the cursor when it's over a viewport and mirrored to the linked pane when Link Panes is enabled. Implemented via a `WM_KEYDOWN` WndProc hook that inspects the scan-code extended-key bit in `lParam`, so the numpad keys work regardless of NumLock state and do not hijack the dedicated arrow-block Up/Down keys.
 
 ## 1.2.0 — Metrics instrumentation across all services (2026-04-13)
 
