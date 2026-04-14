@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Threading;
@@ -160,6 +161,57 @@ public partial class MainWindow : Window
             ? (ForecastScale, ForecastTranslate, false)
             : (AnalysisScale, AnalysisTranslate, true);
 
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        if (PresentationSource.FromVisual(this) is HwndSource src)
+            src.AddHook(KeypadZoomHook);
+    }
+
+    // Hooks WM_KEYDOWN so numpad 8 (zoom in) and numpad 2 (zoom out) work
+    // regardless of NumLock state. When NumLock is off those keys arrive as
+    // VK_UP/VK_DOWN, but only the dedicated arrow block sets the extended-key
+    // bit in lParam — the numpad does not — so the scan-code flag tells them
+    // apart and leaves the real arrow keys free for normal navigation.
+    private IntPtr KeypadZoomHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        const int WM_KEYDOWN = 0x0100;
+        const int VK_UP      = 0x26;
+        const int VK_DOWN    = 0x28;
+        const int VK_NUMPAD8 = 0x68;
+        const int VK_NUMPAD2 = 0x62;
+
+        if (msg != WM_KEYDOWN) return IntPtr.Zero;
+
+        int  vk       = wParam.ToInt32();
+        bool extended = ((lParam.ToInt64() >> 24) & 0x01) != 0;
+
+        bool zoomIn  = vk == VK_NUMPAD8 || (vk == VK_UP   && !extended);
+        bool zoomOut = vk == VK_NUMPAD2 || (vk == VK_DOWN && !extended);
+        if (!zoomIn && !zoomOut) return IntPtr.Zero;
+
+        Border? viewport = AnalysisViewport.IsMouseOver ? AnalysisViewport
+                         : ForecastViewport.IsMouseOver ? ForecastViewport
+                         : null;
+        if (viewport is null) return IntPtr.Zero;
+
+        BeginFastScaling();
+        var (scale, translate, isAnalysis) = GetTransforms(viewport);
+        var mousePos = Mouse.GetPosition(viewport);
+        double factor = zoomIn ? 1.15 : 1.0 / 1.15;
+        ApplyZoom(scale, translate, viewport, mousePos, factor, isAnalysis);
+
+        if (LinkPanesToggle.IsChecked == true)
+        {
+            var (ls, lt, li) = GetLinkedTransforms(isAnalysis);
+            var linkedViewport = li ? (Border)AnalysisViewport : (Border)ForecastViewport;
+            ApplyZoom(ls, lt, linkedViewport, mousePos, factor, li);
+        }
+
+        handled = true;
+        return IntPtr.Zero;
+    }
+
     private void MapViewport_MouseWheel(object sender, MouseWheelEventArgs e)
     {
         BeginFastScaling();
@@ -202,61 +254,54 @@ public partial class MainWindow : Window
 
         ClampTranslation(scale, translate, viewport);
 
-        // Check zoom-level swap thresholds.
-        CheckZoomThreshold(scale, translate, viewport, isAnalysis);
+        // Check zoom-level swap thresholds. Pass the zoom factor so the check
+        // can be direction-aware (zoom-in steps consider swap-up only,
+        // zoom-out steps swap-down only — prevents ping-pong).
+        CheckZoomThreshold(scale, translate, viewport, isAnalysis, factor);
     }
 
     private void CheckZoomThreshold(ScaleTransform scale, TranslateTransform translate,
-                                    Border viewport, bool isAnalysis)
+                                    Border viewport, bool isAnalysis, double factor)
     {
         int currentZoom = isAnalysis ? _vm.AnalysisCurrentZoom : _vm.ForecastCurrentZoom;
 
-        // Swap UP when zoomed in enough that the z1 pixels are getting blurry.
-        // At 3.0x the viewport shows ~1/9 of the image area — the user has had
-        // time to explore at the current level before the sharper image loads.
-        if (scale.ScaleX >= 3.0)
+        // Each Z-level has 2x the pixel density of the previous, so the
+        // "stretched enough to look blurry" scale doubles per level. Up: Z1→Z2
+        // at 3.0, Z2→Z3 at 6.0. Down thresholds equal the previous level's up
+        // threshold; because the checks are direction-aware there is no
+        // ping-pong even though the up and down thresholds coincide.
+        double levelFactor = 1 << (currentZoom - 1);  // 1, 2, 4, ...
+        double upThreshold   = 3.0 * levelFactor;
+        double downThreshold = 3.0 * levelFactor / 2.0;  // = up threshold of level below
+
+        if (factor > 1.0 && scale.ScaleX >= upThreshold)
         {
             int actual = isAnalysis
                 ? _vm.SwapAnalysisZoomLevel(currentZoom + 1)
                 : _vm.SwapForecastZoomLevel(currentZoom + 1);
 
             if (actual > currentZoom)
-            {
-                // Higher-res image loaded — the new image has 2x the pixels per
-                // axis, so halve the visual scale to maintain the same viewport.
-                CrossfadeZoomSwap(scale, translate, 0.5, isAnalysis);
-            }
+                CrossfadeZoomSwap(isAnalysis);
         }
-        // Swap DOWN when zoomed back out to roughly where we entered this level.
-        // Zoom-in swaps at 3.0x and halves to 1.5x, so swap out at 1.4x.
-        else if (scale.ScaleX <= 1.4 && currentZoom > 1)
+        else if (factor < 1.0 && currentZoom > 1 && scale.ScaleX < downThreshold)
         {
             int actual = isAnalysis
                 ? _vm.SwapAnalysisZoomLevel(currentZoom - 1)
                 : _vm.SwapForecastZoomLevel(currentZoom - 1);
 
             if (actual < currentZoom)
-            {
-                CrossfadeZoomSwap(scale, translate, 2.0, isAnalysis);
-            }
+                CrossfadeZoomSwap(isAnalysis);
         }
     }
 
-    /// <summary>
-    /// Adjusts scale/translate for the zoom level swap and applies a brief
-    /// opacity crossfade to smooth the image transition.
-    /// </summary>
-    private void CrossfadeZoomSwap(ScaleTransform scale, TranslateTransform translate,
-                                   double scaleFactor, bool isAnalysis)
+    // The Image controls use Stretch="Uniform", so a bitmap of any Z-level fills
+    // the viewport identically at ScaleX=1. Swapping the source therefore
+    // requires no scale/translate change — the view stays put and the point
+    // under the cursor does not move.
+    private void CrossfadeZoomSwap(bool isAnalysis)
     {
-        scale.ScaleX *= scaleFactor;
-        scale.ScaleY *= scaleFactor;
-        translate.X  *= scaleFactor;
-        translate.Y  *= scaleFactor;
-
-        // Brief crossfade on the image element.
         var image = isAnalysis ? (UIElement)AnalysisMapImage : (UIElement)ForecastMapImage;
-        var fade = new DoubleAnimation(0.5, 1.0, TimeSpan.FromMilliseconds(200))
+        var fade = new DoubleAnimation(0.1, 1.0, TimeSpan.FromMilliseconds(1000))
         {
             EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
         };
