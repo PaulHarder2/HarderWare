@@ -1,12 +1,17 @@
 <Project>
   <!--
     Redirects MSBuild output outside of the Dropbox tree so that build artifacts
-    are never synced to Dropbox. All obj/ and bin/ folders go to C:\HarderWare\BuildCache\.
-    This file is automatically picked up by MSBuild for every project in this solution.
+    are never synced to Dropbox. All obj/ and bin/ folders go under
+    $(BuildCacheRoot). This file is automatically picked up by MSBuild for every
+    project in this solution.
   -->
   <PropertyGroup>
-    <BaseIntermediateOutputPath>C:\HarderWare\BuildCache\WxServices\$(MSBuildProjectName)\obj\</BaseIntermediateOutputPath>
-    <BaseOutputPath>C:\HarderWare\BuildCache\WxServices\$(MSBuildProjectName)\bin\</BaseOutputPath>
+    <BuildCacheRoot>C:\HarderWare\BuildCache\WxServices</BuildCacheRoot>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <BaseIntermediateOutputPath>$(BuildCacheRoot)\$(MSBuildProjectName)\obj\</BaseIntermediateOutputPath>
+    <BaseOutputPath>$(BuildCacheRoot)\$(MSBuildProjectName)\bin\</BaseOutputPath>
   </PropertyGroup>
 
   <!-- Single version for the entire WxServices system. -->
@@ -20,9 +25,9 @@
        with the current project's name, so parallel builds of sibling
        projects are unaffected. -->
   <Target Name="CleanStaleWpfTmp" BeforeTargets="BeforeBuild"
-          Condition="'$(UseWPF)' == 'true' And Exists('C:\HarderWare\BuildCache\WxServices')">
+          Condition="'$(UseWPF)' == 'true' And Exists('$(BuildCacheRoot)')">
     <ItemGroup>
-      <StaleWpfTmp Include="$([System.IO.Directory]::GetDirectories('C:\HarderWare\BuildCache\WxServices', '$(MSBuildProjectName)_*_wpftmp'))" />
+      <StaleWpfTmp Include="$([System.IO.Directory]::GetDirectories('$(BuildCacheRoot)', '$(MSBuildProjectName)_*_wpftmp'))" />
     </ItemGroup>
     <RemoveDir Directories="@(StaleWpfTmp)" />
   </Target>
