@@ -158,7 +158,11 @@ public sealed class ClaudeClient
             $"(4) Extended Forecast section — background white, padding 20px 24px. " +
             $"Section heading styled identically to Current Conditions; text is {forecastHeading}. " +
             "Multi-column table, header row background #1a3a5c white text. " +
-            "Columns: Date, High/Low, Wind, Conditions. " +
+            "Columns: Date, Temperatures, Wind, Conditions. " +
+            "The Temperatures cell shows the daily high above the daily low on two lines " +
+            "separated by <br/>, with each value carrying its own unit suffix and labeled " +
+            "(e.g. 'High: 85°F<br/>Low: 72°F' or 'High: 29°C<br/>Low: 22°C') — never " +
+            "combine the two values with a slash. " +
             "Each Conditions cell: a single sentence of no more than 15 words — " +
             "lead with the most important condition and omit anything that can be inferred. " +
             "(5) Closing div — background #f0f4f9, padding 16px 24px, " +
