@@ -70,7 +70,7 @@ git checkout -b WX-NN-short-description
 - Multi-line commit message with a clear subject line prefixed by the Jira key, e.g. `WX-13: Add Country and Region fields to WxStations (v1.3.0)`.
 - Body explains *why*, not just *what*.  Include design rationale for non-obvious decisions.
 - Always include the Claude co-author trailer:
-  ```
+  ```text
   Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
   ```
 - Use a HEREDOC for multi-line messages so formatting survives.
