@@ -108,10 +108,10 @@ This preserves the convention of documenting each release's exact commit, while 
 
 ### 3.10 Merge
 
-- **Always use "Create a merge commit"**, never "Squash and merge".
-  - Squashing replaces the main commit's SHA with a new one, **invalidating the hash recorded in `VERSIONS.md`**.
-  - Merge-commit preserves all original SHAs on master, so the version history stays valid.
-  - "Rebase and merge" also preserves SHAs but eliminates the merge commit; either is acceptable, but merge-commit is the project default for clarity.
+- **Always use "Create a merge commit"**, never "Squash and merge" or "Rebase and merge".
+  - Squashing collapses every commit on the feature branch into a single new commit on master with a new SHA, **invalidating the hash recorded in `VERSIONS.md`**.
+  - Rebasing replays the feature-branch commits onto master's HEAD, producing new commits with new SHAs — same problem.
+  - Only "Create a merge commit" preserves the original feature-branch SHAs on master, so the hashes recorded in `VERSIONS.md` continue to resolve.
 - After merging, GitHub auto-deletes the head branch (setting "Automatically delete head branches" was enabled 2026-04-15).
 
 ### 3.11 Transition to **Done**
