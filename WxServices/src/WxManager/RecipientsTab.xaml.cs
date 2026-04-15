@@ -366,7 +366,7 @@ public partial class RecipientsTab : UserControl
                 rows.Add(new StationRow
                 {
                     Icao       = station.IcaoId,
-                    Name       = station.Name ?? station.Municipality ?? "",
+                    Name       = FormatStationName(station),
                     DistKm     = distKm,
                     MetarCount = displayCount,
                     TafCount   = tafCounts.FirstOrDefault(x => x.Icao == station.IcaoId)?.Count ?? 0,
@@ -868,6 +868,23 @@ public partial class RecipientsTab : UserControl
     /// <param name="lat2">Latitude of the second point in decimal degrees.</param>
     /// <param name="lon2">Longitude of the second point in decimal degrees.</param>
     /// <returns>Distance in kilometres.</returns>
+    /// <summary>
+    /// Builds the "Station" column text for the Nearby Stations grid:
+    /// <c>"{Municipality}, {RegionAbbr}, {CountryAbbr}"</c>, omitting any missing
+    /// component and falling back to the airport name when no location pieces
+    /// are available.
+    /// </summary>
+    private static string FormatStationName(MetarParser.Data.Entities.WxStation s)
+    {
+        var parts = new List<string>(3);
+        if (!string.IsNullOrWhiteSpace(s.Municipality)) parts.Add(s.Municipality!);
+        if (!string.IsNullOrWhiteSpace(s.RegionAbbr))   parts.Add(s.RegionAbbr!);
+        if (!string.IsNullOrWhiteSpace(s.CountryAbbr))  parts.Add(s.CountryAbbr!);
+
+        if (parts.Count > 0) return string.Join(", ", parts);
+        return s.Name ?? "";
+    }
+
     /// <summary>
     /// Queries the Aviation Weather Center API for the number of recent METAR reports
     /// for a single station, used as a fallback when the station has no local database records.

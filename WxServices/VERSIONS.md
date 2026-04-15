@@ -5,6 +5,7 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 
 | Version | Commit  | Date       | Summary |
 |---------|---------|------------|---------|
+| 1.3.0   | d70f708 | 2026-04-15 | WxStations country/region columns (WX-13) |
 | 1.2.1   | 83b9a29 | 2026-04-14 | WxViewer zoom-swap fix; numpad zoom controls |
 | 1.2.0   | 211282c | 2026-04-13 | Metrics instrumentation across all services; report footer branding |
 | 1.1.1   | a0a3b5c | 2026-04-13 | Bug fixes, logging audit, meteogram cosmetic fix |
@@ -14,6 +15,14 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 | 1.0.0   | 7a2a268 | 2026-04-07 | Initial versioned release |
 
 ---
+
+## 1.3.0 — WxStations country/region columns (2026-04-15)
+
+- **Six new nullable columns on `WxStations`** (WX-13): `Region`, `RegionCode`, `RegionAbbr`, `Country`, `CountryCode`, `CountryAbbr`. Populated from OurAirports' `airports.csv`, `countries.csv`, and `regions.csv`. `CountryAbbr` uses a small override table (currently `GB`→`UK`, `US`→`USA`); all other countries default to their ISO 3166-1 alpha-2 code.
+- **Schema migration is idempotent.** `DatabaseSetup.EnsureSchemaAsync` appends six `ALTER TABLE ... IF NOT EXISTS` blocks; fresh installs pick up the columns from `OnModelCreating`.
+- **WxManager Nearby Stations grid** now displays `"{Municipality}, {RegionAbbr}, {CountryAbbr}"` (e.g. `Brenham, TX, USA`), falling back to the airport name when location parts are unavailable.
+- **Importer enhancements.** `AirportDataImporter` now downloads `countries.csv` and `regions.csv` alongside `airports.csv`, builds in-memory lookups, splits `iso_region` at the hyphen for the short region abbreviation, and upserts all six fields on every refresh cycle — providing automatic backfill of existing rows on the next run.
+- **Expected coverage.** Of ~39 300 stations imported, only the ~45 stub rows inserted by `MetarFetcher` for ICAOs not present in OurAirports remain with NULL location fields; the station-grid display handles those gracefully.
 
 ## 1.2.1 — WxViewer zoom-swap fix; numpad zoom controls (2026-04-14)
 

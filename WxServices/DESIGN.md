@@ -371,9 +371,10 @@ graph TD
 6. When all 121 hours are stored, mark the run `IsComplete = true` and purge old runs (retaining the 2 most recent).
 
 **Airport metadata refresh cycle (once per week, and on first startup):**
-1. Download `airports.csv` from OurAirports (`https://davidmegginson.github.io/ourairports-data/airports.csv`), decoded as UTF-8.
-2. Parse the CSV; skip rows where `icao_code` and `ident` are both blank, and skip any identifier not exactly 4 characters long.
-3. Upsert all valid rows into `WxStations`: update existing rows with properly-cased `Name` and `Municipality`; insert new rows for airports not yet seen. Coordinates and elevation are refreshed from OurAirports data.
+1. Download `airports.csv`, `countries.csv`, and `regions.csv` from OurAirports (`https://davidmegginson.github.io/ourairports-data/`), decoded as UTF-8.
+2. Build in-memory lookups from `countries.csv` (alpha-2 code → short name) and `regions.csv` (full ISO 3166-2 code → region name).
+3. Parse `airports.csv`; skip rows where `icao_code` and `ident` are both blank, and skip any identifier not exactly 4 characters long.
+4. Upsert all valid rows into `WxStations`: update existing rows with properly-cased `Name`, `Municipality`, country fields (`Country`, `CountryCode`, `CountryAbbr`), and region fields (`Region`, `RegionCode`, `RegionAbbr`); insert new rows for airports not yet seen. Coordinates and elevation are refreshed from OurAirports data.
 
 **Metrics emitted (OpenTelemetry):**
 
@@ -394,7 +395,7 @@ See [Section 11 — Observability](#11-observability) for the collection stack.
 | `MetarFetcher` | MetarParser.Data | AWC API call → parse → insert METARs |
 | `TafFetcher` | MetarParser.Data | AWC API call → parse → insert TAFs |
 | `GfsFetcher` | MetarParser.Data | NOMADS byte-range download → wgrib2 → insert GfsGridPoints |
-| `AirportDataImporter` | MetarParser.Data | Downloads OurAirports CSV; upserts `WxStations` with names, municipalities, and coordinates |
+| `AirportDataImporter` | MetarParser.Data | Downloads OurAirports CSVs; upserts `WxStations` with names, municipalities, coordinates, and country/region fields |
 | `GribExtractor` | GribParser | wgrib2 subprocess wrapper; parses CSV output into `GribValue` records |
 | `MetarParser` | MetarParser | Parses raw METAR text into structured objects |
 | `TafParser` | TafParser | Parses raw TAF text into structured objects |
@@ -924,6 +925,13 @@ erDiagram
         float Lat
         float Lon
         float ElevationFt
+        bit AlwaysFetchDirect
+        nvarchar Region
+        nvarchar RegionCode
+        nvarchar RegionAbbr
+        nvarchar Country
+        nchar CountryCode
+        nvarchar CountryAbbr
     }
 
     Metars ||--|| WxStations : "station metadata"
@@ -951,9 +959,13 @@ erDiagram
 | WxStations | IcaoId | Primary key |
 
 **Notes on WxStations:**
-- Seeded from OurAirports (`airports.csv`) by `AirportDataImporter`, which runs on first startup and weekly thereafter. This populates `Name` (properly cased), `Municipality` (city/town), and coordinates for all ~40 000 ICAO-coded airports worldwide.
+- Seeded from OurAirports (`airports.csv`, `countries.csv`, `regions.csv`) by `AirportDataImporter`, which runs on first startup and weekly thereafter. Populates `Name` (properly cased), `Municipality` (city/town), coordinates, and the country/region fields for all ~40 000 ICAO-coded airports worldwide.
 - `MetarFetcher` also inserts stub rows for any ICAO not yet present after a METAR batch, so new stations appear immediately even before the next weekly refresh.
 - `Municipality` is used by `WxReport.Svc` to label the Current Conditions section with a human-readable location rather than an ICAO code.
+- Country / region columns are derived from OurAirports' `iso_country` and `iso_region`:
+  - `CountryCode` is the ISO 3166-1 alpha-2 code (e.g. `US`, `GB`). `Country` is the short name from `countries.csv` (e.g. "United States", "United Kingdom"). `CountryAbbr` is a display-friendly override maintained in `AirportDataImporter.CountryAbbrOverrides` (currently `GB`→`UK`, `US`→`USA`); defaults to `CountryCode` otherwise.
+  - `RegionCode` is the full ISO 3166-2 subdivision code (e.g. `US-TX`, `GB-ENG`). `RegionAbbr` is the portion after the hyphen (e.g. `TX`, `ENG`). `Region` is the subdivision name from `regions.csv` (e.g. "Texas", "England").
+- The WxManager Nearby Stations grid displays `"{Municipality}, {RegionAbbr}, {CountryAbbr}"` (e.g. `Brenham, TX, USA`), falling back to the airport name when location parts are unavailable.
 - WxVis queries `WxStations` via `INNER JOIN` so stub rows (null coordinates) are automatically excluded from maps.
 
 ---

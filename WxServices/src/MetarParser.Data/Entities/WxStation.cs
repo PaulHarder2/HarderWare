@@ -56,4 +56,39 @@ public sealed class WxStation
     /// <see langword="null"/> means the station has not yet been evaluated.
     /// </summary>
     public bool? AlwaysFetchDirect { get; set; }
+
+    /// <summary>
+    /// Full name of the state, province, or region (ISO 3166-2 subdivision name),
+    /// e.g. <c>"Texas"</c> or <c>"England"</c>.
+    /// <see langword="null"/> when the OurAirports dataset does not supply a region for this station.
+    /// </summary>
+    public string? Region { get; set; }
+
+    /// <summary>
+    /// Full ISO 3166-2 subdivision code (country-prefixed), e.g. <c>"US-TX"</c> or <c>"GB-ENG"</c>.
+    /// </summary>
+    public string? RegionCode { get; set; }
+
+    /// <summary>
+    /// Short subdivision abbreviation — the portion of <see cref="RegionCode"/> after the hyphen,
+    /// e.g. <c>"TX"</c> or <c>"ENG"</c>.  Preferred for compact report display.
+    /// </summary>
+    public string? RegionAbbr { get; set; }
+
+    /// <summary>
+    /// ISO 3166-1 country short name, e.g. <c>"United States"</c> or <c>"United Kingdom"</c>.
+    /// </summary>
+    public string? Country { get; set; }
+
+    /// <summary>
+    /// ISO 3166-1 alpha-2 country code, e.g. <c>"US"</c> or <c>"GB"</c>.
+    /// </summary>
+    public string? CountryCode { get; set; }
+
+    /// <summary>
+    /// Display-friendly country abbreviation distinct from <see cref="CountryCode"/> where
+    /// convention differs from ISO, e.g. <c>"UK"</c> for GB, <c>"USA"</c> for US.
+    /// Defaults to <see cref="CountryCode"/> when no override applies.
+    /// </summary>
+    public string? CountryAbbr { get; set; }
 }
