@@ -1,6 +1,8 @@
+# Image versions are pinned (WX-17, 2026-04-15) for reproducibility.  Bump
+# deliberately when upgrading; check upstream release notes for breaking changes.
 services:
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v3.11.2
     restart: unless-stopped
     ports:
       - "9090:9090"
@@ -9,7 +11,7 @@ services:
       - prometheus-data:/prometheus
 
   otel-collector:
-    image: otel/opentelemetry-collector:latest
+    image: otel/opentelemetry-collector:0.150.1
     restart: unless-stopped
     ports:
       - "4317:4317"
