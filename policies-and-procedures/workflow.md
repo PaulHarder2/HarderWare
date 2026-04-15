@@ -22,7 +22,7 @@ Every change starts with a Jira ticket.  Even one-line fixes go through a ticket
 
 States used (project workflow):
 
-```
+```text
 To Do  →  In Progress  →  In Review  →  Done
 ```
 
@@ -48,7 +48,7 @@ Before writing any code, transition the ticket to **In Progress**.  This makes i
 - The Jira key in the branch name is **mandatory** — that's how GitHub-for-Jira auto-links the work.
 - Branch off `master`.
 
-```
+```bash
 git checkout master
 git pull
 git checkout -b WX-NN-short-description
@@ -77,7 +77,7 @@ git checkout -b WX-NN-short-description
 
 ### 3.6 Push and open a PR
 
-```
+```bash
 git push -u origin WX-NN-short-description
 gh pr create --title "WX-NN: …" --body "…"
 ```
@@ -100,7 +100,7 @@ As soon as the PR is open, transition the Jira ticket to **In Review**.
 
 Just before merge, add a single-purpose follow-up commit whose **only** change is filling in the commit hash of the main version-bump commit in `VERSIONS.md`:
 
-```
+```text
 Record vX.Y.Z commit hash in VERSIONS.md
 ```
 
@@ -120,7 +120,7 @@ Move the Jira ticket to **Done** immediately after merge.
 
 ### 3.12 Local cleanup
 
-```
+```bash
 git checkout master
 git pull
 git branch -d WX-NN-short-description
@@ -142,7 +142,7 @@ git branch -d WX-NN-short-description
 - Detailed, multi-line.
 - Subject line ≤ 72 characters, prefixed with the Jira key.
 - Body explains rationale, not just mechanics.
-- Always include the Claude co-author trailer when Claude assisted.
+- Always include the Claude co-author trailer (Claude assists on every commit per §1).
 
 ### 4.3 Direct commits to `master`
 
@@ -170,7 +170,7 @@ The HarderWare repo lives inside Dropbox.  Dropbox's file watcher occasionally l
 
 Recovery:
 
-```
+```bash
 rm -f .git/refs/remotes/origin/<branch-name>.lock
 git fetch origin
 ```
