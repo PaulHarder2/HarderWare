@@ -1,6 +1,7 @@
 services:
   prometheus:
     image: prom/prometheus:latest
+    restart: unless-stopped
     ports:
       - "9090:9090"
     volumes:
@@ -9,6 +10,7 @@ services:
 
   otel-collector:
     image: otel/opentelemetry-collector:latest
+    restart: unless-stopped
     ports:
       - "4317:4317"
       - "4318:4318"
@@ -17,6 +19,7 @@ services:
 
   grafana:
     image: grafana/grafana:11.4.0
+    restart: unless-stopped
     ports:
       - "3000:3000"
     volumes:
