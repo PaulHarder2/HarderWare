@@ -5,7 +5,7 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 
 | Version | Commit  | Date       | Summary |
 |---------|---------|------------|---------|
-| 1.3.1   |         | 2026-04-15 | Forecast temperatures formatted on two labeled lines (WX-14) |
+| 1.3.1   | d9ec9fc | 2026-04-15 | Forecast temperatures formatted on two labeled lines (WX-14) |
 | 1.3.0   | d70f708 | 2026-04-15 | WxStations country/region columns (WX-13) |
 | 1.2.1   | 83b9a29 | 2026-04-14 | WxViewer zoom-swap fix; numpad zoom controls |
 | 1.2.0   | 211282c | 2026-04-13 | Metrics instrumentation across all services; report footer branding |
