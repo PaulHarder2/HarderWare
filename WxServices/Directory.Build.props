@@ -19,7 +19,8 @@
        Runs only for WPF projects and only touches folders whose names start
        with the current project's name, so parallel builds of sibling
        projects are unaffected. -->
-  <Target Name="CleanStaleWpfTmp" BeforeTargets="BeforeBuild" Condition="'$(UseWPF)' == 'true'">
+  <Target Name="CleanStaleWpfTmp" BeforeTargets="BeforeBuild"
+          Condition="'$(UseWPF)' == 'true' And Exists('C:\HarderWare\BuildCache\WxServices')">
     <ItemGroup>
       <StaleWpfTmp Include="$([System.IO.Directory]::GetDirectories('C:\HarderWare\BuildCache\WxServices', '$(MSBuildProjectName)_*_wpftmp'))" />
     </ItemGroup>

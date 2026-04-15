@@ -88,6 +88,13 @@ public static class AirportDataImporter
             var countryCode = string.IsNullOrWhiteSpace(data.CountryCode) ? null : data.CountryCode;
             var regionCode  = string.IsNullOrWhiteSpace(data.RegionCode)  ? null : data.RegionCode;
 
+            // OurAirports emits a placeholder subdivision "{country}-U-A" with name
+            // "(unassigned)" for airports whose country lacks or omits a subdivision.
+            // Treat these as absent so the station-grid display doesn't read
+            // "Vega Baja, U-A, PR" — we leave the country intact and drop the region.
+            if (regionCode is not null && regionCode.EndsWith("-U-A", StringComparison.Ordinal))
+                regionCode = null;
+
             string? regionAbbr = null;
             if (regionCode is not null)
             {
