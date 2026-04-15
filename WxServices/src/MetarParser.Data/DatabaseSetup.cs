@@ -142,5 +142,36 @@ public static class DatabaseSetup
                 WHERE object_id = OBJECT_ID(N'WxStations') AND name = N'AlwaysFetchDirect'
             )
             ALTER TABLE [WxStations] ADD [AlwaysFetchDirect] bit NULL;", ct);
+
+        // WX-13: Country and State/Province/Region fields on WxStations.
+        await db.Database.ExecuteSqlRawAsync(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns
+                           WHERE object_id = OBJECT_ID(N'WxStations') AND name = N'Region')
+                ALTER TABLE [WxStations] ADD [Region] nvarchar(100) NULL;", ct);
+
+        await db.Database.ExecuteSqlRawAsync(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns
+                           WHERE object_id = OBJECT_ID(N'WxStations') AND name = N'RegionCode')
+                ALTER TABLE [WxStations] ADD [RegionCode] nvarchar(10) NULL;", ct);
+
+        await db.Database.ExecuteSqlRawAsync(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns
+                           WHERE object_id = OBJECT_ID(N'WxStations') AND name = N'RegionAbbr')
+                ALTER TABLE [WxStations] ADD [RegionAbbr] nvarchar(10) NULL;", ct);
+
+        await db.Database.ExecuteSqlRawAsync(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns
+                           WHERE object_id = OBJECT_ID(N'WxStations') AND name = N'Country')
+                ALTER TABLE [WxStations] ADD [Country] nvarchar(100) NULL;", ct);
+
+        await db.Database.ExecuteSqlRawAsync(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns
+                           WHERE object_id = OBJECT_ID(N'WxStations') AND name = N'CountryCode')
+                ALTER TABLE [WxStations] ADD [CountryCode] nchar(2) NULL;", ct);
+
+        await db.Database.ExecuteSqlRawAsync(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns
+                           WHERE object_id = OBJECT_ID(N'WxStations') AND name = N'CountryAbbr')
+                ALTER TABLE [WxStations] ADD [CountryAbbr] nvarchar(10) NULL;", ct);
     }
 }

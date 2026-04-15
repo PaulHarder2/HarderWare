@@ -337,6 +337,12 @@ public sealed class WeatherDataContext : DbContext
             e.Property(x => x.Lat);
             e.Property(x => x.Lon);
             e.Property(x => x.ElevationFt);
+            e.Property(x => x.Region)     .HasMaxLength(100);
+            e.Property(x => x.RegionCode) .HasMaxLength(10);
+            e.Property(x => x.RegionAbbr) .HasMaxLength(10);
+            e.Property(x => x.Country)    .HasMaxLength(100);
+            e.Property(x => x.CountryCode).HasMaxLength(2).IsFixedLength();
+            e.Property(x => x.CountryAbbr).HasMaxLength(10);
         });
 
         // ── GfsGrid ──────────────────────────────────────────────────────────

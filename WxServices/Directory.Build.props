@@ -11,9 +11,20 @@
 
   <!-- Single version for the entire WxServices system. -->
   <PropertyGroup>
-    <Version>1.2.1</Version>
+    <Version>1.3.0</Version>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
+
+  <!-- Remove stale *_wpftmp folders left behind by the WPF markup compiler.
+       Runs only for WPF projects and only touches folders whose names start
+       with the current project's name, so parallel builds of sibling
+       projects are unaffected. -->
+  <Target Name="CleanStaleWpfTmp" BeforeTargets="BeforeBuild" Condition="'$(UseWPF)' == 'true'">
+    <ItemGroup>
+      <StaleWpfTmp Include="$([System.IO.Directory]::GetDirectories('C:\HarderWare\BuildCache\WxServices', '$(MSBuildProjectName)_*_wpftmp'))" />
+    </ItemGroup>
+    <RemoveDir Directories="@(StaleWpfTmp)" />
+  </Target>
 
   <!-- Embed the git commit hash as a separate assembly metadata attribute.
        Runs in a target after SourceRevisionId is resolved. -->
