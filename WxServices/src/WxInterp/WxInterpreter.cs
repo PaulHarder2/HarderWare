@@ -12,6 +12,13 @@ namespace WxInterp;
 public static class WxInterpreter
 {
     /// <summary>
+    /// Maximum great-circle distance in kilometres from the recipient's
+    /// coordinates for a station to be considered when falling back to the
+    /// nearest-neighbour observation.  Roughly 30 statute miles.
+    /// </summary>
+    public const double MaxFallbackDistanceKm = 50.0;
+
+    /// <summary>
     /// Builds a <see cref="WeatherSnapshot"/> from the most recent METAR and
     /// the most recent valid TAF for <paramref name="tafIcao"/> (if provided),
     /// optionally enriched with a GFS model forecast at the recipient's exact
@@ -20,16 +27,22 @@ public static class WxInterpreter
     /// METAR stations are tried in the order given by <paramref name="metarIcaos"/>;
     /// only observations within the last 3 hours are accepted, so a stale primary
     /// station falls through to the next candidate.  If no configured station has
-    /// recent data the method falls back to the most recent observation from any
-    /// station in the database within the same 3-hour window.
+    /// recent data and the recipient's coordinates are known, the method falls
+    /// back to the nearest station within <see cref="MaxFallbackDistanceKm"/>
+    /// that has data in the same 3-hour window.  If no station qualifies, the
+    /// returned snapshot has <see cref="WeatherSnapshot.ObservationAvailable"/>
+    /// set to <see langword="false"/> so the forecast sections can still be
+    /// rendered with a note explaining the missing observation.
     /// </para>
-    /// Returns <see langword="null"/> if no METAR data is available at all.
+    /// Returns <see langword="null"/> only when no METAR, no TAF, and no GFS
+    /// forecast are available — i.e. there is nothing to report.
     /// </summary>
     /// <param name="metarIcaos">
     /// Preferred METAR station ICAOs in priority order.  Each is tried in sequence;
     /// a station is only accepted if its most recent observation is within 3 hours.
-    /// If none qualify, the method falls back to the most recent station in the
-    /// database within the same 3-hour window.  May be empty.
+    /// If none qualify and recipient coordinates are supplied, the nearest
+    /// geographic fallback within <see cref="MaxFallbackDistanceKm"/> is used.
+    /// May be empty.
     /// </param>
     /// <param name="tafIcao">
     /// ICAO of the TAF station to include in the snapshot, or
@@ -38,12 +51,16 @@ public static class WxInterpreter
     /// <param name="localityName">Human-readable location label to embed in the snapshot.</param>
     /// <param name="dbOptions">EF Core options for opening a <see cref="WeatherDataContext"/>.</param>
     /// <param name="homeLat">
-    /// Recipient latitude in decimal degrees North, used to query GFS forecast data.
-    /// Pass <see langword="null"/> to omit the GFS forecast.
+    /// Recipient latitude in decimal degrees North.  Used both to query GFS
+    /// forecast data and to anchor the geographic nearest-neighbour fallback
+    /// when no preferred station has recent data.  Pass <see langword="null"/>
+    /// to omit the GFS forecast and disable the fallback.
     /// </param>
     /// <param name="homeLon">
-    /// Recipient longitude in decimal degrees East (negative = West), used to query
-    /// GFS forecast data.  Pass <see langword="null"/> to omit the GFS forecast.
+    /// Recipient longitude in decimal degrees East (negative = West).  Used both
+    /// to query GFS forecast data and to anchor the geographic nearest-neighbour
+    /// fallback.  Pass <see langword="null"/> to omit the GFS forecast and
+    /// disable the fallback.
     /// </param>
     /// <param name="precipThresholdMmHr">
     /// Minimum precipitation rate in mm/hr for a GFS forecast hour to contribute to
@@ -52,8 +69,11 @@ public static class WxInterpreter
     /// </param>
     /// <param name="ct">Cancellation token propagated to all EF Core async queries.</param>
     /// <returns>
-    /// A populated <see cref="WeatherSnapshot"/>, or <see langword="null"/> if no
-    /// METAR data exists in the database at all.
+    /// A populated <see cref="WeatherSnapshot"/>.  When no METAR qualifies, the
+    /// returned snapshot has <see cref="WeatherSnapshot.ObservationAvailable"/>
+    /// set to <see langword="false"/> and only the TAF/GFS sections are
+    /// populated.  Returns <see langword="null"/> only when none of METAR, TAF,
+    /// and GFS produced any data.
     /// </returns>
     public static async Task<WeatherSnapshot?> GetSnapshotAsync(
         IReadOnlyList<string> metarIcaos,
@@ -83,20 +103,18 @@ public static class WxInterpreter
             if (metar is not null) break;
         }
 
-        // Tier 2: any station in the database with data in the last 3 hours.
-        if (metar is null)
+        // Tier 2: nearest station within MaxFallbackDistanceKm of the recipient
+        // that has data in the same 3-hour window.  Requires recipient coordinates.
+        double? fallbackDistanceKm = null;
+        if (metar is null && homeLat.HasValue && homeLon.HasValue)
         {
-            metar = await ctx.Metars
-                .Include(m => m.SkyConditions)
-                .Include(m => m.WeatherPhenomena)
-                .Where(m => m.ObservationUtc >= recentCutoff)
-                .OrderByDescending(m => m.ObservationUtc)
-                .FirstOrDefaultAsync(ct);
+            (metar, fallbackDistanceKm) = await FindNearestFallbackAsync(
+                ctx, homeLat.Value, homeLon.Value, recentCutoff, ct);
         }
 
-        if (metar is null) return null;
-
-        var station = await ctx.WxStations.FindAsync([metar.StationIcao], ct);
+        var station = metar is not null
+            ? await ctx.WxStations.FindAsync([metar.StationIcao], ct)
+            : null;
 
         TafRecord? taf = null;
         if (tafIcao is not null)
@@ -118,7 +136,91 @@ public static class WxInterpreter
                 homeLat.Value, homeLon.Value, dbOptions, precipThresholdMmHr, ct);
         }
 
-        return BuildSnapshot(metar, taf, localityName, gfsForecast, station);
+        // Nothing to report: no METAR, no TAF, no GFS.
+        if (metar is null && taf is null && gfsForecast is null) return null;
+
+        if (metar is null)
+        {
+            return BuildObservationlessSnapshot(
+                taf, localityName, gfsForecast,
+                unavailableNote: "No station within 30 miles reported current conditions in the last 3 hours.");
+        }
+
+        return BuildSnapshot(metar, taf, localityName, gfsForecast, station, fallbackDistanceKm);
+    }
+
+    /// <summary>
+    /// Finds the nearest METAR station to (<paramref name="homeLat"/>, <paramref name="homeLon"/>)
+    /// whose most recent observation is within the last 3 hours and whose distance
+    /// does not exceed <see cref="MaxFallbackDistanceKm"/>.  Returns the observation
+    /// plus the great-circle distance in kilometres, or <c>(null, null)</c> if no
+    /// such station exists.
+    /// </summary>
+    private static async Task<(MetarRecord? metar, double? distanceKm)> FindNearestFallbackAsync(
+        WeatherDataContext ctx, double homeLat, double homeLon,
+        DateTime recentCutoff, CancellationToken ct)
+    {
+        // Least-cost prefilter: reject stations obviously outside the radius via
+        // a simple lat/lon bounding box so the per-row haversine only runs on a
+        // small candidate set.  1° latitude is ~111 km everywhere; 1° longitude
+        // is ~111·cos(lat) km — narrower as you approach the poles.  A 10%
+        // margin keeps stations near the radius boundary in play despite the
+        // sphere-vs-ellipsoid approximation.  Math.Max guards against cos→0
+        // at the poles, which no real recipient would hit.
+        const double kmPerDegreeLat = 111.0;
+        var latSpan = MaxFallbackDistanceKm / kmPerDegreeLat * 1.1;
+        var cosLat  = Math.Cos(homeLat * Math.PI / 180.0);
+        var lonSpan = MaxFallbackDistanceKm / (kmPerDegreeLat * Math.Max(cosLat, 0.01)) * 1.1;
+        var minLat  = homeLat - latSpan;
+        var maxLat  = homeLat + latSpan;
+        var minLon  = homeLon - lonSpan;
+        var maxLon  = homeLon + lonSpan;
+
+        // Candidates: known coords, inside the bounding box, with a recent
+        // observation.  Haversine below picks the true nearest and enforces
+        // the actual radius.
+        var candidates = await (
+            from s in ctx.WxStations
+            where s.Lat.HasValue && s.Lon.HasValue
+               && s.Lat >= minLat && s.Lat <= maxLat
+               && s.Lon >= minLon && s.Lon <= maxLon
+               && ctx.Metars.Any(m => m.StationIcao == s.IcaoId && m.ObservationUtc >= recentCutoff)
+            select new { s.IcaoId, Lat = s.Lat!.Value, Lon = s.Lon!.Value })
+            .ToListAsync(ct);
+
+        string? nearestIcao = null;
+        var     nearestKm   = double.MaxValue;
+        foreach (var c in candidates)
+        {
+            var km = HaversineKm(homeLat, homeLon, c.Lat, c.Lon);
+            if (km < nearestKm) { nearestKm = km; nearestIcao = c.IcaoId; }
+        }
+
+        if (nearestIcao is null || nearestKm > MaxFallbackDistanceKm) return (null, null);
+
+        var metar = await ctx.Metars
+            .Include(m => m.SkyConditions)
+            .Include(m => m.WeatherPhenomena)
+            .Where(m => m.StationIcao == nearestIcao && m.ObservationUtc >= recentCutoff)
+            .OrderByDescending(m => m.ObservationUtc)
+            .FirstOrDefaultAsync(ct);
+
+        return metar is null ? (null, null) : (metar, nearestKm);
+    }
+
+    /// <summary>
+    /// Great-circle distance in kilometres between two points on Earth, using the
+    /// haversine formula with a mean radius of 6371.0 km.
+    /// </summary>
+    private static double HaversineKm(double lat1, double lon1, double lat2, double lon2)
+    {
+        const double R = 6371.0;
+        var dLat = (lat2 - lat1) * Math.PI / 180.0;
+        var dLon = (lon2 - lon1) * Math.PI / 180.0;
+        var a = Math.Sin(dLat / 2) * Math.Sin(dLat / 2)
+              + Math.Cos(lat1 * Math.PI / 180.0) * Math.Cos(lat2 * Math.PI / 180.0)
+              * Math.Sin(dLon / 2) * Math.Sin(dLon / 2);
+        return R * 2 * Math.Atan2(Math.Sqrt(a), Math.Sqrt(1 - a));
     }
 
     // ── nearest-station resolution ────────────────────────────────────────────
@@ -228,11 +330,18 @@ public static class WxInterpreter
     /// <param name="taf">The TAF record to populate forecast periods, or <see langword="null"/> to omit forecast data.</param>
     /// <param name="localityName">Human-readable location label to embed in the snapshot.</param>
     /// <param name="gfsForecast">GFS model forecast to attach to the snapshot, or <see langword="null"/> if unavailable.</param>
+    /// <param name="station">Station metadata for the observing station, or <see langword="null"/> if unavailable.</param>
+    /// <param name="fallbackDistanceKm">
+    /// Distance from the recipient to the observing station when a geographic
+    /// fallback was used; <see langword="null"/> when the station is one of the
+    /// recipient's preferred stations.
+    /// </param>
     /// <returns>A fully populated <see cref="WeatherSnapshot"/> derived from the given records.</returns>
     private static WeatherSnapshot BuildSnapshot(
         MetarRecord metar, TafRecord? taf, string localityName,
         GfsForecast? gfsForecast = null,
-        WxStation? station = null)
+        WxStation? station = null,
+        double? fallbackDistanceKm = null)
     {
         var visSm    = metar.VisibilityStatuteMiles
                        ?? (metar.VisibilityM.HasValue ? metar.VisibilityM.Value / 1609.344 : null);
@@ -264,6 +373,8 @@ public static class WxInterpreter
 
         return new WeatherSnapshot
         {
+            ObservationAvailable  = true,
+            ObservationDistanceKm = fallbackDistanceKm,
             StationIcao           = metar.StationIcao,
             StationMunicipality   = station?.Municipality,
             StationName           = station?.Name is { Length: > 0 } n ? ToStationTitleCase(n) : null,
@@ -286,6 +397,35 @@ public static class WxInterpreter
             TafStationIcao        = taf?.StationIcao,
             ForecastPeriods       = forecastPeriods,
             GfsForecast           = gfsForecast,
+        };
+    }
+
+    /// <summary>
+    /// Builds an observation-less <see cref="WeatherSnapshot"/> for the case
+    /// where no qualifying METAR was available.  The returned snapshot carries
+    /// only forecast data (<paramref name="taf"/> and <paramref name="gfsForecast"/>)
+    /// plus <paramref name="unavailableNote"/> explaining why current conditions
+    /// are missing.
+    /// </summary>
+    private static WeatherSnapshot BuildObservationlessSnapshot(
+        TafRecord? taf, string localityName,
+        GfsForecast? gfsForecast, string unavailableNote)
+    {
+        var forecastPeriods = taf is not null
+            ? taf.ChangePeriods
+                .OrderBy(p => p.SortOrder)
+                .Select(MapForecastPeriod)
+                .ToList()
+            : new List<ForecastPeriod>();
+
+        return new WeatherSnapshot
+        {
+            ObservationAvailable       = false,
+            ObservationUnavailableNote = unavailableNote,
+            LocalityName               = localityName,
+            TafStationIcao             = taf?.StationIcao,
+            ForecastPeriods            = forecastPeriods,
+            GfsForecast                = gfsForecast,
         };
     }
 

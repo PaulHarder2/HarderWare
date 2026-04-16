@@ -26,15 +26,26 @@ public static class SnapshotDescriber
         var sb = new StringBuilder();
 
         var localNow = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, tz);
-        var localObs = TimeZoneInfo.ConvertTimeFromUtc(snap.ObservationTimeUtc, tz);
 
         sb.AppendLine($"Current date/time: {localNow:dddd, yyyy-MM-dd HH:mm} local / {DateTime.UtcNow:HH:mm} UTC");
         sb.AppendLine($"Forecast location: {snap.LocalityName}");
+
+        if (!snap.ObservationAvailable)
+        {
+            sb.AppendLine($"Current observation: NOT AVAILABLE — {snap.ObservationUnavailableNote}");
+            AppendForecastSections(sb, snap, units);
+            return sb.ToString();
+        }
+
+        var localObs = TimeZoneInfo.ConvertTimeFromUtc(snap.ObservationTimeUtc, tz);
+
         sb.AppendLine($"Station ICAO: {snap.StationIcao}");
         if (snap.StationMunicipality is not null)
             sb.AppendLine($"Station city: {snap.StationMunicipality}");
         if (snap.StationName is not null)
             sb.AppendLine($"Station name: {snap.StationName}");
+        if (snap.ObservationDistanceKm is double kmDist)
+            sb.AppendLine($"Station distance from recipient: {kmDist * 0.621371:0.#} statute miles");
         sb.AppendLine($"Observed: {localObs:dddd, yyyy-MM-dd HH:mm} local / {snap.ObservationTimeUtc:HH:mm} UTC{(snap.IsAutomated ? " (automated)" : "")}");
 
         // Wind
@@ -76,6 +87,13 @@ public static class SnapshotDescriber
         if (snap.AltimeterInHg.HasValue)
             sb.AppendLine($"Pressure: {FormatPressure(snap.AltimeterInHg.Value, units)}");
 
+        AppendForecastSections(sb, snap, units);
+
+        return sb.ToString();
+    }
+
+    private static void AppendForecastSections(StringBuilder sb, WeatherSnapshot snap, UnitPreferences units)
+    {
         // Forecast
         if (!string.IsNullOrEmpty(snap.TafStationIcao))
         {
@@ -95,8 +113,6 @@ public static class SnapshotDescriber
             foreach (var day in gfs.Days)
                 sb.AppendLine(FormatGfsDay(day, units));
         }
-
-        return sb.ToString();
     }
 
     // ── GFS helpers ───────────────────────────────────────────────────────────
