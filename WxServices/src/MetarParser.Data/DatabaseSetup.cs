@@ -173,5 +173,24 @@ public static class DatabaseSetup
             IF NOT EXISTS (SELECT 1 FROM sys.columns
                            WHERE object_id = OBJECT_ID(N'WxStations') AND name = N'CountryAbbr')
                 ALTER TABLE [WxStations] ADD [CountryAbbr] nvarchar(10) NULL;", ct);
+
+        // WX-22: ReceivedUtc on Metars and Tafs.  Column was introduced in
+        // commit a70d81f (2026-03-30) as a NOT NULL EF property populated by
+        // the mappers, but no idempotent migration shipped with it.  These
+        // guards let a fresh clone or restore-from-old-backup pick up the
+        // column safely.  The DEFAULT SYSUTCDATETIME() only applies to the
+        // backfill of pre-existing rows at ALTER time — EF always supplies a
+        // value on insert, so the constraint is a no-op for new rows.
+        await db.Database.ExecuteSqlRawAsync(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns
+                           WHERE object_id = OBJECT_ID(N'Metars') AND name = N'ReceivedUtc')
+                ALTER TABLE [Metars] ADD [ReceivedUtc] datetime2 NOT NULL
+                    CONSTRAINT [DF_Metars_ReceivedUtc] DEFAULT SYSUTCDATETIME();", ct);
+
+        await db.Database.ExecuteSqlRawAsync(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns
+                           WHERE object_id = OBJECT_ID(N'Tafs') AND name = N'ReceivedUtc')
+                ALTER TABLE [Tafs] ADD [ReceivedUtc] datetime2 NOT NULL
+                    CONSTRAINT [DF_Tafs_ReceivedUtc] DEFAULT SYSUTCDATETIME();", ct);
     }
 }
