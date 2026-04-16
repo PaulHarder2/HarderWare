@@ -455,10 +455,13 @@ flowchart TD
 
 **METAR station fallback (tiered):**
 1. Try each ICAO in the recipient's `MetarIcao` list (comma-separated, preference order); a station is only accepted if its most recent observation is within the last 3 hours.
-2. Fall back to any station in the database with data in the last 3 hours.
-3. If no data at all, skip the recipient for this cycle.
+2. Fall back to the geographically nearest station within 50 km (≈30 statute miles) of the recipient's coordinates that has a METAR in the same 3-hour window. A lat/lon bounding box derived from the radius prefilters candidates; the haversine formula picks the true nearest and enforces the actual radius. Requires recipient coordinates; the fallback is disabled without them.
+3. If no station qualifies but a TAF and/or GFS forecast are available, send a forecast-only report with a one-paragraph note in the Current Conditions section explaining that no recent observation is available from a station within ≈30 miles.
+4. Only when METAR, TAF, and GFS are all unavailable is the recipient skipped for the cycle.
 
-The config is never updated when a fallback station is used; a warning is logged.  When the station used differs from the one in `RecipientState.LastMetarIcao` (i.e. the station changed since the last report), Claude is informed via the prompt and includes a brief, matter-of-fact note in the report — in the change-summary band for unscheduled sends, or in the closing summary for scheduled ones.  `LastMetarIcao` is updated on every successful send.
+The config is never updated when a fallback station is used; a warning is logged with the fallback station's distance in miles.  When the station used differs from the one in `RecipientState.LastMetarIcao` (i.e. the station changed since the last report), Claude is informed via the prompt and includes a brief, matter-of-fact note in the report — in the change-summary band for unscheduled sends, or in the closing summary for scheduled ones.  `LastMetarIcao` is updated on every successful send *that carried a real observation*; forecast-only sends leave it untouched so change-detection resumes cleanly once observations return.
+
+Observation-less sends also suppress change-triggered unscheduled sends — the observation portion of the fingerprint would default to "calm / good visibility / no phenomena" and could produce a misleading "conditions cleared!" alert. `RecipientState.LastSnapshotFingerprint` is not updated in that case either, so the next cycle with a real observation compares to the last genuine state.
 
 **Recipient resolution (one-time, cached):**
 1. Geocode `Address` via Nominatim → lat/lon + locality name.

@@ -318,12 +318,21 @@ public sealed class ReportWorker : BackgroundService
 
             if (snapshot is null)
             {
-                Logger.Warn($"{recipient.Id} {recipient.Email} ({recipient.Name}): no METAR data ({recipient.MetarIcao}) — skipping.");
+                Logger.Warn($"{recipient.Id} {recipient.Email} ({recipient.Name}): no METAR, TAF, or GFS data available — skipping.");
                 continue;
             }
 
-            if (preferredIcaos.Count > 0 && !preferredIcaos.Contains(snapshot.StationIcao))
-                Logger.Warn($"{recipient.Id} {recipient.Email} ({recipient.Name}): preferred station(s) [{string.Join(", ", preferredIcaos)}] had no data — fell back to {snapshot.StationIcao}.");
+            if (!snapshot.ObservationAvailable)
+            {
+                Logger.Warn($"{recipient.Id} {recipient.Email} ({recipient.Name}): preferred station(s) [{string.Join(", ", preferredIcaos)}] had no data and no station within 30 mi reported in the last 3 hours — sending forecast-only report.");
+            }
+            else if (preferredIcaos.Count > 0 && !preferredIcaos.Contains(snapshot.StationIcao))
+            {
+                var distStr = snapshot.ObservationDistanceKm is double km
+                    ? $" ({km * 0.621371:F0} mi away)"
+                    : "";
+                Logger.Warn($"{recipient.Id} {recipient.Email} ({recipient.Name}): preferred station(s) [{string.Join(", ", preferredIcaos)}] had no data — fell back to {snapshot.StationIcao}{distStr}.");
+            }
 
             var useC = recipient.Units.Temperature.Equals("C", StringComparison.OrdinalIgnoreCase);
             if (snapshot.GfsForecast is { } gfs)
@@ -335,7 +344,8 @@ public sealed class ReportWorker : BackgroundService
                 Logger.Warn($"{recipient.Id} {recipient.Email} ({recipient.Name}): no GFS forecast available.");
 
             var fingerprint      = SnapshotFingerprint.Compute(snapshot, cfg.SignificantChange);
-            var (shouldSend, reason, severity) = ShouldSend(recipient, state, fingerprint, cfg, now);
+            var (shouldSend, reason, severity) = ShouldSend(recipient, state, fingerprint, cfg, now,
+                observationAvailable: snapshot.ObservationAvailable);
 
             if (shouldSend && reason == "change" && state.LastSnapshotFingerprint is not null)
             {
@@ -350,7 +360,10 @@ public sealed class ReportWorker : BackgroundService
 
             // Detect station switch: if the METAR source changed from what was used in
             // the last report, pass the previous ICAO to Claude so it can note the change.
-            var previousMetarIcao = state.LastMetarIcao is not null
+            // Skip when the current snapshot has no observation — the "empty" StationIcao
+            // would otherwise look like a spurious station switch.
+            var previousMetarIcao = snapshot.ObservationAvailable
+                && state.LastMetarIcao is not null
                 && state.LastMetarIcao != snapshot.StationIcao
                     ? state.LastMetarIcao
                     : null;
@@ -406,8 +419,14 @@ public sealed class ReportWorker : BackgroundService
             else
                 state.LastUnscheduledSentUtc  = now;
 
-            state.LastSnapshotFingerprint = fingerprint;
-            state.LastMetarIcao           = snapshot.StationIcao;
+            // Only capture the fingerprint and station when we have real observation
+            // data; otherwise leave the last-known values in place so change-detection
+            // resumes correctly once observations return.
+            if (snapshot.ObservationAvailable)
+            {
+                state.LastSnapshotFingerprint = fingerprint;
+                state.LastMetarIcao           = snapshot.StationIcao;
+            }
 
             try
             {
@@ -467,7 +486,8 @@ public sealed class ReportWorker : BackgroundService
         RecipientState      state,
         string              fingerprint,
         ReportConfig        cfg,
-        DateTime            nowUtc)
+        DateTime            nowUtc,
+        bool                observationAvailable = true)
     {
         // Brand-new recipient — send an introductory report on the first cycle.
         if (!state.LastScheduledSentUtc.HasValue && !state.LastUnscheduledSentUtc.HasValue)
@@ -511,7 +531,13 @@ public sealed class ReportWorker : BackgroundService
 
         // ── Significant-change send ───────────────────────────────────────────
 
-        if (state.LastSnapshotFingerprint is not null
+        // When no current observation is available, the observation portion of
+        // the fingerprint is meaningless (wind/visibility/phenomena default to
+        // "calm/good/none").  Suppress change-triggered sends in that case to
+        // avoid false-clearing alerts, and resume on the next cycle that has
+        // real data.
+        if (observationAvailable
+            && state.LastSnapshotFingerprint is not null
             && state.LastSnapshotFingerprint != fingerprint)
         {
             var severity = SnapshotFingerprint.ClassifyChange(state.LastSnapshotFingerprint, fingerprint);
@@ -571,7 +597,10 @@ public sealed class ReportWorker : BackgroundService
     private static string BuildSubject(WeatherSnapshot snap, string language, TimeZoneInfo tz,
         ChangeSeverity severity = ChangeSeverity.None, string recipientName = "")
     {
-        var localTime = TimeZoneInfo.ConvertTimeFromUtc(snap.ObservationTimeUtc, tz).ToString("h:mm tt");
+        // Use send-time when no observation is available; ObservationTimeUtc is
+        // default(DateTime) in that case, which would render as 12:00 AM.
+        var subjectTimeUtc = snap.ObservationAvailable ? snap.ObservationTimeUtc : DateTime.UtcNow;
+        var localTime = TimeZoneInfo.ConvertTimeFromUtc(subjectTimeUtc, tz).ToString("h:mm tt");
         var forName   = string.IsNullOrWhiteSpace(recipientName) ? "" : $" for {recipientName}";
         if (language.Equals("Spanish", StringComparison.OrdinalIgnoreCase))
         {

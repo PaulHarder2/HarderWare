@@ -5,6 +5,7 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 
 | Version | Commit  | Date       | Summary |
 |---------|---------|------------|---------|
+| 1.3.2   | 5569f78 | 2026-04-16 | Geographic nearest-neighbour METAR fallback within 30 mi (WX-19) |
 | 1.3.1   | d9ec9fc | 2026-04-15 | Forecast temperatures formatted on two labeled lines (WX-14) |
 | 1.3.0   | d70f708 | 2026-04-15 | WxStations country/region columns (WX-13) |
 | 1.2.1   | 83b9a29 | 2026-04-14 | WxViewer zoom-swap fix; numpad zoom controls |
@@ -16,6 +17,14 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 | 1.0.0   | 7a2a268 | 2026-04-07 | Initial versioned release |
 
 ---
+
+## 1.3.2 — Geographic nearest-neighbour METAR fallback (2026-04-16)
+
+- **Bug fix (WX-19):** when the recipient's preferred METAR station(s) had no data within the last 3 hours, `WxInterpreter.GetSnapshotAsync` previously fell back to "the single most recently inserted METAR anywhere in the database." Every recipient in the same cycle received the same fallback regardless of geography, and the chosen station drifted as unrelated stations reported — producing observations from Earlton, Ontario (CYXR) for an Austin recipient and Mineola, TX (KJDD) for a Spring, TX recipient this morning.
+- **New fallback behaviour:** the interpreter now picks the geographically *nearest* station with a recent METAR, capped at a 50 km (≈30 mi) radius, on a per-recipient basis. Anchored on the recipient's own lat/lon. A lat/lon bounding-box derived from the radius prefilters candidates so the per-row haversine runs only on the handful of stations actually in range.
+- **No qualifying station → forecast-only report with an honest note.** If no station within the radius has recent data, the snapshot is still built but carries `ObservationAvailable = false` and an `ObservationUnavailableNote`. The Current Conditions section is rendered as a short italic paragraph explaining that no recent observation is available from a station within about 30 miles, and the report continues with the TAF and GFS forecast sections. The report footer swaps the station/timestamp line for "No current observation". The recipient is only skipped entirely when none of METAR, TAF, and GFS produced data.
+- **Change-detection safety.** Observation-less snapshots cannot reliably feed into significant-change detection (the observation fingerprint fields would default to "calm / good visibility / no phenomena" and could fire a false "conditions cleared" alert). `ShouldSend` now suppresses the change-triggered branch when `ObservationAvailable` is false; `RecipientState.LastSnapshotFingerprint` and `LastMetarIcao` are left untouched on forecast-only sends so change-detection resumes cleanly against the last genuine observation when data returns.
+- **Fallback warning now includes distance.** The existing "preferred station(s) had no data — fell back to KXYZ" warn now reports the fallback station's distance from the recipient in statute miles, e.g. *"fell back to KHYI (18 mi away)"*. A distinct warn is emitted for the observation-less path so forecast-only sends show up clearly in the log.
 
 ## 1.3.1 — Forecast temperatures on two labeled lines (2026-04-15)
 

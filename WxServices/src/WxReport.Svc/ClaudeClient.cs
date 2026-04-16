@@ -151,10 +151,16 @@ public sealed class ClaudeClient
             "Omit this section entirely on scheduled reports. " +
             $"(3) Current Conditions section — background #f7f9fc, padding 20px 24px. " +
             $"Section heading: bold, 17px, color #1a3a5c, 2px solid #1a3a5c bottom border; text is {currentConditionsHeading}. " +
-            "Two-column table (label | value), alternating row shading (#eaf0f7 / white). " +
-            "Rows in this exact order: Sky; Visibility; Wind; " +
-            "Weather (include only when weather phenomena are present, e.g. rain, fog, drizzle — omit on clear days); " +
-            "Temperature; Relative Humidity; Pressure. " +
+            (snapshot.ObservationAvailable
+                ? "Two-column table (label | value), alternating row shading (#eaf0f7 / white). " +
+                  "Rows in this exact order: Sky; Visibility; Wind; " +
+                  "Weather (include only when weather phenomena are present, e.g. rain, fog, drizzle — omit on clear days); " +
+                  "Temperature; Relative Humidity; Pressure. "
+                : "When the data payload shows 'Current observation: NOT AVAILABLE', omit any weather table. " +
+                  $"Instead, render a single short paragraph in italic at 14px, color #6b8fa8, translated into {language}, " +
+                  "explaining in plain language that no recent observation is available from any station within about 30 miles, " +
+                  "and that the report below is therefore based on forecast model data only. " +
+                  "Do not invent or estimate any current-conditions values. ") +
             $"(4) Extended Forecast section — background white, padding 20px 24px. " +
             $"Section heading styled identically to Current Conditions; text is {forecastHeading}. " +
             "Multi-column table, header row background #1a3a5c white text. " +
@@ -302,7 +308,11 @@ public sealed class ClaudeClient
             ? $" &middot; GFS: {gfs.ModelRunUtc:yyyy-MM-dd HHmm}Z"
             : " &middot; GFS: n/a";
 
-        var line = $"{snap.StationIcao}: {snap.ObservationTimeUtc:yyyy-MM-dd HHmm}Z{gfsPart}"
+        var obsPart = snap.ObservationAvailable
+            ? $"{snap.StationIcao}: {snap.ObservationTimeUtc:yyyy-MM-dd HHmm}Z"
+            : "No current observation";
+
+        var line = $"{obsPart}{gfsPart}"
                  + $" &middot; HarderWare WxServices {WxServices.Common.WxPaths.ProductVersion}";
 
         return $"""

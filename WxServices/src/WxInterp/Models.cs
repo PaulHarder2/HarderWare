@@ -206,6 +206,34 @@ public sealed class GfsForecast
 /// </summary>
 public sealed class WeatherSnapshot
 {
+    // ── observation availability ──────────────────────────────────────────────
+
+    /// <summary>
+    /// <see langword="true"/> when this snapshot carries current-conditions data
+    /// from a METAR observation.  <see langword="false"/> when no qualifying
+    /// station was found (see <see cref="ObservationUnavailableNote"/>); in that
+    /// case the METAR-derived fields below are left at defaults and only the
+    /// forecast sections (<see cref="ForecastPeriods"/>, <see cref="GfsForecast"/>)
+    /// carry usable data.
+    /// </summary>
+    public bool ObservationAvailable { get; init; } = true;
+
+    /// <summary>
+    /// Human-readable explanation of why no observation is available, for
+    /// inclusion in the report's Current Conditions section.  Non-null only when
+    /// <see cref="ObservationAvailable"/> is <see langword="false"/>.
+    /// </summary>
+    public string? ObservationUnavailableNote { get; init; }
+
+    /// <summary>
+    /// Great-circle distance in kilometres from the recipient's coordinates to
+    /// the observing station, when a geographic fallback was used to choose the
+    /// station.  <see langword="null"/> when the station is one of the recipient's
+    /// preferred stations (no fallback needed) or when the recipient has no
+    /// coordinates configured.
+    /// </summary>
+    public double? ObservationDistanceKm { get; init; }
+
     // ── observation metadata ──────────────────────────────────────────────────
 
     /// <summary>ICAO identifier of the home METAR station.</summary>
