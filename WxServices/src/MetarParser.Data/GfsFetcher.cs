@@ -173,7 +173,8 @@ public static class GfsFetcher
             string idxContent;
             try
             {
-                idxContent = await httpClient.GetStringAsync(baseUrl + ".idx", ct);
+                idxContent = await httpClient.GetStringWithRetryAsync(
+                    baseUrl + ".idx", $"GFS f{fhStr} index", ct: ct);
             }
             catch (HttpRequestException ex) when (
                 ex.StatusCode == System.Net.HttpStatusCode.NotFound ||
@@ -185,7 +186,7 @@ public static class GfsFetcher
             }
             catch (Exception ex)
             {
-                Logger.Error($"GfsFetcher: failed to fetch index for f{fhStr}: {ex.Message}");
+                Logger.Error($"GfsFetcher: failed to fetch index for f{fhStr} after retries: {ex.Message}");
                 break;
             }
 

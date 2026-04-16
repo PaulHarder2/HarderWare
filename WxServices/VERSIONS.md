@@ -5,6 +5,7 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 
 | Version | Commit  | Date       | Summary |
 |---------|---------|------------|---------|
+| 1.3.4   | pending | 2026-04-16 | Retry with exponential backoff on transient upstream fetch failures (WX-20, WX-21) |
 | 1.3.3   | 5205064 | 2026-04-16 | Defensive idempotent ALTER for Metars/Tafs ReceivedUtc (WX-22) |
 | 1.3.2   | 5569f78 | 2026-04-16 | Geographic nearest-neighbour METAR fallback within 30 mi (WX-19) |
 | 1.3.1   | d9ec9fc | 2026-04-15 | Forecast temperatures formatted on two labeled lines (WX-14) |
@@ -18,6 +19,13 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 | 1.0.0   | 7a2a268 | 2026-04-07 | Initial versioned release |
 
 ---
+
+## 1.3.4 — Retry with exponential backoff on transient upstream fetch failures (2026-04-16)
+
+- **WX-20 / WX-21:** The METAR, TAF, and GFS fetchers previously treated every non-2xx HTTP response and every network-level exception as a terminal failure — `catch (Exception) → Logger.Error → return` or `break`. This overnight produced 12 `ERROR` log entries from `MetarFetcher` (upstream HTTP 502 Bad Gateway / 504 Gateway Time-out from aviationweather.gov) and one from `GfsFetcher` (SSL handshake failure for a specific GFS forecast hour). WxMonitor's alert pipeline treats every `ERROR` as actionable, so transient upstream hiccups were paging the operator for conditions that would have self-resolved within seconds.
+- **Fix:** new `HttpFetchRetry.GetStringWithRetryAsync` extension method in `MetarParser.Data` wraps `HttpClient.GetStringAsync` with a 3-attempt exponential-backoff retry (2 s → 4 s → 8 s). Transient failures — HTTP 5xx, 429, SSL/TLS handshake errors, network-level `IOException`, request-timeout `TaskCanceledException` — are retried and each retry logs at `WARN`. Only when all three attempts have failed does the caller log at `ERROR`. Permanent failures (4xx other than 429) throw immediately without retry, so `GfsFetcher`'s existing 404/301/302 treatment ("forecast hour not yet published, stop the loop") is preserved exactly.
+- **Applied to:** `MetarFetcher.FetchUrlAndInsertAsync`, `TafFetcher.FetchAndInsertAsync` (companion fix — same aviationweather.gov upstream, same failure pattern), and `GfsFetcher`'s per-forecast-hour `.idx` download. Call sites are one-liners: `await httpClient.GetStringWithRetryAsync(url, "METAR")` / `"TAF"` / `$"GFS f{fhStr} index"`.
+- **Context:** these errors are *partially* related to WX-19 (the wrong-station fallback from earlier today) in that they contributed noise to the incident-triage process, but they were never the root cause of the wrong-station bug. Handling them cleanly reduces the signal-to-noise ratio of the WxMonitor alert stream enough that the planned WX-25 rate-based alerting becomes much easier to calibrate.
 
 ## 1.3.3 — Defensive idempotent ALTER for Metars/Tafs ReceivedUtc (2026-04-16)
 

@@ -400,6 +400,9 @@ See [Section 11 — Observability](#11-observability) for the collection stack.
 | `MetarParser` | MetarParser | Parses raw METAR text into structured objects |
 | `TafParser` | TafParser | Parses raw TAF text into structured objects |
 | `AirportLocator` | MetarParser.Data | AWC API: resolves ICAO to lat/lon; finds nearest METAR/TAF stations by bounding box |
+| `HttpFetchRetry` | MetarParser.Data | Extension method `GetStringWithRetryAsync` wrapping `HttpClient.GetStringAsync` with 3-attempt exponential-backoff retry (2 s → 4 s → 8 s) for transient upstream failures |
+
+**Upstream-fetch error handling:** METAR, TAF, and GFS fetchers all call `HttpFetchRetry.GetStringWithRetryAsync`.  Transient failures (HTTP 5xx, 429, SSL/TLS handshake errors, network-level `IOException`, request-timeout `TaskCanceledException`) are retried up to three times with exponential backoff; each retry logs at `WARN`.  Only when all three attempts have failed does the caller's catch block log at `ERROR`, which is also the point at which WxMonitor's alert pipeline (see WX-25) would escalate.  Permanent failures (4xx other than 429) throw immediately without retry so caller-specific handling still applies — notably `GfsFetcher`'s treatment of HTTP 404/301/302 as "forecast hour not yet published, stop the loop."
 
 ---
 

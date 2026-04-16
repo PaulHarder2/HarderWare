@@ -35,11 +35,11 @@ public static class TafFetcher
         string raw;
         try
         {
-            raw = await httpClient.GetStringAsync(url);
+            raw = await httpClient.GetStringWithRetryAsync(url, "TAF");
         }
         catch (Exception ex)
         {
-            Logger.Error($"TAF fetch failed: {ex.Message}");
+            Logger.Error($"TAF fetch failed after retries: {ex.Message}");
             return;
         }
 

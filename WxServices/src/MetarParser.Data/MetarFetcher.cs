@@ -77,11 +77,11 @@ public static class MetarFetcher
         string raw;
         try
         {
-            raw = await httpClient.GetStringAsync(url);
+            raw = await httpClient.GetStringWithRetryAsync(url, "METAR");
         }
         catch (Exception ex)
         {
-            Logger.Error($"METAR fetch failed: {ex.Message}");
+            Logger.Error($"METAR fetch failed after retries: {ex.Message}");
             return;
         }
 
