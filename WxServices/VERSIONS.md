@@ -5,7 +5,7 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 
 | Version | Commit  | Date       | Summary |
 |---------|---------|------------|---------|
-| 1.3.4   | pending | 2026-04-16 | Retry with exponential backoff on transient upstream fetch failures (WX-20, WX-21) |
+| 1.3.4   | d3996df | 2026-04-16 | Retry with exponential backoff on transient upstream fetch failures (WX-20, WX-21) |
 | 1.3.3   | 5205064 | 2026-04-16 | Defensive idempotent ALTER for Metars/Tafs ReceivedUtc (WX-22) |
 | 1.3.2   | 5569f78 | 2026-04-16 | Geographic nearest-neighbour METAR fallback within 30 mi (WX-19) |
 | 1.3.1   | d9ec9fc | 2026-04-15 | Forecast temperatures formatted on two labeled lines (WX-14) |
