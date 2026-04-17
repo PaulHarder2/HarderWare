@@ -5,7 +5,7 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 
 | Version | Commit  | Date       | Summary |
 |---------|---------|------------|---------|
-| 1.3.5   | _pending_ | 2026-04-17 | Retry DB connection at service startup with per-attempt WARN + final ERROR (WX-28, partial) |
+| 1.3.5   | 115d037 | 2026-04-17 | Retry DB connection at service startup with per-attempt WARN + final ERROR (WX-28, partial) |
 | 1.3.4   | d3996df | 2026-04-16 | Retry with exponential backoff on transient upstream fetch failures (WX-20, WX-21) |
 | 1.3.3   | 5205064 | 2026-04-16 | Defensive idempotent ALTER for Metars/Tafs ReceivedUtc (WX-22) |
 | 1.3.2   | 5569f78 | 2026-04-16 | Geographic nearest-neighbour METAR fallback within 30 mi (WX-19) |
