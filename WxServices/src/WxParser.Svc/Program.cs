@@ -87,9 +87,11 @@ try
 {
     var dbOptions = host.Services.GetRequiredService<DbContextOptions<WeatherDataContext>>();
     var cfg = host.Services.GetRequiredService<IConfiguration>();
+    var lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
     await DatabaseSetup.EnsureSchemaAsync(
         dbOptions,
-        DatabaseStartupRetryOptions.FromConfiguration(cfg));
+        DatabaseStartupRetryOptions.FromConfiguration(cfg),
+        lifetime.ApplicationStopping);
     Logger.Info("Database ready.");
 
     var wgrib2Path = cfg["Gfs:Wgrib2WslPath"];

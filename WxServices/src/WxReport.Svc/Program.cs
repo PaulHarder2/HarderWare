@@ -89,9 +89,11 @@ try
 {
     var dbOptions = host.Services.GetRequiredService<DbContextOptions<WeatherDataContext>>();
     var appConfig = host.Services.GetRequiredService<IConfiguration>();
+    var lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
     await DatabaseSetup.EnsureSchemaAsync(
         dbOptions,
-        DatabaseStartupRetryOptions.FromConfiguration(appConfig));
+        DatabaseStartupRetryOptions.FromConfiguration(appConfig),
+        lifetime.ApplicationStopping);
     Logger.Info("Database ready.");
 
     await ValidateConfigAsync(dbOptions);
