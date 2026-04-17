@@ -1,4 +1,6 @@
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
+using WxServices.Logging;
 
 namespace MetarParser.Data;
 
@@ -7,24 +9,89 @@ namespace MetarParser.Data;
 /// single idempotent method.  Every service calls <see cref="EnsureSchemaAsync"/>
 /// at startup; the first one to run creates the database and all tables,
 /// and subsequent calls are harmless no-ops.
+/// <para>
+/// WX-28 wraps the schema setup in a retry loop so that a service booting
+/// before SQL Server is ready (e.g. after a Windows-Update-driven reboot)
+/// waits for the server to come up instead of crashing on the first
+/// <c>SqlException error 26</c>.  Transient failures log at <c>WARN</c>; a
+/// <see cref="DatabaseUnavailableException"/> is thrown only after every
+/// attempt in <see cref="DatabaseStartupRetryOptions"/> has failed.
+/// </para>
 /// </summary>
 public static class DatabaseSetup
 {
     /// <summary>
-    /// Ensures the <c>WeatherData</c> database and all required tables exist.
+    /// Ensures the <c>WeatherData</c> database and all required tables exist,
+    /// retrying transient connection failures according to
+    /// <paramref name="retry"/>.
     /// <para>
-    /// <see cref="WeatherDataContext.Database.EnsureCreatedAsync"/> creates the
-    /// core tables defined in <see cref="WeatherDataContext.OnModelCreating"/>
-    /// only when the database is entirely absent.  The explicit DDL statements
-    /// below handle tables and columns that were added after the initial schema,
-    /// using <c>IF NOT EXISTS</c> guards so every statement is idempotent.
+    /// <see cref="WeatherDataContext.Database.EnsureCreatedAsync"/> creates
+    /// the core tables defined in <see cref="WeatherDataContext.OnModelCreating"/>
+    /// only when the database is entirely absent — so this method also covers
+    /// the first-run case where SQL Server is up but the <c>WeatherData</c>
+    /// database itself does not yet exist.  The idempotent DDL statements
+    /// below handle tables and columns that were added after the initial
+    /// schema.
     /// </para>
     /// </summary>
     /// <param name="dbOptions">EF Core options for the <see cref="WeatherDataContext"/>.</param>
+    /// <param name="retry">Retry schedule; <c>null</c> uses <see cref="DatabaseStartupRetryOptions.Default"/>.</param>
     /// <param name="ct">Cancellation token.</param>
+    /// <exception cref="DatabaseUnavailableException">
+    /// Thrown after every attempt has failed with a transient connection
+    /// error.  Non-transient errors (e.g. permission problems, schema
+    /// conflicts) propagate immediately without retry.
+    /// </exception>
     public static async Task EnsureSchemaAsync(
         DbContextOptions<WeatherDataContext> dbOptions,
+        DatabaseStartupRetryOptions? retry = null,
         CancellationToken ct = default)
+    {
+        retry ??= DatabaseStartupRetryOptions.Default;
+        var maxAttempts = Math.Max(1, retry.MaxAttempts);
+
+        Exception? lastTransient = null;
+
+        for (int attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            try
+            {
+                await EnsureSchemaCoreAsync(dbOptions, ct);
+                if (attempt > 1)
+                {
+                    Logger.Info(
+                        $"Database became available on attempt {attempt}/{maxAttempts}.");
+                }
+                return;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex) when (IsTransientConnectionError(ex))
+            {
+                lastTransient = ex;
+
+                if (attempt >= maxAttempts) break;
+
+                var delay = retry.DelayAfterAttempt(attempt);
+                Logger.Warn(
+                    $"Database not ready (attempt {attempt}/{maxAttempts}): " +
+                    $"{ex.GetBaseException().Message.TrimEnd('.')} — retrying in {delay.TotalSeconds:F0}s.");
+
+                await Task.Delay(delay, ct);
+            }
+        }
+
+        throw new DatabaseUnavailableException(
+            $"Database did not become available after {maxAttempts} attempt(s). " +
+            "SQL Server may be down, unreachable, or misconfigured.",
+            lastTransient);
+    }
+
+    private static async Task EnsureSchemaCoreAsync(
+        DbContextOptions<WeatherDataContext> dbOptions,
+        CancellationToken ct)
     {
         await using var db = new WeatherDataContext(dbOptions);
 
@@ -193,4 +260,55 @@ public static class DatabaseSetup
                 ALTER TABLE [Tafs] ADD [ReceivedUtc] datetime2 NOT NULL
                     CONSTRAINT [DF_Tafs_ReceivedUtc] DEFAULT SYSUTCDATETIME();", ct);
     }
+
+    /// <summary>
+    /// Classifies an exception raised from EF Core startup as transient
+    /// (retry) vs. permanent (fail fast).  Transient cases cover the
+    /// post-reboot race where SQL Server has not yet opened its network
+    /// listener, has not yet attached the database, or is throttling
+    /// connections while the instance warms up.  Permanent cases — invalid
+    /// configuration, schema conflicts, permission errors — fall through
+    /// unchanged so the existing <c>Logger.Error("Fatal error during
+    /// startup.")</c> block continues to surface real bugs immediately.
+    /// </summary>
+    private static bool IsTransientConnectionError(Exception ex)
+    {
+        for (var cur = ex; cur is not null; cur = cur.InnerException)
+        {
+            if (cur is SqlException sql && IsTransientSqlNumber(sql.Number))
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// SQL Server / SqlClient error numbers that indicate a transient
+    /// connection-level condition — either "server not reachable yet" or
+    /// "server is throttling under load."  Deliberately conservative: login
+    /// failures (18456) and permissions errors (e.g. 229) are NOT included,
+    /// because those are configuration bugs that should fail fast rather
+    /// than spin for five minutes.
+    /// </summary>
+    private static bool IsTransientSqlNumber(int number) => number switch
+    {
+        // Client-side timeouts and network-layer failures.
+        -2     => true,   // Connection timeout expired.
+        20     => true,   // The instance of SQL Server you attempted to connect to does not support encryption (often transient during startup).
+        26     => true,   // Error Locating Server/Instance Specified — the post-reboot case we're fixing.
+        40     => true,   // Could not open a connection to SQL Server.
+        53     => true,   // Network path not found.
+        64     => true,   // Specified network name is no longer available.
+        121    => true,   // Semaphore timeout period has expired.
+        233    => true,   // No process is on the other end of the pipe.
+        258    => true,   // Cannot wait on a mutex.
+        1205   => true,   // Deadlock victim.
+        1222   => true,   // Lock request time out.
+        10053  => true,   // A transport-level error has occurred (connection forcibly closed).
+        10054  => true,   // Connection reset by peer.
+        10060  => true,   // Connection attempt timed out.
+        10061  => true,   // No connection because target machine actively refused it.
+        11001  => true,   // Host not found (DNS still warming up, for named-instance lookups).
+
+        _ => false,
+    };
 }

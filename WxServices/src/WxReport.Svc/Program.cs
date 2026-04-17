@@ -88,12 +88,14 @@ var host = Host.CreateDefaultBuilder(args)
 try
 {
     var dbOptions = host.Services.GetRequiredService<DbContextOptions<WeatherDataContext>>();
-    await DatabaseSetup.EnsureSchemaAsync(dbOptions);
+    var appConfig = host.Services.GetRequiredService<IConfiguration>();
+    await DatabaseSetup.EnsureSchemaAsync(
+        dbOptions,
+        DatabaseStartupRetryOptions.FromConfiguration(appConfig));
     Logger.Info("Database ready.");
 
     await ValidateConfigAsync(dbOptions);
 
-    var appConfig = host.Services.GetRequiredService<IConfiguration>();
     await PrerequisiteChecker.LogPrerequisitesAsync(
         PrerequisiteChecker.Requires.SqlServer,
         connectionString: appConfig.GetConnectionString("WeatherData") ?? "");

@@ -88,7 +88,13 @@ var host = Host.CreateDefaultBuilder(args)
 
 try
 {
+    var dbOptions = host.Services.GetRequiredService<DbContextOptions<WeatherDataContext>>();
     var cfg = host.Services.GetRequiredService<IConfiguration>();
+    await DatabaseSetup.EnsureSchemaAsync(
+        dbOptions,
+        DatabaseStartupRetryOptions.FromConfiguration(cfg));
+    Logger.Info("Database ready.");
+
     await PrerequisiteChecker.LogPrerequisitesAsync(
         PrerequisiteChecker.Requires.SqlServer | PrerequisiteChecker.Requires.CondaPython | PrerequisiteChecker.Requires.WxVisPackages,
         connectionString: cfg.GetConnectionString("WeatherData") ?? "",
