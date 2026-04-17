@@ -54,7 +54,7 @@ CodeRabbit costs money per review. Handing a paid reviewer code with test failur
 
 ## 5. Push and open PR
 
-```
+```bash
 git push -u origin WX-NN-short-description
 gh pr create --title "WX-NN: short description" --body ...
 ```
