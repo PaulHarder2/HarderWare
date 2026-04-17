@@ -5,6 +5,7 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 
 | Version | Commit  | Date       | Summary |
 |---------|---------|------------|---------|
+| 1.3.5   | 115d037 | 2026-04-17 | Retry DB connection at service startup with per-attempt WARN + final ERROR (WX-28, partial) |
 | 1.3.4   | d3996df | 2026-04-16 | Retry with exponential backoff on transient upstream fetch failures (WX-20, WX-21) |
 | 1.3.3   | 5205064 | 2026-04-16 | Defensive idempotent ALTER for Metars/Tafs ReceivedUtc (WX-22) |
 | 1.3.2   | 5569f78 | 2026-04-16 | Geographic nearest-neighbour METAR fallback within 30 mi (WX-19) |
@@ -19,6 +20,25 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 | 1.0.0   | 7a2a268 | 2026-04-07 | Initial versioned release |
 
 ---
+
+## 1.3.5 — Retry DB connection at service startup (2026-04-17)
+
+- **WX-28 (partial):** All four services boot with Windows, and after a Windows-Update-driven reboot they race SQL Server's own service start. Before this release, the first `SqlException error 26` ("A network-related or instance-specific error occurred while establishing a connection to SQL Server … error: 26 – Error Locating Server/Instance Specified") was terminal — `DatabaseSetup.EnsureSchemaAsync` threw, each service's outer `try/catch` logged `ERROR Fatal error during startup`, and the services exited without restarting. The 2026-04-17 overnight log showed WxMonitor.Svc died at 04:00:15 and again at 04:32:06 from exactly this pattern; WxParser, WxReport, and WxVis had the same stack traces. When the operator logged in at 12:34, all four came back up successfully on the next manual start, confirming the post-reboot race.
+- **Fix:** `DatabaseSetup.EnsureSchemaAsync` now retries transient SQL Server connection errors according to a configurable schedule. Defaults are 12 attempts with delays 5 s, 10 s, 20 s, 30 s, 30 s, 30 s, 30 s, 30 s, 30 s, 30 s, 30 s — roughly 5 minutes of patience before giving up. Each transient failure logs at `WARN` (`Database not ready (attempt N/12): … — retrying in Xs.`); only after every attempt has failed does the service throw `DatabaseUnavailableException` and let the existing outer catch log `ERROR` so Windows SCM recovery actions can restart it.
+- **Transient vs. permanent classification.** Only `SqlException` numbers known to indicate a connection-layer condition are retried: –2 (timeout), 20, 26, 40, 53, 64, 121, 233, 258, 1205, 1222, 10053, 10054, 10060, 10061, 11001. Login failures (18456), permission errors, schema conflicts, and malformed configuration all propagate immediately so real bugs still fail fast instead of spinning for five minutes.
+- **Scope — all four services.** `WxParser.Svc`, `WxReport.Svc`, `WxMonitor.Svc`, and (now) `WxVis.Svc` all route DB-schema setup through the retry path. WxVis.Svc previously skipped `EnsureSchemaAsync` entirely and allowed its workers to crash with unhandled exceptions if SQL was not yet reachable; it now performs the same startup check as the other three.
+- **Configurable without rebuild.** New `Database:StartupRetry` section in `appsettings.shared.json`:
+    ```json
+    "Database": {
+      "StartupRetry": {
+        "MaxAttempts": 12,
+        "DelaySecondsSchedule": [ 5, 10, 20, 30, 30, 30, 30, 30, 30, 30, 30 ]
+      }
+    }
+    ```
+    Any missing element falls back to the in-code default. The delay schedule wraps on its last element, so `MaxAttempts` can be increased without also lengthening the array.
+- **First-run database creation is preserved.** `db.Database.EnsureCreatedAsync` (which connects to `master` to create the `WeatherData` database on first run) is inside the retry loop, so new-developer installs where SQL Server is up but the database has not yet been created still work end-to-end — the retry simply waits for SQL Server to answer, then `EnsureCreatedAsync` creates the database and the schema in the normal way.
+- **Deferred to follow-up WX-28 PRs:** declaring `DependOnService=MSSQL$SQLEXPRESS` on each service (belt-and-suspenders with this retry), the full Windows service-configuration audit for `INSTALL.md`, and moving `WxParser.Svc` off the personal login it currently runs under.
 
 ## 1.3.4 — Retry with exponential backoff on transient upstream fetch failures (2026-04-16)
 

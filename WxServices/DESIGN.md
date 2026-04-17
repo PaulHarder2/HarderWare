@@ -1116,6 +1116,25 @@ sc.exe start WxVisSvc
 
 The database schema is managed by `DatabaseSetup.EnsureSchemaAsync()` in `MetarParser.Data`.  Every service calls this method at startup.  The first service to start creates the database (via EF Core `EnsureCreatedAsync`) and all additional tables/columns (via idempotent `IF NOT EXISTS` DDL).  Subsequent services and restarts are no-ops.  No manual SQL scripts or EF migrations are needed.
 
+#### Startup retry against a not-yet-ready SQL Server (WX-28)
+
+All four services start with Windows and, after a Windows-Update-driven reboot, race SQL Server's own service start.  `EnsureSchemaAsync` therefore wraps schema setup in a retry loop: each transient `SqlException` (error numbers –2, 20, 26, 40, 53, 64, 121, 233, 258, 1205, 1222, 10053, 10054, 10060, 10061, 11001) is logged at `WARN` and the service waits before the next attempt.  After `MaxAttempts` attempts have failed the method throws `DatabaseUnavailableException`; the service's outer `try/catch` logs `ERROR` and exits, leaving Windows SCM recovery actions to restart it.
+
+Defaults: 12 attempts with delays 5 s, 10 s, 20 s, 30 s, 30 s, 30 s, 30 s, 30 s, 30 s, 30 s, 30 s (≈ 5 minutes total).  Tunable via the `Database:StartupRetry` section of `appsettings.shared.json` or `appsettings.local.json`:
+
+```json
+"Database": {
+  "StartupRetry": {
+    "MaxAttempts": 12,
+    "DelaySecondsSchedule": [ 5, 10, 20, 30, 30, 30, 30, 30, 30, 30, 30 ]
+  }
+}
+```
+
+Permanent errors (login failures, permissions, schema conflicts) are *not* retried — they propagate on the first attempt so real bugs fail fast.  `EnsureCreatedAsync` — which creates the `WeatherData` database itself on first run by connecting to `master` — is inside the retry loop, so new-developer installs against a cold SQL Server still bootstrap cleanly.
+
+The complementary pieces of WX-28 (declarative `DependOnService=MSSQL$SQLEXPRESS` in the installer, full Windows service-configuration audit, and moving `WxParser.Svc` off the personal Windows account it currently runs under) are tracked as follow-up PRs.
+
 ### Startup order
 Start `WxParserSvc` first and allow at least one fetch cycle to complete before starting `WxReportSvc`, so METAR data is available for station resolution. GFS data will begin accumulating on the first 60-minute GFS cycle; full temperature forecasts appear in reports once the first complete model run is ingested (up to ~4 hours after the run's nominal time).
 

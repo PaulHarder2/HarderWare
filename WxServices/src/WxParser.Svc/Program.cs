@@ -86,10 +86,14 @@ var host = Host.CreateDefaultBuilder(args)
 try
 {
     var dbOptions = host.Services.GetRequiredService<DbContextOptions<WeatherDataContext>>();
-    await DatabaseSetup.EnsureSchemaAsync(dbOptions);
+    var cfg = host.Services.GetRequiredService<IConfiguration>();
+    var lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
+    await DatabaseSetup.EnsureSchemaAsync(
+        dbOptions,
+        DatabaseStartupRetryOptions.FromConfiguration(cfg),
+        lifetime.ApplicationStopping);
     Logger.Info("Database ready.");
 
-    var cfg = host.Services.GetRequiredService<IConfiguration>();
     var wgrib2Path = cfg["Gfs:Wgrib2WslPath"];
     if (string.IsNullOrWhiteSpace(wgrib2Path))
         wgrib2Path = paths.Wgrib2BundledWslPath;
