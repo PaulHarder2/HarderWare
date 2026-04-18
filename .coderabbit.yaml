@@ -1,0 +1,84 @@
+# CodeRabbit configuration for the HarderWare repo.
+# Added 2026-04-18 (WX-32).
+#
+# Purpose: raise the signal-to-noise ratio of CodeRabbit's PR reviews
+# now that the project has stabilised enough for more assertive design
+# and architectural feedback. See WX-32 for the full rationale and the
+# concrete trigger (WX-28's shutdown-token "nitpick" that was actually
+# a real bug -- a more assertive profile would have flagged it with
+# appropriate severity).
+#
+# Defaults that ship with CodeRabbit are preserved unless overridden
+# below; any key not set here falls through to the CodeRabbit default.
+
+reviews:
+  # "assertive" gives more comprehensive feedback than the default
+  # "chill" profile. Trade-off: more findings per PR, including some
+  # that aren't worth acting on. Net positive for a small team that
+  # can decline bad suggestions with a one-line reply.
+  profile: assertive
+
+  # Top-of-PR one-paragraph summary makes large PRs easier to triage
+  # at a glance, especially ones with bundled unrelated tweaks.
+  high_level_summary: true
+  high_level_summary_in_walkthrough: true
+
+  # Link each PR to its Jira ticket (we use WX-NN: title prefix) and
+  # check that the PR actually satisfies the ticket's acceptance
+  # criteria. Catches "shipped the retry but forgot to update
+  # DESIGN.md" style drift.
+  related_issues: true
+  assess_linked_issues: true
+
+  # Time estimate at the top of each review. Helps plan when to look.
+  estimate_code_review_effort: true
+
+  # Sequence diagrams for non-trivial PRs. Probably noise on single-
+  # concern PRs but earns its keep on multi-service interactions
+  # (e.g. WX-28 retry loop, WX-33 wgrib2 process boundary). Disable
+  # if it becomes noise after a few PRs.
+  sequence_diagrams: true
+
+  # Per-path guidance. First drafts; tune once we see how CodeRabbit
+  # responds. The point is to steer attention toward the concerns
+  # that matter for each layer, not to be exhaustive.
+  path_instructions:
+    - path: "**/*.cs"
+      instructions: |
+        Focus on nullability contracts, async/cancellation
+        correctness, thread-safety of shared state, EF Core migration
+        safety (idempotent ALTERs, no destructive defaults), and
+        resource disposal. Flag Windows-service-specific concerns
+        (IHostApplicationLifetime usage, graceful shutdown paths,
+        StartName / service account implications).
+
+    - path: "WxServices/src/WxVis/**/*.py"
+      instructions: |
+        Focus on matplotlib/cartopy memory handling (figures must be
+        closed after save), subprocess argument safety, path handling
+        for the Windows service identity that launches Python, and
+        SQLAlchemy engine lifetime.
+
+    - path: "WxServices/**/*.md"
+      instructions: |
+        Check for internal consistency across DESIGN.md, INSTALL.md,
+        DEVELOPER-README.md, and VERSIONS.md. Flag stale references
+        to retired features or renamed config keys. Verify command
+        examples still apply to the current service-account model.
+
+    - path: "**/*.ps1"
+      instructions: |
+        PowerShell 5.x (Windows default) reads .ps1 as ANSI unless a
+        UTF-8 BOM is present. Flag any non-ASCII characters in string
+        literals (em-dash, curly quotes, ellipsis) -- these cause
+        cryptic parser errors at script load time.
+
+# Strategic tone, deliberately scoped for a single-PC single-operator
+# project. Don't ask for scalability analysis on a weather-email tool
+# that will never need to scale past one box.
+tone_instructions: |
+  Provide architectural insights on maintainability, long-term
+  correctness, and operational simplicity. Skip scalability and
+  horizontal-scaling commentary -- this is a single-PC deployment,
+  not a distributed system. When flagging a correctness issue, say so
+  clearly; reserve "nitpick" for genuine style preferences.
