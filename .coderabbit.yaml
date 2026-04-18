@@ -77,8 +77,4 @@ reviews:
 # project. Don't ask for scalability analysis on a weather-email tool
 # that will never need to scale past one box.
 tone_instructions: |
-  Provide architectural insights on maintainability, long-term
-  correctness, and operational simplicity. Skip scalability and
-  horizontal-scaling commentary -- this is a single-PC deployment,
-  not a distributed system. When flagging a correctness issue, say so
-  clearly; reserve "nitpick" for genuine style preferences.
+  Focus on maintainability and long-term correctness. Skip scalability commentary - this is a single-PC deployment. Reserve 'nitpick' for genuine style preferences; use appropriate severity for correctness issues.
