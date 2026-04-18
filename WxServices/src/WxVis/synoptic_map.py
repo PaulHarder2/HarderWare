@@ -108,7 +108,7 @@ def _altimeter_to_mslp_hpa(altimeter_value: float | None,
     qnh_hpa = altimeter_value * 33.8639 \
         if isinstance(altimeter_unit, str) and altimeter_unit.upper() == "INHG" \
         else float(altimeter_value)
-    if elevation_ft is None or elevation_ft < 1.0:
+    if elevation_ft is None or not np.isfinite(elevation_ft) or elevation_ft < 1.0:
         return qnh_hpa
     if temp_c is None or not np.isfinite(temp_c):
         return qnh_hpa
@@ -432,6 +432,11 @@ def render_synoptic_map(
     # Use uniform contour intervals across zoom levels.  Higher zooms have more
     # canvas per line, so they appear less crowded naturally.  Dewpoint isopleths
     # are suppressed at z1 (font_scale == 1) to reduce visual clutter.
+    # smooth_sigma here is 5.0 vs. forecast_map's 1.5: the Barnes-interpolated
+    # field is built from irregularly-spaced point observations and carries
+    # station-density artifacts that the GFS 0.25 deg GRIB grid does not, so
+    # the analysis benefits from more aggressive Gaussian smoothing to match
+    # the visual isobar character of the forecast side.
     _add_analysis_contours(
         ax, plot_df, extent, proj,
         isobar_interval_hpa=8.0,
