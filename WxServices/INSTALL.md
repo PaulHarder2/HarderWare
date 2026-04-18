@@ -67,20 +67,43 @@ After installation:
 The database itself (`WeatherData`) is created automatically on first
 service startup — no manual SQL scripts are needed.
 
-### 2.3 WSL (Windows Subsystem for Linux)
+### 2.3 wgrib2 (native Windows build)
 
-WSL is required for GFS forecast data processing.  The `wgrib2` tool
-that processes forecast files is bundled with the installer — you do not
-need to install it separately.
+GFS forecast-data processing uses `wgrib2`, NOAA's GRIB2 utility.  The
+NOAA pre-built Windows binary is Cygwin-compiled and ships with its
+required `cygwin1.dll` alongside, so it runs under any Windows identity
+(including the `NT SERVICE\*` virtual accounts the services use).
 
-1. Open **PowerShell as administrator** (see Before You Begin) and type:
+1. Download the six files (total ≈10.7 MB) from NOAA's distribution:
+   > https://ftp.cpc.ncep.noaa.gov/wd51we/wgrib2/Windows10/v3.1.3/
+
+   Required: `wgrib2.exe`, `cygwin1.dll`, `cyggcc_s-seh-1.dll`,
+   `cyggfortran-5.dll`, `cyggomp-1.dll`, `cygquadmath-0.dll`.
+
+2. Place all six files in `{InstallRoot}\wgrib2\` (default
+   `C:\HarderWare\wgrib2\`).  This path matches
+   `WxPaths.Wgrib2DefaultPath` so no configuration override is needed
+   unless you install wgrib2 somewhere else.
+
+3. Verify from an ordinary Command Prompt:
    ```
-   wsl --install
+   C:\HarderWare\wgrib2\wgrib2.exe --version
    ```
-   Reboot if prompted.  Ubuntu is installed by default.
+   You should see a version line (e.g. `v3.1.3rc2 10/22/2023 ...`).
+   wgrib2 exits with code 8 on `--version`; that's normal.
 
-2. Verify WSL is working: open a **Command Prompt** and type `wsl echo ok`.
-   You should see `ok` printed.
+4. For services running as `NT SERVICE\*` accounts, grant each account
+   Read + Execute on the folder:
+   ```
+   icacls C:\HarderWare\wgrib2 /grant "NT SERVICE\WxParserSvc:(OI)(CI)RX" /T
+   ```
+   Only `WxParserSvc` actually invokes wgrib2; granting all four
+   `NT SERVICE\Wx*Svc` accounts is a harmless convenience.
+
+**Note.**  WSL is no longer required.  Prior releases invoked a
+WSL-hosted `wgrib2` Linux binary via `wsl.exe`; that was retired in
+1.3.6 (WX-33) when the services moved to virtual service accounts,
+which have no WSL distro.
 
 ### 2.4 Miniconda and the wxvis Environment
 
@@ -188,7 +211,7 @@ an API key.
 |---|---|---|
 | `ConnectionStrings:WeatherData` | `Server=.\SQLEXPRESS;...` | Change if your SQL Server instance differs |
 | `Fetch:BoundingBoxDegrees` | `9` | Radius around home location for data collection |
-| `Gfs:Wgrib2WslPath` | `/usr/local/bin/wgrib2` | Path to wgrib2 inside WSL |
+| `Gfs:Wgrib2Path` | `{InstallRoot}\wgrib2\wgrib2.exe` | Absolute Windows path to `wgrib2.exe`.  Leave empty to use the default derived from `InstallRoot`. |
 | `WxVis:MapExtent` | `south_central` | Map extent: preset name or W,E,S,N coordinates |
 | `Monitor:AlertEmail` | (empty) | Email address for service health alerts |
 
@@ -252,7 +275,7 @@ Recipients tab to add email subscribers:
 The report service picks up new recipients automatically on its next cycle.
 
 > **Tip:** WxManager's **Setup tab** runs prerequisite checks with
-> pass/fail indicators for SQL Server, WSL, wgrib2, conda, and Docker.
+> pass/fail indicators for SQL Server, wgrib2, conda, and Docker.
 > Use it to verify that everything is working before adding recipients.
 
 ## 8. Start the Observability Stack (Optional)
@@ -316,7 +339,7 @@ All log files use UTC timestamps.
 | No METAR data | `Fetch:HomeIcao` / `HomeLatitude` / `HomeLongitude` not configured |
 | No reports sent | SMTP credentials or Claude API key not set — use WxManager → Configure |
 | Maps not rendering | `WxVis:CondaPythonExe` incorrect, or conda packages not installed |
-| GFS fetch errors | WSL not running, or wgrib2 not installed |
+| GFS fetch errors | `wgrib2.exe` missing at the configured path, or the service account lacks RX on the wgrib2 folder |
 | SQL timeout on GFS purge | Normal for large datasets; the system retries automatically |
 
 For all issues, check the relevant log file in `{InstallRoot}\Logs\`.

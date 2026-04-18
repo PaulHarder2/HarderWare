@@ -101,12 +101,13 @@ public sealed class GfsFetchWorker : BackgroundService
                 return;
             }
 
-            var cfg      = LoadConfig();
+            var cfg   = LoadConfig();
+            var paths = new WxPaths(_config["InstallRoot"]);
+
             var tempPath = string.IsNullOrEmpty(cfg.TempPath)
-                ? new WxPaths(_config["InstallRoot"]).TempDir
+                ? paths.TempDir
                 : cfg.TempPath;
 
-            var paths = new WxPaths(_config["InstallRoot"]);
             var wgrib2Path = string.IsNullOrWhiteSpace(cfg.Wgrib2Path)
                 ? paths.Wgrib2DefaultPath
                 : cfg.Wgrib2Path;
