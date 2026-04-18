@@ -213,3 +213,36 @@ correct order.
 | Service won't start | Run `sc.exe query <ServiceName>` to check registration. Check logs in `{InstallRoot}\Logs\`. |
 
 All logs are in `{InstallRoot}\Logs\` with UTC timestamps.
+
+## Jira labels
+
+Issues in the Jira `WX` project are tagged with labels across three orthogonal
+dimensions.  A typical issue carries one to three labels: usually one
+component + one work-character, occasionally a meta label.
+
+The authoritative label registry lives in Jira as **WX-37 "Label taxonomy
+reference"**.  That issue exists solely to keep every approved label in Jira's
+autocomplete pool (Jira Cloud has no admin page for labels — an unused label
+silently disappears from autocomplete).  Do not close WX-37 or strip its
+labels.
+
+### Component / area
+
+`wxparser`, `wxreport`, `wxmonitor`, `wxvis`, `wxmanager`, `wxviewer`,
+`database`, `claude-integration`, `config`, `infrastructure`
+
+### Work character
+
+`ui`, `reliability`, `observability`, `performance`, `security`, `refactor`,
+`tech-debt`, `docs`, `quick-win`
+
+### Source / meta
+
+`coderabbit`, `ai-collab`, `needs-design`, `incident`
+
+### Conventions
+
+- Lowercase, hyphen-separated (`wxmanager`, not `WxManager` or `wx_manager`).
+- Prefer reuse over invention.  Check the list above before adding a new one.
+- If a new label is genuinely needed, add it to WX-37 *and* to this section in
+  the same commit.
