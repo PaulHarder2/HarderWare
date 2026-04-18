@@ -39,9 +39,9 @@ public partial class SetupTab : UserControl
         CheckList.Children.Clear();
 
         var connStr    = App.Configuration?["ConnectionStrings:WeatherData"] ?? "";
-        var wgrib2Path = App.Configuration?["Gfs:Wgrib2WslPath"];
+        var wgrib2Path = App.Configuration?["Gfs:Wgrib2Path"];
         if (string.IsNullOrWhiteSpace(wgrib2Path))
-            wgrib2Path = new WxPaths(App.Configuration?["InstallRoot"]).Wgrib2BundledWslPath;
+            wgrib2Path = new WxPaths(App.Configuration?["InstallRoot"]).Wgrib2DefaultPath;
         var pythonExe  = App.Configuration?["WxVis:CondaPythonExe"] ?? "";
 
         var checks = new (string Label, string Hint, Func<Task<CheckResult>> Check)[]
@@ -52,10 +52,7 @@ public partial class SetupTab : UserControl
             ("Database",        "The database is created automatically on first service startup.",
                 () => PrerequisiteChecker.CheckDatabaseAsync(connStr)),
 
-            ("WSL",             "Run 'wsl --install' from an elevated command prompt.",
-                () => PrerequisiteChecker.CheckWslAsync()),
-
-            ("wgrib2",          $"Install wgrib2 inside WSL at {wgrib2Path}.",
+            ("wgrib2",          $"Install native Windows wgrib2.exe at {wgrib2Path}.",
                 () => PrerequisiteChecker.CheckWgrib2Async(wgrib2Path)),
 
             ("Conda Python",    "Install Miniconda and set WxVis:CondaPythonExe in config.",

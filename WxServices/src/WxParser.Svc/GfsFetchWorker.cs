@@ -107,9 +107,9 @@ public sealed class GfsFetchWorker : BackgroundService
                 : cfg.TempPath;
 
             var paths = new WxPaths(_config["InstallRoot"]);
-            var wgrib2Path = string.IsNullOrWhiteSpace(cfg.Wgrib2WslPath)
-                ? paths.Wgrib2BundledWslPath
-                : cfg.Wgrib2WslPath;
+            var wgrib2Path = string.IsNullOrWhiteSpace(cfg.Wgrib2Path)
+                ? paths.Wgrib2DefaultPath
+                : cfg.Wgrib2Path;
 
             await GfsFetcher.FetchAndInsertAsync(
                 region,

@@ -41,8 +41,8 @@
                         <TextBlock Grid.Row="1" Grid.Column="0" Text="Conda Python Exe" VerticalAlignment="Center" Margin="0,4"/>
                         <TextBox   Grid.Row="1" Grid.Column="1" x:Name="TxtCondaPythonExe" Margin="0,4"/>
 
-                        <TextBlock Grid.Row="2" Grid.Column="0" Text="wgrib2 WSL Path" VerticalAlignment="Center" Margin="0,4"/>
-                        <TextBox   Grid.Row="2" Grid.Column="1" x:Name="TxtWgrib2WslPath" Margin="0,4"/>
+                        <TextBlock Grid.Row="2" Grid.Column="0" Text="wgrib2.exe Path" VerticalAlignment="Center" Margin="0,4"/>
+                        <TextBox   Grid.Row="2" Grid.Column="1" x:Name="TxtWgrib2Path" Margin="0,4"/>
                     </Grid>
                 </GroupBox>
 

@@ -58,7 +58,7 @@ public static class GfsFetcher
     /// <param name="boxDegrees">Half-width of the bounding box in degrees (applied in all four directions).</param>
     /// <param name="dbOptions">EF Core options for opening <see cref="WeatherDataContext"/> instances.</param>
     /// <param name="httpClient">HTTP client for NOMADS requests.</param>
-    /// <param name="wgrib2WslPath">Absolute WSL path to the wgrib2 binary.</param>
+    /// <param name="wgrib2Path">Absolute Windows path to wgrib2.exe.</param>
     /// <param name="maxForecastHours">Highest forecast hour to download (inclusive). Default 120.</param>
     /// <param name="retainModelRuns">Number of most-recent model runs to keep in the database. Default 2.</param>
     /// <param name="gfsTempPath">
@@ -74,7 +74,7 @@ public static class GfsFetcher
     /// <sideeffects>
     /// Makes HTTP requests to NOMADS.
     /// Creates and deletes temporary GRIB2 files in <paramref name="gfsTempPath"/>.
-    /// Invokes wgrib2 via wsl.exe subprocesses.
+    /// Invokes wgrib2.exe subprocesses directly (no WSL wrapper since WX-33).
     /// Inserts <see cref="GfsGridPoint"/> rows and deletes old rows in the database.
     /// Writes log entries throughout.
     /// </sideeffects>
@@ -82,7 +82,7 @@ public static class GfsFetcher
         WxServices.Common.FetchRegion region,
         DbContextOptions<WeatherDataContext> dbOptions,
         HttpClient httpClient,
-        string wgrib2WslPath,
+        string wgrib2Path,
         string gfsTempPath,
         int maxForecastHours = 120,
         int retainModelRuns  = 2,
@@ -215,7 +215,7 @@ public static class GfsFetcher
 
                 // ── Extract sub-grid values via wgrib2 ────────────────────────
                 var gribValues = await GribExtractor.ExtractAsync(
-                    tempPath, wgrib2WslPath, latMin, latMax, lonMin, lonMax, ct);
+                    tempPath, wgrib2Path, latMin, latMax, lonMin, lonMax, ct);
 
                 if (gribValues.Count == 0)
                 {

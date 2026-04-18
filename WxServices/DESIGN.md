@@ -145,7 +145,7 @@ Runs on a separate timer (default: every 60 minutes).
 ```mermaid
 flowchart TD
     NOMADS["NOAA / AWS S3 Open Data (GFS pgrb2 0.25°)"]
-    WGRIB2["wgrib2 (via WSL)"]
+    WGRIB2["wgrib2.exe (native Windows)"]
     DB[("SQL Server WeatherData DB")]
     TEMP["Temp GRIB2 file (C:\\HarderWare\\temp)"]
 
@@ -280,9 +280,9 @@ WxServices/
 ├── Directory.Build.props            ← single product version (e.g. 1.0.0) applied to all assemblies
 ├── appsettings.shared.json          ← single source of truth for all config (InstallRoot, DB, SMTP, Claude, WxVis, Monitor, etc.) — git-tracked
 ├── Deploy-WxService.ps1             ← PowerShell deploy script (run as Administrator)
-├── tools/
-│   ├── wgrib2                       ← pre-built Linux binary (executed via WSL); path derived from InstallRoot at runtime
-│   └── wgrib2-version.txt           ← version stamp; Build-Release.ps1 prints a reminder to check for updates
+├── wgrib2/                          ← runtime-installed, not in repo; operator downloads NOAA native Windows build here
+│   ├── wgrib2.exe                   ← Cygwin-compiled NOAA build; path derived from InstallRoot via WxPaths.Wgrib2DefaultPath
+│   └── cygwin1.dll                  ← required alongside wgrib2.exe
 └── src/
     ├── MetarParser/                 ← METAR text parser library
     ├── TafParser/                   ← TAF text parser library
@@ -366,7 +366,7 @@ graph TD
 1. Check for any incomplete model run registered in `GfsModelRuns`. If one exists, resume it; otherwise compute the most recent GFS cycle (00Z/06Z/12Z/18Z) that should be available on NOMADS.
 2. For each forecast hour 0–120 not yet stored, fetch the `.idx` inventory file for that hour. A 404 means the run is still being computed — stop and resume next cycle.
 3. Download byte-range HTTP requests for the 8 target variables (TMP, SPFH, UGRD, VGRD, PRATE, TCDC, CAPE, PRMSL) and concatenate them into a temporary GRIB2 file.
-4. Invoke wgrib2 (via WSL) to crop to the configured fetch region and emit a CSV of grid values.
+4. Invoke `wgrib2.exe` (NOAA native Windows build) to crop to the configured fetch region and emit a CSV of grid values.
 5. Assemble `GfsGridPoint` entities (applying unit conversions) and insert into `GfsGrid`.
 6. When all 121 hours are stored, mark the run `IsComplete = true` and purge old runs (retaining the 2 most recent).
 
@@ -705,9 +705,9 @@ Each pane has its own toolbar docked to the top of the pane, immediately above t
 
 **Tabs:**
 
-- **Setup** — Prerequisites checklist that runs on application load. Uses `PrerequisiteChecker` from `WxServices.Common` to verify SQL Server, WSL, wgrib2, conda Python, wxvis packages, and Docker (optional). Each check shows a pass/fail indicator with a status message; failed checks include guidance text. A "Re-check" button re-runs all checks. The Configure, Recipients, and Announcement tabs are disabled until all required prerequisites pass.
+- **Setup** — Prerequisites checklist that runs on application load. Uses `PrerequisiteChecker` from `WxServices.Common` to verify SQL Server, wgrib2, conda Python, wxvis packages, and Docker (optional). Each check shows a pass/fail indicator with a status message; failed checks include guidance text. A "Re-check" button re-runs all checks. The Configure, Recipients, and Announcement tabs are disabled until all required prerequisites pass.
 
-- **Configure** — Settings editor for the entire system. Pre-populates all fields from the current configuration. Grouped into panels: Paths (InstallRoot, CondaPythonExe, wgrib2 WSL path), Home Location (ICAO, lat/lon, bounding box), Database (connection string + Test button), Email/SMTP (host, port, credentials + Test button that sends a real email), Claude API (key, model + Test button that sends a minimal API request), Map Rendering (extent preset or coordinates), and Monitoring (alert email). Saves all settings to `{InstallRoot}\appsettings.local.json`, which is in every service's config chain as an override layer — no redeployment needed. After save, automatically switches to the Setup tab and re-runs prerequisite checks.
+- **Configure** — Settings editor for the entire system. Pre-populates all fields from the current configuration. Grouped into panels: Paths (InstallRoot, CondaPythonExe, wgrib2.exe path), Home Location (ICAO, lat/lon, bounding box), Database (connection string + Test button), Email/SMTP (host, port, credentials + Test button that sends a real email), Claude API (key, model + Test button that sends a minimal API request), Map Rendering (extent preset or coordinates), and Monitoring (alert email). Saves all settings to `{InstallRoot}\appsettings.local.json`, which is in every service's config chain as an override layer — no redeployment needed. After save, automatically switches to the Setup tab and re-runs prerequisite checks.
 
 - **Recipients** — Left pane shows a scrollable list of all recipients from the `Recipients` database table. Right pane provides an address geocoder (Nominatim), a nearby-stations grid, and a full recipient field editor. Selecting a station pre-fills the MetarIcao field.
 
@@ -741,7 +741,7 @@ Shared utility code referenced by all services and applications.
 
 Key types:
 - `WxPaths` — derives all standard directory paths (Logs, plots, temp, WxVis, services, etc.) from a single `InstallRoot` setting; provides `ReadInstallRoot()` to bootstrap the value from `appsettings.shared.json` before the configuration builder runs
-- `PrerequisiteChecker` — static class with individual async check methods for system prerequisites (SQL Server, WSL, wgrib2, conda Python, wxvis packages, Docker); each returns a `CheckResult(Ok, Message)` record. Services call `LogPrerequisitesAsync` at startup to log warnings for failed checks; WxManager uses the individual methods to display an interactive checklist in the Setup tab
+- `PrerequisiteChecker` — static class with individual async check methods for system prerequisites (SQL Server, wgrib2, conda Python, wxvis packages, Docker); each returns a `CheckResult(Ok, Message)` record. Services call `LogPrerequisitesAsync` at startup to log warnings for failed checks; WxManager uses the individual methods to display an interactive checklist in the Setup tab. (WSL was retired as a prerequisite in WX-33 when `wgrib2` switched from a WSL-invoked Linux binary to the native Windows build.)
 - `SmtpConfig` — POCO holding SMTP host, port, credentials, and sender address (no `FromName`; each service supplies its own display name at construction time)
 - `SmtpSender` — MailKit-based SMTP wrapper; constructed with `SmtpConfig` and a `fromName` string; `SendAsync` accepts a plain-text body, an optional `htmlBody`, and an optional `inlineImages` dictionary (content-id → file path); when HTML is provided the message is sent as `multipart/alternative`; when inline images are supplied the HTML part is wrapped in `multipart/related` so `<img src="cid:...">` references resolve correctly in email clients; all failures (including invalid addresses and SMTP errors) are caught and return `false` rather than throwing
 - `LanguageHelper` — maps natural-language names (English or native script) to BCP 47 IETF tags via `CultureInfo.GetCultures`; also provides localised announcement email subject lines
@@ -1030,7 +1030,7 @@ This single file contains every non-secret setting for all services and applicat
 | WxParser.Svc / WxReport.Svc | AWC Airport API | Resolve ICAO → coordinates; nearest station lookup | None (public) |
 | WxParser.Svc | [OurAirports](https://davidmegginson.github.io/ourairports-data/airports.csv) | Airport names, municipalities, coordinates for all ICAO airports | None (public) |
 | WxParser.Svc | [NOAA GFS / AWS Open Data](https://noaa-gfs-bdp-pds.s3.amazonaws.com) | Download GFS GRIB2 forecast files | None (public) |
-| WxParser.Svc | wgrib2 (WSL) | Extract sub-grid values from GRIB2 files | n/a (local binary) |
+| WxParser.Svc | wgrib2.exe (native Windows) | Extract sub-grid values from GRIB2 files | n/a (local binary) |
 | WxReport.Svc | [Nominatim](https://nominatim.openstreetmap.org/) | Geocode recipient address | None (User-Agent required) |
 | WxReport.Svc | Anthropic Claude API | Generate natural-language reports | API key |
 | WxReport.Svc / WxMonitor.Svc | Gmail SMTP | Send emails | App password |
@@ -1056,8 +1056,7 @@ This single file contains every non-secret setting for all services and applicat
 **System prerequisites:**
 | Prerequisite | Notes |
 |---|---|
-| WSL (Windows Subsystem for Linux) | Required for wgrib2; Ubuntu recommended |
-| wgrib2 | Bundled in `tools/wgrib2`; path derived from InstallRoot at runtime via `WxPaths.Wgrib2BundledWslPath` |
+| wgrib2 | NOAA native Windows build; default path `{InstallRoot}\wgrib2\wgrib2.exe` resolved via `WxPaths.Wgrib2DefaultPath`. Overrideable via `Gfs:Wgrib2Path`. |
 
 ---
 
@@ -1068,7 +1067,7 @@ This single file contains every non-secret setting for all services and applicat
 - .NET 8 runtime
 - SQL Server Express (or higher); default instance name `SQLEXPRESS`
 - Gmail account with an App Password configured for SMTP
-- WSL (wgrib2 is bundled in `tools/` and runs via WSL automatically)
+- NOAA native Windows `wgrib2.exe` installed at `{InstallRoot}\wgrib2\wgrib2.exe` (Cygwin-based build; ships with `cygwin1.dll`)
 - Miniconda with the wxvis conda environment (for map rendering)
 - Docker Desktop (optional, for Prometheus + Grafana observability)
 
@@ -1162,7 +1161,7 @@ All logs are written to `{InstallRoot}\Logs\` (default `C:\HarderWare\Logs\`). L
 | Item | Notes |
 |---|---|
 | Single bounding box | All METAR, TAF, and GFS data is fetched for one geographic region. Supporting recipients in widely separated locations would require per-region fetch configuration. |
-| GFS requires WSL | wgrib2 is a bundled Linux binary invoked via `wsl.exe`. If WSL is unavailable, the GFS cycle logs errors and skips ingestion; METAR/TAF reports continue normally without forecast data. |
+| GFS requires native `wgrib2.exe` | As of WX-33, `wgrib2` runs as a native Windows process, not via WSL. If `wgrib2.exe` is missing from the configured path (default `{InstallRoot}\wgrib2\wgrib2.exe`), the GFS cycle logs errors and skips ingestion; METAR/TAF reports continue normally without forecast data. |
 | GFS forecast delay | A complete model run takes up to ~4 hours after the nominal run time to appear on NOMADS. During this window the previous run's data is used. |
 | WxMonitor does not watch itself | WxMonitor has no watchdog. A Windows Task Scheduler task could serve this purpose if needed. |
 | Nominatim rate limit | Nominatim's terms require a maximum of 1 request/second and a valid User-Agent. Resolution is one-time per recipient, so this is unlikely to be a problem in practice. |

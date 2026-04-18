@@ -9,89 +9,94 @@ namespace GribParser;
 /// </summary>
 /// <param name="Variable">GRIB2 variable abbreviation (e.g. <c>"TMP"</c>, <c>"UGRD"</c>).</param>
 /// <param name="Level">Level descriptor from the GRIB2 inventory (e.g. <c>"2 m above ground"</c>).</param>
-/// <param name="Lat">Grid point latitude in decimal degrees (−90 to +90).</param>
-/// <param name="Lon">Grid point longitude in decimal degrees (−180 to +180).</param>
+/// <param name="Lat">Grid point latitude in decimal degrees (-90 to +90).</param>
+/// <param name="Lon">Grid point longitude in decimal degrees (-180 to +180).</param>
 /// <param name="Value">Scalar value in the native GFS unit for this variable.</param>
 public record GribValue(string Variable, string Level, float Lat, float Lon, float Value);
 
 /// <summary>
 /// Extracts meteorological values from a GRIB2 file for a geographic sub-region
-/// by invoking <c>wgrib2</c> (via <c>wsl.exe</c> on Windows) as a subprocess.
+/// by invoking the native Windows <c>wgrib2.exe</c> binary as a subprocess.
 /// </summary>
+/// <remarks>
+/// <para>
+/// Prior to WX-33, this class invoked <c>wgrib2</c> via <c>wsl.exe</c>, which
+/// required a per-user WSL distro and broke when the parent service moved to an
+/// <c>NT SERVICE\*</c> virtual account (virtual accounts have no WSL of their
+/// own).  The native NOAA Windows build of wgrib2 (Cygwin-compiled) runs under
+/// any identity, so WX-33 dropped the WSL wrapper entirely.  Windows paths are
+/// now passed to wgrib2.exe unchanged.
+/// </para>
+/// </remarks>
 public static class GribExtractor
 {
     /// <summary>
     /// Extracts all GRIB2 messages in <paramref name="grib2FilePath"/> that fall
     /// within the supplied bounding box, returning one <see cref="GribValue"/> per
-    /// (variable × grid point) combination.
+    /// (variable x grid point) combination.
     /// </summary>
     /// <remarks>
     /// Internally runs two wgrib2 invocations:
     /// <list type="number">
-    ///   <item><c>wgrib2 … -small_grib …</c> — crops the input to the bounding box,
-    ///   producing a much smaller temporary GRIB2 file.</item>
-    ///   <item><c>wgrib2 … -csv -</c> — emits the sub-grid as CSV on stdout.</item>
+    ///   <item><c>wgrib2 ... -small_grib ...</c> - crops the input to the bounding box,
+    ///   producing a smaller temporary GRIB2 file.</item>
+    ///   <item><c>wgrib2 ... -csv ...</c> - emits the sub-grid as CSV to a file.</item>
     /// </list>
-    /// Both invocations are run via <c>wsl.exe</c> because wgrib2 is installed inside
-    /// the WSL environment.  Windows file paths are automatically converted to their
-    /// WSL equivalents (e.g. <c>C:\Temp\x</c> → <c>/mnt/c/Temp/x</c>).
     /// </remarks>
     /// <param name="grib2FilePath">Absolute Windows path to the input GRIB2 file.</param>
-    /// <param name="wgrib2WslPath">Absolute WSL path to the wgrib2 binary (e.g. <c>/usr/local/bin/wgrib2</c>).</param>
+    /// <param name="wgrib2Path">Absolute Windows path to <c>wgrib2.exe</c> (e.g. <c>C:\HarderWare\wgrib2\wgrib2.exe</c>).</param>
     /// <param name="latMin">Southern boundary of the bounding box in decimal degrees.</param>
     /// <param name="latMax">Northern boundary of the bounding box in decimal degrees.</param>
-    /// <param name="lonMin">Western boundary in decimal degrees (−180 to +180 convention).</param>
-    /// <param name="lonMax">Eastern boundary in decimal degrees (−180 to +180 convention).</param>
+    /// <param name="lonMin">Western boundary in decimal degrees (-180 to +180 convention).</param>
+    /// <param name="lonMax">Eastern boundary in decimal degrees (-180 to +180 convention).</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>
     /// A list of extracted grid values; empty if the file produces no data within
     /// the bounding box.
     /// </returns>
     /// <sideeffects>
-    /// Creates and then deletes a temporary <c>.sub.grb2</c> file alongside the input.
-    /// Spawns two <c>wsl.exe</c> subprocesses.
-    /// Writes warning log entries if wgrib2 exits with a non-zero code or emits stderr output.
+    /// Creates and then deletes a temporary <c>.sub.grb2</c> file and a <c>.csv</c>
+    /// file alongside the input.  Spawns two <c>wgrib2.exe</c> subprocesses.
+    /// Writes warning log entries if wgrib2 exits with a non-zero code or emits
+    /// stderr output.
     /// </sideeffects>
     public static async Task<IReadOnlyList<GribValue>> ExtractAsync(
         string grib2FilePath,
-        string wgrib2WslPath,
+        string wgrib2Path,
         float latMin, float latMax,
         float lonMin, float lonMax,
         CancellationToken ct = default)
     {
-        // GFS uses 0–360 longitude convention; convert our -180/+180 bounds.
+        // GFS uses 0-360 longitude convention; convert our -180/+180 bounds.
         var lon360Min = lonMin < 0 ? lonMin + 360f : lonMin;
         var lon360Max = lonMax < 0 ? lonMax + 360f : lonMax;
 
-        var inputWsl    = ToWslPath(grib2FilePath);
         var subgridPath = grib2FilePath + ".sub.grb2";
-        var subgridWsl  = ToWslPath(subgridPath);
         var csvPath     = grib2FilePath + ".csv";
-        var csvWsl      = ToWslPath(csvPath);
 
         try
         {
-            // ── Step 1: crop to bounding box ──────────────────────────────────
-            var step1Args = $"-e {wgrib2WslPath} \"{inputWsl}\""
+            // Step 1: crop to bounding box.
+            var step1Args = $"\"{grib2FilePath}\""
                           + $" -small_grib {lon360Min:F3}:{lon360Max:F3} {latMin:F3}:{latMax:F3}"
-                          + $" \"{subgridWsl}\"";
+                          + $" \"{subgridPath}\"";
 
-            var rc1 = await RunWslAsync(step1Args, null, ct);
+            var rc1 = await RunWgrib2Async(wgrib2Path, step1Args, null, ct);
             if (rc1 != 0)
                 Logger.Warn($"GribExtractor: wgrib2 -small_grib exited {rc1} for '{Path.GetFileName(grib2FilePath)}'.");
 
             if (!File.Exists(subgridPath))
             {
-                Logger.Warn($"GribExtractor: subgrid file not produced from '{Path.GetFileName(grib2FilePath)}' — bounding box may yield no points.");
+                Logger.Warn($"GribExtractor: subgrid file not produced from '{Path.GetFileName(grib2FilePath)}' - bounding box may yield no points.");
                 return Array.Empty<GribValue>();
             }
 
-            // ── Step 2: emit CSV from the sub-grid ────────────────────────────
-            // wgrib2 opens its CSV output with fopen(), so we write to a temp file
-            // rather than attempting to redirect through /dev/stdout.
-            var step2Args = $"-e {wgrib2WslPath} \"{subgridWsl}\" -csv \"{csvWsl}\"";
+            // Step 2: emit CSV from the sub-grid.
+            // wgrib2 opens its CSV output with fopen(), so we write to a file
+            // rather than attempting to redirect through stdout.
+            var step2Args = $"\"{subgridPath}\" -csv \"{csvPath}\"";
 
-            var rc2 = await RunWslAsync(step2Args, null, ct);
+            var rc2 = await RunWgrib2Async(wgrib2Path, step2Args, null, ct);
             if (rc2 != 0)
                 Logger.Warn($"GribExtractor: wgrib2 -csv exited {rc2} for sub-grid of '{Path.GetFileName(grib2FilePath)}'.");
 
@@ -113,10 +118,11 @@ public static class GribExtractor
     // ── helpers ───────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Runs <c>wsl.exe</c> with the supplied arguments, optionally collecting
+    /// Runs <c>wgrib2.exe</c> with the supplied arguments, optionally collecting
     /// every stdout line into <paramref name="outputLines"/>.
     /// </summary>
-    /// <param name="args">Arguments forwarded verbatim to <c>wsl.exe</c>.</param>
+    /// <param name="wgrib2Path">Absolute Windows path to <c>wgrib2.exe</c>.</param>
+    /// <param name="args">Arguments forwarded verbatim to <c>wgrib2.exe</c>.</param>
     /// <param name="outputLines">
     /// If non-null, each stdout line is appended here as it is read.
     /// If null, stdout is drained and discarded.
@@ -124,15 +130,16 @@ public static class GribExtractor
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The process exit code.</returns>
     /// <sideeffects>
-    /// Spawns a <c>wsl.exe</c> child process.
+    /// Spawns a <c>wgrib2.exe</c> child process.
     /// Any stderr output is written to the warning log.
     /// </sideeffects>
-    private static async Task<int> RunWslAsync(
+    private static async Task<int> RunWgrib2Async(
+        string wgrib2Path,
         string args,
         List<string>? outputLines,
         CancellationToken ct)
     {
-        var psi = new ProcessStartInfo("wsl", args)
+        var psi = new ProcessStartInfo(wgrib2Path, args)
         {
             RedirectStandardOutput = true,
             RedirectStandardError  = true,
@@ -141,7 +148,7 @@ public static class GribExtractor
         };
 
         using var proc = Process.Start(psi)
-            ?? throw new InvalidOperationException("Failed to start wsl.exe — is WSL installed?");
+            ?? throw new InvalidOperationException($"Failed to start wgrib2.exe at '{wgrib2Path}' - is the path correct and does the service account have RX on that folder?");
 
         var stderrTask = proc.StandardError.ReadToEndAsync(ct);
 
@@ -178,7 +185,7 @@ public static class GribExtractor
     /// </code>
     /// The parser reads variable and level from fixed positions and takes lon,
     /// lat, and value from the last three fields, so it handles both layouts.
-    /// Longitudes are in the GFS 0–360 convention and are converted to −180/+180 here.
+    /// Longitudes are in the GFS 0-360 convention and are converted to -180/+180 here.
     /// Lines that cannot be parsed are silently skipped.
     /// </remarks>
     /// <param name="lines">Lines from a <c>wgrib2 -csv</c> output file.</param>
@@ -211,26 +218,12 @@ public static class GribExtractor
             if (!float.TryParse(parts[lonIdx + 2].Trim(), System.Globalization.NumberStyles.Float,
                     System.Globalization.CultureInfo.InvariantCulture, out var value)) continue;
 
-            // Convert 0–360 longitude back to −180/+180.
+            // Convert 0-360 longitude back to -180/+180.
             var lon = lon360 > 180f ? lon360 - 360f : lon360;
 
             results.Add(new GribValue(variable, level, lat, lon, value));
         }
 
         return results;
-    }
-
-    /// <summary>
-    /// Converts an absolute Windows path to its WSL mount-path equivalent.
-    /// For example, <c>C:\Temp\file.grb2</c> → <c>/mnt/c/Temp/file.grb2</c>.
-    /// </summary>
-    /// <param name="windowsPath">Absolute Windows path to convert.</param>
-    /// <returns>The WSL-style path string.</returns>
-    private static string ToWslPath(string windowsPath)
-    {
-        var full  = Path.GetFullPath(windowsPath);
-        var drive = char.ToLower(full[0]);
-        var rest  = full[3..].Replace('\\', '/'); // skip "C:\" — index 3 is past the drive letter, colon, and separator
-        return $"/mnt/{drive}/{rest}";
     }
 }
