@@ -41,7 +41,10 @@ public partial class ConfigureTab : UserControl
 
         TxtInstallRoot.Text      = cfg["InstallRoot"]              ?? WxPaths.DefaultInstallRoot;
         TxtCondaPythonExe.Text   = cfg["WxVis:CondaPythonExe"]     ?? "";
-        TxtWgrib2WslPath.Text    = cfg["Gfs:Wgrib2WslPath"]        ?? "/usr/local/bin/wgrib2";
+        var configuredWgrib2     = cfg["Gfs:Wgrib2Path"];
+        TxtWgrib2Path.Text       = string.IsNullOrWhiteSpace(configuredWgrib2)
+            ? new WxPaths(TxtInstallRoot.Text).Wgrib2DefaultPath
+            : configuredWgrib2;
 
         TxtHomeIcao.Text         = cfg["Fetch:HomeIcao"]           ?? "";
         TxtHomeLatitude.Text     = cfg["Fetch:HomeLatitude"]       ?? "";
@@ -123,7 +126,7 @@ public partial class ConfigureTab : UserControl
                 },
                 ["Gfs"] = new JsonObject
                 {
-                    ["Wgrib2WslPath"] = TxtWgrib2WslPath.Text.Trim(),
+                    ["Wgrib2Path"] = TxtWgrib2Path.Text.Trim(),
                 },
                 ["WxVis"] = new JsonObject
                 {

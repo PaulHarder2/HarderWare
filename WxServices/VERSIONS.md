@@ -5,6 +5,7 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 
 | Version | Commit  | Date       | Summary |
 |---------|---------|------------|---------|
+| 1.3.6   | fa6c0c3 | 2026-04-18 | GFS pipeline switched from WSL-invoked wgrib2 to native Windows wgrib2.exe (WX-33) |
 | 1.3.5   | 115d037 | 2026-04-17 | Retry DB connection at service startup with per-attempt WARN + final ERROR (WX-28, partial) |
 | 1.3.4   | d3996df | 2026-04-16 | Retry with exponential backoff on transient upstream fetch failures (WX-20, WX-21) |
 | 1.3.3   | 5205064 | 2026-04-16 | Defensive idempotent ALTER for Metars/Tafs ReceivedUtc (WX-22) |
@@ -20,6 +21,16 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 | 1.0.0   | 7a2a268 | 2026-04-07 | Initial versioned release |
 
 ---
+
+## 1.3.6 — GFS pipeline switched from WSL to native Windows wgrib2 (2026-04-18)
+
+- **WX-33 (bug fix):** 1.3.5 introduced a regression when WX-31 Phase 1 moved `WxParser.Svc` off `.\PaulH` onto the `NT SERVICE\WxParserSvc` virtual account. `GribExtractor` invoked `wgrib2` via `wsl.exe` — but WSL distros are per-Windows-user, and virtual service accounts have no WSL of their own. Every `wgrib2 -small_grib` call exited `-1`, every forecast hour produced zero subgrid data, and the 2026-04-17 18Z GFS run was lost entirely (`GfsFetcher: run 2026-04-17 18Z is 0/121 hours complete`). `ForecastMapWorker` correctly idled for lack of new data, so forecast-map output stopped after the 12Z run rendered at 19:10 UTC.
+- **Fix:** switched to the NOAA native Windows build of `wgrib2` (Cygwin-compiled, ships `wgrib2.exe` + `cygwin1.dll`). `GribExtractor.ExtractAsync` now spawns `wgrib2.exe` directly with Windows paths — no `wsl.exe` wrapper, no `/mnt/c/...` path translation. Works under any identity because the Windows exe has no per-user prerequisites.
+- **Config key renamed:** `Gfs:Wgrib2WslPath` → `Gfs:Wgrib2Path`. Clean rename with no back-compat shim — the old key in an existing `appsettings.local.json` will be ignored and the default from `WxPaths.Wgrib2DefaultPath` (`{InstallRoot}\wgrib2\wgrib2.exe`) will apply. Operators updating the new key in WxManager's Configure tab will write the new key name going forward.
+- **`WxPaths.Wgrib2BundledWslPath` → `Wgrib2DefaultPath`.** Default resolves to `{InstallRoot}\wgrib2\wgrib2.exe` (previously a WSL path under `{InstallRoot}/tools/`). The `ToolsDir` property and the internal `ToWslPath` helper were retired along with the WSL code path.
+- **WSL retired as a prerequisite.** It was only there to host `wgrib2`. `PrerequisiteChecker.Requires.Wsl` and `CheckWslAsync` are gone; `WxParser.Svc/Program.cs` no longer probes WSL at startup; WxManager's Setup tab drops the WSL checklist row. The `Requires` enum keeps its bit-pattern values so any persisted config referencing old flags cannot collide with new meanings.
+- **WxManager Configure tab:** label "wgrib2 WSL Path" → "wgrib2.exe Path". Field renamed `TxtWgrib2WslPath` → `TxtWgrib2Path`. Default suggested value now the Windows path from `WxPaths.Wgrib2DefaultPath`.
+- **Ops work (one-time on the HarderWare PC):** download the NOAA Windows wgrib2 build, extract to `C:\HarderWare\wgrib2\`, grant `NT SERVICE\WxParserSvc` RX on that folder, rename the `Wgrib2WslPath` key in `appsettings.local.json` to `Wgrib2Path` (or remove it to let the default apply), redeploy WxParser.Svc, observe the next GFS cycle ingests 121/121 hours.
 
 ## 1.3.5 — Retry DB connection at service startup (2026-04-17)
 

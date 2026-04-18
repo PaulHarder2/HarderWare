@@ -94,13 +94,13 @@ try
         lifetime.ApplicationStopping);
     Logger.Info("Database ready.");
 
-    var wgrib2Path = cfg["Gfs:Wgrib2WslPath"];
+    var wgrib2Path = cfg["Gfs:Wgrib2Path"];
     if (string.IsNullOrWhiteSpace(wgrib2Path))
-        wgrib2Path = paths.Wgrib2BundledWslPath;
+        wgrib2Path = paths.Wgrib2DefaultPath;
     await PrerequisiteChecker.LogPrerequisitesAsync(
-        PrerequisiteChecker.Requires.SqlServer | PrerequisiteChecker.Requires.Wsl | PrerequisiteChecker.Requires.Wgrib2,
+        PrerequisiteChecker.Requires.SqlServer | PrerequisiteChecker.Requires.Wgrib2,
         connectionString: cfg.GetConnectionString("WeatherData") ?? "",
-        wgrib2WslPath: wgrib2Path);
+        wgrib2Path: wgrib2Path);
 
     await host.RunAsync();
 }

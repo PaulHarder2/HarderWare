@@ -57,23 +57,23 @@ public static class PrerequisiteChecker
     }
 
     /// <summary>
-    /// Tests whether WSL is installed by running <c>wsl --list --quiet</c>.
+    /// Tests whether the native Windows wgrib2 binary exists and runs.
+    /// wgrib2 returns a non-zero exit code (typically 8) even for <c>--version</c>,
+    /// so we accept any output containing a digit as a pass.
     /// </summary>
-    public static async Task<CheckResult> CheckWslAsync()
+    /// <remarks>
+    /// WX-33 replaced the previous WSL-invoked probe with a direct
+    /// <c>wgrib2.exe</c> launch.  Virtual service accounts (<c>NT SERVICE\*</c>)
+    /// have no WSL distro; the native build works under any identity.
+    /// </remarks>
+    public static async Task<CheckResult> CheckWgrib2Async(string wgrib2Path)
     {
-        return await RunProcessAsync("wsl", "--list --quiet", "WSL");
-    }
+        if (string.IsNullOrWhiteSpace(wgrib2Path))
+            return new CheckResult(false, "Gfs:Wgrib2Path is not configured.");
+        if (!File.Exists(wgrib2Path))
+            return new CheckResult(false, $"File not found: {wgrib2Path}");
 
-    /// <summary>
-    /// Tests whether wgrib2 is available inside WSL at the given path.
-    /// wgrib2 returns a non-zero exit code for --version, so we accept any
-    /// exit code as long as stdout contains a version-like string.
-    /// </summary>
-    public static async Task<CheckResult> CheckWgrib2Async(string wgrib2WslPath)
-    {
-        var result = await RunProcessAsync("wsl", $"{wgrib2WslPath} --version", "wgrib2");
-        // wgrib2 exits with code 8 even on success; treat any output containing
-        // a digit as a pass (e.g. "3.8.0").
+        var result = await RunProcessAsync(wgrib2Path, "--version", "wgrib2");
         if (!result.Ok && result.Message.Any(char.IsDigit))
             return new CheckResult(true, $"wgrib2 {result.Message}");
         return result;
@@ -136,12 +136,16 @@ public static class PrerequisiteChecker
     /// <summary>
     /// Which prerequisites a service requires.
     /// </summary>
+    /// <remarks>
+    /// The <c>Wsl</c> flag was retired in WX-33 when the GFS pipeline switched
+    /// from WSL-invoked <c>wgrib2</c> to the native Windows build.  The
+    /// bit-pattern values are preserved so old config cannot collide.
+    /// </remarks>
     [Flags]
     public enum Requires
     {
         None         = 0,
         SqlServer    = 1 << 0,
-        Wsl          = 1 << 1,
         Wgrib2       = 1 << 2,
         CondaPython  = 1 << 3,
         WxVisPackages = 1 << 4,
@@ -155,22 +159,20 @@ public static class PrerequisiteChecker
     /// </summary>
     /// <param name="requires">Which checks to run.</param>
     /// <param name="connectionString">SQL Server connection string.</param>
-    /// <param name="wgrib2WslPath">Path to wgrib2 inside WSL.</param>
+    /// <param name="wgrib2Path">Absolute Windows path to wgrib2.exe.</param>
     /// <param name="condaPythonExe">Path to the conda Python executable.</param>
     public static async Task LogPrerequisitesAsync(
         Requires requires,
         string connectionString = "",
-        string wgrib2WslPath = "/usr/local/bin/wgrib2",
+        string wgrib2Path = "",
         string condaPythonExe = "")
     {
         var checks = new List<(string Label, Func<Task<CheckResult>> Check)>();
 
         if (requires.HasFlag(Requires.SqlServer))
             checks.Add(("SQL Server", () => CheckSqlServerAsync(connectionString)));
-        if (requires.HasFlag(Requires.Wsl))
-            checks.Add(("WSL", CheckWslAsync));
         if (requires.HasFlag(Requires.Wgrib2))
-            checks.Add(("wgrib2", () => CheckWgrib2Async(wgrib2WslPath)));
+            checks.Add(("wgrib2", () => CheckWgrib2Async(wgrib2Path)));
         if (requires.HasFlag(Requires.CondaPython))
             checks.Add(("Conda Python", () => Task.FromResult(CheckCondaPython(condaPythonExe))));
         if (requires.HasFlag(Requires.WxVisPackages))
