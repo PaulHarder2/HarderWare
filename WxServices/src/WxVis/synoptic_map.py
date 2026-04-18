@@ -85,10 +85,24 @@ def _parse_present_weather_code(raw_wx: str | None) -> int | None:
     return None
 
 
-def _altimeter_to_slp_hpa(altimeter_value: float | None,
-                           altimeter_unit: str | None,
-                           elevation_ft: float | None) -> float | None:
-    """Convert a METAR altimeter setting to approximate MSLP in hPa."""
+def _altimeter_to_mslp_hpa(altimeter_value: float | None,
+                            altimeter_unit: str | None,
+                            elevation_ft: float | None,
+                            temp_c: float | None) -> float | None:
+    """Convert a METAR altimeter setting to actual MSLP in hPa.
+
+    The altimeter setting (QNH) is already reduced to sea level using the ISA
+    temperature profile, so at low elevations it is a good approximation of
+    MSLP (error < 1 hPa).  For accuracy on elevated stations we re-reduce
+    using the station's own air temperature:
+
+    1. QNH -> station pressure via the ISA polytropic formula
+    2. Station pressure -> MSLP via the hypsometric equation with the mean
+       layer temperature, assuming a standard 6.5 K/km lapse rate for the
+       fictitious surface-to-MSL column.
+
+    Falls back to QNH when temperature or elevation is unavailable.
+    """
     if altimeter_value is None:
         return None
     qnh_hpa = altimeter_value * 33.8639 \
@@ -96,7 +110,12 @@ def _altimeter_to_slp_hpa(altimeter_value: float | None,
         else float(altimeter_value)
     if elevation_ft is None or elevation_ft < 1.0:
         return qnh_hpa
-    return qnh_hpa + (elevation_ft * 0.3048 / 8.5)
+    if temp_c is None or not np.isfinite(temp_c):
+        return qnh_hpa
+    h_m = float(elevation_ft) * 0.3048
+    p_stn = qnh_hpa * (1.0 - 0.0065 * h_m / 288.15) ** 5.2561
+    t_mean_k = (float(temp_c) + 273.15) + 0.00325 * h_m
+    return p_stn * np.exp(9.80665 * h_m / (287.05 * t_mean_k))
 
 
 def _encode_slp(slp_hpa: float | None) -> float | None:
@@ -133,7 +152,10 @@ def prepare_plot_data(df: pd.DataFrame) -> pd.DataFrame:
     out["sky_oktas"]   = out["RawSkyConditions"].apply(_parse_sky_oktas)
     out["wx_code"]     = out["RawWeatherPhenomena"].apply(_parse_present_weather_code)
     out["slp_hpa"]     = out.apply(
-        lambda r: _altimeter_to_slp_hpa(r["AltimeterValue"], r["AltimeterUnit"], r["ElevationFt"]),
+        lambda r: _altimeter_to_mslp_hpa(
+            r["AltimeterValue"], r["AltimeterUnit"],
+            r["ElevationFt"], r["AirTemperatureCelsius"],
+        ),
         axis=1,
     )
     out["slp_encoded"] = out["slp_hpa"].apply(_encode_slp)

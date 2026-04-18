@@ -5,6 +5,7 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 
 | Version | Commit  | Date       | Summary |
 |---------|---------|------------|---------|
+| 1.3.7   |         | 2026-04-18 | Analysis map MSLP now uses proper temperature-based reduction from altimeter (WX-35) |
 | 1.3.6   | fa6c0c3 | 2026-04-18 | GFS pipeline switched from WSL-invoked wgrib2 to native Windows wgrib2.exe (WX-33) |
 | 1.3.5   | 115d037 | 2026-04-17 | Retry DB connection at service startup with per-attempt WARN + final ERROR (WX-28, partial) |
 | 1.3.4   | d3996df | 2026-04-16 | Retry with exponential backoff on transient upstream fetch failures (WX-20, WX-21) |
@@ -21,6 +22,14 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 | 1.0.0   | 7a2a268 | 2026-04-07 | Initial versioned release |
 
 ---
+
+## 1.3.7 — Analysis-map MSLP: proper temperature-based reduction (2026-04-18)
+
+- **WX-35 (bug fix):** `WxVis/synoptic_map.py::_altimeter_to_slp_hpa` was adding `h_meters / 8.5` hPa on top of the METAR altimeter setting. That barometric approximation is the formula for reducing **station pressure** to MSL — but the altimeter setting (QNH) is *already* reduced to MSL using the ISA temperature profile. The extra reduction inflated the plotted "SLP" in direct proportion to elevation: at KDEN (5280 ft) the function returned ≈1205 hPa for a 30.00 inHg altimeter; at KLXV (9927 ft) it returned ≈1372 hPa. Barnes interpolation then built a fake 300 hPa dome over the Rockies and 4 hPa isobar contours proliferated across the middle of the map, producing the visibly denser isobar field than the companion GFS f000 map for the same valid time.
+- **Fix:** new `_altimeter_to_mslp_hpa(altimeter_value, altimeter_unit, elevation_ft, temp_c)` performs the physically correct two-step reduction — QNH → station pressure via the ISA polytropic formula `P_stn = QNH × (1 - 0.0065·h/288.15)^5.2561`, then station pressure → MSLP via the hypsometric equation `MSLP = P_stn × exp(g·h / (R_d · T_mean))` with `T_mean = T_surface_K + 0.00325·h` (6.5 K/km standard lapse for the fictitious surface-to-MSL layer). The `AirTemperatureCelsius` column is already materialised on the plot DataFrame at `prepare_plot_data`, so the call site just threads it through.
+- **Degenerate cases.** Station at or below MSL, or missing/non-finite `AirTemperatureCelsius`, fall back to returning QNH directly — the error vs. true MSLP is <1 hPa at low elevations and the analysis remains self-consistent across stations.
+- **Verified end-to-end.** KCXO (245 ft, 29.88 inHg, 20°C): 1011.7 hPa (was 1020.6). KDEN (5280 ft, 30.00 inHg, 10°C): 1012.2 hPa (was 1205.3). KLXV (9927 ft, 30.00 inHg, 0°C): 1009.5 hPa (was 1371.9). The Rockies no longer anchor an artificial high; isobar density on the 06Z analysis map now matches the companion GFS f000 map.
+- **Non-goals.** The 3-digit station-model encoding `(slp_hpa * 10) % 1000` at `_encode_slp` is untouched (it is standard WMO format and was always correct — it just inherited wrong inputs). Forecast-side MSLP handling in `forecast_map.py` reads MSLP in Pa from GRIB and was never affected.
 
 ## 1.3.6 — GFS pipeline switched from WSL to native Windows wgrib2 (2026-04-18)
 
