@@ -86,7 +86,7 @@ required `cygwin1.dll` alongside, so it runs under any Windows identity
    unless you install wgrib2 somewhere else.
 
 3. Verify from an ordinary Command Prompt:
-   ```
+   ```cmd
    C:\HarderWare\wgrib2\wgrib2.exe --version
    ```
    You should see a version line (e.g. `v3.1.3rc2 10/22/2023 ...`).
@@ -94,7 +94,7 @@ required `cygwin1.dll` alongside, so it runs under any Windows identity
 
 4. For services running as `NT SERVICE\*` accounts, grant each account
    Read + Execute on the folder:
-   ```
+   ```powershell
    icacls C:\HarderWare\wgrib2 /grant "NT SERVICE\WxParserSvc:(OI)(CI)RX" /T
    ```
    Only `WxParserSvc` actually invokes wgrib2; granting all four
