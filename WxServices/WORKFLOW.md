@@ -79,6 +79,18 @@ Some changes (installer scripts, raw config files, prose-only doc edits) cannot 
 
 `dotnet test WxServices.sln` must be green before creating the PR. Pre-existing failures in unrelated modules may remain out of scope, but they must be explicitly identified in the PR body so the reviewer (human or AI) knows they're not new regressions.
 
+### 6c. Confirm acceptance criteria are met
+
+**Added 2026-04-19.**
+
+Before pushing, read the ticket's **Acceptance** section and explicitly ask Paul whether every listed criterion has been satisfied by the change. Do not assume — say the criteria back and get confirmation.
+
+- If a criterion is unmet because of a mistake (missed scope), fix it before pushing.
+- If a criterion is deliberately out of scope for this PR (e.g. the PR is one of several sub-PRs that together satisfy an umbrella ticket, or a criterion was re-scoped during the work), call it out explicitly in the PR body so the reviewer is not left guessing.
+- If the ticket has no Acceptance section at all, pause and flag that to Paul before pushing — the ticket itself needs amendment first.
+
+Reason: acceptance criteria are the ticket's explicit contract. Tests verify code correctness; acceptance criteria verify *feature* correctness. Both are needed and neither is a substitute for the other. Skipping this step is the same class of mistake as skipping the code walkthrough — it lets the pair drift into autopilot and ships work whose completeness nobody actually checked.
+
 ### Rationale
 
 CodeRabbit costs money per review. Handing a paid reviewer code with test failures wastes both the fee and Paul's follow-up attention. This guardrail keeps the review budget focused on design and correctness issues the tests can't catch.
