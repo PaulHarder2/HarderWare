@@ -189,7 +189,8 @@
         </StatusBar>
 
         <!-- ── Tab area ─────────────────────────────────────────────────────── -->
-        <TabControl>
+        <TabControl x:Name="RootTabControl"
+                    SelectionChanged="RootTabControl_SelectionChanged">
 
             <!-- ── Maps tab ──────────────────────────────────────────────────── -->
             <TabItem Header="Maps">

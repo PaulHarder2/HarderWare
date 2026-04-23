@@ -7,6 +7,7 @@ using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using WxServices.Common;
+using WxServices.Logging;
 
 namespace WxViewer;
 
@@ -423,6 +424,29 @@ public partial class MainWindow : Window
 
     private void ComboBox_DropDownClosed(object sender, EventArgs e)
         => Keyboard.Focus(this);
+
+    // WX-46 diagnostic — logs whatever is causing the Maps→Meteograms tab
+    // switch so we can identify the mechanism (bubbled Selector event, focus
+    // traversal via RequestBringIntoView, programmatic setter, etc.) from a
+    // single repro. Remove once the real fix lands.
+    private void RootTabControl_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!ReferenceEquals(e.OriginalSource, sender)) return;
+
+        var added   = e.AddedItems.Count   > 0 ? e.AddedItems[0]?.GetType().Name   ?? "?" : "(none)";
+        var removed = e.RemovedItems.Count > 0 ? e.RemovedItems[0]?.GetType().Name ?? "?" : "(none)";
+        var addedHeader = e.AddedItems.Count > 0 && e.AddedItems[0] is TabItem ti
+            ? ti.Header?.ToString() ?? "?"
+            : "?";
+        var focused = Keyboard.FocusedElement?.GetType().Name ?? "(null)";
+        var focusedName = (Keyboard.FocusedElement as FrameworkElement)?.Name ?? "";
+
+        Logger.Info(
+            $"TabControl.SelectionChanged: added={added}({addedHeader}) removed={removed} " +
+            $"focus={focused} name='{focusedName}' origSrc={e.OriginalSource?.GetType().Name} " +
+            $"src={e.Source?.GetType().Name}");
+        Logger.Info("TabControl.SelectionChanged stack:\n" + new System.Diagnostics.StackTrace(fNeedFileInfo: true));
+    }
 
     /// <summary>
     /// Handles arrow-key navigation for both panes.
