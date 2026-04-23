@@ -136,7 +136,7 @@ CodeRabbit's behavior is tuned via `.coderabbit.yaml` at the repo root (added in
 
 ## 10. Hash-fill commit
 
-When CodeRabbit is clean, add a **separate commit** whose sole change is filling in the v1.N.N commit hash in `VERSIONS.md` (replacing `_pending_`). The hash to record is the SHA of the main commit on the feature branch, not the merge commit.
+When CodeRabbit is clean, add a **separate commit** whose sole change is filling in the v1.N.N commit hash in `VERSIONS.md` (replacing `_pending_`). The hash to record is the SHA of the commit that introduced the `Directory.Build.props` version bump — equivalently, the feature branch's HEAD at the moment *before* this hash-fill commit is added. It is never the hash-fill commit itself, and never the merge commit.
 
 Skip this step for pure-tooling / pure-docs PRs that did not bump the version (see §5).
 
@@ -151,8 +151,9 @@ Skip this step for pure-tooling / pure-docs PRs that did not bump the version (s
 1. Delete the remote branch. GitHub's auto-delete (enabled 2026-04-15) handles this automatically; manual `git push origin --delete WX-NN-...` is only needed if auto-delete is disabled.
 2. `git checkout master && git pull` locally.
 3. Delete the local branch: `git branch -d WX-NN-...`.
-4. Transition the Jira ticket to **Done**.
-5. **Stop at Done — do not transition to Closed.** The Done→Closed transition is Paul's deliberate human-review checkpoint. Report back what was done and let Paul press the final button.
+4. **Log time spent.** Add a Jira worklog entry recording combined pair-effort from grooming through merge (e.g. `45m`, to 15-minute granularity). This closes the calibration loop with the Original estimate set at grooming time. *Added 2026-04-23.*
+5. Transition the Jira ticket to **Done**.
+6. **Stop at Done — do not transition to Closed.** The Done→Closed transition is Paul's deliberate human-review checkpoint. Report back what was done and let Paul press the final button.
 
 ## Known friction
 
