@@ -5,6 +5,7 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 
 | Version | Commit  | Date       | Summary |
 |---------|---------|------------|---------|
+| 1.3.8   | _pending_ | 2026-04-23 | Promote TabControl.SelectionChanged diagnostic to permanent logging (WX-48) |
 | 1.3.7   | 726c01d | 2026-04-18 | Analysis map MSLP now uses proper temperature-based reduction from altimeter (WX-35) |
 | 1.3.6   | fa6c0c3 | 2026-04-18 | GFS pipeline switched from WSL-invoked wgrib2 to native Windows wgrib2.exe (WX-33) |
 | 1.3.5   | 115d037 | 2026-04-17 | Retry DB connection at service startup with per-attempt WARN + final ERROR (WX-28, partial) |
@@ -22,6 +23,14 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 | 1.0.0   | 7a2a268 | 2026-04-07 | Initial versioned release |
 
 ---
+
+## 1.3.8 — TabControl.SelectionChanged diagnostic promoted to permanent (2026-04-23)
+
+- **WX-48 (instrumentation):** The diagnostic `SelectionChanged` handler developed on `WX-46-maps-tab-jump` (commit `59b2d9c`, originally marked *"branch-only, no PR"*) is now part of master. Feature branches forked from master will inherit the instrumentation automatically, and any WX-46 recurrence in any installed build will leave a forensic record in the log.
+- **What's captured.** On each genuine `TabControl` selection change (the `OriginalSource` guard filters bubbled events from nested ComboBoxes and similar), the handler emits two log lines: a compact one-liner with the added/removed `TabItem` and its `Header`, the current `Keyboard.FocusedElement` type and `x:Name`, and both `e.OriginalSource` and `e.Source` types; and a full managed `StackTrace(fNeedFileInfo: true)` so the caller into `Selector.OnSelectionChanged` is captured. Frames of interest include `TabItem.OnGotKeyboardFocusWithin` (focus-traversal theory), `TabItem.OnRequestBringIntoView` (a Meteograms descendant asked to scroll into view), any of our own code (programmatic `SelectedIndex` set), or pure WPF internals with no obvious trigger (dispatcher-queued operation).
+- **Why ship to master now.** WX-46 is an intermittent bug. Keeping the diagnostic confined to the `WX-46-maps-tab-jump` branch meant any WxViewer build derived from master would not log recurrences — exactly the scenario where recurrence data is most likely to appear (sustained daily use of the installed product). Shipping the diagnostic to master closes that gap.
+- **No user-visible change.** Output is log-only; no UI, data, or behaviour shift.
+- **WX-46 ticket.** Remains open, awaiting the next recurrence — the installed build now has the diagnostic wired in, so the next trigger will produce a stack trace for root-cause analysis.
 
 ## 1.3.7 — Analysis-map MSLP: proper temperature-based reduction (2026-04-18)
 
