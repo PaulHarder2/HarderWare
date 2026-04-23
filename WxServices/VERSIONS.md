@@ -5,7 +5,7 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 
 | Version | Commit  | Date       | Summary |
 |---------|---------|------------|---------|
-| 1.3.8   | _pending_ | 2026-04-23 | Promote TabControl.SelectionChanged diagnostic to permanent logging (WX-48) |
+| 1.3.8   | 79ec475 | 2026-04-23 | Promote TabControl.SelectionChanged diagnostic to permanent logging (WX-48) |
 | 1.3.7   | 726c01d | 2026-04-18 | Analysis map MSLP now uses proper temperature-based reduction from altimeter (WX-35) |
 | 1.3.6   | fa6c0c3 | 2026-04-18 | GFS pipeline switched from WSL-invoked wgrib2 to native Windows wgrib2.exe (WX-33) |
 | 1.3.5   | 115d037 | 2026-04-17 | Retry DB connection at service startup with per-attempt WARN + final ERROR (WX-28, partial) |
