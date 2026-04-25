@@ -27,6 +27,7 @@ public sealed class ReportWorker : BackgroundService
     private readonly IConfiguration                         _config;
     private readonly DbContextOptions<WeatherDataContext>   _dbOptions;
     private readonly HttpClient                             _httpClient;
+    private readonly PersonaPrefix                          _persona;
 
     private readonly Meter _meter = new("WxReport.Svc", "1.0.0");
     private readonly Counter<long> _reportCycles;
@@ -40,14 +41,17 @@ public sealed class ReportWorker : BackgroundService
     /// <param name="config">Application configuration used to load the <c>Report</c> config section each cycle.</param>
     /// <param name="dbOptions">EF Core options for opening a <see cref="WeatherDataContext"/> to read/write recipient state.</param>
     /// <param name="httpClientFactory">Factory used to obtain the named <c>WxReport</c> HTTP client for Claude and geocoding calls.</param>
+    /// <param name="persona">Author-persona prefix loaded once at startup and threaded into every Claude call.</param>
     public ReportWorker(
         IConfiguration config,
         DbContextOptions<WeatherDataContext> dbOptions,
-        IHttpClientFactory httpClientFactory)
+        IHttpClientFactory httpClientFactory,
+        PersonaPrefix persona)
     {
         _config        = config;
         _dbOptions     = dbOptions;
         _httpClient    = httpClientFactory.CreateClient("WxReport");
+        _persona       = persona;
         _reportCycles  = _meter.CreateCounter<long>("wxreport.cycles.total", description: "Number of completed report cycles.");
         _reportsSent   = _meter.CreateCounter<long>("wxreport.sends.total", description: "Number of reports successfully sent.");
         _sendFailures  = _meter.CreateCounter<long>("wxreport.send.failures.total", description: "Number of failed email sends.");
@@ -177,7 +181,7 @@ public sealed class ReportWorker : BackgroundService
         var scheduledHours = ParseHourList(recipient.ScheduledSendHours ?? cfg.DefaultScheduledSendHours);
         var scheduledHour  = scheduledHours.Count > 0 ? scheduledHours[0] : 7;
         var tz             = ResolveTimezone(recipient.Timezone);
-        var claude         = new ClaudeClient(_httpClient, claude_cfg.ApiKey, claude_cfg.Model);
+        var claude         = new ClaudeClient(_httpClient, claude_cfg.ApiKey, claude_cfg.Model, _persona.Text);
         var report         = await claude.GenerateReportAsync(
             snapshot, language, recipient.Name, tz,
             isFirstReport: false,
@@ -279,7 +283,7 @@ public sealed class ReportWorker : BackgroundService
         foreach (var id in duplicateIds)
             Logger.Error($"Duplicate recipient Id '{id}' — all entries with this Id will be skipped.");
 
-        var claude      = new ClaudeClient(_httpClient, claude_cfg.ApiKey, claude_cfg.Model);
+        var claude      = new ClaudeClient(_httpClient, claude_cfg.ApiKey, claude_cfg.Model, _persona.Text);
         var emailer     = new SmtpSender(smtp, "WxReport");
         var resolver    = new RecipientResolver(_dbOptions, _httpClient);
         var now         = DateTime.UtcNow;

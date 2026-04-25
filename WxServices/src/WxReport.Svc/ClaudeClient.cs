@@ -18,16 +18,23 @@ public sealed class ClaudeClient
     private readonly HttpClient _http;
     private readonly string     _apiKey;
     private readonly string     _model;
+    private readonly string     _personaPrefix;
 
-    /// <summary>Initializes a new instance of <see cref="ClaudeClient"/> with the given credentials and model.</summary>
+    /// <summary>Initializes a new instance of <see cref="ClaudeClient"/> with the given credentials, model, and persona prefix.</summary>
     /// <param name="http">HTTP client used for all requests to the Anthropic Messages API.</param>
     /// <param name="apiKey">Anthropic API key; sent as the <c>x-api-key</c> header.</param>
     /// <param name="model">Claude model ID to use for generation (e.g. <c>"claude-haiku-4-5-20251001"</c>).</param>
-    public ClaudeClient(HttpClient http, string apiKey, string model)
+    /// <param name="personaPrefix">
+    /// Author-persona text (the contents of <c>AboutPaul.md</c>) sent as the first
+    /// <c>system</c> content block on every Messages API call, with
+    /// <c>cache_control: ephemeral</c> attached so Anthropic caches it across calls.
+    /// </param>
+    public ClaudeClient(HttpClient http, string apiKey, string model, string personaPrefix)
     {
-        _http   = http;
-        _apiKey = apiKey;
-        _model  = model;
+        _http          = http;
+        _apiKey        = apiKey;
+        _model         = model;
+        _personaPrefix = personaPrefix;
     }
 
     /// <summary>
@@ -199,11 +206,29 @@ public sealed class ClaudeClient
             $"Please write a weather report for {recipientName} based on the following observations:\n\n" +
             weatherData;
 
+        // The persona prefix is sent as the first system content block with
+        // cache_control: ephemeral so Anthropic caches it across calls. The
+        // dynamic per-recipient instructions follow as a second uncached block;
+        // each cache breakpoint covers everything up to and including the block
+        // it is attached to, so this layout caches AboutPaul.md alone.
         var request = new
         {
             model    = _model,
             max_tokens = 4096,
-            system   = systemPrompt,
+            system   = new object[]
+            {
+                new
+                {
+                    type          = "text",
+                    text          = _personaPrefix,
+                    cache_control = new { type = "ephemeral" },
+                },
+                new
+                {
+                    type = "text",
+                    text = systemPrompt,
+                },
+            },
             messages = new[]
             {
                 new { role = "user", content = userPrompt },

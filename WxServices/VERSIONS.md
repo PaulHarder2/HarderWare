@@ -5,6 +5,7 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 
 | Version | Commit  | Date       | Summary |
 |---------|---------|------------|---------|
+| 1.4.0   | a47732a | 2026-04-25 | WxReport.Svc Claude calls now carry a cached author-persona prefix from `AboutPaul.md` (WX-50) |
 | 1.3.8   | 79ec475 | 2026-04-23 | Promote TabControl.SelectionChanged diagnostic to permanent logging (WX-48) |
 | 1.3.7   | 726c01d | 2026-04-18 | Analysis map MSLP now uses proper temperature-based reduction from altimeter (WX-35) |
 | 1.3.6   | fa6c0c3 | 2026-04-18 | GFS pipeline switched from WSL-invoked wgrib2 to native Windows wgrib2.exe (WX-33) |
@@ -23,6 +24,16 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 | 1.0.0   | 7a2a268 | 2026-04-07 | Initial versioned release |
 
 ---
+
+## 1.4.0 — Author-persona cached prefix on WxReport Claude calls (2026-04-25)
+
+- **WX-50 (feature):** Every Claude API call from `WxReport.Svc` now opens with an author-persona prefix — the contents of `AboutPaul.md` at the repo root — sent as the first `system` content block with `cache_control: { type: "ephemeral" }` attached. The intent is voice continuity: generated reports should read as a continuation of Paul's thinking and judgment (forecaster authority, voice register, the matrix of when poetry is and is not appropriate, etc.) rather than a generic-Claude rendering of a weather forecast.
+- **`AboutPaul.md` location.** Lives at the repo root rather than under `WxServices/src/WxReport.Svc/` so future HarderWare services that generate voice-bearing output can consume the same source of truth. The file is curated to be public-safe by design — its top section codifies an inclusion/exclusion rule (*"would Paul be comfortable seeing this quoted back in a generated report?"*) so it can sit in a public repo without harm. Deployed to each consuming service via a `<Content Include="..\..\..\AboutPaul.md"><Link>AboutPaul.md</Link><CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory></Content>` in the .csproj — same pattern WxReport.Svc already uses for `appsettings.shared.json`.
+- **Loading.** `Program.cs` reads the file once at service startup via `File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "AboutPaul.md"))`, wraps it in a small `PersonaPrefix` record, and registers that as a singleton in DI. A missing file is a fatal startup error: silent fallback to generic-Claude output is a worse failure mode than refusing to start.
+- **API shape.** `ClaudeClient.GenerateReportAsync` previously sent `system` as a string. It now sends `system` as a two-element content-block array: the persona block first (with `cache_control: ephemeral`), the existing dynamic per-recipient prompt second. The cache breakpoint covers everything up to and including the block it is attached to, so this layout caches the persona alone — the per-recipient instructions vary by language, locality, and severity and must remain uncached.
+- **Cache eligibility.** Anthropic's minimum cacheable size is 1024 tokens for Sonnet/Opus and 2048 tokens for Haiku. `AboutPaul.md` measures ~2400 tokens (observed in the Phase 2 test's `cache_creation_input_tokens`), which clears both thresholds — the persona block alone is large enough to engage caching on any current Claude model. The production model (`Claude:Model` in `appsettings.shared.json`) is `claude-sonnet-4-6`, and the cache breakpoint engages from the first call.
+- **Refresh discipline.** `AboutPaul.md` lists the memory files it was synthesized from. When report output drifts from Paul's voice, or when one of the source memory files changes materially, a follow-up Jira ticket opens a refresh PR through the normal workflow — so CodeRabbit sees the diff and the audit trail is preserved.
+- **No changes to the existing systemPrompt content.** The HTML-structure instructions, severity-conditional welcome/change-summary text, and aviation-terminology backstop list at `ClaudeClient.cs:182` are all unchanged. The persona block sits in front of them, layering authorial context onto the existing report-format contract.
 
 ## 1.3.8 — TabControl.SelectionChanged diagnostic promoted to permanent (2026-04-23)
 
