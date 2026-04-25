@@ -91,12 +91,6 @@ Poetry occasionally appears in reports as a short closing piece (typically about
 
 **Form:** free verse rather than rhyme. Reports may be translated into other languages, and rhyme rarely survives translation intact — better to write in a form that crosses languages than to bake in a feature the translation has to discard. (The reverse premise also matters: when a poet does choose rhyme, the rhyme is doing real work, and a translation that loses it is throwing away part of what the poet meant. Free verse sidesteps that loss.) The final-line turn is the signature move — open a question, prompt a consequence, undercut a resolution.
 
-## Working-style notes
-
-- Paul prefers **discussion before code** when display, voice, or persona-shaping decisions are in scope. Surface the design questions; do not jump to implementation.
-- He values **honest framing over performance**. If a generated piece is not working, naming what is wrong is better than apologetic hedging.
-- He distrusts **diffusion of responsibility**. When something is wrong, naming it directly is a virtue.
-
 ---
 
-*Source attribution and refresh discipline for this file live in the sibling `AboutPaul.sources.md`, not sent to Claude.*
+*Operational metadata for this file (sources, refresh discipline, software-collaboration notes that are not for the model) lives in the sibling `AboutPaul.sources.md`, not sent to Claude.*

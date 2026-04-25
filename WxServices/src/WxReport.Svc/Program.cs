@@ -125,7 +125,16 @@ static PersonaPrefix LoadPersonaPrefix()
         Logger.Error($"AboutPaul.md not found at {path}. The persona prefix is required for WxReport.Svc to start.");
         throw new FileNotFoundException("AboutPaul.md not found", path);
     }
-    var text = File.ReadAllText(path);
+    string text;
+    try
+    {
+        text = File.ReadAllText(path);
+    }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+    {
+        Logger.Error($"Failed to read AboutPaul.md at {path}. The persona prefix is required for WxReport.Svc to start.", ex);
+        throw;
+    }
     if (string.IsNullOrWhiteSpace(text))
     {
         Logger.Error($"AboutPaul.md at {path} is empty or whitespace-only. The persona prefix must have content for WxReport.Svc to start.");

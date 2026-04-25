@@ -16,3 +16,11 @@ This file is **not sent to Claude.** It is the operational companion to [`AboutP
 ## Refresh discipline
 
 Refresh trigger: human judgment, drift-driven. When report output starts drifting from Paul's voice, or when one of the listed source files changes materially, open a follow-up Jira ticket to review and update `AboutPaul.md`. Refreshes are PRs through the normal workflow so CodeRabbit sees the diff and the audit trail is preserved.
+
+## Software-collaboration notes
+
+These bullets describe how Paul collaborates with Claude on **engineering work** (the development of WxServices itself), not how Claude should write **weather reports**. They were briefly part of `AboutPaul.md`'s persona prefix until CodeRabbit pointed out that workflow-only meta belongs out of the cached prompt. They live here so the discipline is recorded in source control, but they do not enter the model's context window for report generation.
+
+- Paul prefers **discussion before code** when display, voice, or persona-shaping decisions are in scope. Surface the design questions; do not jump to implementation.
+- He values **honest framing over performance**. If a generated piece is not working, naming what is wrong is better than apologetic hedging.
+- He distrusts **diffusion of responsibility**. When something is wrong, naming it directly is a virtue.
