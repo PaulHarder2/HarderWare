@@ -480,7 +480,8 @@ Observation-less sends also suppress change-triggered unscheduled sends — the 
 | `WxInterpreter` | WxInterp | Queries DB → `WeatherSnapshot` (METAR + TAF + GFS); station fallback logic |
 | `GfsInterpreter` | WxInterp | Bilinear interpolation over the four surrounding 0.25° GFS grid points → `GfsForecast` |
 | `SnapshotDescriber` | WxReport.Svc | `WeatherSnapshot` → structured plain-text for Claude; unit-aware (temperature, pressure, wind speed); outputs relative humidity (computed from temperature and dew point) rather than raw dew point |
-| `ClaudeClient` | WxReport.Svc | Anthropic Messages API wrapper; generates HTML email body; accepts `UnitPreferences` and `ChangeSeverity` to tailor the system prompt per recipient; retries transient failures (429, 529, 5xx, `HttpRequestException`) up to 3 times with linear backoff |
+| `ClaudeClient` | WxReport.Svc | Anthropic Messages API wrapper; generates HTML email body; accepts `UnitPreferences` and `ChangeSeverity` to tailor the system prompt per recipient; injects the cached author-persona prefix as the first `system` content block (see *Persona prefix* below); retries transient failures (429, 529, 5xx, `HttpRequestException`) up to 3 times with linear backoff |
+| `PersonaPrefix` | WxReport.Svc | Tiny record wrapping the contents of `AboutPaul.md`, loaded once at service startup and threaded into every `ClaudeClient` so it can be sent as a cached system-prompt prefix |
 | `SmtpSender` | WxServices.Common | MailKit SMTP wrapper; `SendAsync` accepts optional `htmlBody` and `inlineImages`; sends `multipart/alternative` (plain-text + HTML); HTML part is wrapped in `multipart/related` when inline images are provided (`cid:` URI support); `fromName` set per-service at construction time; all failures (including invalid addresses and SMTP errors) are caught and return `false` rather than throwing |
 | `SnapshotFingerprint` | WxReport.Svc | Computes an 8-field pipe-delimited fingerprint (W, V, TS, PR, GH, GL, GC, GP) from significant weather fields; `ClassifyChange` compares two fingerprints and returns a `ChangeSeverity` value |
 
@@ -494,6 +495,17 @@ Observation-less sends also suppress change-triggered unscheduled sends — the 
 | `wxreport.claude.calls.total` | Counter | Claude API calls |
 | `wxreport.cycle.duration.seconds` | Histogram | Report cycle duration (buckets: 1 2 5 10 20 30 60 120 s) |
 | `wxreport.claude.duration.seconds` | Histogram | Claude API call duration (buckets: 1 2 5 10 15 20 30 60 s) |
+
+**Persona prefix (cached) — `AboutPaul.md`:**
+
+The Anthropic Messages API is stateless: every call begins with no knowledge of who Paul is, what voice he writes in, or what content rules he wants applied. To give Claude that context without paying for it on every call, every `ClaudeClient.GenerateReportAsync` request opens with an author-persona prefix — the full contents of `AboutPaul.md` at the repo root — sent as the first element of the `system` content-block array, with `cache_control: { type: "ephemeral" }` attached.
+
+- **Source of truth.** `HarderWare/AboutPaul.md` (repo root, not under `WxServices/`). The file is curated to be public-safe by design — its top section codifies an explicit inclusion/exclusion rule so the doc can live in a public repo without leaking content unsuitable for customer-facing output. Future HarderWare services that generate voice-bearing output should consume the same file rather than fork their own copy.
+- **Deployment.** `WxReport.Svc.csproj` includes the file via `<Content Include="..\..\..\AboutPaul.md"><Link>AboutPaul.md</Link><CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory></Content>` so it is copied alongside the binary at build time. `Program.cs` reads the deployed copy once at startup via `File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "AboutPaul.md"))`, wraps it in a `PersonaPrefix` record, and registers that as a DI singleton consumed by `ReportWorker`.
+- **Fail-fast on missing file.** A startup error if `AboutPaul.md` is not on disk: the persona prefix is required for every Claude call, and silently falling back to generic output would be a worse failure mode than refusing to start.
+- **API shape.** The `system` parameter is sent as a two-element array: persona block first (with `cache_control: ephemeral`), dynamic per-recipient prompt second (uncached). A cache breakpoint covers everything up to and including the block it is attached to, so this layout caches the persona alone — per-recipient instructions vary by language, locality, and severity and must remain fresh.
+- **Cache eligibility.** Anthropic's minimum cacheable size is 1024 tokens for Sonnet/Opus and 2048 tokens for Haiku. `AboutPaul.md` measures ~2400 tokens, which clears both thresholds — the persona block alone is large enough to engage caching on any current Claude model. The production model (`Claude:Model` in `appsettings.shared.json`) is `claude-sonnet-4-6`, and the cache breakpoint engages from the first call.
+- **Refresh discipline.** `AboutPaul.md` lists the memory files it was synthesized from. Refreshes are drift-triggered (output starts sounding off, or a source memory file changes materially) and flow through the normal Jira-ticket-and-PR workflow so CodeRabbit reviews the diff.
 
 ---
 

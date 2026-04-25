@@ -77,6 +77,7 @@ var host = Host.CreateDefaultBuilder(args)
             });
 
         services.AddSingleton(dbOptions);
+        services.AddSingleton(LoadPersonaPrefix());
         services.AddHttpClient("WxReport", c =>
         {
             c.DefaultRequestHeaders.Add("User-Agent", "WxReport/1.0");
@@ -108,6 +109,25 @@ catch (Exception ex)
 {
     Logger.Error("Fatal error during startup.", ex);
     throw;
+}
+
+// Loads AboutPaul.md from the service's binary directory. The file ships
+// alongside the executable via the <Content> include in WxReport.Svc.csproj
+// (source of truth at the repo root). A missing file is treated as a fatal
+// startup error: the persona prefix is required for every Claude call, and
+// silently falling back to generic-Claude output would be a worse failure
+// mode than refusing to start.
+static PersonaPrefix LoadPersonaPrefix()
+{
+    var path = Path.Combine(AppContext.BaseDirectory, "AboutPaul.md");
+    if (!File.Exists(path))
+    {
+        Logger.Error($"AboutPaul.md not found at {path}. The persona prefix is required for WxReport.Svc to start.");
+        throw new FileNotFoundException("AboutPaul.md not found", path);
+    }
+    var text = File.ReadAllText(path);
+    Logger.Info($"Loaded persona prefix from {path} ({text.Length} chars).");
+    return new PersonaPrefix(text);
 }
 
 static async Task ValidateConfigAsync(DbContextOptions<WeatherDataContext> dbOptions)

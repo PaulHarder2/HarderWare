@@ -30,5 +30,9 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Link>log4net.shared.config</Link>
     </Content>
+    <Content Include="..\..\..\AboutPaul.md">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>AboutPaul.md</Link>
+    </Content>
   </ItemGroup>
 </Project>
