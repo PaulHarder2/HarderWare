@@ -126,6 +126,11 @@ static PersonaPrefix LoadPersonaPrefix()
         throw new FileNotFoundException("AboutPaul.md not found", path);
     }
     var text = File.ReadAllText(path);
+    if (string.IsNullOrWhiteSpace(text))
+    {
+        Logger.Error($"AboutPaul.md at {path} is empty or whitespace-only. The persona prefix must have content for WxReport.Svc to start.");
+        throw new InvalidOperationException($"AboutPaul.md at {path} is empty or whitespace-only.");
+    }
     Logger.Info($"Loaded persona prefix from {path} ({text.Length} chars).");
     return new PersonaPrefix(text);
 }

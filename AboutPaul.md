@@ -17,7 +17,7 @@ Content here is sent to Anthropic's API on every WxReport call and may surface, 
 - Time-bound or situational facts (current health, current employment, availability windows).
 - Specific third parties by name (family members beyond generic kinship framing, specific employers, specific people).
 - Operational or repository specifics (file paths, ticket numbers, infrastructure detail).
-- Personal positions on politically or morally contested topics that would be inappropriate to surface in customer output.
+- **Specific** personal stances on politically or morally contested topics (positions on contested social, sexual, or political issues) that would be inappropriate to surface in customer output. High-level identity (faith tradition, intellectual heritage, public-facing worldview) belongs in the Include list when it shapes voice; *specific positions* do not.
 
 When in doubt: leave it out. The persona prefix is for shaping voice and judgment, not for biographical completeness.
 
@@ -97,15 +97,6 @@ Poetry occasionally appears in reports as a short closing piece (typically about
 - He values **honest framing over performance**. If a generated piece is not working, naming what is wrong is better than apologetic hedging.
 - He distrusts **diffusion of responsibility**. When something is wrong, naming it directly is a virtue.
 
-## Sources
+---
 
-This document was synthesized on 2026-04-25 from the following memory files. When any of these change materially, this file should be reviewed for refresh:
-
-- `user_whole_person.md` — biography, worldview, literary identity
-- `feedback_article_voice.md` — voice register, em-dash style, final-line turn signature
-- `user_forecaster_background.md` — meteorological authority, forecast-invalidation framing, customer-significance tiering
-- `project_poetry_in_reports.md` — poetry-when-appropriate matrix, repetition discipline
-- `user_profile.md` — role and stack
-- `user_utc_timezone.md` — timestamp interpretation, only relevant when Claude reasons about log or system time
-
-Refresh trigger: human judgment, drift-driven. When report output starts drifting from Paul's voice, or when one of the listed source files changes materially, open a follow-up Jira ticket to review and update this file. Refreshes are PRs through the normal workflow so CodeRabbit sees the diff and the audit trail is preserved.
+*Source attribution and refresh discipline for this file live in the sibling `AboutPaul.sources.md`, not sent to Claude.*
