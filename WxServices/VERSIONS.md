@@ -5,7 +5,7 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 
 | Version | Commit  | Date       | Summary |
 |---------|---------|------------|---------|
-| 1.4.1   | _pending_ | 2026-04-26 | Fix Maps-tab control press jumping to Meteograms tab via WPF focus-scope redirect (WX-46) |
+| 1.4.1   | 1395754 | 2026-04-26 | Fix Maps-tab control press jumping to Meteograms tab via WPF focus-scope redirect (WX-46) |
 | 1.4.0   | a47732a | 2026-04-25 | WxReport.Svc Claude calls now carry a cached author-persona prefix from `AboutPaul.md` (WX-50) |
 | 1.3.8   | 79ec475 | 2026-04-23 | Promote TabControl.SelectionChanged diagnostic to permanent logging (WX-48) |
 | 1.3.7   | 726c01d | 2026-04-18 | Analysis map MSLP now uses proper temperature-based reduction from altimeter (WX-35) |
