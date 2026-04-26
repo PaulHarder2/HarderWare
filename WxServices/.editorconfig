@@ -1,13 +1,19 @@
 # This file is the output of `dotnet new editorconfig` (.NET SDK 9.0.312,
-# Microsoft default C# ruleset), with one documented deviation:
+# Microsoft default C# ruleset). Two annotations apply:
 #
-#   dotnet_naming_symbols.type_parameters.applicable_kinds was changed
-#   from `namespace` to `type_parameter`. The original is a template bug
-#   (https://github.com/dotnet/sdk/issues/46569) that left the
-#   type_parameters_should_be_tpascalcase rule silently non-functional —
-#   no T-prefix enforcement on generic type parameters. Remove this
-#   deviation note when dotnet/sdk#46569 is fixed upstream and the file
-#   is regenerated from the corrected template.
+#   1. SIBLING FILE: WxServices/.globalconfig adds project-wide IDE rule
+#      severity overrides that turn specific rules from "suggestion" to
+#      "warning" so they fire on `dotnet build`. See that file for the
+#      full enforced set.
+#
+#   2. DOCUMENTED DEVIATION: dotnet_naming_symbols.type_parameters.applicable_kinds
+#      was changed from `namespace` to `type_parameter`. The original is
+#      a template bug (https://github.com/dotnet/sdk/issues/46569) that
+#      left the type_parameters_should_be_tpascalcase rule silently
+#      non-functional — no T-prefix enforcement on generic type
+#      parameters. Remove this deviation note when dotnet/sdk#46569 is
+#      fixed upstream and the file is regenerated from the corrected
+#      template.
 
 root = true
 

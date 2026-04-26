@@ -1,0 +1,14 @@
+is_global = true
+
+# WxServices project-wide analyzer config.
+#
+# Severity overrides for IDE rules that should fire as build warnings
+# (not just IDE suggestions). Works in concert with .editorconfig (which
+# holds the rule definitions) and EnforceCodeStyleInBuild=true in
+# Directory.Build.props (which makes the build run the analyzers).
+#
+# To add a new rule: append a `dotnet_diagnostic.IDExxxx.severity = warning`
+# line below.
+
+# IDE0055 — Fix formatting (whitespace, brace placement, etc. per .editorconfig).
+dotnet_diagnostic.IDE0055.severity = warning

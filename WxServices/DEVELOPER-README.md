@@ -104,12 +104,27 @@ dotnet build WxServices.sln
 
 ## Code style
 
-C# style rules are defined in `WxServices/.editorconfig` at the solution root —
-the unmodified output of `dotnet new editorconfig` (Microsoft default ruleset).
-Visual Studio, JetBrains Rider, VS Code, and `dotnet format` all read this
-file automatically.
+C# style rules are defined across two files at the solution root:
+
+- **`WxServices/.editorconfig`** — the unmodified output of
+  `dotnet new editorconfig` (Microsoft default ruleset). Read automatically by
+  Visual Studio, JetBrains Rider, VS Code, and `dotnet format`.
+- **`WxServices/.globalconfig`** — project-wide severity overrides that elevate
+  specific IDE rules from "suggestion" to "warning" so they fire on
+  `dotnet build`. Currently elevated:
+  - `IDE0055` (Fix formatting): trailing whitespace, brace placement,
+    indentation, etc.
+
+`<EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>` in
+`Directory.Build.props` makes every `dotnet build` run the IDE analyzers and
+report violations of any elevated rule.
 
 To apply the rules to the solution: `dotnet format WxServices.sln`.
+
+To add a new rule to the build-time enforced set: append a
+`dotnet_diagnostic.IDExxxx.severity = warning` line to
+`WxServices/.globalconfig`. Elevating a rule can surface latent violations
+against existing code that need cleanup in the same PR.
 
 ## Deploy
 

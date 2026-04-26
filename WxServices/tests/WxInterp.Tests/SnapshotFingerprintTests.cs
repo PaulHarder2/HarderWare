@@ -58,9 +58,9 @@ public class SnapshotFingerprintTests
     public void Visibility_AboveThreshold_EncodesAsFalse()
         => Assert.Contains("V:False", SnapshotFingerprint.Compute(Make(visSm: 3.1), DefaultCfg));
 
+    // 3.0 is not < 3.0
     [Fact]
     public void Visibility_AtThreshold_EncodesAsFalse()
-        // 3.0 is not < 3.0
         => Assert.Contains("V:False", SnapshotFingerprint.Compute(Make(visSm: 3.0), DefaultCfg));
 
     [Fact]
