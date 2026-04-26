@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+
 using WxServices.Logging;
 
 namespace MetarParser.Data;

@@ -1,6 +1,9 @@
 using GribParser;
+
 using MetarParser.Data.Entities;
+
 using Microsoft.EntityFrameworkCore;
+
 using WxServices.Logging;
 
 namespace MetarParser.Data;
@@ -85,8 +88,8 @@ public static class GfsFetcher
         string wgrib2Path,
         string gfsTempPath,
         int maxForecastHours = 120,
-        int retainModelRuns  = 2,
-        double delayHours    = 3.5,
+        int retainModelRuns = 2,
+        double delayHours = 3.5,
         CancellationToken ct = default)
     {
         // ── Determine which run to process ────────────────────────────────────
@@ -142,7 +145,7 @@ public static class GfsFetcher
             Logger.Info($"GfsFetcher: {storedHours.Count} hour(s) already stored for run {modelRun:yyyy-MM-dd HH}Z.");
         }
 
-        var runDate  = modelRun.ToString("yyyyMMdd");
+        var runDate = modelRun.ToString("yyyyMMdd");
         var runCycle = modelRun.Hour.ToString("D2");
 
         var latMin = (float)region.South;
@@ -166,7 +169,7 @@ public static class GfsFetcher
 
             if (storedHours.Contains(fh)) continue;
 
-            var fhStr   = fh.ToString("D3");
+            var fhStr = fh.ToString("D3");
             var baseUrl = $"{NomadsBase}/gfs.{runDate}/{runCycle}/atmos/gfs.t{runCycle}z.pgrb2.0p25.f{fhStr}";
 
             // ── Download inventory (.idx) ─────────────────────────────────────
@@ -329,7 +332,7 @@ public static class GfsFetcher
 
         foreach (var cycle in new[] { 18, 12, 6, 0 })
         {
-            var runTime  = now.Date.AddHours(cycle);
+            var runTime = now.Date.AddHours(cycle);
             var ageHours = (now - runTime).TotalHours;
             if (ageHours >= delayHours && ageHours <= 8)
                 return runTime;
@@ -470,34 +473,34 @@ public static class GfsFetcher
 
             var point = new GfsGridPoint
             {
-                ModelRunUtc  = modelRunUtc,
+                ModelRunUtc = modelRunUtc,
                 ForecastHour = forecastHour,
-                Lat          = group.Key.Lat,
-                Lon          = group.Key.Lon,
+                Lat = group.Key.Lat,
+                Lon = group.Key.Lon,
             };
 
-            if (byKey.TryGetValue("TMP:2 m above ground",    out var tmp))
+            if (byKey.TryGetValue("TMP:2 m above ground", out var tmp))
                 point.TmpC = tmp.Value - 273.15f;
 
-            if (byKey.TryGetValue("SPFH:2 m above ground",   out var spfh))
+            if (byKey.TryGetValue("SPFH:2 m above ground", out var spfh))
                 point.DwpC = SpfhToDewPointC(spfh.Value);
 
-            if (byKey.TryGetValue("UGRD:10 m above ground",  out var ugrd))
+            if (byKey.TryGetValue("UGRD:10 m above ground", out var ugrd))
                 point.UGrdMs = ugrd.Value;
 
-            if (byKey.TryGetValue("VGRD:10 m above ground",  out var vgrd))
+            if (byKey.TryGetValue("VGRD:10 m above ground", out var vgrd))
                 point.VGrdMs = vgrd.Value;
 
-            if (byKey.TryGetValue("PRATE:surface",           out var prate))
+            if (byKey.TryGetValue("PRATE:surface", out var prate))
                 point.PRateKgM2s = prate.Value;
 
-            if (byKey.TryGetValue("TCDC:entire atmosphere",  out var tcdc))
+            if (byKey.TryGetValue("TCDC:entire atmosphere", out var tcdc))
                 point.TcdcPct = tcdc.Value;
 
-            if (byKey.TryGetValue("CAPE:surface",            out var cape))
+            if (byKey.TryGetValue("CAPE:surface", out var cape))
                 point.CapeJKg = cape.Value;
 
-            if (byKey.TryGetValue("PRMSL:mean sea level",   out var prmsl))
+            if (byKey.TryGetValue("PRMSL:mean sea level", out var prmsl))
                 point.PrMslPa = prmsl.Value;
 
             points.Add(point);

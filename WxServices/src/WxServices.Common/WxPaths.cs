@@ -115,15 +115,15 @@ public sealed class WxPaths
     {
         InstallRoot = string.IsNullOrWhiteSpace(installRoot) ? DefaultInstallRoot : installRoot;
 
-        LogsDir          = Path.Combine(InstallRoot, "Logs");
-        PlotsDir         = Path.Combine(InstallRoot, "plots");
-        TempDir          = Path.Combine(InstallRoot, "temp");
-        WxVisDir         = Path.Combine(InstallRoot, "WxVis");
-        ServicesDir      = Path.Combine(InstallRoot, "services");
-        WxManagerDir     = Path.Combine(InstallRoot, "WxManager");
-        WxViewerDir      = Path.Combine(InstallRoot, "WxViewer");
+        LogsDir = Path.Combine(InstallRoot, "Logs");
+        PlotsDir = Path.Combine(InstallRoot, "plots");
+        TempDir = Path.Combine(InstallRoot, "temp");
+        WxVisDir = Path.Combine(InstallRoot, "WxVis");
+        ServicesDir = Path.Combine(InstallRoot, "services");
+        WxManagerDir = Path.Combine(InstallRoot, "WxManager");
+        WxViewerDir = Path.Combine(InstallRoot, "WxViewer");
         Log4NetConfigPath = Path.Combine(InstallRoot, "log4net.shared.config");
-        LocalConfigPath  = Path.Combine(InstallRoot, "appsettings.local.json");
+        LocalConfigPath = Path.Combine(InstallRoot, "appsettings.local.json");
         AnnounceFilePath = Path.Combine(InstallRoot, "announce.txt");
         Wgrib2DefaultPath = Path.Combine(InstallRoot, "wgrib2", "wgrib2.exe");
     }

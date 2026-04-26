@@ -1,6 +1,8 @@
 using System.Globalization;
+
 using MetarParser.Data;
 using MetarParser.Data.Entities;
+
 using Microsoft.EntityFrameworkCore;
 
 namespace WxInterp;
@@ -169,12 +171,12 @@ public static class WxInterpreter
         // at the poles, which no real recipient would hit.
         const double kmPerDegreeLat = 111.0;
         var latSpan = MaxFallbackDistanceKm / kmPerDegreeLat * 1.1;
-        var cosLat  = Math.Cos(homeLat * Math.PI / 180.0);
+        var cosLat = Math.Cos(homeLat * Math.PI / 180.0);
         var lonSpan = MaxFallbackDistanceKm / (kmPerDegreeLat * Math.Max(cosLat, 0.01)) * 1.1;
-        var minLat  = homeLat - latSpan;
-        var maxLat  = homeLat + latSpan;
-        var minLon  = homeLon - lonSpan;
-        var maxLon  = homeLon + lonSpan;
+        var minLat = homeLat - latSpan;
+        var maxLat = homeLat + latSpan;
+        var minLon = homeLon - lonSpan;
+        var maxLon = homeLon + lonSpan;
 
         // Candidates: known coords, inside the bounding box, with a recent
         // observation.  Haversine below picks the true nearest and enforces
@@ -189,7 +191,7 @@ public static class WxInterpreter
             .ToListAsync(ct);
 
         string? nearestIcao = null;
-        var     nearestKm   = double.MaxValue;
+        var nearestKm = double.MaxValue;
         foreach (var c in candidates)
         {
             var km = HaversineKm(homeLat, homeLon, c.Lat, c.Lon);
@@ -303,13 +305,13 @@ public static class WxInterpreter
         IEnumerable<string> icaos, double lat, double lon, HttpClient httpClient)
     {
         string? nearestIcao = null;
-        double  nearestDist = double.MaxValue;
+        double nearestDist = double.MaxValue;
 
         foreach (var icao in icaos)
         {
             var coords = await AirportLocator.LookupAsync(icao, httpClient);
             if (coords is null) continue;
-            var dist = Math.Pow(coords.Value.Latitude  - lat, 2)
+            var dist = Math.Pow(coords.Value.Latitude - lat, 2)
                      + Math.Pow(coords.Value.Longitude - lon, 2);
             if (dist < nearestDist) { nearestDist = dist; nearestIcao = icao; }
         }
@@ -343,14 +345,14 @@ public static class WxInterpreter
         WxStation? station = null,
         double? fallbackDistanceKm = null)
     {
-        var visSm    = metar.VisibilityStatuteMiles
+        var visSm = metar.VisibilityStatuteMiles
                        ?? (metar.VisibilityM.HasValue ? metar.VisibilityM.Value / 1609.344 : null);
 
-        var altInHg  = metar.AltimeterUnit == "inHg"
+        var altInHg = metar.AltimeterUnit == "inHg"
                        ? metar.AltimeterValue
                        : metar.AltimeterValue.HasValue ? metar.AltimeterValue.Value / 33.8639 : null;
 
-        var tempF    = metar.AirTemperatureCelsius.HasValue
+        var tempF = metar.AirTemperatureCelsius.HasValue
                        ? metar.AirTemperatureCelsius.Value * 9.0 / 5.0 + 32.0
                        : (double?)null;
 
@@ -373,30 +375,30 @@ public static class WxInterpreter
 
         return new WeatherSnapshot
         {
-            ObservationAvailable  = true,
+            ObservationAvailable = true,
             ObservationDistanceKm = fallbackDistanceKm,
-            StationIcao           = metar.StationIcao,
-            StationMunicipality   = station?.Municipality,
-            StationName           = station?.Name is { Length: > 0 } n ? ToStationTitleCase(n) : null,
-            LocalityName          = localityName,
-            ObservationTimeUtc    = metar.ObservationUtc,
-            IsAutomated           = metar.IsAuto,
-            WindDirectionDeg      = metar.WindDirection,
-            WindIsVariable        = metar.WindIsVariable,
-            WindSpeedKt           = NormalizeWindKt(metar.WindSpeed, metar.WindUnit),
-            WindGustKt            = NormalizeWindKt(metar.WindGust,  metar.WindUnit),
-            Cavok                 = metar.VisibilityCavok,
+            StationIcao = metar.StationIcao,
+            StationMunicipality = station?.Municipality,
+            StationName = station?.Name is { Length: > 0 } n ? ToStationTitleCase(n) : null,
+            LocalityName = localityName,
+            ObservationTimeUtc = metar.ObservationUtc,
+            IsAutomated = metar.IsAuto,
+            WindDirectionDeg = metar.WindDirection,
+            WindIsVariable = metar.WindIsVariable,
+            WindSpeedKt = NormalizeWindKt(metar.WindSpeed, metar.WindUnit),
+            WindGustKt = NormalizeWindKt(metar.WindGust, metar.WindUnit),
+            Cavok = metar.VisibilityCavok,
             VisibilityStatuteMiles = visSm,
-            VisibilityLessThan    = metar.VisibilityLessThan,
-            SkyLayers             = skyLayers,
-            WeatherPhenomena      = phenomena,
-            TemperatureCelsius    = metar.AirTemperatureCelsius,
+            VisibilityLessThan = metar.VisibilityLessThan,
+            SkyLayers = skyLayers,
+            WeatherPhenomena = phenomena,
+            TemperatureCelsius = metar.AirTemperatureCelsius,
             TemperatureFahrenheit = tempF,
-            DewPointCelsius       = metar.DewPointCelsius,
-            AltimeterInHg         = altInHg,
-            TafStationIcao        = taf?.StationIcao,
-            ForecastPeriods       = forecastPeriods,
-            GfsForecast           = gfsForecast,
+            DewPointCelsius = metar.DewPointCelsius,
+            AltimeterInHg = altInHg,
+            TafStationIcao = taf?.StationIcao,
+            ForecastPeriods = forecastPeriods,
+            GfsForecast = gfsForecast,
         };
     }
 
@@ -420,12 +422,12 @@ public static class WxInterpreter
 
         return new WeatherSnapshot
         {
-            ObservationAvailable       = false,
+            ObservationAvailable = false,
             ObservationUnavailableNote = unavailableNote,
-            LocalityName               = localityName,
-            TafStationIcao             = taf?.StationIcao,
-            ForecastPeriods            = forecastPeriods,
-            GfsForecast                = gfsForecast,
+            LocalityName = localityName,
+            TafStationIcao = taf?.StationIcao,
+            ForecastPeriods = forecastPeriods,
+            GfsForecast = gfsForecast,
         };
     }
 
@@ -436,9 +438,9 @@ public static class WxInterpreter
     /// <returns>A new <see cref="SkyLayer"/> with coverage, height, cloud type, and vertical-visibility flag populated.</returns>
     private static SkyLayer MapSkyLayer(MetarSkyCondition s) => new()
     {
-        Coverage             = ParseCoverage(s.Cover),
-        HeightFeet           = s.HeightFeet,
-        CloudType            = s.CloudType is "CB"  ? CloudType.Cumulonimbus
+        Coverage = ParseCoverage(s.Cover),
+        HeightFeet = s.HeightFeet,
+        CloudType = s.CloudType is "CB" ? CloudType.Cumulonimbus
                              : s.CloudType is "TCU" ? CloudType.ToweringCumulus
                              : CloudType.None,
         IsVerticalVisibility = s.IsVerticalVisibility,
@@ -449,9 +451,9 @@ public static class WxInterpreter
     /// <returns>A new <see cref="SkyLayer"/> with coverage, height, cloud type, and vertical-visibility flag populated.</returns>
     private static SkyLayer MapTafSkyLayer(TafChangePeriodSky s) => new()
     {
-        Coverage             = ParseCoverage(s.Cover),
-        HeightFeet           = s.HeightFeet,
-        CloudType            = s.CloudType is "CB"  ? CloudType.Cumulonimbus
+        Coverage = ParseCoverage(s.Cover),
+        HeightFeet = s.HeightFeet,
+        CloudType = s.CloudType is "CB" ? CloudType.Cumulonimbus
                              : s.CloudType is "TCU" ? CloudType.ToweringCumulus
                              : CloudType.None,
         IsVerticalVisibility = s.IsVerticalVisibility,
@@ -466,12 +468,12 @@ public static class WxInterpreter
     /// <returns>A new <see cref="SnapshotWeather"/> with all decoded weather components populated.</returns>
     private static SnapshotWeather MapWeather(MetarWeatherPhenomenon w, bool isRecent) => new()
     {
-        Intensity     = ParseIntensity(w.Intensity),
-        Descriptor    = ParseDescriptor(w.Descriptor),
+        Intensity = ParseIntensity(w.Intensity),
+        Descriptor = ParseDescriptor(w.Descriptor),
         Precipitation = ParsePrecipitation(w.Precipitation),
-        Obscuration   = ParseObscuration(w.Obscuration),
-        Other         = ParseOther(w.OtherPhenomenon),
-        IsRecent      = isRecent,
+        Obscuration = ParseObscuration(w.Obscuration),
+        Other = ParseOther(w.OtherPhenomenon),
+        IsRecent = isRecent,
     };
 
     /// <summary>Maps a <see cref="TafChangePeriodWeather"/> database entity to a <see cref="SnapshotWeather"/> value.</summary>
@@ -479,11 +481,11 @@ public static class WxInterpreter
     /// <returns>A new <see cref="SnapshotWeather"/> with all decoded weather components populated.</returns>
     private static SnapshotWeather MapTafWeather(TafChangePeriodWeather w) => new()
     {
-        Intensity     = ParseIntensity(w.Intensity),
-        Descriptor    = ParseDescriptor(w.Descriptor),
+        Intensity = ParseIntensity(w.Intensity),
+        Descriptor = ParseDescriptor(w.Descriptor),
         Precipitation = ParsePrecipitation(w.Precipitation),
-        Obscuration   = ParseObscuration(w.Obscuration),
-        Other         = ParseOther(w.OtherPhenomenon),
+        Obscuration = ParseObscuration(w.Obscuration),
+        Other = ParseOther(w.OtherPhenomenon),
     };
 
     /// <summary>Maps a <see cref="TafChangePeriodRecord"/> database entity to a <see cref="ForecastPeriod"/> snapshot value.</summary>
@@ -491,18 +493,18 @@ public static class WxInterpreter
     /// <returns>A new <see cref="ForecastPeriod"/> with change type, validity window, wind, visibility, sky, and weather populated.</returns>
     private static ForecastPeriod MapForecastPeriod(TafChangePeriodRecord p) => new()
     {
-        ChangeType             = ParseChangeType(p.ChangeType),
-        ValidFromUtc           = p.ValidFromUtc,
-        ValidToUtc             = p.ValidToUtc,
-        WindDirectionDeg       = p.WindDirection,
-        WindIsVariable         = p.WindIsVariable,
-        WindSpeedKt            = NormalizeWindKt(p.WindSpeed, p.WindUnit),
-        WindGustKt             = NormalizeWindKt(p.WindGust,  p.WindUnit),
-        Cavok                  = p.VisibilityCavok,
+        ChangeType = ParseChangeType(p.ChangeType),
+        ValidFromUtc = p.ValidFromUtc,
+        ValidToUtc = p.ValidToUtc,
+        WindDirectionDeg = p.WindDirection,
+        WindIsVariable = p.WindIsVariable,
+        WindSpeedKt = NormalizeWindKt(p.WindSpeed, p.WindUnit),
+        WindGustKt = NormalizeWindKt(p.WindGust, p.WindUnit),
+        Cavok = p.VisibilityCavok,
         VisibilityStatuteMiles = p.VisibilityStatuteMiles
                                  ?? (p.VisibilityM.HasValue ? p.VisibilityM.Value / 1609.344 : null),
-        SkyLayers              = p.SkyConditions.OrderBy(s => s.SortOrder).Select(MapTafSkyLayer).ToList(),
-        WeatherPhenomena       = p.WeatherPhenomena.OrderBy(w => w.SortOrder).Select(MapTafWeather).ToList(),
+        SkyLayers = p.SkyConditions.OrderBy(s => s.SortOrder).Select(MapTafSkyLayer).ToList(),
+        WeatherPhenomena = p.WeatherPhenomena.OrderBy(w => w.SortOrder).Select(MapTafWeather).ToList(),
     };
 
     // ── value parsers ─────────────────────────────────────────────────────────
@@ -523,14 +525,14 @@ public static class WxInterpreter
     private static SkyCoverage ParseCoverage(string s) => s switch
     {
         "SKC" or "CLR" => SkyCoverage.Clear,
-        "FEW"          => SkyCoverage.Few,
-        "SCT"          => SkyCoverage.Scattered,
-        "BKN"          => SkyCoverage.Broken,
-        "OVC"          => SkyCoverage.Overcast,
-        "VV"           => SkyCoverage.VerticalVisibility,
-        "NSC"          => SkyCoverage.NoSignificantCloud,
-        "NCD"          => SkyCoverage.NoCloudsDetected,
-        _              => SkyCoverage.Clear,
+        "FEW" => SkyCoverage.Few,
+        "SCT" => SkyCoverage.Scattered,
+        "BKN" => SkyCoverage.Broken,
+        "OVC" => SkyCoverage.Overcast,
+        "VV" => SkyCoverage.VerticalVisibility,
+        "NSC" => SkyCoverage.NoSignificantCloud,
+        "NCD" => SkyCoverage.NoCloudsDetected,
+        _ => SkyCoverage.Clear,
     };
 
     private static WeatherIntensity ParseIntensity(string s) => s switch
@@ -538,7 +540,7 @@ public static class WxInterpreter
         "+" => WeatherIntensity.Heavy,
         "-" => WeatherIntensity.Light,
         "VC" => WeatherIntensity.InTheVicinity,
-        _    => WeatherIntensity.Moderate,
+        _ => WeatherIntensity.Moderate,
     };
 
     private static WeatherDescriptor? ParseDescriptor(string? s) => s switch
@@ -551,7 +553,7 @@ public static class WxInterpreter
         "SH" => WeatherDescriptor.Showers,
         "TS" => WeatherDescriptor.Thunderstorm,
         "FZ" => WeatherDescriptor.Freezing,
-        _    => null,
+        _ => null,
     };
 
     private static IReadOnlyList<PrecipitationType> ParsePrecipitation(string? s)
@@ -567,7 +569,7 @@ public static class WxInterpreter
             "PL" => PrecipitationType.IcePellets,
             "GR" => PrecipitationType.Hail,
             "GS" => PrecipitationType.SmallHail,
-            _    => PrecipitationType.Unknown,
+            _ => PrecipitationType.Unknown,
         }).ToList();
     }
 
@@ -581,7 +583,7 @@ public static class WxInterpreter
         "SA" => WeatherObscuration.Sand,
         "HZ" => WeatherObscuration.Haze,
         "PY" => WeatherObscuration.Spray,
-        _    => null,
+        _ => null,
     };
 
     private static OtherPhenomenon? ParseOther(string? s) => s switch
@@ -591,20 +593,20 @@ public static class WxInterpreter
         "FC" => OtherPhenomenon.FunnelCloud,
         "SS" => OtherPhenomenon.Sandstorm,
         "DS" => OtherPhenomenon.Duststorm,
-        _    => null,
+        _ => null,
     };
 
     private static ForecastChangeType ParseChangeType(string s) => s switch
     {
-        "BASE"          => ForecastChangeType.Base,
-        "BECMG"         => ForecastChangeType.BecomeGradually,
-        "TEMPO"         => ForecastChangeType.Temporary,
-        "FM"            => ForecastChangeType.From,
-        "PROB30"        => ForecastChangeType.Probability30,
-        "PROB40"        => ForecastChangeType.Probability40,
-        "PROB30 TEMPO"  => ForecastChangeType.Probability30Temporary,
-        "PROB40 TEMPO"  => ForecastChangeType.Probability40Temporary,
-        _               => ForecastChangeType.Base,
+        "BASE" => ForecastChangeType.Base,
+        "BECMG" => ForecastChangeType.BecomeGradually,
+        "TEMPO" => ForecastChangeType.Temporary,
+        "FM" => ForecastChangeType.From,
+        "PROB30" => ForecastChangeType.Probability30,
+        "PROB40" => ForecastChangeType.Probability40,
+        "PROB30 TEMPO" => ForecastChangeType.Probability30Temporary,
+        "PROB40 TEMPO" => ForecastChangeType.Probability40Temporary,
+        _ => ForecastChangeType.Base,
     };
 
     /// <summary>
@@ -614,7 +616,7 @@ public static class WxInterpreter
     /// </summary>
     private static string ToStationTitleCase(string name)
     {
-        var ti     = CultureInfo.InvariantCulture.TextInfo;
+        var ti = CultureInfo.InvariantCulture.TextInfo;
         var spaced = name.Replace("/", " / ").Replace("-", " - ").ToLowerInvariant();
         var titled = ti.ToTitleCase(spaced);
         return titled.Replace(" / ", "/").Replace(" - ", "-");

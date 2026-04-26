@@ -1,5 +1,7 @@
 using MetarParser.Data;
+
 using Microsoft.Extensions.Configuration;
+
 using Xunit;
 
 namespace MetarParser.Tests;

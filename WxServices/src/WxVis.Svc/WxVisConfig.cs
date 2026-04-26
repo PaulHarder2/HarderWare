@@ -72,11 +72,11 @@ public class WxVisConfig
 
         return new Dictionary<string, string>
         {
-            ["WXVIS_DB_SERVER"]   = parts.GetValueOrDefault("Server", @".\SQLEXPRESS"),
-            ["WXVIS_DB_NAME"]     = parts.GetValueOrDefault("Database", "WeatherData"),
-            ["WXVIS_DB_DRIVER"]   = DbDriver,
-            ["WXVIS_OUTPUT_DIR"]  = OutputDir,
-            ["WXVIS_LOG_DIR"]     = logsDir,
+            ["WXVIS_DB_SERVER"] = parts.GetValueOrDefault("Server", @".\SQLEXPRESS"),
+            ["WXVIS_DB_NAME"] = parts.GetValueOrDefault("Database", "WeatherData"),
+            ["WXVIS_DB_DRIVER"] = DbDriver,
+            ["WXVIS_OUTPUT_DIR"] = OutputDir,
+            ["WXVIS_LOG_DIR"] = logsDir,
         };
     }
 }

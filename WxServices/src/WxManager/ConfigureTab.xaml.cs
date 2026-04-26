@@ -7,9 +7,12 @@ using System.Text.Json.Nodes;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+
 using MetarParser.Data;
 using MetarParser.Data.Entities;
+
 using Microsoft.EntityFrameworkCore;
+
 using WxServices.Common;
 using WxServices.Logging;
 
@@ -39,30 +42,30 @@ public partial class ConfigureTab : UserControl
         var cfg = App.Configuration;
         if (cfg is null) return;
 
-        TxtInstallRoot.Text      = cfg["InstallRoot"]              ?? WxPaths.DefaultInstallRoot;
-        TxtCondaPythonExe.Text   = cfg["WxVis:CondaPythonExe"]     ?? "";
-        var configuredWgrib2     = cfg["Gfs:Wgrib2Path"];
-        TxtWgrib2Path.Text       = string.IsNullOrWhiteSpace(configuredWgrib2)
+        TxtInstallRoot.Text = cfg["InstallRoot"] ?? WxPaths.DefaultInstallRoot;
+        TxtCondaPythonExe.Text = cfg["WxVis:CondaPythonExe"] ?? "";
+        var configuredWgrib2 = cfg["Gfs:Wgrib2Path"];
+        TxtWgrib2Path.Text = string.IsNullOrWhiteSpace(configuredWgrib2)
             ? new WxPaths(TxtInstallRoot.Text).Wgrib2DefaultPath
             : configuredWgrib2;
 
-        TxtHomeIcao.Text         = cfg["Fetch:HomeIcao"]           ?? "";
-        TxtHomeLatitude.Text     = cfg["Fetch:HomeLatitude"]       ?? "";
-        TxtHomeLongitude.Text    = cfg["Fetch:HomeLongitude"]      ?? "";
-        TxtBoundingBoxDeg.Text   = cfg["Fetch:BoundingBoxDegrees"] ?? "9";
-        TxtRegionSouth.Text      = cfg["Fetch:RegionSouth"]       ?? "";
-        TxtRegionNorth.Text      = cfg["Fetch:RegionNorth"]       ?? "";
-        TxtRegionWest.Text       = cfg["Fetch:RegionWest"]        ?? "";
-        TxtRegionEast.Text       = cfg["Fetch:RegionEast"]        ?? "";
+        TxtHomeIcao.Text = cfg["Fetch:HomeIcao"] ?? "";
+        TxtHomeLatitude.Text = cfg["Fetch:HomeLatitude"] ?? "";
+        TxtHomeLongitude.Text = cfg["Fetch:HomeLongitude"] ?? "";
+        TxtBoundingBoxDeg.Text = cfg["Fetch:BoundingBoxDegrees"] ?? "9";
+        TxtRegionSouth.Text = cfg["Fetch:RegionSouth"] ?? "";
+        TxtRegionNorth.Text = cfg["Fetch:RegionNorth"] ?? "";
+        TxtRegionWest.Text = cfg["Fetch:RegionWest"] ?? "";
+        TxtRegionEast.Text = cfg["Fetch:RegionEast"] ?? "";
 
         TxtConnectionString.Text = cfg["ConnectionStrings:WeatherData"]
             ?? @"Server=.\SQLEXPRESS;Database=WeatherData;Trusted_Connection=True;TrustServerCertificate=True;";
 
-        TxtSmtpHost.Text         = cfg["Smtp:Host"]        ?? "smtp.gmail.com";
-        TxtSmtpPort.Text         = cfg["Smtp:Port"]        ?? "587";
-        TxtClaudeModel.Text      = cfg["Claude:Model"]      ?? "claude-sonnet-4-6";
-        TxtMapExtent.Text        = cfg["WxVis:MapExtent"]   ?? "";
-        TxtAlertEmail.Text       = cfg["Monitor:AlertEmail"] ?? "";
+        TxtSmtpHost.Text = cfg["Smtp:Host"] ?? "smtp.gmail.com";
+        TxtSmtpPort.Text = cfg["Smtp:Port"] ?? "587";
+        TxtClaudeModel.Text = cfg["Claude:Model"] ?? "claude-sonnet-4-6";
+        TxtMapExtent.Text = cfg["WxVis:MapExtent"] ?? "";
+        TxtAlertEmail.Text = cfg["Monitor:AlertEmail"] ?? "";
 
         // Secrets come from the database, not config files.
         try
@@ -71,10 +74,10 @@ public partial class ConfigureTab : UserControl
             var gs = await db.GlobalSettings.FirstOrDefaultAsync(x => x.Id == 1);
             if (gs is not null)
             {
-                TxtSmtpUsername.Text     = gs.SmtpUsername    ?? "";
-                TxtSmtpPassword.Password = gs.SmtpPassword    ?? "";
-                TxtSmtpFromAddress.Text  = gs.SmtpFromAddress ?? "";
-                TxtClaudeApiKey.Password = gs.ClaudeApiKey    ?? "";
+                TxtSmtpUsername.Text = gs.SmtpUsername ?? "";
+                TxtSmtpPassword.Password = gs.SmtpPassword ?? "";
+                TxtSmtpFromAddress.Text = gs.SmtpFromAddress ?? "";
+                TxtClaudeApiKey.Password = gs.ClaudeApiKey ?? "";
             }
         }
         catch (Exception ex)
@@ -106,14 +109,14 @@ public partial class ConfigureTab : UserControl
                 },
                 ["Fetch"] = new JsonObject
                 {
-                    ["HomeIcao"]           = TxtHomeIcao.Text.Trim().ToUpperInvariant(),
-                    ["HomeLatitude"]       = ParseDoubleOrNull(TxtHomeLatitude.Text),
-                    ["HomeLongitude"]      = ParseDoubleOrNull(TxtHomeLongitude.Text),
+                    ["HomeIcao"] = TxtHomeIcao.Text.Trim().ToUpperInvariant(),
+                    ["HomeLatitude"] = ParseDoubleOrNull(TxtHomeLatitude.Text),
+                    ["HomeLongitude"] = ParseDoubleOrNull(TxtHomeLongitude.Text),
                     ["BoundingBoxDegrees"] = ParseDoubleOrNull(TxtBoundingBoxDeg.Text),
-                    ["RegionSouth"]        = ParseDoubleOrNull(TxtRegionSouth.Text),
-                    ["RegionNorth"]        = ParseDoubleOrNull(TxtRegionNorth.Text),
-                    ["RegionWest"]         = ParseDoubleOrNull(TxtRegionWest.Text),
-                    ["RegionEast"]         = ParseDoubleOrNull(TxtRegionEast.Text),
+                    ["RegionSouth"] = ParseDoubleOrNull(TxtRegionSouth.Text),
+                    ["RegionNorth"] = ParseDoubleOrNull(TxtRegionNorth.Text),
+                    ["RegionWest"] = ParseDoubleOrNull(TxtRegionWest.Text),
+                    ["RegionEast"] = ParseDoubleOrNull(TxtRegionEast.Text),
                 },
                 ["Smtp"] = new JsonObject
                 {
@@ -131,7 +134,7 @@ public partial class ConfigureTab : UserControl
                 ["WxVis"] = new JsonObject
                 {
                     ["CondaPythonExe"] = TxtCondaPythonExe.Text.Trim(),
-                    ["MapExtent"]      = TxtMapExtent.Text.Trim(),
+                    ["MapExtent"] = TxtMapExtent.Text.Trim(),
                 },
                 ["Monitor"] = new JsonObject
                 {
@@ -158,10 +161,10 @@ public partial class ConfigureTab : UserControl
                 db.GlobalSettings.Add(gs);
             }
 
-            gs.SmtpUsername    = TxtSmtpUsername.Text.Trim();
-            gs.SmtpPassword    = TxtSmtpPassword.Password;
+            gs.SmtpUsername = TxtSmtpUsername.Text.Trim();
+            gs.SmtpPassword = TxtSmtpPassword.Password;
             gs.SmtpFromAddress = TxtSmtpFromAddress.Text.Trim();
-            gs.ClaudeApiKey    = TxtClaudeApiKey.Password;
+            gs.ClaudeApiKey = TxtClaudeApiKey.Password;
             await db.SaveChangesAsync();
             Logger.Info("Secrets saved to GlobalSettings.");
 
@@ -198,10 +201,10 @@ public partial class ConfigureTab : UserControl
         {
             var smtp = new SmtpConfig
             {
-                Host        = TxtSmtpHost.Text.Trim(),
-                Port        = int.TryParse(TxtSmtpPort.Text, out var p) ? p : 587,
-                Username    = TxtSmtpUsername.Text.Trim(),
-                Password    = TxtSmtpPassword.Password,
+                Host = TxtSmtpHost.Text.Trim(),
+                Port = int.TryParse(TxtSmtpPort.Text, out var p) ? p : 587,
+                Username = TxtSmtpUsername.Text.Trim(),
+                Password = TxtSmtpPassword.Password,
                 FromAddress = from,
             };
             var sender2 = new SmtpSender(smtp, "WxManager");
@@ -232,9 +235,9 @@ public partial class ConfigureTab : UserControl
             req.Headers.Add("anthropic-version", "2023-06-01");
             req.Content = JsonContent.Create(new
             {
-                model      = TxtClaudeModel.Text.Trim(),
+                model = TxtClaudeModel.Text.Trim(),
                 max_tokens = 16,
-                messages   = new[] { new { role = "user", content = "Reply with OK." } },
+                messages = new[] { new { role = "user", content = "Reply with OK." } },
             });
 
             var resp = await http.SendAsync(req);
@@ -256,9 +259,9 @@ public partial class ConfigureTab : UserControl
         StatusText.Text = text;
         StatusText.Foreground = new SolidColorBrush(ok switch
         {
-            true  => Color.FromRgb(0x4C, 0xAF, 0x50),
+            true => Color.FromRgb(0x4C, 0xAF, 0x50),
             false => Color.FromRgb(0xEF, 0x53, 0x50),
-            _     => Color.FromRgb(0x90, 0x90, 0x90),
+            _ => Color.FromRgb(0x90, 0x90, 0x90),
         });
     }
 

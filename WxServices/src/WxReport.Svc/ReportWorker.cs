@@ -1,13 +1,18 @@
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
 using System.Text.Json;
+
 using MetarParser.Data;
 using MetarParser.Data.Entities;
+
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+
 using WxInterp;
+
 using WxServices.Common;
 using WxServices.Logging;
+
 using Recipient = MetarParser.Data.Entities.Recipient;
 
 namespace WxReport.Svc;
@@ -24,10 +29,10 @@ namespace WxReport.Svc;
 /// </summary>
 public sealed class ReportWorker : BackgroundService
 {
-    private readonly IConfiguration                         _config;
-    private readonly DbContextOptions<WeatherDataContext>   _dbOptions;
-    private readonly HttpClient                             _httpClient;
-    private readonly PersonaPrefix                          _persona;
+    private readonly IConfiguration _config;
+    private readonly DbContextOptions<WeatherDataContext> _dbOptions;
+    private readonly HttpClient _httpClient;
+    private readonly PersonaPrefix _persona;
 
     private readonly Meter _meter = new("WxReport.Svc", "1.0.0");
     private readonly Counter<long> _reportCycles;
@@ -48,14 +53,14 @@ public sealed class ReportWorker : BackgroundService
         IHttpClientFactory httpClientFactory,
         PersonaPrefix persona)
     {
-        _config        = config;
-        _dbOptions     = dbOptions;
-        _httpClient    = httpClientFactory.CreateClient("WxReport");
-        _persona       = persona;
-        _reportCycles  = _meter.CreateCounter<long>("wxreport.cycles.total", description: "Number of completed report cycles.");
-        _reportsSent   = _meter.CreateCounter<long>("wxreport.sends.total", description: "Number of reports successfully sent.");
-        _sendFailures  = _meter.CreateCounter<long>("wxreport.send.failures.total", description: "Number of failed email sends.");
-        _claudeCalls   = _meter.CreateCounter<long>("wxreport.claude.calls.total", description: "Number of Claude API calls.");
+        _config = config;
+        _dbOptions = dbOptions;
+        _httpClient = httpClientFactory.CreateClient("WxReport");
+        _persona = persona;
+        _reportCycles = _meter.CreateCounter<long>("wxreport.cycles.total", description: "Number of completed report cycles.");
+        _reportsSent = _meter.CreateCounter<long>("wxreport.sends.total", description: "Number of reports successfully sent.");
+        _sendFailures = _meter.CreateCounter<long>("wxreport.send.failures.total", description: "Number of failed email sends.");
+        _claudeCalls = _meter.CreateCounter<long>("wxreport.claude.calls.total", description: "Number of Claude API calls.");
         _cycleDuration = _meter.CreateHistogram<double>("wxreport.cycle.duration.seconds", unit: "s", description: "Duration of each report cycle.");
         _claudeDuration = _meter.CreateHistogram<double>("wxreport.claude.duration.seconds", unit: "s", description: "Duration of each Claude API call.");
     }
@@ -162,8 +167,8 @@ public sealed class ReportWorker : BackgroundService
         if (!await resolver.EnsureResolvedAsync(recipient)) return;
 
         var preferredIcaos = ParseIcaoList(recipient.MetarIcao);
-        var localityName   = recipient.LocalityName ?? (preferredIcaos.Count > 0 ? preferredIcaos[0] : recipient.Email);
-        var snapshot       = await WxInterpreter.GetSnapshotAsync(
+        var localityName = recipient.LocalityName ?? (preferredIcaos.Count > 0 ? preferredIcaos[0] : recipient.Email);
+        var snapshot = await WxInterpreter.GetSnapshotAsync(
             preferredIcaos, recipient.TafIcao == "NONE" ? null : recipient.TafIcao, localityName, _dbOptions,
             homeLat: recipient.Latitude, homeLon: recipient.Longitude,
             precipThresholdMmHr: cfg.PrecipRateThresholdMmHr,
@@ -177,12 +182,12 @@ public sealed class ReportWorker : BackgroundService
 
         Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): sending startup report.");
 
-        var language       = recipient.Language ?? cfg.DefaultLanguage;
+        var language = recipient.Language ?? cfg.DefaultLanguage;
         var scheduledHours = ParseHourList(recipient.ScheduledSendHours ?? cfg.DefaultScheduledSendHours);
-        var scheduledHour  = scheduledHours.Count > 0 ? scheduledHours[0] : 7;
-        var tz             = ResolveTimezone(recipient.Timezone);
-        var claude         = new ClaudeClient(_httpClient, claude_cfg.ApiKey, claude_cfg.Model, _persona.Text);
-        var report         = await claude.GenerateReportAsync(
+        var scheduledHour = scheduledHours.Count > 0 ? scheduledHours[0] : 7;
+        var tz = ResolveTimezone(recipient.Timezone);
+        var claude = new ClaudeClient(_httpClient, claude_cfg.ApiKey, claude_cfg.Model, _persona.Text);
+        var report = await claude.GenerateReportAsync(
             snapshot, language, recipient.Name, tz,
             isFirstReport: false,
             scheduledHour: scheduledHour,
@@ -195,7 +200,7 @@ public sealed class ReportWorker : BackgroundService
             return;
         }
 
-        var subject       = BuildSubject(snapshot, language, tz, recipientName: recipient.Name);
+        var subject = BuildSubject(snapshot, language, tz, recipientName: recipient.Name);
         var plainFallback = SnapshotDescriber.Describe(snapshot, tz, recipient.Units);
 
         var plotsDir = new WxPaths(_config["InstallRoot"]).PlotsDir;
@@ -208,7 +213,7 @@ public sealed class ReportWorker : BackgroundService
             : null;
 
         var emailer = new SmtpSender(smtp, "WxReport");
-        var sent    = await emailer.SendAsync(
+        var sent = await emailer.SendAsync(
             recipient.Email, subject, plainFallback,
             htmlBody: report, inlineImages: inlineImages,
             toName: recipient.Name, ct: ct);
@@ -228,11 +233,11 @@ public sealed class ReportWorker : BackgroundService
             ctx.RecipientStates.Add(state);
         }
 
-        state.LastUnscheduledSentUtc  = DateTime.UtcNow;
+        state.LastUnscheduledSentUtc = DateTime.UtcNow;
         state.LastSnapshotFingerprint = SnapshotFingerprint.Compute(snapshot, cfg.SignificantChange);
-        state.LastMetarIcao           = snapshot.StationIcao;
+        state.LastMetarIcao = snapshot.StationIcao;
 
-        try   { await ctx.SaveChangesAsync(ct); }
+        try { await ctx.SaveChangesAsync(ct); }
         catch (Exception ex) { Logger.Error("Failed to save state after startup report.", ex); }
     }
 
@@ -261,193 +266,193 @@ public sealed class ReportWorker : BackgroundService
         try
         {
 
-        if (string.IsNullOrWhiteSpace(claude_cfg.ApiKey))
-        {
-            Logger.Warn("Claude.ApiKey is not set — skipping report cycle.");
-            return;
-        }
-
-        if (cfg.Recipients.Count == 0)
-        {
-            Logger.Debug("No recipients configured.");
-            return;
-        }
-
-        var duplicateIds = cfg.Recipients
-            .Where(r => r.Id is not null)
-            .GroupBy(r => r.Id)
-            .Where(g => g.Count() > 1)
-            .Select(g => g.Key!)
-            .ToHashSet();
-
-        foreach (var id in duplicateIds)
-            Logger.Error($"Duplicate recipient Id '{id}' — all entries with this Id will be skipped.");
-
-        var claude      = new ClaudeClient(_httpClient, claude_cfg.ApiKey, claude_cfg.Model, _persona.Text);
-        var emailer     = new SmtpSender(smtp, "WxReport");
-        var resolver    = new RecipientResolver(_dbOptions, _httpClient);
-        var now         = DateTime.UtcNow;
-        var reportsSent = 0;
-
-        foreach (var recipient in cfg.Recipients)
-        {
-            if (string.IsNullOrWhiteSpace(recipient.Email)) continue;
-            if (string.IsNullOrWhiteSpace(recipient.Id))
+            if (string.IsNullOrWhiteSpace(claude_cfg.ApiKey))
             {
-                Logger.Warn($"{recipient.Email} ({recipient.Name}): no Id configured — skipping. Add a unique Id via WxManager → Recipients.");
-                continue;
-            }
-            if (duplicateIds.Contains(recipient.Id)) continue;
-
-            // Ensure the recipient's address has been resolved to station ICAOs.
-            if (!await resolver.EnsureResolvedAsync(recipient)) continue;
-
-            var state = await ctx.RecipientStates
-                .FirstOrDefaultAsync(r => r.RecipientId == recipient.Id, ct);
-
-            if (state is null)
-            {
-                state = new RecipientState { RecipientId = recipient.Id! };
-                ctx.RecipientStates.Add(state);
+                Logger.Warn("Claude.ApiKey is not set — skipping report cycle.");
+                return;
             }
 
-            // Build a snapshot specific to this recipient's nearest stations.
-            var preferredIcaos = ParseIcaoList(recipient.MetarIcao);
-            var localityName   = recipient.LocalityName ?? (preferredIcaos.Count > 0 ? preferredIcaos[0] : recipient.Email);
-            var snapshot = await WxInterpreter.GetSnapshotAsync(
-                preferredIcaos, recipient.TafIcao == "NONE" ? null : recipient.TafIcao, localityName, _dbOptions,
-                homeLat: recipient.Latitude, homeLon: recipient.Longitude,
-                precipThresholdMmHr: cfg.PrecipRateThresholdMmHr,
-                ct: ct);
-
-            if (snapshot is null)
+            if (cfg.Recipients.Count == 0)
             {
-                Logger.Warn($"{recipient.Id} {recipient.Email} ({recipient.Name}): no METAR, TAF, or GFS data available — skipping.");
-                continue;
+                Logger.Debug("No recipients configured.");
+                return;
             }
 
-            if (!snapshot.ObservationAvailable)
+            var duplicateIds = cfg.Recipients
+                .Where(r => r.Id is not null)
+                .GroupBy(r => r.Id)
+                .Where(g => g.Count() > 1)
+                .Select(g => g.Key!)
+                .ToHashSet();
+
+            foreach (var id in duplicateIds)
+                Logger.Error($"Duplicate recipient Id '{id}' — all entries with this Id will be skipped.");
+
+            var claude = new ClaudeClient(_httpClient, claude_cfg.ApiKey, claude_cfg.Model, _persona.Text);
+            var emailer = new SmtpSender(smtp, "WxReport");
+            var resolver = new RecipientResolver(_dbOptions, _httpClient);
+            var now = DateTime.UtcNow;
+            var reportsSent = 0;
+
+            foreach (var recipient in cfg.Recipients)
             {
-                Logger.Warn($"{recipient.Id} {recipient.Email} ({recipient.Name}): preferred station(s) [{string.Join(", ", preferredIcaos)}] had no data and no station within 30 mi reported in the last 3 hours — sending forecast-only report.");
-            }
-            else if (preferredIcaos.Count > 0 && !preferredIcaos.Contains(snapshot.StationIcao))
-            {
-                var distStr = snapshot.ObservationDistanceKm is double km
-                    ? $" ({km * 0.621371:F0} mi away)"
-                    : "";
-                Logger.Warn($"{recipient.Id} {recipient.Email} ({recipient.Name}): preferred station(s) [{string.Join(", ", preferredIcaos)}] had no data — fell back to {snapshot.StationIcao}{distStr}.");
-            }
+                if (string.IsNullOrWhiteSpace(recipient.Email)) continue;
+                if (string.IsNullOrWhiteSpace(recipient.Id))
+                {
+                    Logger.Warn($"{recipient.Email} ({recipient.Name}): no Id configured — skipping. Add a unique Id via WxManager → Recipients.");
+                    continue;
+                }
+                if (duplicateIds.Contains(recipient.Id)) continue;
 
-            var useC = recipient.Units.Temperature.Equals("C", StringComparison.OrdinalIgnoreCase);
-            if (snapshot.GfsForecast is { } gfs)
-                Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): GFS run {gfs.ModelRunUtc:yyyy-MM-dd HH}Z — {gfs.Days.Count} day(s); " +
-                    string.Join(", ", gfs.Days.Select(d => useC
-                        ? $"{d.Date:MM/dd} {d.HighTempC:F0}°/{d.LowTempC:F0}°C"
-                        : $"{d.Date:MM/dd} {d.HighTempF:F0}°/{d.LowTempF:F0}°F")));
-            else
-                Logger.Warn($"{recipient.Id} {recipient.Email} ({recipient.Name}): no GFS forecast available.");
+                // Ensure the recipient's address has been resolved to station ICAOs.
+                if (!await resolver.EnsureResolvedAsync(recipient)) continue;
 
-            var fingerprint      = SnapshotFingerprint.Compute(snapshot, cfg.SignificantChange);
-            var (shouldSend, reason, severity) = ShouldSend(recipient, state, fingerprint, cfg, now,
-                observationAvailable: snapshot.ObservationAvailable);
+                var state = await ctx.RecipientStates
+                    .FirstOrDefaultAsync(r => r.RecipientId == recipient.Id, ct);
 
-            if (shouldSend && reason == "change" && state.LastSnapshotFingerprint is not null)
-            {
-                var changeDesc = SnapshotFingerprint.DescribeChanges(
-                    state.LastSnapshotFingerprint, fingerprint, snapshot, cfg.SignificantChange);
-                Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): unscheduled send triggered — {changeDesc}");
-            }
+                if (state is null)
+                {
+                    state = new RecipientState { RecipientId = recipient.Id! };
+                    ctx.RecipientStates.Add(state);
+                }
 
-            if (!shouldSend) continue;
+                // Build a snapshot specific to this recipient's nearest stations.
+                var preferredIcaos = ParseIcaoList(recipient.MetarIcao);
+                var localityName = recipient.LocalityName ?? (preferredIcaos.Count > 0 ? preferredIcaos[0] : recipient.Email);
+                var snapshot = await WxInterpreter.GetSnapshotAsync(
+                    preferredIcaos, recipient.TafIcao == "NONE" ? null : recipient.TafIcao, localityName, _dbOptions,
+                    homeLat: recipient.Latitude, homeLon: recipient.Longitude,
+                    precipThresholdMmHr: cfg.PrecipRateThresholdMmHr,
+                    ct: ct);
 
-            Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): generating {reason} report.");
+                if (snapshot is null)
+                {
+                    Logger.Warn($"{recipient.Id} {recipient.Email} ({recipient.Name}): no METAR, TAF, or GFS data available — skipping.");
+                    continue;
+                }
 
-            // Detect station switch: if the METAR source changed from what was used in
-            // the last report, pass the previous ICAO to Claude so it can note the change.
-            // Skip when the current snapshot has no observation — the "empty" StationIcao
-            // would otherwise look like a spurious station switch.
-            var previousMetarIcao = snapshot.ObservationAvailable
-                && state.LastMetarIcao is not null
-                && state.LastMetarIcao != snapshot.StationIcao
-                    ? state.LastMetarIcao
+                if (!snapshot.ObservationAvailable)
+                {
+                    Logger.Warn($"{recipient.Id} {recipient.Email} ({recipient.Name}): preferred station(s) [{string.Join(", ", preferredIcaos)}] had no data and no station within 30 mi reported in the last 3 hours — sending forecast-only report.");
+                }
+                else if (preferredIcaos.Count > 0 && !preferredIcaos.Contains(snapshot.StationIcao))
+                {
+                    var distStr = snapshot.ObservationDistanceKm is double km
+                        ? $" ({km * 0.621371:F0} mi away)"
+                        : "";
+                    Logger.Warn($"{recipient.Id} {recipient.Email} ({recipient.Name}): preferred station(s) [{string.Join(", ", preferredIcaos)}] had no data — fell back to {snapshot.StationIcao}{distStr}.");
+                }
+
+                var useC = recipient.Units.Temperature.Equals("C", StringComparison.OrdinalIgnoreCase);
+                if (snapshot.GfsForecast is { } gfs)
+                    Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): GFS run {gfs.ModelRunUtc:yyyy-MM-dd HH}Z — {gfs.Days.Count} day(s); " +
+                        string.Join(", ", gfs.Days.Select(d => useC
+                            ? $"{d.Date:MM/dd} {d.HighTempC:F0}°/{d.LowTempC:F0}°C"
+                            : $"{d.Date:MM/dd} {d.HighTempF:F0}°/{d.LowTempF:F0}°F")));
+                else
+                    Logger.Warn($"{recipient.Id} {recipient.Email} ({recipient.Name}): no GFS forecast available.");
+
+                var fingerprint = SnapshotFingerprint.Compute(snapshot, cfg.SignificantChange);
+                var (shouldSend, reason, severity) = ShouldSend(recipient, state, fingerprint, cfg, now,
+                    observationAvailable: snapshot.ObservationAvailable);
+
+                if (shouldSend && reason == "change" && state.LastSnapshotFingerprint is not null)
+                {
+                    var changeDesc = SnapshotFingerprint.DescribeChanges(
+                        state.LastSnapshotFingerprint, fingerprint, snapshot, cfg.SignificantChange);
+                    Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): unscheduled send triggered — {changeDesc}");
+                }
+
+                if (!shouldSend) continue;
+
+                Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): generating {reason} report.");
+
+                // Detect station switch: if the METAR source changed from what was used in
+                // the last report, pass the previous ICAO to Claude so it can note the change.
+                // Skip when the current snapshot has no observation — the "empty" StationIcao
+                // would otherwise look like a spurious station switch.
+                var previousMetarIcao = snapshot.ObservationAvailable
+                    && state.LastMetarIcao is not null
+                    && state.LastMetarIcao != snapshot.StationIcao
+                        ? state.LastMetarIcao
+                        : null;
+                if (previousMetarIcao is not null)
+                    Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): METAR station changed {previousMetarIcao} → {snapshot.StationIcao} — noting in report.");
+
+                var language = recipient.Language ?? cfg.DefaultLanguage;
+                var scheduledHours = ParseHourList(recipient.ScheduledSendHours ?? cfg.DefaultScheduledSendHours);
+                var scheduledHour = scheduledHours.Count > 0 ? scheduledHours[0] : 7;
+                var tz = ResolveTimezone(recipient.Timezone);
+                var claudeSw = Stopwatch.StartNew();
+                var report = await claude.GenerateReportAsync(
+                    snapshot, language, recipient.Name, tz,
+                    isFirstReport: reason == "first",
+                    scheduledHour: scheduledHour,
+                    units: recipient.Units,
+                    changeSeverity: severity,
+                    previousMetarIcao: previousMetarIcao,
+                    ct: ct);
+                _claudeDuration.Record(claudeSw.Elapsed.TotalSeconds);
+                _claudeCalls.Add(1);
+
+                if (report is null)
+                {
+                    Logger.Error($"{recipient.Id} {recipient.Email} ({recipient.Name}): Claude returned no report — skipping send.");
+                    continue;
+                }
+
+                var subject = BuildSubject(snapshot, language, tz, severity, recipientName: recipient.Name);
+                var plainFallback = SnapshotDescriber.Describe(snapshot, tz, recipient.Units);
+
+                var plotsDir2 = new WxPaths(_config["InstallRoot"]).PlotsDir;
+                var meteogramPath = FindMeteogramAbbrevPath(preferredIcaos.Count > 0 ? preferredIcaos[0] : "", recipient.Units.Temperature, recipient.Timezone, plotsDir2);
+                report = meteogramPath is not null
+                    ? InsertMeteogramImage(report)
+                    : report.Replace("<!--meteogram-->", "", StringComparison.Ordinal);
+                IReadOnlyDictionary<string, string>? inlineImages = meteogramPath is not null
+                    ? new Dictionary<string, string> { ["meteogramAbbrev"] = meteogramPath }
                     : null;
-            if (previousMetarIcao is not null)
-                Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): METAR station changed {previousMetarIcao} → {snapshot.StationIcao} — noting in report.");
 
-            var language       = recipient.Language ?? cfg.DefaultLanguage;
-            var scheduledHours = ParseHourList(recipient.ScheduledSendHours ?? cfg.DefaultScheduledSendHours);
-            var scheduledHour  = scheduledHours.Count > 0 ? scheduledHours[0] : 7;
-            var tz             = ResolveTimezone(recipient.Timezone);
-            var claudeSw      = Stopwatch.StartNew();
-            var report        = await claude.GenerateReportAsync(
-                snapshot, language, recipient.Name, tz,
-                isFirstReport: reason == "first",
-                scheduledHour: scheduledHour,
-                units: recipient.Units,
-                changeSeverity: severity,
-                previousMetarIcao: previousMetarIcao,
-                ct: ct);
-            _claudeDuration.Record(claudeSw.Elapsed.TotalSeconds);
-            _claudeCalls.Add(1);
+                var sent = await emailer.SendAsync(
+                    recipient.Email, subject, plainFallback,
+                    htmlBody: report, inlineImages: inlineImages,
+                    toName: recipient.Name, ct: ct);
 
-            if (report is null)
-            {
-                Logger.Error($"{recipient.Id} {recipient.Email} ({recipient.Name}): Claude returned no report — skipping send.");
-                continue;
+                if (!sent) { _sendFailures.Add(1); continue; }
+
+                _reportsSent.Add(1);
+                Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): report sent.");
+
+                if (reason is "scheduled" or "first")
+                    state.LastScheduledSentUtc = now;
+                else
+                    state.LastUnscheduledSentUtc = now;
+
+                // Only capture the fingerprint and station when we have real observation
+                // data; otherwise leave the last-known values in place so change-detection
+                // resumes correctly once observations return.
+                if (snapshot.ObservationAvailable)
+                {
+                    state.LastSnapshotFingerprint = fingerprint;
+                    state.LastMetarIcao = snapshot.StationIcao;
+                }
+
+                try
+                {
+                    await ctx.SaveChangesAsync(ct);
+                    reportsSent++;
+                }
+                catch (Exception ex)
+                {
+                    Logger.Error($"{recipient.Id} {recipient.Email} ({recipient.Name}): failed to save recipient state.", ex);
+                }
             }
 
-            var subject       = BuildSubject(snapshot, language, tz, severity, recipientName: recipient.Name);
-            var plainFallback = SnapshotDescriber.Describe(snapshot, tz, recipient.Units);
+            Logger.Info(reportsSent > 0
+                ? $"Report cycle complete. {reportsSent} report(s) sent."
+                : "Report cycle complete. No reports due.");
 
-            var plotsDir2     = new WxPaths(_config["InstallRoot"]).PlotsDir;
-            var meteogramPath = FindMeteogramAbbrevPath(preferredIcaos.Count > 0 ? preferredIcaos[0] : "", recipient.Units.Temperature, recipient.Timezone, plotsDir2);
-            report = meteogramPath is not null
-                ? InsertMeteogramImage(report)
-                : report.Replace("<!--meteogram-->", "", StringComparison.Ordinal);
-            IReadOnlyDictionary<string, string>? inlineImages = meteogramPath is not null
-                ? new Dictionary<string, string> { ["meteogramAbbrev"] = meteogramPath }
-                : null;
-
-            var sent = await emailer.SendAsync(
-                recipient.Email, subject, plainFallback,
-                htmlBody: report, inlineImages: inlineImages,
-                toName: recipient.Name, ct: ct);
-
-            if (!sent) { _sendFailures.Add(1); continue; }
-
-            _reportsSent.Add(1);
-            Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): report sent.");
-
-            if (reason is "scheduled" or "first")
-                state.LastScheduledSentUtc   = now;
-            else
-                state.LastUnscheduledSentUtc  = now;
-
-            // Only capture the fingerprint and station when we have real observation
-            // data; otherwise leave the last-known values in place so change-detection
-            // resumes correctly once observations return.
-            if (snapshot.ObservationAvailable)
-            {
-                state.LastSnapshotFingerprint = fingerprint;
-                state.LastMetarIcao           = snapshot.StationIcao;
-            }
-
-            try
-            {
-                await ctx.SaveChangesAsync(ct);
-                reportsSent++;
-            }
-            catch (Exception ex)
-            {
-                Logger.Error($"{recipient.Id} {recipient.Email} ({recipient.Name}): failed to save recipient state.", ex);
-            }
-        }
-
-        Logger.Info(reportsSent > 0
-            ? $"Report cycle complete. {reportsSent} report(s) sent."
-            : "Report cycle complete. No reports due.");
-
-        _reportCycles.Add(1);
+            _reportCycles.Add(1);
 
         } // try
         finally
@@ -486,12 +491,12 @@ public sealed class ReportWorker : BackgroundService
     /// — the method returns <c>send = false</c> in that case.
     /// </returns>
     private static (bool send, string reason, ChangeSeverity severity) ShouldSend(
-        RecipientConfig     recipient,
-        RecipientState      state,
-        string              fingerprint,
-        ReportConfig        cfg,
-        DateTime            nowUtc,
-        bool                observationAvailable = true)
+        RecipientConfig recipient,
+        RecipientState state,
+        string fingerprint,
+        ReportConfig cfg,
+        DateTime nowUtc,
+        bool observationAvailable = true)
     {
         // Brand-new recipient — send an introductory report on the first cycle.
         if (!state.LastScheduledSentUtc.HasValue && !state.LastUnscheduledSentUtc.HasValue)
@@ -510,8 +515,8 @@ public sealed class ReportWorker : BackgroundService
 
         // ── Scheduled send ────────────────────────────────────────────────────
 
-        var tz             = ResolveTimezone(recipient.Timezone);
-        var localNow       = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, tz);
+        var tz = ResolveTimezone(recipient.Timezone);
+        var localNow = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, tz);
         var scheduledHours = ParseHourList(recipient.ScheduledSendHours ?? cfg.DefaultScheduledSendHours);
 
         // Find the most recently passed scheduled hour today (if any).
@@ -605,14 +610,14 @@ public sealed class ReportWorker : BackgroundService
         // default(DateTime) in that case, which would render as 12:00 AM.
         var subjectTimeUtc = snap.ObservationAvailable ? snap.ObservationTimeUtc : DateTime.UtcNow;
         var localTime = TimeZoneInfo.ConvertTimeFromUtc(subjectTimeUtc, tz).ToString("h:mm tt");
-        var forName   = string.IsNullOrWhiteSpace(recipientName) ? "" : $" for {recipientName}";
+        var forName = string.IsNullOrWhiteSpace(recipientName) ? "" : $" for {recipientName}";
         if (language.Equals("Spanish", StringComparison.OrdinalIgnoreCase))
         {
             var label = severity switch
             {
-                ChangeSeverity.Alert  => "Alerta meteorológica",
+                ChangeSeverity.Alert => "Alerta meteorológica",
                 ChangeSeverity.Update => "Actualización del tiempo",
-                _                     => "Reporte del tiempo",
+                _ => "Reporte del tiempo",
             };
             var paraName = string.IsNullOrWhiteSpace(recipientName) ? "" : $" para {recipientName}";
             return $"{label}{paraName} — {snap.LocalityName} ({localTime})";
@@ -621,9 +626,9 @@ public sealed class ReportWorker : BackgroundService
         {
             var label = severity switch
             {
-                ChangeSeverity.Alert  => "Alerte météo",
+                ChangeSeverity.Alert => "Alerte météo",
                 ChangeSeverity.Update => "Mise à jour météo",
-                _                     => "Bulletin météo",
+                _ => "Bulletin météo",
             };
             var pourName = string.IsNullOrWhiteSpace(recipientName) ? "" : $" pour {recipientName}";
             return $"{label}{pourName} — {snap.LocalityName} ({localTime})";
@@ -631,9 +636,9 @@ public sealed class ReportWorker : BackgroundService
         {
             var label = severity switch
             {
-                ChangeSeverity.Alert  => "Weather alert",
+                ChangeSeverity.Alert => "Weather alert",
                 ChangeSeverity.Update => "Weather update",
-                _                     => "Weather report",
+                _ => "Weather report",
             };
             return $"{label}{forName} — {snap.LocalityName} ({localTime})";
         }
@@ -649,7 +654,7 @@ public sealed class ReportWorker : BackgroundService
     private static void WriteHeartbeat(string? path)
     {
         if (string.IsNullOrWhiteSpace(path)) return;
-        try   { File.WriteAllText(path, DateTime.UtcNow.ToString("o")); }
+        try { File.WriteAllText(path, DateTime.UtcNow.ToString("o")); }
         catch (Exception ex) { Logger.Warn($"Could not write heartbeat to '{path}': {ex.Message}"); }
     }
 
@@ -709,10 +714,10 @@ public sealed class ReportWorker : BackgroundService
         _config.GetSection("Claude").Bind(claude);
 
         var gs = await ctx.GlobalSettings.FirstOrDefaultAsync(x => x.Id == 1, ct);
-        smtp.Username    = gs?.SmtpUsername    ?? "";
-        smtp.Password    = gs?.SmtpPassword    ?? "";
+        smtp.Username = gs?.SmtpUsername ?? "";
+        smtp.Password = gs?.SmtpPassword ?? "";
         smtp.FromAddress = gs?.SmtpFromAddress ?? "";
-        claude.ApiKey    = gs?.ClaudeApiKey    ?? "";
+        claude.ApiKey = gs?.ClaudeApiKey ?? "";
 
         return (report, smtp, claude);
     }
@@ -746,14 +751,14 @@ public sealed class ReportWorker : BackgroundService
                 using var doc = JsonDocument.Parse(File.ReadAllText(manifestPath));
                 foreach (var entry in doc.RootElement.EnumerateArray())
                 {
-                    if (!entry.TryGetProperty("Icao",       out var icaoProp))      continue;
-                    if (!entry.TryGetProperty("TempUnit",   out var tuProp))        continue;
-                    if (!entry.TryGetProperty("Timezone",   out var tzProp))        continue;
+                    if (!entry.TryGetProperty("Icao", out var icaoProp)) continue;
+                    if (!entry.TryGetProperty("TempUnit", out var tuProp)) continue;
+                    if (!entry.TryGetProperty("Timezone", out var tzProp)) continue;
                     if (!entry.TryGetProperty("FileAbbrev", out var fileAbbrevProp)) continue;
 
                     if (!string.Equals(icaoProp.GetString(), icao, StringComparison.OrdinalIgnoreCase)) continue;
-                    if (!string.Equals(tuProp.GetString(),   tempUnit, StringComparison.OrdinalIgnoreCase)) continue;
-                    if (!string.Equals(tzProp.GetString(),   timezone, StringComparison.Ordinal))       continue;
+                    if (!string.Equals(tuProp.GetString(), tempUnit, StringComparison.OrdinalIgnoreCase)) continue;
+                    if (!string.Equals(tzProp.GetString(), timezone, StringComparison.Ordinal)) continue;
 
                     var file = fileAbbrevProp.GetString();
                     if (string.IsNullOrWhiteSpace(file)) continue;
@@ -812,23 +817,23 @@ public sealed class ReportWorker : BackgroundService
     /// <returns>A populated <see cref="RecipientConfig"/> instance.</returns>
     private static RecipientConfig ToConfig(Recipient r) => new()
     {
-        Id                 = r.RecipientId,
-        Email              = r.Email,
-        Name               = r.Name,
-        Language           = r.Language,
-        Timezone           = r.Timezone,
+        Id = r.RecipientId,
+        Email = r.Email,
+        Name = r.Name,
+        Language = r.Language,
+        Timezone = r.Timezone,
         ScheduledSendHours = r.ScheduledSendHours,
-        Address            = r.Address,
-        LocalityName       = r.LocalityName,
-        Latitude           = r.Latitude,
-        Longitude          = r.Longitude,
-        MetarIcao          = r.MetarIcao,
-        TafIcao            = r.TafIcao,
-        Units              = new UnitPreferences
+        Address = r.Address,
+        LocalityName = r.LocalityName,
+        Latitude = r.Latitude,
+        Longitude = r.Longitude,
+        MetarIcao = r.MetarIcao,
+        TafIcao = r.TafIcao,
+        Units = new UnitPreferences
         {
             Temperature = r.TempUnit,
-            Pressure    = r.PressureUnit,
-            WindSpeed   = r.WindSpeedUnit,
+            Pressure = r.PressureUnit,
+            WindSpeed = r.WindSpeedUnit,
         },
     };
 }

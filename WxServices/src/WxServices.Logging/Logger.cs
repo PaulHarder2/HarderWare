@@ -1,6 +1,7 @@
+using System.Runtime.CompilerServices;
+
 using log4net;
 using log4net.Config;
-using System.Runtime.CompilerServices;
 
 namespace WxServices.Logging;
 
@@ -89,8 +90,8 @@ public static class Logger
     public static void Debug(
         string message,
         [CallerMemberName] string member = "",
-        [CallerFilePath]   string file   = "",
-        [CallerLineNumber] int    line   = 0)
+        [CallerFilePath] string file = "",
+        [CallerLineNumber] int line = 0)
     {
         if (_log.IsDebugEnabled)
             _log.Debug(Format(message, member, file, line));
@@ -104,8 +105,8 @@ public static class Logger
     public static void Info(
         string message,
         [CallerMemberName] string member = "",
-        [CallerFilePath]   string file   = "",
-        [CallerLineNumber] int    line   = 0)
+        [CallerFilePath] string file = "",
+        [CallerLineNumber] int line = 0)
     {
         if (_log.IsInfoEnabled)
             _log.Info(Format(message, member, file, line));
@@ -119,8 +120,8 @@ public static class Logger
     public static void Warn(
         string message,
         [CallerMemberName] string member = "",
-        [CallerFilePath]   string file   = "",
-        [CallerLineNumber] int    line   = 0)
+        [CallerFilePath] string file = "",
+        [CallerLineNumber] int line = 0)
     {
         if (_log.IsWarnEnabled)
             _log.Warn(Format(message, member, file, line));
@@ -136,8 +137,8 @@ public static class Logger
         string message,
         Exception ex,
         [CallerMemberName] string member = "",
-        [CallerFilePath]   string file   = "",
-        [CallerLineNumber] int    line   = 0)
+        [CallerFilePath] string file = "",
+        [CallerLineNumber] int line = 0)
     {
         if (_log.IsWarnEnabled)
             _log.Warn(Format(message, member, file, line), ex);
@@ -151,8 +152,8 @@ public static class Logger
     public static void Error(
         string message,
         [CallerMemberName] string member = "",
-        [CallerFilePath]   string file   = "",
-        [CallerLineNumber] int    line   = 0)
+        [CallerFilePath] string file = "",
+        [CallerLineNumber] int line = 0)
     {
         if (_log.IsErrorEnabled)
             _log.Error(Format(message, member, file, line));
@@ -168,8 +169,8 @@ public static class Logger
         string message,
         Exception ex,
         [CallerMemberName] string member = "",
-        [CallerFilePath]   string file   = "",
-        [CallerLineNumber] int    line   = 0)
+        [CallerFilePath] string file = "",
+        [CallerLineNumber] int line = 0)
     {
         if (_log.IsErrorEnabled)
             _log.Error(Format(message, member, file, line), ex);
@@ -183,8 +184,8 @@ public static class Logger
     public static void Fatal(
         string message,
         [CallerMemberName] string member = "",
-        [CallerFilePath]   string file   = "",
-        [CallerLineNumber] int    line   = 0)
+        [CallerFilePath] string file = "",
+        [CallerLineNumber] int line = 0)
     {
         if (_log.IsFatalEnabled)
             _log.Fatal(Format(message, member, file, line));
@@ -200,8 +201,8 @@ public static class Logger
         string message,
         Exception ex,
         [CallerMemberName] string member = "",
-        [CallerFilePath]   string file   = "",
-        [CallerLineNumber] int    line   = 0)
+        [CallerFilePath] string file = "",
+        [CallerLineNumber] int line = 0)
     {
         if (_log.IsFatalEnabled)
             _log.Fatal(Format(message, member, file, line), ex);

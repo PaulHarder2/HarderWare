@@ -67,10 +67,10 @@ public static class SnapshotFingerprint
     /// </returns>
     public static string Compute(WeatherSnapshot snap, SignificantChangeConfig cfg)
     {
-        var windKt   = snap.WindSpeedKt ?? 0;
+        var windKt = snap.WindSpeedKt ?? 0;
         var windHigh = windKt >= cfg.WindThresholdKt;
 
-        var visSm  = snap.Cavok ? 99.0 : (snap.VisibilityStatuteMiles ?? 99.0);
+        var visSm = snap.Cavok ? 99.0 : (snap.VisibilityStatuteMiles ?? 99.0);
         var visLow = visSm < cfg.VisibilityThresholdSm;
 
         // Current (non-recent) thunderstorm
@@ -84,13 +84,13 @@ public static class SnapshotFingerprint
         // GFS: bucket the next calendar day's forecast high/low to their respective
         // change-degree resolutions.  A change in bucket means the temp shifted by
         // at least that many degrees.
-        var gfsDays   = snap.GfsForecast?.Days;
-        var today     = DateOnly.FromDateTime(DateTime.UtcNow);
-        var nextDay   = gfsDays?.FirstOrDefault(d => d.Date > today) ?? gfsDays?.FirstOrDefault();
+        var gfsDays = snap.GfsForecast?.Days;
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var nextDay = gfsDays?.FirstOrDefault(d => d.Date > today) ?? gfsDays?.FirstOrDefault();
         var highBucket = nextDay?.HighTempF.HasValue == true
             ? (int?)Math.Floor(nextDay.HighTempF!.Value / cfg.ForecastHighChangeDegF)
             : null;
-        var lowBucket  = nextDay?.LowTempF.HasValue == true
+        var lowBucket = nextDay?.LowTempF.HasValue == true
             ? (int?)Math.Floor(nextDay.LowTempF!.Value / cfg.ForecastLowChangeDegF)
             : null;
 
@@ -129,18 +129,18 @@ public static class SnapshotFingerprint
             return ChangeSeverity.Update;
 
         // Alert: a dangerous current-condition appeared.
-        if (BecameTrue(oldP, newP, "W"))  return ChangeSeverity.Alert;
-        if (BecameTrue(oldP, newP, "V"))  return ChangeSeverity.Alert;
+        if (BecameTrue(oldP, newP, "W")) return ChangeSeverity.Alert;
+        if (BecameTrue(oldP, newP, "V")) return ChangeSeverity.Alert;
         if (BecameTrue(oldP, newP, "TS")) return ChangeSeverity.Alert;
 
         // Update: precip appeared, forecast risk appeared, or temperature shifted.
         // "Conditions improved" transitions for observed fields (W/V/TS/PR) are
         // suppressed — they fall through to Minor below.
-        if (BecameTrue(oldP, newP, "PR"))       return ChangeSeverity.Update;
-        if (BecameTrue(oldP, newP, "GC"))       return ChangeSeverity.Update;
-        if (BecameTrue(oldP, newP, "GP"))       return ChangeSeverity.Update;
-        if (Changed(oldP, newP, "GH"))          return ChangeSeverity.Update;
-        if (Changed(oldP, newP, "GL"))          return ChangeSeverity.Update;
+        if (BecameTrue(oldP, newP, "PR")) return ChangeSeverity.Update;
+        if (BecameTrue(oldP, newP, "GC")) return ChangeSeverity.Update;
+        if (BecameTrue(oldP, newP, "GP")) return ChangeSeverity.Update;
+        if (Changed(oldP, newP, "GH")) return ChangeSeverity.Update;
+        if (Changed(oldP, newP, "GL")) return ChangeSeverity.Update;
 
         // Everything remaining (observed flags cleared, GC/GP cleared): suppress.
         return ChangeSeverity.Minor;
@@ -162,8 +162,8 @@ public static class SnapshotFingerprint
     /// </returns>
     public static string DescribeChanges(string oldFp, string newFp, WeatherSnapshot snap, SignificantChangeConfig cfg)
     {
-        var oldP  = ParseFields(oldFp);
-        var newP  = ParseFields(newFp);
+        var oldP = ParseFields(oldFp);
+        var newP = ParseFields(newFp);
         var parts = new List<string>();
 
         // Wind speed
@@ -196,7 +196,7 @@ public static class SnapshotFingerprint
         if (Changed(oldP, newP, "GH") || Changed(oldP, newP, "GL"))
         {
             var gfsDays = snap.GfsForecast?.Days;
-            var today   = DateOnly.FromDateTime(DateTime.UtcNow);
+            var today = DateOnly.FromDateTime(DateTime.UtcNow);
             var nextDay = gfsDays?.FirstOrDefault(d => d.Date > today) ?? gfsDays?.FirstOrDefault();
 
             if (Changed(oldP, newP, "GH"))

@@ -1,6 +1,7 @@
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text.Json.Serialization;
+
 using WxServices.Common;
 
 namespace WxManager;
@@ -14,11 +15,11 @@ namespace WxManager;
 public sealed class AnnouncementFormatter
 {
     private readonly HttpClient _http;
-    private readonly string     _apiKey;
-    private readonly string     _model;
-    private readonly string     _endpoint;
-    private readonly string     _apiVersion;
-    private readonly int        _maxTokens;
+    private readonly string _apiKey;
+    private readonly string _model;
+    private readonly string _endpoint;
+    private readonly string _apiVersion;
+    private readonly int _maxTokens;
 
     /// <summary>Initialises a new instance with the given HTTP client and Claude credentials.</summary>
     /// <param name="http">HTTP client used for all Anthropic API requests.</param>
@@ -30,12 +31,12 @@ public sealed class AnnouncementFormatter
     public AnnouncementFormatter(HttpClient http, string apiKey, string model,
                                  string endpoint, string apiVersion, int maxTokens)
     {
-        _http       = http;
-        _apiKey     = apiKey;
-        _model      = model;
-        _endpoint   = endpoint;
+        _http = http;
+        _apiKey = apiKey;
+        _model = model;
+        _endpoint = endpoint;
         _apiVersion = apiVersion;
-        _maxTokens  = maxTokens;
+        _maxTokens = maxTokens;
     }
 
     /// <summary>
@@ -69,10 +70,10 @@ public sealed class AnnouncementFormatter
 
         var request = new
         {
-            model      = _model,
+            model = _model,
             max_tokens = _maxTokens,
-            system     = systemPrompt,
-            messages   = new[] { new { role = "user", content = text } },
+            system = systemPrompt,
+            messages = new[] { new { role = "user", content = text } },
         };
 
         using var req = new HttpRequestMessage(HttpMethod.Post, _endpoint);

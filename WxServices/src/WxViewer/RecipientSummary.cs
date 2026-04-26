@@ -9,8 +9,8 @@ public sealed record RecipientSummary(
     string Name,
     string Language,
     string? FirstIcao,
-    string  TempUnit,
-    string  Timezone)
+    string TempUnit,
+    string Timezone)
 {
     /// <summary>Text shown in the ComboBox list (e.g. "paulh — Paul Harder (English)").</summary>
     public string DisplayText => $"{RecipientId} — {Name} ({Language})";

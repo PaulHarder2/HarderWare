@@ -1,6 +1,9 @@
 using MetarParser.Data.Entities;
+
 using Microsoft.EntityFrameworkCore;
+
 using TafParser;
+
 using WxServices.Logging;
 
 namespace MetarParser.Data;
@@ -53,7 +56,7 @@ public static class TafFetcher
 
         Logger.Info($"Received {lines.Count} TAF(s). Parsing...");
 
-        var parsed     = new List<(TafReport Report, TafRecord Entity)>();
+        var parsed = new List<(TafReport Report, TafRecord Entity)>();
         int parseErrors = 0;
 
         foreach (var line in lines)
@@ -80,7 +83,7 @@ public static class TafFetcher
         using var ctx = new WeatherDataContext(dbOptions);
 
         var stations = parsed.Select(p => p.Entity.StationIcao).Distinct().ToList();
-        var minTime  = parsed.Min(p => p.Entity.IssuanceUtc);
+        var minTime = parsed.Min(p => p.Entity.IssuanceUtc);
 
         var existingKeys = ctx.Tafs
             .Where(t => stations.Contains(t.StationIcao) && t.IssuanceUtc >= minTime)

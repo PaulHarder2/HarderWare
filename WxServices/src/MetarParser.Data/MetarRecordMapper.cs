@@ -26,13 +26,13 @@ public static class MetarRecordMapper
     {
         var record = new MetarRecord
         {
-            ReportType       = report.ReportType,
-            StationIcao      = report.Station,
-            ObservationUtc   = InferObservationUtc(report.Day, report.Hour, report.Minute, DateTime.UtcNow),
-            IsAuto           = report.IsAuto,
-            IsCorrection     = report.IsCorrection,
-            RawReport        = report.Raw,
-            ReceivedUtc      = DateTime.UtcNow,
+            ReportType = report.ReportType,
+            StationIcao = report.Station,
+            ObservationUtc = InferObservationUtc(report.Day, report.Hour, report.Minute, DateTime.UtcNow),
+            IsAuto = report.IsAuto,
+            IsCorrection = report.IsCorrection,
+            RawReport = report.Raw,
+            ReceivedUtc = DateTime.UtcNow,
         };
 
         MapWind(report, record);
@@ -60,13 +60,13 @@ public static class MetarRecordMapper
     private static void MapWind(MetarReport report, MetarRecord record)
     {
         if (report.Wind is not { } w) return;
-        record.WindDirection   = w.Direction;
-        record.WindIsVariable  = w.IsVariable;
-        record.WindSpeed       = w.Speed;
-        record.WindGust        = w.Gust;
-        record.WindUnit        = w.Unit;
+        record.WindDirection = w.Direction;
+        record.WindIsVariable = w.IsVariable;
+        record.WindSpeed = w.Speed;
+        record.WindGust = w.Gust;
+        record.WindUnit = w.Unit;
         record.WindVariableFrom = w.VariableFrom;
-        record.WindVariableTo   = w.VariableTo;
+        record.WindVariableTo = w.VariableTo;
     }
 
     /// <summary>
@@ -79,10 +79,10 @@ public static class MetarRecordMapper
     private static void MapVisibility(MetarReport report, MetarRecord record)
     {
         if (report.Visibility is not { } v) return;
-        record.VisibilityCavok         = v.Cavok;
-        record.VisibilityM        = v.DistanceMeters;
-        record.VisibilityStatuteMiles  = v.DistanceStatuteMiles;
-        record.VisibilityLessThan      = v.LessThan;
+        record.VisibilityCavok = v.Cavok;
+        record.VisibilityM = v.DistanceMeters;
+        record.VisibilityStatuteMiles = v.DistanceStatuteMiles;
+        record.VisibilityLessThan = v.LessThan;
     }
 
     /// <summary>
@@ -98,7 +98,7 @@ public static class MetarRecordMapper
     {
         if (report.Temperature is not { } t) return;
         record.AirTemperatureCelsius = t.Air;
-        record.DewPointCelsius       = double.IsNaN(t.DewPoint) ? null : t.DewPoint;
+        record.DewPointCelsius = double.IsNaN(t.DewPoint) ? null : t.DewPoint;
     }
 
     /// <summary>
@@ -112,7 +112,7 @@ public static class MetarRecordMapper
     {
         if (report.Altimeter is not { } a) return;
         record.AltimeterValue = a.Value;
-        record.AltimeterUnit  = a.Unit;
+        record.AltimeterUnit = a.Unit;
     }
 
     /// <summary>
@@ -135,11 +135,11 @@ public static class MetarRecordMapper
             var sky = report.Sky[i];
             record.SkyConditions.Add(new MetarSkyCondition
             {
-                Cover               = sky.Cover,
-                HeightFeet          = sky.HeightFeet,
-                CloudType           = sky.CloudType,
+                Cover = sky.Cover,
+                HeightFeet = sky.HeightFeet,
+                CloudType = sky.CloudType,
                 IsVerticalVisibility = sky.IsVerticalVisibility,
-                SortOrder           = i,
+                SortOrder = i,
             });
         }
     }
@@ -171,14 +171,14 @@ public static class MetarRecordMapper
             record.WeatherPhenomena.Add(new MetarWeatherPhenomenon
             {
                 PhenomenonKind = kind,
-                Intensity      = wx.Intensity,
-                Descriptor     = wx.Descriptor,
-                Precipitation  = wx.Precipitation.Count > 0
+                Intensity = wx.Intensity,
+                Descriptor = wx.Descriptor,
+                Precipitation = wx.Precipitation.Count > 0
                                      ? string.Join(",", wx.Precipitation)
                                      : null,
-                Obscuration    = wx.Obscuration,
+                Obscuration = wx.Obscuration,
                 OtherPhenomenon = wx.Other,
-                SortOrder      = i,
+                SortOrder = i,
             });
         }
     }
@@ -201,13 +201,13 @@ public static class MetarRecordMapper
         {
             record.RunwayVisualRanges.Add(new MetarRunwayVisualRange
             {
-                Runway        = rvr.Runway,
-                MeanMeters    = rvr.MeanMeters,
-                MinMeters     = rvr.MinMeters,
-                MaxMeters     = rvr.MaxMeters,
-                BelowMinimum  = rvr.BelowMinimum,
-                AboveMaximum  = rvr.AboveMaximum,
-                Trend         = rvr.Trend?.ToString(),
+                Runway = rvr.Runway,
+                MeanMeters = rvr.MeanMeters,
+                MinMeters = rvr.MinMeters,
+                MaxMeters = rvr.MaxMeters,
+                BelowMinimum = rvr.BelowMinimum,
+                AboveMaximum = rvr.AboveMaximum,
+                Trend = rvr.Trend?.ToString(),
             });
         }
     }
@@ -236,7 +236,7 @@ public static class MetarRecordMapper
     /// </returns>
     internal static DateTime InferObservationUtc(int day, int hour, int minute, DateTime referenceTime)
     {
-        int year  = referenceTime.Year;
+        int year = referenceTime.Year;
         int month = referenceTime.Month;
 
         if (day > referenceTime.Day)

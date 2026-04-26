@@ -16,11 +16,15 @@
 // Stop:      sc.exe stop WxVisSvc
 
 using MetarParser.Data;
+
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.FileProviders;
+
 using OpenTelemetry.Metrics;
+
 using WxServices.Common;
 using WxServices.Logging;
+
 using WxVis.Svc;
 
 var installRoot = WxPaths.ReadInstallRoot();

@@ -17,8 +17,8 @@ public static class LogScanner
     private static readonly Dictionary<string, int> SeverityRank = new(StringComparer.OrdinalIgnoreCase)
     {
         ["DEBUG"] = 0,
-        ["INFO"]  = 1,
-        ["WARN"]  = 2,
+        ["INFO"] = 1,
+        ["WARN"] = 2,
         ["ERROR"] = 3,
         ["FATAL"] = 4,
     };
@@ -36,9 +36,9 @@ public static class LogScanner
     /// <paramref name="since"/> value if no new entries were found.
     /// </param>
     public static IReadOnlyList<LogEntry> Scan(
-        string    filePath,
+        string filePath,
         DateTime? since,
-        string    minSeverity,
+        string minSeverity,
         out DateTime? latestTimestamp)
     {
         latestTimestamp = since;
@@ -46,8 +46,8 @@ public static class LogScanner
         if (!File.Exists(filePath))
             return [];
 
-        var minRank   = SeverityRank.GetValueOrDefault(minSeverity.Trim(), 3);
-        var entries   = ParseEntries(filePath);
+        var minRank = SeverityRank.GetValueOrDefault(minSeverity.Trim(), 3);
+        var entries = ParseEntries(filePath);
 
         // Update the latest timestamp seen regardless of severity filter.
         if (entries.Count > 0)
@@ -69,14 +69,14 @@ public static class LogScanner
     {
         var entries = new List<LogEntry>();
 
-        List<string>? currentLines   = null;
-        DateTime      currentTs      = default;
-        string        currentSev     = "";
+        List<string>? currentLines = null;
+        DateTime currentTs = default;
+        string currentSev = "";
 
         try
         {
             // Open with ReadWrite share so we don't conflict with log4net's MinimalLock.
-            using var fs     = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
             using var reader = new StreamReader(fs);
 
             string? line;
@@ -88,8 +88,8 @@ public static class LogScanner
                     if (currentLines is not null)
                         entries.Add(new LogEntry(currentTs, currentSev, string.Join(Environment.NewLine, currentLines)));
 
-                    currentTs    = ts;
-                    currentSev   = sev;
+                    currentTs = ts;
+                    currentSev = sev;
                     currentLines = [line];
                 }
                 else
@@ -118,7 +118,7 @@ public static class LogScanner
     private static bool TryParseHeader(string line, out DateTime timestamp, out string severity)
     {
         timestamp = default;
-        severity  = "";
+        severity = "";
 
         // Minimum: 23 chars timestamp + 1 space + 5 severity = 29 chars.
         if (line.Length < 29) return false;

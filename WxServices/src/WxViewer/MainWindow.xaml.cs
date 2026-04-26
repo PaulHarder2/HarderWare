@@ -6,6 +6,7 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Threading;
+
 using WxServices.Common;
 using WxServices.Logging;
 
@@ -16,7 +17,7 @@ public partial class MainWindow : Window
     private readonly MainViewModel _vm;
     private readonly DispatcherTimer _qualityTimer;
 
-    private Point  _panStart;
+    private Point _panStart;
     private double _panStartTx, _panStartTy;
 
     // WX-46 tab-switch focus guard.  Set by TabHeader_PreviewMouseLeftButtonDown
@@ -32,10 +33,10 @@ public partial class MainWindow : Window
         VersionRun.Text = $"  {WxPaths.ProductVersion}";
         _vm = viewModel;
         DataContext = _vm;
-        _vm.ScrollToItem      += OnScrollToItem;
+        _vm.ScrollToItem += OnScrollToItem;
         _vm.RecipientNotFound += OnRecipientNotFound;
         _vm.ZoomResetRequested += OnZoomResetRequested;
-        StateChanged          += OnStateChanged;
+        StateChanged += OnStateChanged;
 
         // Timer to restore high-quality scaling after zoom/pan interaction stops.
         _qualityTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
@@ -58,14 +59,14 @@ public partial class MainWindow : Window
         {
             var wa = SystemParameters.WorkArea;
             MaxHeight = wa.Height;
-            MaxWidth  = wa.Width;
-            Left      = wa.Left;
-            Top       = wa.Top;
+            MaxWidth = wa.Width;
+            Left = wa.Left;
+            Top = wa.Top;
         }
         else
         {
             MaxHeight = double.PositiveInfinity;
-            MaxWidth  = double.PositiveInfinity;
+            MaxWidth = double.PositiveInfinity;
         }
     }
 
@@ -184,17 +185,17 @@ public partial class MainWindow : Window
     private IntPtr KeypadZoomHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
         const int WM_KEYDOWN = 0x0100;
-        const int VK_UP      = 0x26;
-        const int VK_DOWN    = 0x28;
+        const int VK_UP = 0x26;
+        const int VK_DOWN = 0x28;
         const int VK_NUMPAD8 = 0x68;
         const int VK_NUMPAD2 = 0x62;
 
         if (msg != WM_KEYDOWN) return IntPtr.Zero;
 
-        int  vk       = wParam.ToInt32();
+        int vk = wParam.ToInt32();
         bool extended = ((lParam.ToInt64() >> 24) & 0x01) != 0;
 
-        bool zoomIn  = vk == VK_NUMPAD8 || (vk == VK_UP   && !extended);
+        bool zoomIn = vk == VK_NUMPAD8 || (vk == VK_UP && !extended);
         bool zoomOut = vk == VK_NUMPAD2 || (vk == VK_DOWN && !extended);
         if (!zoomIn && !zoomOut) return IntPtr.Zero;
 
@@ -257,8 +258,8 @@ public partial class MainWindow : Window
 
         scale.ScaleX = newScale;
         scale.ScaleY = newScale;
-        translate.X  = mousePos.X - rx * newScale;
-        translate.Y  = mousePos.Y - ry * newScale;
+        translate.X = mousePos.X - rx * newScale;
+        translate.Y = mousePos.Y - ry * newScale;
 
         ClampTranslation(scale, translate, viewport);
 
@@ -279,7 +280,7 @@ public partial class MainWindow : Window
         // threshold; because the checks are direction-aware there is no
         // ping-pong even though the up and down thresholds coincide.
         double levelFactor = 1 << (currentZoom - 1);  // 1, 2, 4, ...
-        double upThreshold   = 3.0 * levelFactor;
+        double upThreshold = 3.0 * levelFactor;
         double downThreshold = 3.0 * levelFactor / 2.0;  // = up threshold of level below
 
         if (factor > 1.0 && scale.ScaleX >= upThreshold)
@@ -331,7 +332,7 @@ public partial class MainWindow : Window
         }
 
         var viewport = (Border)sender;
-        _panStart   = e.GetPosition(viewport);
+        _panStart = e.GetPosition(viewport);
         var (_, translate, _) = GetTransforms(sender);
         _panStartTx = translate.X;
         _panStartTy = translate.Y;
@@ -352,7 +353,7 @@ public partial class MainWindow : Window
         if (!viewport.IsMouseCaptured) return;
         BeginFastScaling();
 
-        var pos   = e.GetPosition(viewport);
+        var pos = e.GetPosition(viewport);
         double dx = pos.X - _panStart.X;
         double dy = pos.Y - _panStart.Y;
 
@@ -383,15 +384,15 @@ public partial class MainWindow : Window
         {
             // Always reset the requested pane's transforms.
             AnalysisScale.ScaleX = 1; AnalysisScale.ScaleY = 1;
-            AnalysisTranslate.X = 0;  AnalysisTranslate.Y = 0;
+            AnalysisTranslate.X = 0; AnalysisTranslate.Y = 0;
             ForecastScale.ScaleX = 1; ForecastScale.ScaleY = 1;
-            ForecastTranslate.X = 0;  ForecastTranslate.Y = 0;
+            ForecastTranslate.X = 0; ForecastTranslate.Y = 0;
 
             // If linked, reset the other pane's zoom level too.
             if (LinkPanesToggle.IsChecked == true)
             {
                 if (pane == "Analysis") _vm.ResetForecastZoom();
-                else                    _vm.ResetAnalysisZoom();
+                else _vm.ResetAnalysisZoom();
             }
         }
         finally { _inZoomReset = false; }
@@ -423,7 +424,7 @@ public partial class MainWindow : Window
     protected override void OnClosed(EventArgs e)
     {
         _qualityTimer.Stop();
-        _vm.ScrollToItem      -= OnScrollToItem;
+        _vm.ScrollToItem -= OnScrollToItem;
         _vm.RecipientNotFound -= OnRecipientNotFound;
         _vm.ZoomResetRequested -= OnZoomResetRequested;
         base.OnClosed(e);
@@ -512,10 +513,10 @@ public partial class MainWindow : Window
 
         switch (e.Key)
         {
-            case Key.Right: if (ctrl) _vm.JumpForecastToEnd();     else _vm.StepForecastForward(); e.Handled = true; break;
-            case Key.Left:  if (ctrl) _vm.JumpForecastToStart();   else _vm.StepForecastBack();    e.Handled = true; break;
-            case Key.Up:    if (ctrl) _vm.JumpAnalysisToNewest();  else _vm.StepAnalysisForward(); e.Handled = true; break;
-            case Key.Down:  if (ctrl) _vm.JumpAnalysisToOldest();  else _vm.StepAnalysisBack();    e.Handled = true; break;
+            case Key.Right: if (ctrl) _vm.JumpForecastToEnd(); else _vm.StepForecastForward(); e.Handled = true; break;
+            case Key.Left: if (ctrl) _vm.JumpForecastToStart(); else _vm.StepForecastBack(); e.Handled = true; break;
+            case Key.Up: if (ctrl) _vm.JumpAnalysisToNewest(); else _vm.StepAnalysisForward(); e.Handled = true; break;
+            case Key.Down: if (ctrl) _vm.JumpAnalysisToOldest(); else _vm.StepAnalysisBack(); e.Handled = true; break;
         }
     }
 }

@@ -8,11 +8,11 @@ namespace WxServices.Common;
 /// </summary>
 public class SmtpConfig
 {
-    public string  Host        { get; set; } = "smtp.gmail.com";
-    public int     Port        { get; set; } = 587;
-    public string? Username    { get; set; }
+    public string Host { get; set; } = "smtp.gmail.com";
+    public int Port { get; set; } = 587;
+    public string? Username { get; set; }
 
     /// <summary>App password or SMTP password — stored in the GlobalSettings database row.</summary>
-    public string? Password    { get; set; }
+    public string? Password { get; set; }
     public string? FromAddress { get; set; }
 }

@@ -1,5 +1,7 @@
 using System.Diagnostics;
+
 using Microsoft.Data.SqlClient;
+
 using WxServices.Logging;
 
 namespace WxServices.Common;
@@ -106,7 +108,7 @@ public static class PrerequisiteChecker
         if (!File.Exists(pythonExePath))
             return new CheckResult(false, $"Python not found: {pythonExePath}");
 
-        var condaEnvDir  = Path.GetDirectoryName(pythonExePath)!;
+        var condaEnvDir = Path.GetDirectoryName(pythonExePath)!;
         var extraEnv = new Dictionary<string, string>
         {
             ["PATH"] = string.Join(';',
@@ -144,12 +146,12 @@ public static class PrerequisiteChecker
     [Flags]
     public enum Requires
     {
-        None         = 0,
-        SqlServer    = 1 << 0,
-        Wgrib2       = 1 << 2,
-        CondaPython  = 1 << 3,
+        None = 0,
+        SqlServer = 1 << 0,
+        Wgrib2 = 1 << 2,
+        CondaPython = 1 << 3,
         WxVisPackages = 1 << 4,
-        Docker       = 1 << 5,
+        Docker = 1 << 5,
     }
 
     /// <summary>
@@ -207,12 +209,12 @@ public static class PrerequisiteChecker
         {
             var psi = new ProcessStartInfo
             {
-                FileName               = fileName,
-                Arguments              = arguments,
+                FileName = fileName,
+                Arguments = arguments,
                 RedirectStandardOutput = true,
-                RedirectStandardError  = true,
-                UseShellExecute        = false,
-                CreateNoWindow         = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
             };
 
             if (env is not null)

@@ -4,7 +4,9 @@ using System.IO;
 using System.Runtime.CompilerServices;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+
 using Microsoft.Data.SqlClient;
+
 using WxServices.Logging;
 
 namespace WxViewer;
@@ -15,40 +17,40 @@ namespace WxViewer;
 /// </summary>
 public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 {
-    private readonly MapFileScanner  _scanner;
+    private readonly MapFileScanner _scanner;
     private readonly DispatcherTimer _analysisTimer;
     private readonly DispatcherTimer _forecastTimer;
 
     // ── Analysis backing fields ───────────────────────────────────────────────
 
     private AnalysisLabel? _selectedAnalysisLabel;
-    private int            _analysisFrameIndex;
-    private int            _maxAnalysisFrameIndex;
-    private BitmapImage?   _analysisImage;
-    private string         _analysisFrameLabel = "";
-    private bool           _isAnalysisPlaying;
-    private SpeedOption    _selectedAnalysisSpeed;
-    private int            _analysisCurrentZoom = 1;
+    private int _analysisFrameIndex;
+    private int _maxAnalysisFrameIndex;
+    private BitmapImage? _analysisImage;
+    private string _analysisFrameLabel = "";
+    private bool _isAnalysisPlaying;
+    private SpeedOption _selectedAnalysisSpeed;
+    private int _analysisCurrentZoom = 1;
     private IReadOnlyDictionary<int, string>? _analysisZoomPaths;
 
     // ── Meteogram backing fields ──────────────────────────────────────────────
 
-    private MeteogramRun?      _selectedMeteogramRun;
-    private RecipientSummary?  _selectedRecipient;
-    private MeteogramItem?     _highlightedItem;
-    private DispatcherTimer?   _highlightTimer;
-    private readonly string    _connectionString;
+    private MeteogramRun? _selectedMeteogramRun;
+    private RecipientSummary? _selectedRecipient;
+    private MeteogramItem? _highlightedItem;
+    private DispatcherTimer? _highlightTimer;
+    private readonly string _connectionString;
 
     // ── Forecast backing fields ───────────────────────────────────────────────
 
-    private ForecastRun?   _selectedForecastRun;
-    private int            _forecastFrameIndex;
-    private int            _maxForecastFrameIndex;
-    private BitmapImage?   _forecastImage;
-    private string         _forecastFrameLabel = "";
-    private bool           _isForecastPlaying;
-    private SpeedOption    _selectedForecastSpeed;
-    private int            _forecastCurrentZoom = 1;
+    private ForecastRun? _selectedForecastRun;
+    private int _forecastFrameIndex;
+    private int _maxForecastFrameIndex;
+    private BitmapImage? _forecastImage;
+    private string _forecastFrameLabel = "";
+    private bool _isForecastPlaying;
+    private SpeedOption _selectedForecastSpeed;
+    private int _forecastCurrentZoom = 1;
     private IReadOnlyDictionary<int, string>? _forecastZoomPaths;
 
     // ── Shared ────────────────────────────────────────────────────────────────
@@ -77,16 +79,16 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 
     // ── Commands ──────────────────────────────────────────────────────────────
 
-    public RelayCommand AnalysisPlayPauseCommand   { get; }
+    public RelayCommand AnalysisPlayPauseCommand { get; }
     public RelayCommand AnalysisStepForwardCommand { get; }
-    public RelayCommand AnalysisStepBackCommand    { get; }
+    public RelayCommand AnalysisStepBackCommand { get; }
 
-    public RelayCommand ForecastPlayPauseCommand   { get; }
+    public RelayCommand ForecastPlayPauseCommand { get; }
     public RelayCommand ForecastStepForwardCommand { get; }
-    public RelayCommand ForecastStepBackCommand    { get; }
+    public RelayCommand ForecastStepBackCommand { get; }
 
-    public RelayCommand ResetAnalysisZoomCommand  { get; }
-    public RelayCommand ResetForecastZoomCommand  { get; }
+    public RelayCommand ResetAnalysisZoomCommand { get; }
+    public RelayCommand ResetForecastZoomCommand { get; }
 
     // ── Events ────────────────────────────────────────────────────────────────
 
@@ -111,28 +113,28 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     public MainViewModel(string outputDir, string connectionString, Dispatcher dispatcher)
     {
         _connectionString = connectionString;
-        SpeedOptions.Add(new SpeedOption("Slow",   1500));
-        SpeedOptions.Add(new SpeedOption("Medium",  800));
-        SpeedOptions.Add(new SpeedOption("Fast",    300));
+        SpeedOptions.Add(new SpeedOption("Slow", 1500));
+        SpeedOptions.Add(new SpeedOption("Medium", 800));
+        SpeedOptions.Add(new SpeedOption("Fast", 300));
         _selectedAnalysisSpeed = SpeedOptions[1];
         _selectedForecastSpeed = SpeedOptions[1];
 
-        _analysisTimer        = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(_selectedAnalysisSpeed.IntervalMs) };
-        _analysisTimer.Tick  += OnAnalysisTimerTick;
+        _analysisTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(_selectedAnalysisSpeed.IntervalMs) };
+        _analysisTimer.Tick += OnAnalysisTimerTick;
 
-        _forecastTimer        = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(_selectedForecastSpeed.IntervalMs) };
-        _forecastTimer.Tick  += OnForecastTimerTick;
+        _forecastTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(_selectedForecastSpeed.IntervalMs) };
+        _forecastTimer.Tick += OnForecastTimerTick;
 
-        AnalysisPlayPauseCommand   = new RelayCommand(ToggleAnalysisPlay,   () => AnalysisLabels.Count > 1);
-        AnalysisStepForwardCommand = new RelayCommand(StepAnalysisForward,  () => AnalysisLabels.Count > 1);
-        AnalysisStepBackCommand    = new RelayCommand(StepAnalysisBack,     () => AnalysisLabels.Count > 1);
+        AnalysisPlayPauseCommand = new RelayCommand(ToggleAnalysisPlay, () => AnalysisLabels.Count > 1);
+        AnalysisStepForwardCommand = new RelayCommand(StepAnalysisForward, () => AnalysisLabels.Count > 1);
+        AnalysisStepBackCommand = new RelayCommand(StepAnalysisBack, () => AnalysisLabels.Count > 1);
 
-        ForecastPlayPauseCommand   = new RelayCommand(ToggleForecastPlay,   () => _selectedForecastRun?.Frames.Count > 1);
-        ForecastStepForwardCommand = new RelayCommand(StepForecastForward,  () => _selectedForecastRun?.Frames.Count > 1);
-        ForecastStepBackCommand    = new RelayCommand(StepForecastBack,     () => _selectedForecastRun?.Frames.Count > 1);
+        ForecastPlayPauseCommand = new RelayCommand(ToggleForecastPlay, () => _selectedForecastRun?.Frames.Count > 1);
+        ForecastStepForwardCommand = new RelayCommand(StepForecastForward, () => _selectedForecastRun?.Frames.Count > 1);
+        ForecastStepBackCommand = new RelayCommand(StepForecastBack, () => _selectedForecastRun?.Frames.Count > 1);
 
-        ResetAnalysisZoomCommand  = new RelayCommand(ResetAnalysisZoom);
-        ResetForecastZoomCommand  = new RelayCommand(ResetForecastZoom);
+        ResetAnalysisZoomCommand = new RelayCommand(ResetAnalysisZoom);
+        ResetForecastZoomCommand = new RelayCommand(ResetForecastZoom);
 
         _scanner = new MapFileScanner(outputDir, dispatcher);
         _scanner.DirectoryChanged += OnDirectoryChanged;
@@ -220,8 +222,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         set
         {
             if (_selectedAnalysisSpeed == value) return;
-            _selectedAnalysisSpeed    = value;
-            _analysisTimer.Interval   = TimeSpan.FromMilliseconds(value.IntervalMs);
+            _selectedAnalysisSpeed = value;
+            _analysisTimer.Interval = TimeSpan.FromMilliseconds(value.IntervalMs);
             OnPropertyChanged();
         }
     }
@@ -305,8 +307,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         set
         {
             if (_selectedForecastSpeed == value) return;
-            _selectedForecastSpeed   = value;
-            _forecastTimer.Interval  = TimeSpan.FromMilliseconds(value.IntervalMs);
+            _selectedForecastSpeed = value;
+            _forecastTimer.Interval = TimeSpan.FromMilliseconds(value.IntervalMs);
             OnPropertyChanged();
         }
     }
@@ -341,9 +343,9 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             if (value is null) return;
 
             var item = MeteogramItems.FirstOrDefault(m =>
-                string.Equals(m.Icao,     value.FirstIcao, StringComparison.OrdinalIgnoreCase)
-             && string.Equals(m.TempUnit, value.TempUnit,  StringComparison.OrdinalIgnoreCase)
-             && string.Equals(m.Timezone, value.Timezone,  StringComparison.OrdinalIgnoreCase));
+                string.Equals(m.Icao, value.FirstIcao, StringComparison.OrdinalIgnoreCase)
+             && string.Equals(m.TempUnit, value.TempUnit, StringComparison.OrdinalIgnoreCase)
+             && string.Equals(m.Timezone, value.Timezone, StringComparison.OrdinalIgnoreCase));
 
             if (item is not null)
             {
@@ -372,9 +374,9 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         foreach (var item in _selectedMeteogramRun.Items)
         {
             item.Recipients = Recipients
-                .Where(r => string.Equals(r.FirstIcao, item.Icao,     StringComparison.OrdinalIgnoreCase)
-                         && string.Equals(r.TempUnit,  item.TempUnit, StringComparison.OrdinalIgnoreCase)
-                         && string.Equals(r.Timezone,  item.Timezone, StringComparison.OrdinalIgnoreCase))
+                .Where(r => string.Equals(r.FirstIcao, item.Icao, StringComparison.OrdinalIgnoreCase)
+                         && string.Equals(r.TempUnit, item.TempUnit, StringComparison.OrdinalIgnoreCase)
+                         && string.Equals(r.Timezone, item.Timezone, StringComparison.OrdinalIgnoreCase))
                 .ToList();
             MeteogramItems.Add(item);
         }
@@ -397,7 +399,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             _highlightedItem.IsHighlighted = false;
 
         item.IsHighlighted = true;
-        _highlightedItem   = item;
+        _highlightedItem = item;
         _highlightTimer.Start();
     }
 
@@ -425,12 +427,12 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
             {
-                var id        = reader.GetString(0);
-                var name      = reader.GetString(1);
-                var lang      = reader.IsDBNull(2) ? "English" : reader.GetString(2);
-                var icaoRaw   = reader.IsDBNull(3) ? null      : reader.GetString(3);
-                var tempUnit  = reader.IsDBNull(4) ? "F"       : reader.GetString(4);
-                var timezone  = reader.IsDBNull(5) ? "UTC"     : reader.GetString(5);
+                var id = reader.GetString(0);
+                var name = reader.GetString(1);
+                var lang = reader.IsDBNull(2) ? "English" : reader.GetString(2);
+                var icaoRaw = reader.IsDBNull(3) ? null : reader.GetString(3);
+                var tempUnit = reader.IsDBNull(4) ? "F" : reader.GetString(4);
+                var timezone = reader.IsDBNull(5) ? "UTC" : reader.GetString(5);
                 var firstIcao = icaoRaw?.Split(',')[0].Trim();
                 Recipients.Add(new RecipientSummary(id, name, lang, firstIcao, tempUnit, timezone));
             }
@@ -455,8 +457,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     /// </summary>
     public void Refresh()
     {
-        var prevLabelName    = _selectedAnalysisLabel?.Name;
-        var prevRunUtc       = _selectedForecastRun?.ModelRunUtc;
+        var prevLabelName = _selectedAnalysisLabel?.Name;
+        var prevRunUtc = _selectedForecastRun?.ModelRunUtc;
         var prevMeteogramUtc = _selectedMeteogramRun?.ModelRunUtc;
 
         var analysisList = _scanner.ScanAnalysis();
@@ -639,7 +641,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         var frame = CurrentAnalysisFrame;
         _analysisZoomPaths = frame?.ZoomPaths;
         var path = ResolveZoomPath(_analysisZoomPaths, _analysisCurrentZoom);
-        AnalysisImage      = LoadBitmap(path);
+        AnalysisImage = LoadBitmap(path);
         AnalysisFrameLabel = frame is null ? "" : $"{frame.ObsUtc:yyyy-MM-dd HH}Z";
         if (path != _lastAnalysisPath)
         {
@@ -658,7 +660,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         var frame = CurrentForecastFrame;
         _forecastZoomPaths = frame?.ZoomPaths;
         var path = ResolveZoomPath(_forecastZoomPaths, _forecastCurrentZoom);
-        ForecastImage      = LoadBitmap(path);
+        ForecastImage = LoadBitmap(path);
         ForecastFrameLabel = frame?.HourLabel ?? "";
         if (path != _lastForecastPath)
         {
@@ -776,8 +778,8 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         {
             var bmp = new BitmapImage();
             bmp.BeginInit();
-            bmp.UriSource     = new Uri(path, UriKind.Absolute);
-            bmp.CacheOption   = BitmapCacheOption.OnLoad;
+            bmp.UriSource = new Uri(path, UriKind.Absolute);
+            bmp.CacheOption = BitmapCacheOption.OnLoad;
             bmp.CreateOptions = BitmapCreateOptions.IgnoreImageCache;
             bmp.EndInit();
             bmp.Freeze();

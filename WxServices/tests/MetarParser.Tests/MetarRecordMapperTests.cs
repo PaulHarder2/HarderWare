@@ -1,5 +1,6 @@
 using MetarParser.Data;
 using MetarParser.Data.Entities;
+
 using Xunit;
 
 namespace MetarParser.Tests;
@@ -56,9 +57,9 @@ public class MetarRecordMapperTests
         var report = MetarParser.Parse("METAR EGLL 221220Z 27015G25KT 9999 FEW030 10/05 Q1018");
         var entity = MetarRecordMapper.ToEntity(report);
 
-        Assert.Equal(270,  entity.WindDirection);
-        Assert.Equal(15,   entity.WindSpeed);
-        Assert.Equal(25,   entity.WindGust);
+        Assert.Equal(270, entity.WindDirection);
+        Assert.Equal(15, entity.WindSpeed);
+        Assert.Equal(25, entity.WindGust);
         Assert.Equal("KT", entity.WindUnit);
         Assert.False(entity.WindIsVariable);
     }
@@ -81,15 +82,17 @@ public class MetarRecordMapperTests
         // depending on parser handling of the '//' token.
         var report = new MetarReport
         {
-            Raw        = "",
+            Raw = "",
             ReportType = "METAR",
-            Station    = "EGLL",
-            Day = 22, Hour = 12, Minute = 20,
+            Station = "EGLL",
+            Day = 22,
+            Hour = 12,
+            Minute = 20,
             Temperature = new Temperature { Air = 10, DewPoint = double.NaN },
         };
         var entity = MetarRecordMapper.ToEntity(report);
 
-        Assert.Equal(10,  entity.AirTemperatureCelsius);
+        Assert.Equal(10, entity.AirTemperatureCelsius);
         Assert.Null(entity.DewPointCelsius);
     }
 
@@ -113,11 +116,11 @@ public class MetarRecordMapperTests
             "METAR EGLL 221220Z 27015KT 0400 R28L/0600N R28R/0700U FG OVC001 10/09 Q1018");
         var entity = MetarRecordMapper.ToEntity(report);
 
-        Assert.Equal(2,     entity.RunwayVisualRanges.Count);
+        Assert.Equal(2, entity.RunwayVisualRanges.Count);
         Assert.Equal("28L", entity.RunwayVisualRanges[0].Runway);
-        Assert.Equal(600,   entity.RunwayVisualRanges[0].MeanMeters);
+        Assert.Equal(600, entity.RunwayVisualRanges[0].MeanMeters);
         Assert.Equal("28R", entity.RunwayVisualRanges[1].Runway);
-        Assert.Equal(700,   entity.RunwayVisualRanges[1].MeanMeters);
+        Assert.Equal(700, entity.RunwayVisualRanges[1].MeanMeters);
     }
 
     [Fact]
@@ -127,7 +130,7 @@ public class MetarRecordMapperTests
         var entity = MetarRecordMapper.ToEntity(report);
 
         Assert.Equal("METAR", entity.ReportType);
-        Assert.Equal("EGLL",  entity.StationIcao);
+        Assert.Equal("EGLL", entity.StationIcao);
     }
 
     [Fact]

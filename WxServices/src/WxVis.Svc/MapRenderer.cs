@@ -1,4 +1,5 @@
 using System.Diagnostics;
+
 using WxServices.Logging;
 
 namespace WxVis.Svc;
@@ -46,7 +47,7 @@ public static class MapRenderer
         // Augment PATH with the conda environment directories so that the Python
         // executable can locate its dependent DLLs when launched from a Windows
         // service (which runs with a minimal environment and no conda activation).
-        var condaEnvDir  = Path.GetDirectoryName(pythonExe)!;
+        var condaEnvDir = Path.GetDirectoryName(pythonExe)!;
         var existingPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
         var augmentedPath = string.Join(';',
             condaEnvDir,
@@ -56,13 +57,13 @@ public static class MapRenderer
 
         var psi = new ProcessStartInfo
         {
-            FileName               = pythonExe,
-            Arguments              = $"\"{scriptPath}\" {args}",
-            WorkingDirectory       = scriptDir,
+            FileName = pythonExe,
+            Arguments = $"\"{scriptPath}\" {args}",
+            WorkingDirectory = scriptDir,
             RedirectStandardOutput = true,
-            RedirectStandardError  = true,
-            UseShellExecute        = false,
-            CreateNoWindow         = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
         };
         psi.Environment["PATH"] = augmentedPath;
 

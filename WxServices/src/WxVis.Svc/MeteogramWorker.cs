@@ -1,6 +1,9 @@
 using System.Text.Json;
+
 using MetarParser.Data;
+
 using Microsoft.EntityFrameworkCore;
+
 using WxServices.Common;
 using WxServices.Logging;
 
@@ -27,8 +30,8 @@ namespace WxVis.Svc;
 /// </remarks>
 public sealed class MeteogramWorker : BackgroundService
 {
-    private readonly IConfiguration                        _config;
-    private readonly DbContextOptions<WeatherDataContext>  _dbOptions;
+    private readonly IConfiguration _config;
+    private readonly DbContextOptions<WeatherDataContext> _dbOptions;
     private Dictionary<string, string> _pythonEnv = new();
 
     // Model runs for which rendering is complete (all recipient locations done).
@@ -41,7 +44,7 @@ public sealed class MeteogramWorker : BackgroundService
         IConfiguration config,
         DbContextOptions<WeatherDataContext> dbOptions)
     {
-        _config    = config;
+        _config = config;
         _dbOptions = dbOptions;
     }
 
@@ -103,7 +106,7 @@ public sealed class MeteogramWorker : BackgroundService
             _completedRuns.RemoveWhere(r => r < latestCompleteRun);
 
             var recipientRows = await ctx.Recipients
-                .Where(r => r.Latitude  != null
+                .Where(r => r.Latitude != null
                          && r.Longitude != null
                          && r.MetarIcao != null)
                 .Select(r => new
@@ -112,19 +115,19 @@ public sealed class MeteogramWorker : BackgroundService
                     r.LocalityName,
                     r.TempUnit,
                     r.Timezone,
-                    Latitude  = r.Latitude!.Value,
+                    Latitude = r.Latitude!.Value,
                     Longitude = r.Longitude!.Value,
                 })
                 .ToListAsync(ct);
 
             locations = recipientRows.Select(r => new RecipientLocation
             {
-                Icao         = r.MetarIcao!,
+                Icao = r.MetarIcao!,
                 LocalityName = r.LocalityName ?? FirstIcao(r.MetarIcao!),
-                TempUnit     = r.TempUnit,
-                Timezone     = r.Timezone,
-                Latitude     = r.Latitude,
-                Longitude    = r.Longitude,
+                TempUnit = r.TempUnit,
+                Timezone = r.Timezone,
+                Latitude = r.Latitude,
+                Longitude = r.Longitude,
             }).ToList();
         }
 
@@ -147,26 +150,26 @@ public sealed class MeteogramWorker : BackgroundService
         Logger.Info($"MeteogramWorker: rendering meteograms for run {latestCompleteRun:yyyy-MM-dd HH}Z — " +
                     $"{unique.Count} location(s).");
 
-        var runTag      = latestCompleteRun.ToString("yyyyMMdd_HH");
+        var runTag = latestCompleteRun.ToString("yyyyMMdd_HH");
         var manifestEntries = new List<ManifestEntry>();
-        var allOk       = true;
+        var allOk = true;
 
         foreach (var loc in unique)
         {
             if (ct.IsCancellationRequested) break;
 
             // Sanitize timezone for use in filenames: "America/Chicago" → "America-Chicago"
-            var tzSafe      = loc.Timezone.Replace('/', '-');
-            var unitTag     = loc.TempUnit.Equals("C", StringComparison.OrdinalIgnoreCase) ? "C" : "F";
-            var fileAbbrev  = $"meteogram_{runTag}_{loc.Icao}_{tzSafe}_{unitTag}_abbrev.png";
-            var fileFull    = $"meteogram_{runTag}_{loc.Icao}_{tzSafe}_{unitTag}_full.png";
-            var pathAbbrev  = Path.Combine(cfg.OutputDir, fileAbbrev);
-            var pathFull    = Path.Combine(cfg.OutputDir, fileFull);
+            var tzSafe = loc.Timezone.Replace('/', '-');
+            var unitTag = loc.TempUnit.Equals("C", StringComparison.OrdinalIgnoreCase) ? "C" : "F";
+            var fileAbbrev = $"meteogram_{runTag}_{loc.Icao}_{tzSafe}_{unitTag}_abbrev.png";
+            var fileFull = $"meteogram_{runTag}_{loc.Icao}_{tzSafe}_{unitTag}_full.png";
+            var pathAbbrev = Path.Combine(cfg.OutputDir, fileAbbrev);
+            var pathFull = Path.Combine(cfg.OutputDir, fileFull);
 
             // Skip if both outputs already exist and are newer than the model run.
             if (File.Exists(pathAbbrev) && File.Exists(pathFull)
                 && File.GetLastWriteTimeUtc(pathAbbrev) > latestCompleteRun
-                && File.GetLastWriteTimeUtc(pathFull)   > latestCompleteRun)
+                && File.GetLastWriteTimeUtc(pathFull) > latestCompleteRun)
             {
                 Logger.Info($"MeteogramWorker: {loc.Icao}/{loc.Timezone} already rendered — skipping.");
                 manifestEntries.Add(new ManifestEntry(loc.Icao, loc.LocalityName, loc.TempUnit, loc.Timezone, fileAbbrev, fileFull));
@@ -248,12 +251,12 @@ public sealed class MeteogramWorker : BackgroundService
     /// <summary>Intermediate record used to hold resolved recipient location data.</summary>
     private record RecipientLocation
     {
-        public string  Icao                { get; init; } = "";
-        public string  LocalityName        { get; init; } = "";
-        public string  TempUnit            { get; init; } = "F";
-        public string  Timezone            { get; init; } = "UTC";
-        public double  Latitude            { get; init; }
-        public double  Longitude           { get; init; }
+        public string Icao { get; init; } = "";
+        public string LocalityName { get; init; } = "";
+        public string TempUnit { get; init; } = "F";
+        public string Timezone { get; init; } = "UTC";
+        public double Latitude { get; init; }
+        public double Longitude { get; init; }
     }
 
     /// <summary>One entry in the meteogram manifest JSON file.</summary>

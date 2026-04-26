@@ -1,12 +1,15 @@
 // WxManager — Weather service management GUI.
 // Replaces WxAddRecipient with a tabbed WPF application.
 
+using System.Globalization;
+using System.Windows;
+
 using MetarParser.Data;
+
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.FileProviders;
-using System.Globalization;
-using System.Windows;
+
 using WxServices.Common;
 using WxServices.Logging;
 
@@ -134,18 +137,18 @@ public partial class App : Application
             .UseSqlServer(connStr)
             .Options;
 
-        FetchHomeLat    = TryParseDouble(config["Fetch:HomeLatitude"]);
-        FetchHomeLon    = TryParseDouble(config["Fetch:HomeLongitude"]);
-        FetchBoxDeg     = TryParseDouble(config["Fetch:BoundingBoxDegrees"]);
-        FetchRegion     = FetchRegion.FromConfig(key => config[key]);
+        FetchHomeLat = TryParseDouble(config["Fetch:HomeLatitude"]);
+        FetchHomeLon = TryParseDouble(config["Fetch:HomeLongitude"]);
+        FetchBoxDeg = TryParseDouble(config["Fetch:BoundingBoxDegrees"]);
+        FetchRegion = FetchRegion.FromConfig(key => config[key]);
         DefaultLanguage = config["Report:DefaultLanguage"] ?? "English";
         if (int.TryParse(config["Report:DefaultScheduledSendHour"], out var defHour) && defHour >= 0 && defHour <= 23)
             DefaultScheduledSendHour = defHour;
-        SmtpConfig             = config.GetSection("Smtp").Get<SmtpConfig>() ?? new SmtpConfig();
-        ClaudeApiKey           = config["Claude:ApiKey"]           ?? "";
-        ClaudeModel            = config["Claude:Model"]            ?? "claude-sonnet-4-6";
+        SmtpConfig = config.GetSection("Smtp").Get<SmtpConfig>() ?? new SmtpConfig();
+        ClaudeApiKey = config["Claude:ApiKey"] ?? "";
+        ClaudeModel = config["Claude:Model"] ?? "claude-sonnet-4-6";
         ClaudeMessagesEndpoint = config["Claude:MessagesEndpoint"] ?? ClaudeMessagesEndpoint;
-        ClaudeApiVersion       = config["Claude:ApiVersion"]       ?? ClaudeApiVersion;
+        ClaudeApiVersion = config["Claude:ApiVersion"] ?? ClaudeApiVersion;
         if (int.TryParse(config["Claude:MaxTokens"], out var maxTok) && maxTok > 0)
             ClaudeMaxTokens = maxTok;
         if (int.TryParse(config["WxManager:MaxNearbyStationsInLookup"], out var maxNearby) && maxNearby > 0)
@@ -154,9 +157,9 @@ public partial class App : Application
             StationLookupRadiusKm = radiusKm;
         if (int.TryParse(config["WxManager:MaxDisplayStations"], out var maxDisplay) && maxDisplay > 0)
             MaxDisplayStations = maxDisplay;
-        DefaultTimezone        = config["WxManager:DefaultTimezone"]        ?? DefaultTimezone;
-        UserAgent              = config["WxManager:UserAgent"]              ?? UserAgent;
-        AwcMetarEndpoint       = config["WxManager:AwcMetarEndpoint"]       ?? AwcMetarEndpoint;
+        DefaultTimezone = config["WxManager:DefaultTimezone"] ?? DefaultTimezone;
+        UserAgent = config["WxManager:UserAgent"] ?? UserAgent;
+        AwcMetarEndpoint = config["WxManager:AwcMetarEndpoint"] ?? AwcMetarEndpoint;
         if (int.TryParse(config["WxManager:AwcMetarHours"], out var awcHours) && awcHours > 0)
             AwcMetarHours = awcHours;
         if (int.TryParse(config["WxManager:SuccessMessageDismissMs"], out var dismissMs) && dismissMs >= 0)

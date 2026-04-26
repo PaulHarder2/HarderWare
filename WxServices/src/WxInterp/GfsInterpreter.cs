@@ -1,4 +1,5 @@
 using MetarParser.Data;
+
 using Microsoft.EntityFrameworkCore;
 
 namespace WxInterp;
@@ -95,20 +96,20 @@ public static class GfsInterpreter
                 var nw = g.FirstOrDefault(p => p.Lat == aLat1 && p.Lon == aLon0);
                 var ne = g.FirstOrDefault(p => p.Lat == aLat1 && p.Lon == aLon1);
 
-                var tmpC  = BilerpNullable(sw?.TmpC,       se?.TmpC,       nw?.TmpC,       ne?.TmpC,       t, s);
-                var uGrd  = BilerpNullable(sw?.UGrdMs,     se?.UGrdMs,     nw?.UGrdMs,     ne?.UGrdMs,     t, s);
-                var vGrd  = BilerpNullable(sw?.VGrdMs,     se?.VGrdMs,     nw?.VGrdMs,     ne?.VGrdMs,     t, s);
+                var tmpC = BilerpNullable(sw?.TmpC, se?.TmpC, nw?.TmpC, ne?.TmpC, t, s);
+                var uGrd = BilerpNullable(sw?.UGrdMs, se?.UGrdMs, nw?.UGrdMs, ne?.UGrdMs, t, s);
+                var vGrd = BilerpNullable(sw?.VGrdMs, se?.VGrdMs, nw?.VGrdMs, ne?.VGrdMs, t, s);
                 var pRate = BilerpNullable(sw?.PRateKgM2s, se?.PRateKgM2s, nw?.PRateKgM2s, ne?.PRateKgM2s, t, s);
-                var tcdc  = BilerpNullable(sw?.TcdcPct,    se?.TcdcPct,    nw?.TcdcPct,    ne?.TcdcPct,    t, s);
-                var cape  = BilerpNullable(sw?.CapeJKg,    se?.CapeJKg,    nw?.CapeJKg,    ne?.CapeJKg,    t, s);
+                var tcdc = BilerpNullable(sw?.TcdcPct, se?.TcdcPct, nw?.TcdcPct, ne?.TcdcPct, t, s);
+                var cape = BilerpNullable(sw?.CapeJKg, se?.CapeJKg, nw?.CapeJKg, ne?.CapeJKg, t, s);
 
                 // Derive wind speed (kt) and meteorological direction from U/V components.
-                float? windKt  = null;
-                int?   windDir = null;
+                float? windKt = null;
+                int? windDir = null;
                 if (uGrd.HasValue && vGrd.HasValue)
                 {
                     var speedMs = Math.Sqrt((double)uGrd.Value * uGrd.Value + (double)vGrd.Value * vGrd.Value);
-                    windKt  = (float)(speedMs * 1.94384);
+                    windKt = (float)(speedMs * 1.94384);
                     // Meteorological convention: direction wind is coming FROM.
                     windDir = (int)((Math.Atan2(-uGrd.Value, -vGrd.Value) * 180.0 / Math.PI + 360.0) % 360.0);
                 }
@@ -117,13 +118,13 @@ public static class GfsInterpreter
                 float? precipMmHr = pRate.HasValue ? pRate.Value * 3600f : null;
 
                 return new HourlyPoint(
-                    ValidTime:  run.ModelRunUtc.AddHours(g.Key),
-                    TmpC:       tmpC,
-                    WindKt:     windKt,
-                    WindDir:    windDir,
+                    ValidTime: run.ModelRunUtc.AddHours(g.Key),
+                    TmpC: tmpC,
+                    WindKt: windKt,
+                    WindDir: windDir,
                     PrecipMmHr: precipMmHr,
-                    TcdcPct:    tcdc,
-                    CapeJKg:    cape);
+                    TcdcPct: tcdc,
+                    CapeJKg: cape);
             })
             .OrderBy(h => h.ValidTime)
             .ToList();
@@ -137,7 +138,7 @@ public static class GfsInterpreter
         return new GfsForecast
         {
             ModelRunUtc = run.ModelRunUtc,
-            Days        = days,
+            Days = days,
         };
     }
 
@@ -159,12 +160,12 @@ public static class GfsInterpreter
         // Temperature high/low.
         var temps = hours.Where(h => h.TmpC.HasValue).Select(h => h.TmpC!.Value).ToList();
         float? highC = temps.Count > 0 ? temps.Max() : null;
-        float? lowC  = temps.Count > 0 ? temps.Min() : null;
+        float? lowC = temps.Count > 0 ? temps.Min() : null;
 
         // Wind: direction taken from the hour of maximum speed.
-        var windHours   = hours.Where(h => h.WindKt.HasValue).ToList();
-        float? maxWindKt  = null;
-        int?   maxWindDir = null;
+        var windHours = hours.Where(h => h.WindKt.HasValue).ToList();
+        float? maxWindKt = null;
+        int? maxWindDir = null;
         if (windHours.Count > 0)
         {
             maxWindKt = windHours.Max(h => h.WindKt!.Value);
@@ -186,16 +187,16 @@ public static class GfsInterpreter
 
         return new GfsDailyForecast
         {
-            Date               = date,
-            HighTempC          = highC,
-            HighTempF          = highC.HasValue ? (float)(highC.Value * 9.0 / 5.0 + 32.0) : null,
-            LowTempC           = lowC,
-            LowTempF           = lowC.HasValue  ? (float)(lowC.Value  * 9.0 / 5.0 + 32.0) : null,
-            MaxWindSpeedKt     = maxWindKt,
+            Date = date,
+            HighTempC = highC,
+            HighTempF = highC.HasValue ? (float)(highC.Value * 9.0 / 5.0 + 32.0) : null,
+            LowTempC = lowC,
+            LowTempF = lowC.HasValue ? (float)(lowC.Value * 9.0 / 5.0 + 32.0) : null,
+            MaxWindSpeedKt = maxWindKt,
             DominantWindDirDeg = maxWindDir,
-            MaxCloudCoverPct   = maxTcdc,
-            MaxCapeJKg         = maxCape,
-            MaxPrecipRateMmHr  = maxPrecip,
+            MaxCloudCoverPct = maxTcdc,
+            MaxCapeJKg = maxCape,
+            MaxPrecipRateMmHr = maxPrecip,
         };
     }
 
@@ -216,9 +217,9 @@ public static class GfsInterpreter
     {
         if (!sw.HasValue || !se.HasValue || !nw.HasValue || !ne.HasValue) return null;
         return (1 - t) * (1 - s) * sw.Value
-             + (1 - t) *      s  * se.Value
-             +      t  * (1 - s) * nw.Value
-             +      t  *      s  * ne.Value;
+             + (1 - t) * s * se.Value
+             + t * (1 - s) * nw.Value
+             + t * s * ne.Value;
     }
 
     // ── private types ─────────────────────────────────────────────────────────
@@ -226,10 +227,10 @@ public static class GfsInterpreter
     /// <summary>Interpolated weather values for a single forecast valid-time.</summary>
     private record struct HourlyPoint(
         DateTime ValidTime,
-        float?   TmpC,
-        float?   WindKt,
-        int?     WindDir,
-        float?   PrecipMmHr,
-        float?   TcdcPct,
-        float?   CapeJKg);
+        float? TmpC,
+        float? WindKt,
+        int? WindDir,
+        float? PrecipMmHr,
+        float? TcdcPct,
+        float? CapeJKg);
 }

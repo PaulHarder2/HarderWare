@@ -1,4 +1,5 @@
 using System.Text;
+
 using WxInterp;
 
 namespace WxReport.Svc;
@@ -160,7 +161,7 @@ public static class SnapshotDescriber
     /// <returns>A compass label such as <c>"NNW"</c> or <c>"SW"</c>.</returns>
     private static string DegreesToCompass(int deg)
     {
-        string[] dirs = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"];
+        string[] dirs = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
         return dirs[(int)Math.Round(((deg % 360 + 360) % 360) / 22.5) % 16];
     }
 
@@ -169,10 +170,10 @@ public static class SnapshotDescriber
     /// <returns>A label string: <c>"low"</c>, <c>"moderate"</c>, <c>"significant"</c>, or <c>"extreme"</c>.</returns>
     private static string CapeLabel(float capeJKg) => capeJKg switch
     {
-        < 500  => "low",
+        < 500 => "low",
         < 1000 => "moderate",
         < 2000 => "significant",
-        _      => "extreme",
+        _ => "extreme",
     };
 
     // ── unit-aware formatting helpers ─────────────────────────────────────────
@@ -209,7 +210,7 @@ public static class SnapshotDescriber
         const double a = 17.625;
         const double b = 243.04;
         return 100.0 * Math.Exp(a * dewPointC / (b + dewPointC))
-                     / Math.Exp(a * tempC     / (b + tempC));
+                     / Math.Exp(a * tempC / (b + tempC));
     }
 
     /// <summary>Formats a wind speed from knots in the recipient's preferred speed unit.</summary>
@@ -249,15 +250,15 @@ public static class SnapshotDescriber
     /// <returns>A display string such as <c>"Few"</c>, <c>"Scattered"</c>, or <c>"Overcast"</c>.</returns>
     private static string FormatCoverage(SkyCoverage c) => c switch
     {
-        SkyCoverage.Clear               => "Clear",
-        SkyCoverage.Few                 => "Few",
-        SkyCoverage.Scattered           => "Scattered",
-        SkyCoverage.Broken              => "Broken",
-        SkyCoverage.Overcast            => "Overcast",
-        SkyCoverage.VerticalVisibility  => "Vertical visibility",
-        SkyCoverage.NoSignificantCloud  => "No significant cloud",
-        SkyCoverage.NoCloudsDetected    => "No clouds detected",
-        _                               => c.ToString(),
+        SkyCoverage.Clear => "Clear",
+        SkyCoverage.Few => "Few",
+        SkyCoverage.Scattered => "Scattered",
+        SkyCoverage.Broken => "Broken",
+        SkyCoverage.Overcast => "Overcast",
+        SkyCoverage.VerticalVisibility => "Vertical visibility",
+        SkyCoverage.NoSignificantCloud => "No significant cloud",
+        SkyCoverage.NoCloudsDetected => "No clouds detected",
+        _ => c.ToString(),
     };
 
     /// <summary>
@@ -300,7 +301,7 @@ public static class SnapshotDescriber
 
         sb.Append($"  {p.ChangeType}");
         if (p.ValidFromUtc.HasValue) sb.Append($" from {p.ValidFromUtc.Value:ddd yyyy-MM-dd HH:mm} UTC");
-        if (p.ValidToUtc.HasValue)   sb.Append($" to {p.ValidToUtc.Value:ddd yyyy-MM-dd HH:mm} UTC");
+        if (p.ValidToUtc.HasValue) sb.Append($" to {p.ValidToUtc.Value:ddd yyyy-MM-dd HH:mm} UTC");
         sb.Append(":");
 
         if (p.Cavok)

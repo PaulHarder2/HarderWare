@@ -52,22 +52,22 @@ public sealed record FetchRegion(double South, double North, double West, double
     /// <returns>The resolved fetch region, or <see langword="null"/> if neither explicit bounds nor home coordinates are available.</returns>
     public static FetchRegion? Resolve(
         double? regionSouth, double? regionNorth,
-        double? regionWest,  double? regionEast,
-        double? homeLat,     double? homeLon,
-        double  boxDegrees = 9)
+        double? regionWest, double? regionEast,
+        double? homeLat, double? homeLon,
+        double boxDegrees = 9)
     {
         if (regionSouth.HasValue && regionNorth.HasValue &&
-            regionWest.HasValue  && regionEast.HasValue)
+            regionWest.HasValue && regionEast.HasValue)
         {
             return new FetchRegion(regionSouth.Value, regionNorth.Value,
-                                   regionWest.Value,  regionEast.Value);
+                                   regionWest.Value, regionEast.Value);
         }
 
         if (homeLat.HasValue && homeLon.HasValue)
         {
             return new FetchRegion(
                 Math.Max(-90, homeLat.Value - boxDegrees),
-                Math.Min(90,  homeLat.Value + boxDegrees),
+                Math.Min(90, homeLat.Value + boxDegrees),
                 homeLon.Value - boxDegrees,
                 homeLon.Value + boxDegrees);
         }
@@ -84,11 +84,11 @@ public sealed record FetchRegion(double South, double North, double West, double
         return Resolve(
             regionSouth: ParseDouble(getValue("Fetch:RegionSouth")),
             regionNorth: ParseDouble(getValue("Fetch:RegionNorth")),
-            regionWest:  ParseDouble(getValue("Fetch:RegionWest")),
-            regionEast:  ParseDouble(getValue("Fetch:RegionEast")),
-            homeLat:     ParseDouble(getValue("Fetch:HomeLatitude")),
-            homeLon:     ParseDouble(getValue("Fetch:HomeLongitude")),
-            boxDegrees:  ParseDouble(getValue("Fetch:BoundingBoxDegrees")) ?? 9);
+            regionWest: ParseDouble(getValue("Fetch:RegionWest")),
+            regionEast: ParseDouble(getValue("Fetch:RegionEast")),
+            homeLat: ParseDouble(getValue("Fetch:HomeLatitude")),
+            homeLon: ParseDouble(getValue("Fetch:HomeLongitude")),
+            boxDegrees: ParseDouble(getValue("Fetch:BoundingBoxDegrees")) ?? 9);
     }
 
     private static double? ParseDouble(string? value)

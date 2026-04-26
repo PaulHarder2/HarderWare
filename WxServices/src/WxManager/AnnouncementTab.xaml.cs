@@ -1,9 +1,12 @@
-using MetarParser.Data;
-using MetarParser.Data.Entities;
-using Microsoft.EntityFrameworkCore;
 using System.Net.Http;
 using System.Windows;
 using System.Windows.Controls;
+
+using MetarParser.Data;
+using MetarParser.Data.Entities;
+
+using Microsoft.EntityFrameworkCore;
+
 using WxServices.Common;
 using WxServices.Logging;
 
@@ -80,7 +83,7 @@ public partial class AnnouncementTab : UserControl
         try
         {
             using var db = new WeatherDataContext(App.DbOptions);
-            gs         = await db.GlobalSettings.FindAsync(1);
+            gs = await db.GlobalSettings.FindAsync(1);
             recipients = await db.Recipients.OrderBy(r => r.Name).ToListAsync();
         }
         catch (Exception ex)
@@ -97,10 +100,10 @@ public partial class AnnouncementTab : UserControl
 
         var smtpConfig = new SmtpConfig
         {
-            Host        = App.SmtpConfig.Host,
-            Port        = App.SmtpConfig.Port,
-            Username    = gs?.SmtpUsername    ?? "",
-            Password    = gs?.SmtpPassword    ?? "",
+            Host = App.SmtpConfig.Host,
+            Port = App.SmtpConfig.Port,
+            Username = gs?.SmtpUsername ?? "",
+            Password = gs?.SmtpPassword ?? "",
             FromAddress = gs?.SmtpFromAddress ?? "",
         };
         var claudeApiKey = gs?.ClaudeApiKey ?? "";
@@ -108,7 +111,7 @@ public partial class AnnouncementTab : UserControl
         // ── Validate ──────────────────────────────────────────────────────────
 
         var missing = new List<string>();
-        if (string.IsNullOrWhiteSpace(claudeApiKey))        missing.Add("Claude:ApiKey");
+        if (string.IsNullOrWhiteSpace(claudeApiKey)) missing.Add("Claude:ApiKey");
         if (string.IsNullOrWhiteSpace(smtpConfig.Username)) missing.Add("Smtp:Username");
         if (string.IsNullOrWhiteSpace(smtpConfig.Password)) missing.Add("Smtp:Password");
         if (string.IsNullOrWhiteSpace(smtpConfig.FromAddress)) missing.Add("Smtp:FromAddress");
@@ -126,10 +129,10 @@ public partial class AnnouncementTab : UserControl
         SendBtn.IsEnabled = false;
         HideMessages();
 
-        using var http  = new HttpClient();
-        var formatter   = new AnnouncementFormatter(http, claudeApiKey, App.ClaudeModel,
+        using var http = new HttpClient();
+        var formatter = new AnnouncementFormatter(http, claudeApiKey, App.ClaudeModel,
                               App.ClaudeMessagesEndpoint, App.ClaudeApiVersion, App.ClaudeMaxTokens);
-        var emailer     = new SmtpSender(smtpConfig, "WxAnnounce");
+        var emailer = new SmtpSender(smtpConfig, "WxAnnounce");
         var defaultLang = App.DefaultLanguage;
 
         var languageGroups = recipients.GroupBy(
@@ -143,7 +146,7 @@ public partial class AnnouncementTab : UserControl
 
         foreach (var group in languageGroups)
         {
-            var language  = group.Key;
+            var language = group.Key;
             var groupList = group.ToList();
             SetProgress($"Formatting for {language} ({groupList.Count} recipient(s))...");
 
@@ -216,7 +219,7 @@ public partial class AnnouncementTab : UserControl
     /// <sideeffects>Sets <see cref="MessagesText"/> and makes <see cref="MessagesBorder"/> visible.</sideeffects>
     private void ShowMessages(string message)
     {
-        MessagesText.Text         = message;
+        MessagesText.Text = message;
         MessagesBorder.Visibility = Visibility.Visible;
     }
 
@@ -225,7 +228,7 @@ public partial class AnnouncementTab : UserControl
     private void HideMessages()
     {
         MessagesBorder.Visibility = Visibility.Collapsed;
-        MessagesText.Text         = "";
+        MessagesText.Text = "";
     }
 
     /// <summary>Updates the progress label.</summary>

@@ -1,7 +1,10 @@
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
+
 using MetarParser.Data;
+
 using Microsoft.EntityFrameworkCore;
+
 using WxServices.Common;
 using WxServices.Logging;
 
@@ -20,8 +23,8 @@ namespace WxVis.Svc;
 /// </remarks>
 public sealed class ForecastMapWorker : BackgroundService
 {
-    private readonly IConfiguration                          _config;
-    private readonly DbContextOptions<WeatherDataContext>    _dbOptions;
+    private readonly IConfiguration _config;
+    private readonly DbContextOptions<WeatherDataContext> _dbOptions;
     private Dictionary<string, string> _pythonEnv = new();
 
     // Key: model run UTC.  Value: set of forecast hours already rendered for that run.
@@ -38,7 +41,7 @@ public sealed class ForecastMapWorker : BackgroundService
         IConfiguration config,
         DbContextOptions<WeatherDataContext> dbOptions)
     {
-        _config    = config;
+        _config = config;
         _dbOptions = dbOptions;
     }
 

@@ -1,5 +1,6 @@
 using System.Net.Http.Json;
 using System.Text.Json.Serialization;
+
 using WxServices.Logging;
 
 namespace MetarParser.Data;
@@ -58,7 +59,7 @@ public static class AddressGeocoder
             return null;
         }
 
-        var r            = results[0];
+        var r = results[0];
         var localityName = ResolveLocalityName(r.Address);
 
         if (!double.TryParse(r.Lat, System.Globalization.NumberStyles.Float,
@@ -97,17 +98,17 @@ public static class AddressGeocoder
 
     private sealed class NominatimResult
     {
-        [JsonPropertyName("lat")]     public string Lat { get; set; } = "";
-        [JsonPropertyName("lon")]     public string Lon { get; set; } = "";
+        [JsonPropertyName("lat")] public string Lat { get; set; } = "";
+        [JsonPropertyName("lon")] public string Lon { get; set; } = "";
         [JsonPropertyName("address")] public NominatimAddress? Address { get; set; }
     }
 
     private sealed class NominatimAddress
     {
-        [JsonPropertyName("suburb")]  public string? Suburb  { get; set; }
-        [JsonPropertyName("town")]    public string? Town    { get; set; }
+        [JsonPropertyName("suburb")] public string? Suburb { get; set; }
+        [JsonPropertyName("town")] public string? Town { get; set; }
         [JsonPropertyName("village")] public string? Village { get; set; }
-        [JsonPropertyName("city")]    public string? City    { get; set; }
-        [JsonPropertyName("county")]  public string? County  { get; set; }
+        [JsonPropertyName("city")] public string? City { get; set; }
+        [JsonPropertyName("county")] public string? County { get; set; }
     }
 }

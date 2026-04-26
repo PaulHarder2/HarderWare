@@ -1,4 +1,5 @@
 using MetarParser.Data.Entities;
+
 using Microsoft.EntityFrameworkCore;
 
 namespace MetarParser.Data;
@@ -107,15 +108,15 @@ public sealed class WeatherDataContext : DbContext
             e.ToTable("Metars");
             e.HasKey(x => x.Id);
 
-            e.Property(x => x.ReportType)  .HasMaxLength(6)  .IsRequired();
-            e.Property(x => x.StationIcao) .HasMaxLength(4)  .IsFixedLength().IsRequired();
-            e.Property(x => x.WindUnit)    .HasMaxLength(3);
+            e.Property(x => x.ReportType).HasMaxLength(6).IsRequired();
+            e.Property(x => x.StationIcao).HasMaxLength(4).IsFixedLength().IsRequired();
+            e.Property(x => x.WindUnit).HasMaxLength(3);
             e.Property(x => x.AltimeterUnit).HasMaxLength(4);
-            e.Property(x => x.RawSkyConditions)   .HasMaxLength(100);
-            e.Property(x => x.RawWeatherPhenomena) .HasMaxLength(100);
+            e.Property(x => x.RawSkyConditions).HasMaxLength(100);
+            e.Property(x => x.RawWeatherPhenomena).HasMaxLength(100);
             e.Property(x => x.RawRunwayVisualRange).HasMaxLength(100);
-            e.Property(x => x.Remarks)    .HasMaxLength(500);
-            e.Property(x => x.RawReport)  .HasMaxLength(300).IsRequired();
+            e.Property(x => x.Remarks).HasMaxLength(500);
+            e.Property(x => x.RawReport).HasMaxLength(300).IsRequired();
             e.Property(x => x.ReceivedUtc).IsRequired();
 
             e.Property(x => x.ObservationUtc).IsRequired();
@@ -138,8 +139,8 @@ public sealed class WeatherDataContext : DbContext
             e.ToTable("MetarSkyConditions");
             e.HasKey(x => x.Id);
 
-            e.Property(x => x.Cover)     .HasMaxLength(3).IsRequired();
-            e.Property(x => x.CloudType) .HasMaxLength(3);
+            e.Property(x => x.Cover).HasMaxLength(3).IsRequired();
+            e.Property(x => x.CloudType).HasMaxLength(3);
 
             e.HasOne(x => x.Metar)
              .WithMany(m => m.SkyConditions)
@@ -154,11 +155,11 @@ public sealed class WeatherDataContext : DbContext
             e.ToTable("MetarWeatherPhenomena");
             e.HasKey(x => x.Id);
 
-            e.Property(x => x.PhenomenonKind) .HasMaxLength(7).IsRequired();
-            e.Property(x => x.Intensity)      .HasMaxLength(2).IsRequired();
-            e.Property(x => x.Descriptor)     .HasMaxLength(2);
-            e.Property(x => x.Precipitation)  .HasMaxLength(20);
-            e.Property(x => x.Obscuration)    .HasMaxLength(2);
+            e.Property(x => x.PhenomenonKind).HasMaxLength(7).IsRequired();
+            e.Property(x => x.Intensity).HasMaxLength(2).IsRequired();
+            e.Property(x => x.Descriptor).HasMaxLength(2);
+            e.Property(x => x.Precipitation).HasMaxLength(20);
+            e.Property(x => x.Obscuration).HasMaxLength(2);
             e.Property(x => x.OtherPhenomenon).HasMaxLength(2);
 
             e.HasOne(x => x.Metar)
@@ -175,7 +176,7 @@ public sealed class WeatherDataContext : DbContext
             e.HasKey(x => x.Id);
 
             e.Property(x => x.Runway).HasMaxLength(4).IsRequired();
-            e.Property(x => x.Trend) .HasMaxLength(1);
+            e.Property(x => x.Trend).HasMaxLength(1);
 
             e.HasOne(x => x.Metar)
              .WithMany(m => m.RunwayVisualRanges)
@@ -190,13 +191,13 @@ public sealed class WeatherDataContext : DbContext
             e.ToTable("Tafs");
             e.HasKey(x => x.Id);
 
-            e.Property(x => x.ReportType) .HasMaxLength(7) .IsRequired();
-            e.Property(x => x.StationIcao).HasMaxLength(4) .IsFixedLength().IsRequired();
-            e.Property(x => x.RawReport)  .HasColumnType("nvarchar(max)").IsRequired();
-            e.Property(x => x.IssuanceUtc) .IsRequired();
+            e.Property(x => x.ReportType).HasMaxLength(7).IsRequired();
+            e.Property(x => x.StationIcao).HasMaxLength(4).IsFixedLength().IsRequired();
+            e.Property(x => x.RawReport).HasColumnType("nvarchar(max)").IsRequired();
+            e.Property(x => x.IssuanceUtc).IsRequired();
             e.Property(x => x.ValidFromUtc).IsRequired();
-            e.Property(x => x.ValidToUtc)  .IsRequired();
-            e.Property(x => x.ReceivedUtc) .IsRequired();
+            e.Property(x => x.ValidToUtc).IsRequired();
+            e.Property(x => x.ReceivedUtc).IsRequired();
 
             // One TAF per station per issuance time per type.
             e.HasIndex(x => new { x.StationIcao, x.IssuanceUtc, x.ReportType })
@@ -214,10 +215,10 @@ public sealed class WeatherDataContext : DbContext
             e.ToTable("TafChangePeriods");
             e.HasKey(x => x.Id);
 
-            e.Property(x => x.ChangeType)         .HasMaxLength(12).IsRequired();
-            e.Property(x => x.WindUnit)            .HasMaxLength(3);
-            e.Property(x => x.RawSkyConditions)    .HasMaxLength(150);
-            e.Property(x => x.RawWeather)          .HasMaxLength(100);
+            e.Property(x => x.ChangeType).HasMaxLength(12).IsRequired();
+            e.Property(x => x.WindUnit).HasMaxLength(3);
+            e.Property(x => x.RawSkyConditions).HasMaxLength(150);
+            e.Property(x => x.RawWeather).HasMaxLength(100);
 
             e.HasOne(x => x.Taf)
              .WithMany(t => t.ChangePeriods)
@@ -232,7 +233,7 @@ public sealed class WeatherDataContext : DbContext
             e.ToTable("TafChangePeriodSkyConditions");
             e.HasKey(x => x.Id);
 
-            e.Property(x => x.Cover)    .HasMaxLength(3).IsRequired();
+            e.Property(x => x.Cover).HasMaxLength(3).IsRequired();
             e.Property(x => x.CloudType).HasMaxLength(3);
 
             e.HasOne(x => x.ChangePeriod)
@@ -248,10 +249,10 @@ public sealed class WeatherDataContext : DbContext
             e.ToTable("TafChangePeriodWeatherPhenomena");
             e.HasKey(x => x.Id);
 
-            e.Property(x => x.Intensity)      .HasMaxLength(2) .IsRequired();
-            e.Property(x => x.Descriptor)     .HasMaxLength(2);
-            e.Property(x => x.Precipitation)  .HasMaxLength(20);
-            e.Property(x => x.Obscuration)    .HasMaxLength(2);
+            e.Property(x => x.Intensity).HasMaxLength(2).IsRequired();
+            e.Property(x => x.Descriptor).HasMaxLength(2);
+            e.Property(x => x.Precipitation).HasMaxLength(20);
+            e.Property(x => x.Obscuration).HasMaxLength(2);
             e.Property(x => x.OtherPhenomenon).HasMaxLength(2);
 
             e.HasOne(x => x.ChangePeriod)
@@ -267,19 +268,19 @@ public sealed class WeatherDataContext : DbContext
             e.ToTable("Recipients");
             e.HasKey(x => x.Id);
 
-            e.Property(x => x.RecipientId)       .HasMaxLength(100).IsRequired();
-            e.Property(x => x.Email)              .HasMaxLength(200).IsRequired();
-            e.Property(x => x.Name)               .HasMaxLength(200).IsRequired();
-            e.Property(x => x.Language)           .HasMaxLength(50);
-            e.Property(x => x.Timezone)           .HasMaxLength(100).IsRequired();
-            e.Property(x => x.ScheduledSendHours) .HasMaxLength(50);
-            e.Property(x => x.Address)            .HasMaxLength(500);
-            e.Property(x => x.LocalityName)       .HasMaxLength(200);
-            e.Property(x => x.MetarIcao)          .HasMaxLength(100);
-            e.Property(x => x.TafIcao)            .HasMaxLength(10);
-            e.Property(x => x.TempUnit)           .HasMaxLength(10).IsRequired();
-            e.Property(x => x.PressureUnit)       .HasMaxLength(10).IsRequired();
-            e.Property(x => x.WindSpeedUnit)      .HasMaxLength(10).IsRequired();
+            e.Property(x => x.RecipientId).HasMaxLength(100).IsRequired();
+            e.Property(x => x.Email).HasMaxLength(200).IsRequired();
+            e.Property(x => x.Name).HasMaxLength(200).IsRequired();
+            e.Property(x => x.Language).HasMaxLength(50);
+            e.Property(x => x.Timezone).HasMaxLength(100).IsRequired();
+            e.Property(x => x.ScheduledSendHours).HasMaxLength(50);
+            e.Property(x => x.Address).HasMaxLength(500);
+            e.Property(x => x.LocalityName).HasMaxLength(200);
+            e.Property(x => x.MetarIcao).HasMaxLength(100);
+            e.Property(x => x.TafIcao).HasMaxLength(10);
+            e.Property(x => x.TempUnit).HasMaxLength(10).IsRequired();
+            e.Property(x => x.PressureUnit).HasMaxLength(10).IsRequired();
+            e.Property(x => x.WindSpeedUnit).HasMaxLength(10).IsRequired();
 
             e.HasIndex(x => x.RecipientId)
              .IsUnique()
@@ -293,10 +294,10 @@ public sealed class WeatherDataContext : DbContext
             e.ToTable("GlobalSettings");
             e.HasKey(x => x.Id);
 
-            e.Property(x => x.ClaudeApiKey)    .HasMaxLength(500);
-            e.Property(x => x.SmtpUsername)    .HasMaxLength(200);
-            e.Property(x => x.SmtpPassword)    .HasMaxLength(200);
-            e.Property(x => x.SmtpFromAddress) .HasMaxLength(200);
+            e.Property(x => x.ClaudeApiKey).HasMaxLength(500);
+            e.Property(x => x.SmtpUsername).HasMaxLength(200);
+            e.Property(x => x.SmtpPassword).HasMaxLength(200);
+            e.Property(x => x.SmtpFromAddress).HasMaxLength(200);
         });
 
         // ── RecipientStates ──────────────────────────────────────────────────
@@ -306,9 +307,9 @@ public sealed class WeatherDataContext : DbContext
             e.ToTable("RecipientStates");
             e.HasKey(x => x.Id);
 
-            e.Property(x => x.RecipientId)            .HasMaxLength(100).IsRequired();
+            e.Property(x => x.RecipientId).HasMaxLength(100).IsRequired();
             e.Property(x => x.LastSnapshotFingerprint).HasMaxLength(200);
-            e.Property(x => x.LastMetarIcao)          .HasMaxLength(4).IsFixedLength();
+            e.Property(x => x.LastMetarIcao).HasMaxLength(4).IsFixedLength();
 
             e.HasIndex(x => x.RecipientId)
              .IsUnique()
@@ -331,16 +332,16 @@ public sealed class WeatherDataContext : DbContext
             e.ToTable("WxStations");
             e.HasKey(x => x.IcaoId);
 
-            e.Property(x => x.IcaoId)     .HasMaxLength(4).IsFixedLength().IsRequired();
-            e.Property(x => x.Name)       .HasMaxLength(100);
+            e.Property(x => x.IcaoId).HasMaxLength(4).IsFixedLength().IsRequired();
+            e.Property(x => x.Name).HasMaxLength(100);
             e.Property(x => x.Municipality).HasMaxLength(100);
             e.Property(x => x.Lat);
             e.Property(x => x.Lon);
             e.Property(x => x.ElevationFt);
-            e.Property(x => x.Region)     .HasMaxLength(100);
-            e.Property(x => x.RegionCode) .HasMaxLength(10);
-            e.Property(x => x.RegionAbbr) .HasMaxLength(10);
-            e.Property(x => x.Country)    .HasMaxLength(100);
+            e.Property(x => x.Region).HasMaxLength(100);
+            e.Property(x => x.RegionCode).HasMaxLength(10);
+            e.Property(x => x.RegionAbbr).HasMaxLength(10);
+            e.Property(x => x.Country).HasMaxLength(100);
             e.Property(x => x.CountryCode).HasMaxLength(2).IsFixedLength();
             e.Property(x => x.CountryAbbr).HasMaxLength(10);
         });
@@ -352,10 +353,10 @@ public sealed class WeatherDataContext : DbContext
             e.ToTable("GfsGrid");
             e.HasKey(x => x.Id);
 
-            e.Property(x => x.ModelRunUtc) .IsRequired();
+            e.Property(x => x.ModelRunUtc).IsRequired();
             e.Property(x => x.ForecastHour).IsRequired();
-            e.Property(x => x.Lat)         .IsRequired();
-            e.Property(x => x.Lon)         .IsRequired();
+            e.Property(x => x.Lat).IsRequired();
+            e.Property(x => x.Lon).IsRequired();
 
             // Prevent duplicate ingestion of the same grid point / run / hour.
             e.HasIndex(x => new { x.ModelRunUtc, x.ForecastHour, x.Lat, x.Lon })

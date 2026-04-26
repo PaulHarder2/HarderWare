@@ -8,11 +8,15 @@
 // Stop:      sc.exe stop WxMonitorSvc
 
 using MetarParser.Data;
+
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.FileProviders;
+
 using OpenTelemetry.Metrics;
+
 using WxMonitor.Svc;
+
 using WxServices.Common;
 using WxServices.Logging;
 
@@ -104,8 +108,8 @@ static async Task ValidateConfigAsync(IConfiguration config, DbContextOptions<We
     await using var ctx = new WeatherDataContext(dbOptions);
     var gs = await ctx.GlobalSettings.FirstOrDefaultAsync(x => x.Id == 1);
 
-    if (string.IsNullOrWhiteSpace(gs?.SmtpUsername))    issues.Add("SmtpUsername");
-    if (string.IsNullOrWhiteSpace(gs?.SmtpPassword))    issues.Add("SmtpPassword");
+    if (string.IsNullOrWhiteSpace(gs?.SmtpUsername)) issues.Add("SmtpUsername");
+    if (string.IsNullOrWhiteSpace(gs?.SmtpPassword)) issues.Add("SmtpPassword");
     if (string.IsNullOrWhiteSpace(gs?.SmtpFromAddress)) issues.Add("SmtpFromAddress");
     if (string.IsNullOrWhiteSpace(config["Monitor:AlertEmail"])) issues.Add("Monitor:AlertEmail");
 

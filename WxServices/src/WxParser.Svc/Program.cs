@@ -7,13 +7,17 @@
 // Stop:      sc.exe stop WxParserSvc
 
 using MetarParser.Data;
-using WxServices.Common;
-using WxServices.Logging;
-using WxParser.Svc;
+
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.FileProviders;
+
 using OpenTelemetry.Metrics;
+
+using WxParser.Svc;
+
+using WxServices.Common;
+using WxServices.Logging;
 
 var installRoot = WxPaths.ReadInstallRoot();
 var paths = new WxPaths(installRoot);
@@ -109,4 +113,3 @@ catch (Exception ex)
     Logger.Error("Fatal error during startup.", ex);
     throw;
 }
-

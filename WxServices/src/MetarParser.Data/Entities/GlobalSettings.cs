@@ -9,16 +9,16 @@ namespace MetarParser.Data.Entities;
 public class GlobalSettings
 {
     /// <summary>Primary key — always 1.  Exactly one row is valid in this table.</summary>
-    public int     Id              { get; set; }
+    public int Id { get; set; }
 
     /// <summary>Claude API key used by WxReport.Svc for weather report generation.</summary>
-    public string? ClaudeApiKey    { get; set; }
+    public string? ClaudeApiKey { get; set; }
 
     /// <summary>SMTP account username (typically a Gmail address).</summary>
-    public string? SmtpUsername    { get; set; }
+    public string? SmtpUsername { get; set; }
 
     /// <summary>SMTP app password.</summary>
-    public string? SmtpPassword    { get; set; }
+    public string? SmtpPassword { get; set; }
 
     /// <summary>From address for outgoing emails.</summary>
     public string? SmtpFromAddress { get; set; }

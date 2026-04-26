@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+
 using WxServices.Common;
 using WxServices.Logging;
 
@@ -38,11 +39,11 @@ public partial class SetupTab : UserControl
         StatusText.Text = "Checking...";
         CheckList.Children.Clear();
 
-        var connStr    = App.Configuration?["ConnectionStrings:WeatherData"] ?? "";
+        var connStr = App.Configuration?["ConnectionStrings:WeatherData"] ?? "";
         var wgrib2Path = App.Configuration?["Gfs:Wgrib2Path"];
         if (string.IsNullOrWhiteSpace(wgrib2Path))
             wgrib2Path = new WxPaths(App.Configuration?["InstallRoot"]).Wgrib2DefaultPath;
-        var pythonExe  = App.Configuration?["WxVis:CondaPythonExe"] ?? "";
+        var pythonExe = App.Configuration?["WxVis:CondaPythonExe"] ?? "";
 
         var checks = new (string Label, string Hint, Func<Task<CheckResult>> Check)[]
         {
@@ -66,7 +67,7 @@ public partial class SetupTab : UserControl
         };
 
         int passed = 0;
-        int total  = checks.Length;
+        int total = checks.Length;
 
         foreach (var (label, hint, check) in checks)
         {
@@ -116,9 +117,9 @@ public partial class SetupTab : UserControl
             Text = ok switch { true => "\u2714", false => "\u2718", _ => "\u2022" },
             Foreground = new SolidColorBrush(ok switch
             {
-                true  => Color.FromRgb(0x4C, 0xAF, 0x50),
+                true => Color.FromRgb(0x4C, 0xAF, 0x50),
                 false => Color.FromRgb(0xEF, 0x53, 0x50),
-                _     => Color.FromRgb(0x90, 0x90, 0x90),
+                _ => Color.FromRgb(0x90, 0x90, 0x90),
             }),
             FontSize = 16,
             VerticalAlignment = VerticalAlignment.Center,
@@ -156,7 +157,7 @@ public partial class SetupTab : UserControl
     {
         if (row.Child is not StackPanel stack || stack.Children.Count < 3) return;
 
-        var indicator   = (TextBlock)stack.Children[0];
+        var indicator = (TextBlock)stack.Children[0];
         var statusBlock = (TextBlock)stack.Children[2];
 
         indicator.Text = result.Ok ? "\u2714" : "\u2718";
