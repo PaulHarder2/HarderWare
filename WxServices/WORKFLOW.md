@@ -10,6 +10,19 @@ The flow intentionally trades speed for audit: every change maps to a Jira ticke
 
 **Added 2026-04-23.**
 
+### Issue type
+
+Pick the Jira issue type at grooming time:
+
+- **Epic** — umbrella; decomposes into child tickets. Usually Story-shaped (a capability too big for a single Story), occasionally Bug-shaped (architectural rework that fixes something rather than adding a feature, e.g. WX-47). **Every umbrella is an Epic.**
+- **Story** — a user-visible capability or feature.
+- **Bug** — a defect to fix.
+- **Task** — tooling, infra, cleanup, dependency bumps, maintenance — work that's neither a user-facing capability nor a defect.
+
+Stories, Bugs, and Tasks can stand alone or be subordinate to an Epic. When the same work could plausibly be Story or Task (a small developer-facing improvement), prefer Task — Stories are reserved for end-user-visible capability.
+
+### Grooming proper
+
 Every ticket must be *groomed* at creation or at the latest before it is transitioned from **To Do** to **In Progress**. Grooming is the working conversation that fleshes out motivation, scope, acceptance, and estimate — it surfaces ambiguity before it becomes wasted implementation time, and it builds long-term calibration about how well we predict effort.
 
 A groomed ticket has, at minimum:
@@ -18,11 +31,11 @@ A groomed ticket has, at minimum:
 - Explicit **acceptance criteria** a reviewer can confirm against the merged code. If criteria cannot yet be stated, the grooming is incomplete.
 - An **Original estimate** (Jira's native field), in hours, representing our best current guess of combined effort through merge. Rough is better than absent.
 
-**Umbrella tickets** (design tickets that decompose into sub-tickets) follow a variant:
+**Epics** (the umbrella variant) follow a variant of the rules above:
 
 - Their Jira Original estimate field is left empty.
 - Their description ends with a **Planning Estimate** section — a rough aggregate hour count (*"hopefully better than order-of-magnitude, but maybe not"*) plus an approximate sub-ticket count.
-- Sub-tickets are created **just-in-time**, not at umbrella-grooming time. Each sub-ticket is groomed individually before it is picked up for work. This avoids front-loading grooming sessions for sub-tickets whose scope isn't yet in focus.
+- Child tickets are created **just-in-time**, not at Epic-grooming time. Each child is groomed individually before it is picked up for work. This avoids front-loading grooming sessions for children whose scope isn't yet in focus.
 
 If a ticket reaches §3 (transition to In Progress) without grooming, pause and groom it first. The cost of a grooming conversation is much less than the cost of implementing the wrong thing.
 
