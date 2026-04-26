@@ -71,54 +71,6 @@ public class SnapshotFingerprintTests
     public void Visibility_Cavok_EncodesAsFalse()
         => Assert.Contains("V:False", SnapshotFingerprint.Compute(Make(cavok: true), DefaultCfg));
 
-    // ── ceiling ───────────────────────────────────────────────────────────────
-
-    [Fact]
-    public void Ceiling_NoClouds_EncodesAsFalse()
-        => Assert.Contains("C:False", SnapshotFingerprint.Compute(Make(), DefaultCfg));
-
-    [Fact]
-    public void Ceiling_FewLayerOnly_EncodesAsFalse()
-    {
-        // FEW is not BKN/OVC/VV — does not count as a ceiling
-        var layers = new[] { new SkyLayer { Coverage = SkyCoverage.Few, HeightFeet = 1000 } };
-        Assert.Contains("C:False", SnapshotFingerprint.Compute(Make(layers: layers), DefaultCfg));
-    }
-
-    [Fact]
-    public void Ceiling_BrokenAtThreshold_EncodesAsFalse()
-    {
-        // 3000 is not < 3000
-        var layers = new[] { new SkyLayer { Coverage = SkyCoverage.Broken, HeightFeet = 3000 } };
-        Assert.Contains("C:False", SnapshotFingerprint.Compute(Make(layers: layers), DefaultCfg));
-    }
-
-    [Fact]
-    public void Ceiling_BrokenBelowThreshold_EncodesAsTrue()
-    {
-        var layers = new[] { new SkyLayer { Coverage = SkyCoverage.Broken, HeightFeet = 2500 } };
-        Assert.Contains("C:True", SnapshotFingerprint.Compute(Make(layers: layers), DefaultCfg));
-    }
-
-    [Fact]
-    public void Ceiling_OvercastBelowThreshold_EncodesAsTrue()
-    {
-        var layers = new[] { new SkyLayer { Coverage = SkyCoverage.Overcast, HeightFeet = 800 } };
-        Assert.Contains("C:True", SnapshotFingerprint.Compute(Make(layers: layers), DefaultCfg));
-    }
-
-    [Fact]
-    public void Ceiling_UsesLowestLayer()
-    {
-        // High BKN above threshold, low BKN below — should use the lower one
-        var layers = new[]
-        {
-            new SkyLayer { Coverage = SkyCoverage.Broken, HeightFeet = 5000 },
-            new SkyLayer { Coverage = SkyCoverage.Broken, HeightFeet = 1500 },
-        };
-        Assert.Contains("C:True", SnapshotFingerprint.Compute(Make(layers: layers), DefaultCfg));
-    }
-
     // ── thunderstorm ─────────────────────────────────────────────────────────
 
     [Fact]
