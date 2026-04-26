@@ -1,7 +1,10 @@
 using System.Diagnostics.Metrics;
+
 using MetarParser.Data;
+
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+
 using WxServices.Common;
 using WxServices.Logging;
 
@@ -22,8 +25,8 @@ namespace WxMonitor.Svc;
 /// </summary>
 public sealed class MonitorWorker : BackgroundService
 {
-    private readonly IConfiguration                        _config;
-    private readonly DbContextOptions<WeatherDataContext>  _dbOptions;
+    private readonly IConfiguration _config;
+    private readonly DbContextOptions<WeatherDataContext> _dbOptions;
 
     private readonly Meter _meter = new("WxMonitor.Svc", "1.0.0");
     private readonly Counter<long> _monitorCycles;
@@ -34,10 +37,10 @@ public sealed class MonitorWorker : BackgroundService
     /// <param name="dbOptions">EF Core options used to open a <see cref="WeatherDataContext"/> to read SMTP secrets from <c>GlobalSettings</c>.</param>
     public MonitorWorker(IConfiguration config, DbContextOptions<WeatherDataContext> dbOptions)
     {
-        _config        = config;
-        _dbOptions     = dbOptions;
+        _config = config;
+        _dbOptions = dbOptions;
         _monitorCycles = _meter.CreateCounter<long>("wxmonitor.cycles.total", description: "Number of completed monitor cycles.");
-        _alertsSent    = _meter.CreateCounter<long>("wxmonitor.alerts.total", description: "Number of alert emails sent.");
+        _alertsSent = _meter.CreateCounter<long>("wxmonitor.alerts.total", description: "Number of alert emails sent.");
     }
 
     /// <summary>
@@ -107,11 +110,11 @@ public sealed class MonitorWorker : BackgroundService
             return;
         }
 
-        var state   = MonitorStateStore.Load();
+        var state = MonitorStateStore.Load();
         var emailer = new SmtpSender(smtp, "WxMonitor");
         var cooldown = TimeSpan.FromMinutes(cfg.AlertCooldownMinutes);
-        var now      = DateTime.UtcNow;
-        var dirty    = false;
+        var now = DateTime.UtcNow;
+        var dirty = false;
 
         foreach (var svc in cfg.WatchedServices)
         {
@@ -148,7 +151,7 @@ public sealed class MonitorWorker : BackgroundService
                     {
                         Logger.Info($"{svc.Name}: {newEntries.Count} new {cfg.AlertOnSeverity}+ log entry/entries — sending alert.");
                         var subject = $"[WxMonitor] {svc.Name} — {newEntries.Count} new log error(s)";
-                        var body    = BuildLogAlertBody(svc.Name, newEntries);
+                        var body = BuildLogAlertBody(svc.Name, newEntries);
 
                         if (await emailer.SendAsync(cfg.AlertEmail, subject, body))
                         {
@@ -184,7 +187,7 @@ public sealed class MonitorWorker : BackgroundService
                         var ageMin = (int)age.Value.TotalMinutes;
                         Logger.Warn($"{svc.Name}: heartbeat is {ageMin} minute(s) old (max {svc.HeartbeatMaxAgeMinutes}) — sending alert.");
                         var subject = $"[WxMonitor] {svc.Name} — service may be stopped";
-                        var body    = BuildHeartbeatAlertBody(svc.Name, age.Value, svc.HeartbeatMaxAgeMinutes);
+                        var body = BuildHeartbeatAlertBody(svc.Name, age.Value, svc.HeartbeatMaxAgeMinutes);
 
                         if (await emailer.SendAsync(cfg.AlertEmail, subject, body))
                         {
@@ -223,7 +226,7 @@ public sealed class MonitorWorker : BackgroundService
                     Logger.Warn($"Most recent METAR observation is {ageMin} minute(s) old " +
                                 $"(threshold {cfg.MetarStalenessThresholdMinutes}) — sending alert.");
                     var subject = "[WxMonitor] METAR data is stale — no recent observations";
-                    var body    = BuildMetarStalenessAlertBody(mostRecentObsUtc, cfg.MetarStalenessThresholdMinutes);
+                    var body = BuildMetarStalenessAlertBody(mostRecentObsUtc, cfg.MetarStalenessThresholdMinutes);
 
                     if (await emailer.SendAsync(cfg.AlertEmail, subject, body))
                     {
@@ -340,7 +343,7 @@ public sealed class MonitorWorker : BackgroundService
         foreach (var svc in monitor.WatchedServices)
         {
             var svcTag = svc.Name.Replace(".", "-", StringComparison.Ordinal).ToLowerInvariant();
-            if (string.IsNullOrEmpty(svc.LogFile))       svc.LogFile       = paths.LogFile(svcTag);
+            if (string.IsNullOrEmpty(svc.LogFile)) svc.LogFile = paths.LogFile(svcTag);
             if (string.IsNullOrEmpty(svc.HeartbeatFile)) svc.HeartbeatFile = paths.HeartbeatFile(svcTag);
         }
 
@@ -349,8 +352,8 @@ public sealed class MonitorWorker : BackgroundService
 
         await using var ctx = new WeatherDataContext(_dbOptions);
         var gs = await ctx.GlobalSettings.FirstOrDefaultAsync(x => x.Id == 1, ct);
-        smtp.Username    = gs?.SmtpUsername    ?? "";
-        smtp.Password    = gs?.SmtpPassword    ?? "";
+        smtp.Username = gs?.SmtpUsername ?? "";
+        smtp.Password = gs?.SmtpPassword ?? "";
         smtp.FromAddress = gs?.SmtpFromAddress ?? "";
 
         return (monitor, smtp);

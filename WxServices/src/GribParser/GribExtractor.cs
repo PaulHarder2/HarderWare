@@ -1,4 +1,5 @@
 using System.Diagnostics;
+
 using WxServices.Logging;
 
 namespace GribParser;
@@ -72,7 +73,7 @@ public static class GribExtractor
         var lon360Max = lonMax < 0 ? lonMax + 360f : lonMax;
 
         var subgridPath = grib2FilePath + ".sub.grb2";
-        var csvPath     = grib2FilePath + ".csv";
+        var csvPath = grib2FilePath + ".csv";
 
         try
         {
@@ -142,9 +143,9 @@ public static class GribExtractor
         var psi = new ProcessStartInfo(wgrib2Path, args)
         {
             RedirectStandardOutput = true,
-            RedirectStandardError  = true,
-            UseShellExecute        = false,
-            CreateNoWindow         = true
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
         };
 
         using var proc = Process.Start(psi)
@@ -208,10 +209,10 @@ public static class GribExtractor
             // whether parts[1] looks like a datetime (contains '-' or ':').
             var varOffset = parts[1].Contains('-') || parts[1].Contains(':') ? 1 : 0;
             var variable = parts[1 + varOffset].Trim('"', ' ');
-            var level    = parts[2 + varOffset].Trim('"', ' ');
+            var level = parts[2 + varOffset].Trim('"', ' ');
 
             var lonIdx = parts.Length - 3;
-            if (!float.TryParse(parts[lonIdx].Trim(),     System.Globalization.NumberStyles.Float,
+            if (!float.TryParse(parts[lonIdx].Trim(), System.Globalization.NumberStyles.Float,
                     System.Globalization.CultureInfo.InvariantCulture, out var lon360)) continue;
             if (!float.TryParse(parts[lonIdx + 1].Trim(), System.Globalization.NumberStyles.Float,
                     System.Globalization.CultureInfo.InvariantCulture, out var lat)) continue;

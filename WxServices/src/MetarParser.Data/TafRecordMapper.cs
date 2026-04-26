@@ -1,4 +1,5 @@
 using MetarParser.Data.Entities;
+
 using TafParser;
 
 namespace MetarParser.Data;
@@ -28,17 +29,17 @@ public static class TafRecordMapper
 
         // Infer validity period dates relative to the issuance date.
         var validFromUtc = InferValidityDate(report.ValidFromDay, report.ValidFromHour, issuanceUtc);
-        var validToUtc   = InferValidityDate(report.ValidToDay,   report.ValidToHour,   validFromUtc);
+        var validToUtc = InferValidityDate(report.ValidToDay, report.ValidToHour, validFromUtc);
 
         var record = new TafRecord
         {
-            ReportType   = report.ReportType,
-            StationIcao  = report.Station,
-            IssuanceUtc  = issuanceUtc,
+            ReportType = report.ReportType,
+            StationIcao = report.Station,
+            IssuanceUtc = issuanceUtc,
             ValidFromUtc = validFromUtc,
-            ValidToUtc   = validToUtc,
-            RawReport    = report.Raw,
-            ReceivedUtc  = now,
+            ValidToUtc = validToUtc,
+            RawReport = report.Raw,
+            ReceivedUtc = now,
         };
 
         record.ChangePeriods.Add(MapBasePeriod(report, validFromUtc, validToUtc));
@@ -62,27 +63,27 @@ public static class TafRecordMapper
     {
         var base_ = new TafChangePeriodRecord
         {
-            ChangeType   = "BASE",
+            ChangeType = "BASE",
             ValidFromUtc = validFromUtc,
-            ValidToUtc   = validToUtc,
-            SortOrder    = 0,
+            ValidToUtc = validToUtc,
+            SortOrder = 0,
         };
 
         if (report.Wind is { } w)
         {
-            base_.WindDirection  = w.Direction;
+            base_.WindDirection = w.Direction;
             base_.WindIsVariable = w.IsVariable;
-            base_.WindSpeed      = w.Speed;
-            base_.WindGust       = w.Gust;
-            base_.WindUnit       = w.Unit;
+            base_.WindSpeed = w.Speed;
+            base_.WindGust = w.Gust;
+            base_.WindUnit = w.Unit;
         }
 
         if (report.Visibility is { } v)
         {
-            base_.VisibilityCavok        = v.Cavok;
-            base_.VisibilityM            = v.DistanceMeters;
+            base_.VisibilityCavok = v.Cavok;
+            base_.VisibilityM = v.DistanceMeters;
             base_.VisibilityStatuteMiles = v.DistanceStatuteMiles;
-            base_.VisibilityLessThan     = v.LessThan;
+            base_.VisibilityLessThan = v.LessThan;
         }
 
         if (report.Sky.Count > 0)
@@ -93,11 +94,11 @@ public static class TafRecordMapper
                 var s = report.Sky[i];
                 base_.SkyConditions.Add(new TafChangePeriodSky
                 {
-                    Cover                = s.Cover,
-                    HeightFeet           = s.HeightFeet,
-                    CloudType            = s.CloudType,
+                    Cover = s.Cover,
+                    HeightFeet = s.HeightFeet,
+                    CloudType = s.CloudType,
                     IsVerticalVisibility = s.IsVerticalVisibility,
-                    SortOrder            = i,
+                    SortOrder = i,
                 });
             }
         }
@@ -110,12 +111,12 @@ public static class TafRecordMapper
                 var wx = report.Weather[i];
                 base_.WeatherPhenomena.Add(new TafChangePeriodWeather
                 {
-                    Intensity       = wx.Intensity,
-                    Descriptor      = wx.Descriptor,
-                    Precipitation   = wx.Precipitation.Count > 0 ? string.Join(",", wx.Precipitation) : null,
-                    Obscuration     = wx.Obscuration,
+                    Intensity = wx.Intensity,
+                    Descriptor = wx.Descriptor,
+                    Precipitation = wx.Precipitation.Count > 0 ? string.Join(",", wx.Precipitation) : null,
+                    Obscuration = wx.Obscuration,
                     OtherPhenomenon = wx.Other,
-                    SortOrder       = i,
+                    SortOrder = i,
                 });
             }
         }
@@ -148,27 +149,27 @@ public static class TafRecordMapper
 
             var period = new TafChangePeriodRecord
             {
-                ChangeType   = p.ChangeType,
+                ChangeType = p.ChangeType,
                 ValidFromUtc = fromUtc,
-                ValidToUtc   = toUtc,
-                SortOrder    = i + 1,
+                ValidToUtc = toUtc,
+                SortOrder = i + 1,
             };
 
             if (p.Wind is { } w)
             {
-                period.WindDirection  = w.Direction;
+                period.WindDirection = w.Direction;
                 period.WindIsVariable = w.IsVariable;
-                period.WindSpeed      = w.Speed;
-                period.WindGust       = w.Gust;
-                period.WindUnit       = w.Unit;
+                period.WindSpeed = w.Speed;
+                period.WindGust = w.Gust;
+                period.WindUnit = w.Unit;
             }
 
             if (p.Visibility is { } v)
             {
-                period.VisibilityCavok        = v.Cavok;
-                period.VisibilityM            = v.DistanceMeters;
+                period.VisibilityCavok = v.Cavok;
+                period.VisibilityM = v.DistanceMeters;
                 period.VisibilityStatuteMiles = v.DistanceStatuteMiles;
-                period.VisibilityLessThan     = v.LessThan;
+                period.VisibilityLessThan = v.LessThan;
             }
 
             if (p.Sky.Count > 0)
@@ -179,11 +180,11 @@ public static class TafRecordMapper
                     var s = p.Sky[j];
                     period.SkyConditions.Add(new TafChangePeriodSky
                     {
-                        Cover                = s.Cover,
-                        HeightFeet           = s.HeightFeet,
-                        CloudType            = s.CloudType,
+                        Cover = s.Cover,
+                        HeightFeet = s.HeightFeet,
+                        CloudType = s.CloudType,
                         IsVerticalVisibility = s.IsVerticalVisibility,
-                        SortOrder            = j,
+                        SortOrder = j,
                     });
                 }
             }
@@ -196,12 +197,12 @@ public static class TafRecordMapper
                     var wx = p.Weather[j];
                     period.WeatherPhenomena.Add(new TafChangePeriodWeather
                     {
-                        Intensity       = wx.Intensity,
-                        Descriptor      = wx.Descriptor,
-                        Precipitation   = wx.Precipitation.Count > 0 ? string.Join(",", wx.Precipitation) : null,
-                        Obscuration     = wx.Obscuration,
+                        Intensity = wx.Intensity,
+                        Descriptor = wx.Descriptor,
+                        Precipitation = wx.Precipitation.Count > 0 ? string.Join(",", wx.Precipitation) : null,
+                        Obscuration = wx.Obscuration,
                         OtherPhenomenon = wx.Other,
-                        SortOrder       = j,
+                        SortOrder = j,
                     });
                 }
             }
@@ -223,7 +224,7 @@ public static class TafRecordMapper
     /// </summary>
     internal static DateTime InferValidityDate(int day, int hour, DateTime reference)
     {
-        int year  = reference.Year;
+        int year = reference.Year;
         int month = reference.Month;
 
         // Validity end day may roll into the next month.

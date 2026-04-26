@@ -13,7 +13,7 @@ public class TafParserTests
     public void Parse_SetsReportTypeAndStation()
     {
         var r = TafParser.Parse("TAF EGLL 221130Z 2212/2318 27015KT 9999 FEW030");
-        Assert.Equal("TAF",  r.ReportType);
+        Assert.Equal("TAF", r.ReportType);
         Assert.Equal("EGLL", r.Station);
     }
 
@@ -65,8 +65,8 @@ public class TafParserTests
     {
         var r = TafParser.Parse("TAF EGLL 221130Z 2212/2318 27015KT 9999 FEW030");
         Assert.NotNull(r.Wind);
-        Assert.Equal(270,  r.Wind!.Direction);
-        Assert.Equal(15,   r.Wind.Speed);
+        Assert.Equal(270, r.Wind!.Direction);
+        Assert.Equal(15, r.Wind.Speed);
         Assert.Equal("KT", r.Wind.Unit);
     }
 
@@ -113,7 +113,7 @@ public class TafParserTests
         var r = TafParser.Parse("TAF EGLL 221130Z 2212/2318 27015KT 9999 FEW020 SCT060 BKN120");
         Assert.Equal(3, r.Sky.Count);
         Assert.Equal("FEW", r.Sky[0].Cover);
-        Assert.Equal(2000,  r.Sky[0].HeightFeet);
+        Assert.Equal(2000, r.Sky[0].HeightFeet);
         Assert.Equal("SCT", r.Sky[1].Cover);
         Assert.Equal("BKN", r.Sky[2].Cover);
     }
@@ -168,7 +168,7 @@ public class TafParserTests
         var p = r.ChangePeriods[0];
         Assert.Equal("BECMG", p.ChangeType);
         Assert.Equal(240, p.Wind!.Direction);
-        Assert.Equal(10,  p.Wind.Speed);
+        Assert.Equal(10, p.Wind.Speed);
     }
 
     [Fact]
@@ -180,11 +180,11 @@ public class TafParserTests
 
         Assert.Single(r.ChangePeriods);
         var p = r.ChangePeriods[0];
-        Assert.Equal("FM",  p.ChangeType);
-        Assert.Equal(22,    p.FromDay);
-        Assert.Equal(18,    p.FromHour);
+        Assert.Equal("FM", p.ChangeType);
+        Assert.Equal(22, p.FromDay);
+        Assert.Equal(18, p.FromHour);
         Assert.NotNull(p.Wind);
-        Assert.Equal(240,   p.Wind!.Direction);
+        Assert.Equal(240, p.Wind!.Direction);
     }
 
     [Fact]

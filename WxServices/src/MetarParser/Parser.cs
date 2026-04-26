@@ -2,6 +2,7 @@
 // Implements FM 15 / FM 16 as specified in WMO Manual 306, Volume I.1.
 
 using System.Text.RegularExpressions;
+
 using WxServices.Logging;
 
 namespace MetarParser;
@@ -171,8 +172,8 @@ public static class MetarParser
         if (t.Peek() is not { } s || !Regex.IsMatch(s, @"^\d{6}Z$"))
             return null;
 
-        var day    = int.Parse(s[..2]);
-        var hour   = int.Parse(s[2..4]);
+        var day = int.Parse(s[..2]);
+        var hour = int.Parse(s[2..4]);
         var minute = int.Parse(s[4..6]);
 
         if (day < 1 || day > 31 || hour > 23 || minute > 59)
@@ -732,11 +733,11 @@ public static class MetarParser
             {
                 var tok = t.Peek()!;
                 if (tok.StartsWith("FM") && tok.Length == 6 && IsDigits(tok[2..]))
-                    { fm = tok[2..]; t.Next(); }
+                { fm = tok[2..]; t.Next(); }
                 else if (tok.StartsWith("TL") && tok.Length == 6 && IsDigits(tok[2..]))
-                    { tl = tok[2..]; t.Next(); }
+                { tl = tok[2..]; t.Next(); }
                 else if (tok.StartsWith("AT") && tok.Length == 6 && IsDigits(tok[2..]))
-                    { at = tok[2..]; t.Next(); }
+                { at = tok[2..]; t.Next(); }
                 else if (ConsumeWind(t, raw) is { } newWind) tw = newWind;
                 else if (ConsumeVisibility(t) is { } newVis) tv = newVis;
                 else if (tok is "SKC" or "CLR" or "NSC" or "NCD" ||
@@ -753,9 +754,13 @@ public static class MetarParser
             list.Add(new TrendForecast
             {
                 ChangeType = type,
-                From = fm, Until = tl, At = at,
-                Wind = tw, Visibility = tv,
-                Weather = wx, Sky = sky,
+                From = fm,
+                Until = tl,
+                At = at,
+                Wind = tw,
+                Visibility = tv,
+                Weather = wx,
+                Sky = sky,
             });
         }
         return list;

@@ -2,6 +2,7 @@
 // Test inputs are drawn from WMO Manual 306 examples and real-world reports.
 
 using MetarParser;
+
 using Xunit;
 
 namespace MetarParser.Tests;
@@ -503,7 +504,7 @@ public class ParserTests
         // 360° is a valid WMO direction meaning North (same as 000° but with non-zero speed).
         var r = Parse("METAR EGLL 221220Z 36015KT 9999 FEW030 10/05 Q1018");
         Assert.Equal(360, r.Wind!.Direction);
-        Assert.Equal(15,  r.Wind.Speed);
+        Assert.Equal(15, r.Wind.Speed);
     }
 
     [Fact]
@@ -511,7 +512,7 @@ public class ParserTests
     {
         // Direction 000 with speed > 0 means wind from North — structurally valid.
         var r = Parse("METAR EGLL 221220Z 00015KT 9999 FEW030 10/05 Q1018");
-        Assert.Equal(0,  r.Wind!.Direction);
+        Assert.Equal(0, r.Wind!.Direction);
         Assert.Equal(15, r.Wind.Speed);
         Assert.False(r.Wind.IsVariable);
     }

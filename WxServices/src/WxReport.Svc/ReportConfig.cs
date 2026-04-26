@@ -14,19 +14,19 @@ namespace WxReport.Svc;
 public class ReportConfig
 {
     /// <summary>Language to use when no per-recipient language is specified (e.g. "English", "Spanish").</summary>
-    public string DefaultLanguage         { get; set; } = "English";
+    public string DefaultLanguage { get; set; } = "English";
 
     /// <summary>Hour(s) of day (0–23, in the recipient's local timezone) at which the daily scheduled report is sent.  Comma-separated when multiple hours are desired (e.g. "6, 12").</summary>
     public string DefaultScheduledSendHours { get; set; } = "7";
 
     /// <summary>Minimum minutes that must elapse between any two reports sent to the same recipient.</summary>
-    public int    MinGapMinutes           { get; set; } = 60;
+    public int MinGapMinutes { get; set; } = 60;
 
     /// <summary>Check interval; loaded from appsettings.json (service-specific).</summary>
-    public int    IntervalMinutes         { get; set; } = 5;
+    public int IntervalMinutes { get; set; } = 5;
 
     /// <summary>Path to the heartbeat file written after each successful report cycle. Read by WxMonitor.Svc.</summary>
-    public string?                 HeartbeatFile     { get; set; }
+    public string? HeartbeatFile { get; set; }
 
     /// <summary>
     /// Minimum precipitation rate in mm/hr for a GFS forecast hour to be counted
@@ -36,14 +36,14 @@ public class ReportConfig
     public float PrecipRateThresholdMmHr { get; set; } = 0.1f;
 
     public SignificantChangeConfig SignificantChange { get; set; } = new();
-    public List<RecipientConfig>   Recipients        { get; set; } = [];
+    public List<RecipientConfig> Recipients { get; set; } = [];
 }
 
 /// <summary>Thresholds used by <see cref="SnapshotFingerprint"/> to determine whether a weather change is significant enough to trigger an unscheduled report.</summary>
 public class SignificantChangeConfig
 {
     /// <summary>Wind speed at or above this threshold (kt) is considered a significant condition.</summary>
-    public int    WindThresholdKt       { get; set; } = 25;
+    public int WindThresholdKt { get; set; } = 25;
 
     /// <summary>Visibility below this threshold (SM) is considered a significant condition.</summary>
     public double VisibilityThresholdSm { get; set; } = 3.0;
@@ -54,7 +54,7 @@ public class SignificantChangeConfig
     /// forecast high to this resolution, so a change of this many degrees or more
     /// will produce a different fingerprint.  Default 15°F.
     /// </summary>
-    public int    ForecastHighChangeDegF { get; set; } = 15;
+    public int ForecastHighChangeDegF { get; set; } = 15;
 
     /// <summary>
     /// Minimum change in the GFS forecast low temperature (°F) between report
@@ -62,7 +62,7 @@ public class SignificantChangeConfig
     /// forecast low to this resolution, so a change of this many degrees or more
     /// will produce a different fingerprint.  Default 15°F.
     /// </summary>
-    public int    ForecastLowChangeDegF  { get; set; } = 15;
+    public int ForecastLowChangeDegF { get; set; } = 15;
 
     /// <summary>
     /// Surface-based CAPE threshold in J/kg above which a day is considered to
@@ -70,7 +70,7 @@ public class SignificantChangeConfig
     /// forecast day crosses this threshold (or stops crossing it), the fingerprint
     /// changes and an unscheduled alert is sent.  Default 1000 J/kg.
     /// </summary>
-    public int    CapeThresholdJKg      { get; set; } = 1000;
+    public int CapeThresholdJKg { get; set; } = 1000;
 
     /// <summary>
     /// Maximum precipitation rate in mm/hr that any GFS forecast day must reach or
@@ -79,7 +79,7 @@ public class SignificantChangeConfig
     /// the fingerprint changes and an unscheduled update may be sent.
     /// Default 2.0 mm/hr (moderate rain).
     /// </summary>
-    public float  GfsPrecipThresholdMmHr { get; set; } = 2.0f;
+    public float GfsPrecipThresholdMmHr { get; set; } = 2.0f;
 }
 
 /// <summary>
@@ -92,7 +92,7 @@ public class ClaudeConfig
     public string? ApiKey { get; set; }
 
     /// <summary>Claude model ID to use for text generation.</summary>
-    public string  Model  { get; set; } = "claude-haiku-4-5-20251001";
+    public string Model { get; set; } = "claude-haiku-4-5-20251001";
 }
 
 
@@ -107,10 +107,10 @@ public class UnitPreferences
     public string Temperature { get; set; } = "F";
 
     /// <summary>Pressure unit: <c>"inHg"</c> for inches of mercury (default) or <c>"kPa"</c> for kilopascals.</summary>
-    public string Pressure    { get; set; } = "inHg";
+    public string Pressure { get; set; } = "inHg";
 
     /// <summary>Wind speed unit: <c>"mph"</c> for miles per hour (default) or <c>"kph"</c> for kilometres per hour.</summary>
-    public string WindSpeed   { get; set; } = "mph";
+    public string WindSpeed { get; set; } = "mph";
 }
 
 /// <summary>
@@ -123,16 +123,16 @@ public class RecipientConfig
     /// Stable identifier (e.g. "paul-en", "kat").  Should be unique across
     /// all recipients.
     /// </summary>
-    public string? Id                { get; set; }
+    public string? Id { get; set; }
 
-    public string  Email             { get; set; } = "";
-    public string  Name              { get; set; } = "";
+    public string Email { get; set; } = "";
+    public string Name { get; set; } = "";
 
     /// <summary>Language for this recipient's reports (e.g. "English", "Spanish", "French").  Null falls back to <see cref="ReportConfig.DefaultLanguage"/>.</summary>
-    public string? Language          { get; set; }
+    public string? Language { get; set; }
 
     /// <summary>IANA timezone name (e.g. "America/Chicago").  Defaults to UTC.</summary>
-    public string  Timezone          { get; set; } = "UTC";
+    public string Timezone { get; set; } = "UTC";
 
     /// <summary>Hour(s) of day (0–23) in the recipient's timezone at which the daily report is sent.  Comma-separated when multiple hours are desired (e.g. "6, 12").  Null falls back to <see cref="ReportConfig.DefaultScheduledSendHours"/>.</summary>
     public string? ScheduledSendHours { get; set; }
@@ -143,7 +143,7 @@ public class RecipientConfig
     /// Physical address used solely for one-time geocoding to resolve the
     /// nearest METAR and TAF stations.  Never displayed in reports or subjects.
     /// </summary>
-    public string? Address      { get; set; }
+    public string? Address { get; set; }
 
     /// <summary>
     /// Human-readable location label used in report subjects and body
@@ -153,10 +153,10 @@ public class RecipientConfig
     public string? LocalityName { get; set; }
 
     /// <summary>Cached latitude from address geocoding.</summary>
-    public double? Latitude     { get; set; }
+    public double? Latitude { get; set; }
 
     /// <summary>Cached longitude from address geocoding.</summary>
-    public double? Longitude    { get; set; }
+    public double? Longitude { get; set; }
 
     /// <summary>
     /// Preferred METAR station ICAO(s) for this recipient, in priority order.
@@ -166,10 +166,10 @@ public class RecipientConfig
     /// if none have recent data the service falls back to any available station
     /// in the database for that cycle without updating this field.
     /// </summary>
-    public string? MetarIcao    { get; set; }
+    public string? MetarIcao { get; set; }
 
     /// <summary>Cached ICAO of the nearest TAF station to this recipient.</summary>
-    public string? TafIcao      { get; set; }
+    public string? TafIcao { get; set; }
 
     /// <summary>Preferred units for displayed values. Each dimension is independent; defaults to US customary.</summary>
     public UnitPreferences Units { get; set; } = new();

@@ -1,6 +1,8 @@
 using MailKit.Net.Smtp;
 using MailKit.Security;
+
 using MimeKit;
+
 using WxServices.Logging;
 
 namespace WxServices.Common;
@@ -16,7 +18,7 @@ namespace WxServices.Common;
 public sealed class SmtpSender
 {
     private readonly SmtpConfig _cfg;
-    private readonly string     _fromName;
+    private readonly string _fromName;
 
     /// <summary>
     /// Initializes a new instance of <see cref="SmtpSender"/>.
@@ -28,7 +30,7 @@ public sealed class SmtpSender
     /// </param>
     public SmtpSender(SmtpConfig cfg, string fromName)
     {
-        _cfg      = cfg;
+        _cfg = cfg;
         _fromName = fromName;
     }
 
@@ -77,8 +79,8 @@ public sealed class SmtpSender
             return false;
         }
 
-        if (string.IsNullOrWhiteSpace(_cfg.Username)   ||
-            string.IsNullOrWhiteSpace(_cfg.Password)   ||
+        if (string.IsNullOrWhiteSpace(_cfg.Username) ||
+            string.IsNullOrWhiteSpace(_cfg.Password) ||
             string.IsNullOrWhiteSpace(_cfg.FromAddress))
         {
             Logger.Error("SMTP credentials are not configured. Use WxManager → Configure to set SMTP credentials.");
@@ -110,9 +112,9 @@ public sealed class SmtpSender
                         }
                         var img = new MimePart("image", "png")
                         {
-                            Content            = new MimeContent(File.OpenRead(filePath)),
+                            Content = new MimeContent(File.OpenRead(filePath)),
                             ContentDisposition = new ContentDisposition(ContentDisposition.Inline),
-                            ContentId          = cid,
+                            ContentId = cid,
                         };
                         related.Add(img);
                     }

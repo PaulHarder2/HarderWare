@@ -1,10 +1,13 @@
-using MetarParser.Data;
-using WxServices.Common;
-using WxServices.Logging;
-using Microsoft.EntityFrameworkCore;
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
 using System.Text.Json.Nodes;
+
+using MetarParser.Data;
+
+using Microsoft.EntityFrameworkCore;
+
+using WxServices.Common;
+using WxServices.Logging;
 
 namespace WxParser.Svc;
 
@@ -31,9 +34,9 @@ public sealed class FetchWorker : BackgroundService
         IConfiguration config,
         DbContextOptions<WeatherDataContext> dbOptions)
     {
-        _config        = config;
-        _dbOptions     = dbOptions;
-        _fetchCycles   = _meter.CreateCounter<long>("wxparser.fetch.cycles.total", description: "Number of completed METAR/TAF fetch cycles.");
+        _config = config;
+        _dbOptions = dbOptions;
+        _fetchCycles = _meter.CreateCounter<long>("wxparser.fetch.cycles.total", description: "Number of completed METAR/TAF fetch cycles.");
         _fetchDuration = _meter.CreateHistogram<double>("wxparser.fetch.cycle.duration.seconds", unit: "s", description: "Duration of each METAR/TAF fetch cycle.");
     }
 
@@ -98,7 +101,7 @@ public sealed class FetchWorker : BackgroundService
         {
             var homeIcao = _config["Fetch:HomeIcao"];
 
-            double? homeLat = double.TryParse(_config["Fetch:HomeLatitude"],  out var la) ? la : null;
+            double? homeLat = double.TryParse(_config["Fetch:HomeLatitude"], out var la) ? la : null;
             double? homeLon = double.TryParse(_config["Fetch:HomeLongitude"], out var lo) ? lo : null;
 
             if (homeLat is null || homeLon is null)
@@ -187,7 +190,7 @@ public sealed class FetchWorker : BackgroundService
     private static void WriteHeartbeat(string? path)
     {
         if (string.IsNullOrWhiteSpace(path)) return;
-        try   { File.WriteAllText(path, DateTime.UtcNow.ToString("o")); }
+        try { File.WriteAllText(path, DateTime.UtcNow.ToString("o")); }
         catch (Exception ex) { Logger.Warn($"Could not write heartbeat to '{path}': {ex.Message}"); }
     }
 
@@ -234,7 +237,7 @@ public sealed class FetchWorker : BackgroundService
             root["Fetch"] = fetch;
         }
 
-        fetch["HomeLatitude"]  = lat;
+        fetch["HomeLatitude"] = lat;
         fetch["HomeLongitude"] = lon;
 
         File.WriteAllText(path, root.ToJsonString(
@@ -257,10 +260,10 @@ public sealed class FetchWorker : BackgroundService
         try
         {
             var metatRetention = int.TryParse(_config["Fetch:MetarRetentionDays"], out var mr) ? mr : 14;
-            var tafRetention   = int.TryParse(_config["Fetch:TafRetentionDays"],   out var tr) ? tr : 14;
+            var tafRetention = int.TryParse(_config["Fetch:TafRetentionDays"], out var tr) ? tr : 14;
 
             await DataPurger.PurgeOldMetarsAsync(_dbOptions, metatRetention, ct);
-            await DataPurger.PurgeOldTafsAsync(  _dbOptions, tafRetention,   ct);
+            await DataPurger.PurgeOldTafsAsync(_dbOptions, tafRetention, ct);
 
             _lastPurgeUtc = DateTime.UtcNow;
         }

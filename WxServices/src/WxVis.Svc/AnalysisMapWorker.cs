@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
+
 using WxServices.Common;
 using WxServices.Logging;
 
@@ -43,7 +44,7 @@ public sealed class AnalysisMapWorker : BackgroundService
     {
         Logger.Info("AnalysisMapWorker started.");
 
-        var cfg             = LoadConfig();
+        var cfg = LoadConfig();
         int? lastRenderedHour = null;
 
         // On startup: if the trigger minute has already passed this hour and a
@@ -51,8 +52,8 @@ public sealed class AnalysisMapWorker : BackgroundService
         var nowUtc = DateTime.UtcNow;
         if (nowUtc.Minute >= cfg.AnalysisMapMinutePastHour)
         {
-            var hourStart  = new DateTime(nowUtc.Year, nowUtc.Month, nowUtc.Day, nowUtc.Hour, 0, 0, DateTimeKind.Utc);
-            var hourTag    = nowUtc.ToString("yyyyMMdd_HH");
+            var hourStart = new DateTime(nowUtc.Year, nowUtc.Month, nowUtc.Day, nowUtc.Hour, 0, 0, DateTimeKind.Utc);
+            var hourTag = nowUtc.ToString("yyyyMMdd_HH");
             var alreadyDone = Directory.EnumerateFiles(cfg.OutputDir, $"synoptic_*_{hourTag}_z1.png").Any();
             if (alreadyDone)
             {
@@ -63,7 +64,7 @@ public sealed class AnalysisMapWorker : BackgroundService
 
         while (!stoppingToken.IsCancellationRequested)
         {
-            cfg    = LoadConfig();
+            cfg = LoadConfig();
             nowUtc = DateTime.UtcNow;
 
             if (nowUtc.Minute >= cfg.AnalysisMapMinutePastHour && lastRenderedHour != nowUtc.Hour)
@@ -121,7 +122,7 @@ public sealed class AnalysisMapWorker : BackgroundService
 
         try
         {
-            var cutoff  = DateTime.UtcNow - TimeSpan.FromDays(cfg.PlotRetentionDays);
+            var cutoff = DateTime.UtcNow - TimeSpan.FromDays(cfg.PlotRetentionDays);
             int deleted = 0;
 
             foreach (var pattern in new[] { "*.png", "*.json" })

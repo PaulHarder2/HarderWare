@@ -1,4 +1,5 @@
 using System.Text.Json;
+
 using WxServices.Logging;
 
 namespace WxMonitor.Svc;
@@ -13,7 +14,7 @@ public static class MonitorStateStore
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
-        WriteIndented          = true,
+        WriteIndented = true,
         PropertyNameCaseInsensitive = true,
     };
 

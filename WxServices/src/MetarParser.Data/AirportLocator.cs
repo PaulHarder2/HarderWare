@@ -1,6 +1,8 @@
-using System.Text.Json.Serialization;
 using System.Net.Http.Json;
+using System.Text.Json.Serialization;
+
 using MetarParser.Data.Entities;
+
 using WxServices.Logging;
 
 namespace MetarParser.Data;
@@ -109,10 +111,10 @@ public static class AirportLocator
         var a = airports[0];
         return new WxStation
         {
-            IcaoId      = a.IcaoId,
-            Name        = string.IsNullOrWhiteSpace(a.Name) ? null : a.Name.Trim(),
-            Lat         = a.Lat,
-            Lon         = a.Lon,
+            IcaoId = a.IcaoId,
+            Name = string.IsNullOrWhiteSpace(a.Name) ? null : a.Name.Trim(),
+            Lat = a.Lat,
+            Lon = a.Lon,
             ElevationFt = a.Elev,
         };
     }
@@ -146,7 +148,7 @@ public static class AirportLocator
         foreach (var deg in new[] { 2.0, 5.0 })
         {
             var bbox = $"{lat - deg},{lon - deg},{lat + deg},{lon + deg}";
-            var url  = $"https://aviationweather.gov/api/data/metar?bbox={bbox}&hours=1&format=json";
+            var url = $"https://aviationweather.gov/api/data/metar?bbox={bbox}&hours=1&format=json";
 
             MetarStationDto[]? stations;
             try
@@ -199,7 +201,7 @@ public static class AirportLocator
         foreach (var deg in new[] { 2.0, 5.0 })
         {
             var bbox = $"{lat - deg},{lon - deg},{lat + deg},{lon + deg}";
-            var url  = $"https://aviationweather.gov/api/data/taf?bbox={bbox}&hours=24&format=json";
+            var url = $"https://aviationweather.gov/api/data/taf?bbox={bbox}&hours=24&format=json";
 
             TafStationDto[]? stations;
             try
@@ -226,24 +228,24 @@ public static class AirportLocator
 
     private sealed class AirportDto
     {
-        [JsonPropertyName("icaoId")] public string  IcaoId { get; set; } = "";
-        [JsonPropertyName("name")]   public string? Name   { get; set; }
-        [JsonPropertyName("lat")]    public double  Lat    { get; set; }
-        [JsonPropertyName("lon")]    public double  Lon    { get; set; }
-        [JsonPropertyName("elev")]   public double? Elev   { get; set; }
+        [JsonPropertyName("icaoId")] public string IcaoId { get; set; } = "";
+        [JsonPropertyName("name")] public string? Name { get; set; }
+        [JsonPropertyName("lat")] public double Lat { get; set; }
+        [JsonPropertyName("lon")] public double Lon { get; set; }
+        [JsonPropertyName("elev")] public double? Elev { get; set; }
     }
 
     private sealed class MetarStationDto
     {
         [JsonPropertyName("icaoId")] public string StationId { get; set; } = "";
-        [JsonPropertyName("lat")]    public double Lat       { get; set; }
-        [JsonPropertyName("lon")]    public double Lon       { get; set; }
+        [JsonPropertyName("lat")] public double Lat { get; set; }
+        [JsonPropertyName("lon")] public double Lon { get; set; }
     }
 
     private sealed class TafStationDto
     {
         [JsonPropertyName("icaoId")] public string IcaoId { get; set; } = "";
-        [JsonPropertyName("lat")]    public double Lat    { get; set; }
-        [JsonPropertyName("lon")]    public double Lon    { get; set; }
+        [JsonPropertyName("lat")] public double Lat { get; set; }
+        [JsonPropertyName("lon")] public double Lon { get; set; }
     }
 }

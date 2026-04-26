@@ -2,7 +2,9 @@
 // Implements FM 51 as specified in WMO Manual 306, Volume I.1.
 
 using System.Text.RegularExpressions;
+
 using MetarParser;
+
 using WxServices.Logging;
 
 namespace TafParser;
@@ -45,7 +47,7 @@ public static class TafParser
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(raw);
 
-        var text   = Regex.Replace(raw.Trim(), @"\s+", " ").TrimEnd('=');
+        var text = Regex.Replace(raw.Trim(), @"\s+", " ").TrimEnd('=');
         var tokens = new TokenStream(text.Split(' '));
 
         var reportType = ConsumeReportType(tokens)
@@ -60,35 +62,35 @@ public static class TafParser
         var (valFromDay, valFromHour, valToDay, valToHour) = ConsumeValidityPeriod(tokens, raw)
             ?? throw new TafParseException("Missing or invalid validity period.");
 
-        var rejected  = new List<string>();
-        var wind      = ConsumeWind(tokens, raw, rejected);
+        var rejected = new List<string>();
+        var wind = ConsumeWind(tokens, raw, rejected);
         var varSector = ConsumeVariableSector(tokens);
         if (wind is not null && varSector.HasValue)
             wind = wind with { VariableFrom = varSector.Value.from, VariableTo = varSector.Value.to };
 
         var visibility = ConsumeVisibility(tokens);
-        var weather    = ConsumeWeatherPhenomena(tokens);
-        var sky        = ConsumeSkyConditions(tokens);
-        var periods    = ConsumeChangePeriods(tokens, raw);
-        var unparsed   = rejected.Concat(tokens.Remaining()).ToList();
+        var weather = ConsumeWeatherPhenomena(tokens);
+        var sky = ConsumeSkyConditions(tokens);
+        var periods = ConsumeChangePeriods(tokens, raw);
+        var unparsed = rejected.Concat(tokens.Remaining()).ToList();
 
         return new TafReport
         {
-            Raw            = raw,
-            ReportType     = reportType,
-            Station        = station,
-            IssuanceDay    = issDay,
-            IssuanceHour   = issHour,
+            Raw = raw,
+            ReportType = reportType,
+            Station = station,
+            IssuanceDay = issDay,
+            IssuanceHour = issHour,
             IssuanceMinute = issMin,
-            ValidFromDay   = valFromDay,
-            ValidFromHour  = valFromHour,
-            ValidToDay     = valToDay,
-            ValidToHour    = valToHour,
-            Wind           = wind,
-            Visibility     = visibility,
-            Weather        = weather,
-            Sky            = sky,
-            ChangePeriods  = periods,
+            ValidFromDay = valFromDay,
+            ValidFromHour = valFromHour,
+            ValidToDay = valToDay,
+            ValidToHour = valToHour,
+            Wind = wind,
+            Visibility = visibility,
+            Weather = weather,
+            Sky = sky,
+            ChangePeriods = periods,
             UnparsedGroups = unparsed,
         };
     }
@@ -146,8 +148,8 @@ public static class TafParser
     {
         if (t.Peek() is not { } s || !IssuanceTimeRe.IsMatch(s)) return null;
 
-        var day    = int.Parse(s[..2]);
-        var hour   = int.Parse(s[2..4]);
+        var day = int.Parse(s[..2]);
+        var hour = int.Parse(s[2..4]);
         var minute = int.Parse(s[4..6]);
 
         if (day < 1 || day > 31 || hour > 23 || minute > 59)
@@ -237,11 +239,11 @@ public static class TafParser
         t.Next();
         return new Wind
         {
-            Direction  = isVrb ? null : int.Parse(m.Groups["dir"].Value),
+            Direction = isVrb ? null : int.Parse(m.Groups["dir"].Value),
             IsVariable = isVrb,
-            Speed      = int.Parse(m.Groups["spd"].Value),
-            Gust       = m.Groups["gst"].Success ? int.Parse(m.Groups["gst"].Value) : null,
-            Unit       = m.Groups["unit"].Value,
+            Speed = int.Parse(m.Groups["spd"].Value),
+            Gust = m.Groups["gst"].Success ? int.Parse(m.Groups["gst"].Value) : null,
+            Unit = m.Groups["unit"].Value,
         };
     }
 
@@ -310,8 +312,8 @@ public static class TafParser
             t.Next();
             return new Visibility
             {
-                DistanceMeters       = int.Parse(m.Groups["dist"].Value),
-                LessThan             = m.Groups["lt"].Success,
+                DistanceMeters = int.Parse(m.Groups["dist"].Value),
+                LessThan = m.Groups["lt"].Success,
                 NoDirectionalVariation = s.EndsWith("NDV"),
             };
         }
@@ -324,7 +326,7 @@ public static class TafParser
             return new Visibility
             {
                 DistanceStatuteMiles = double.Parse(m.Groups["n"].Value),
-                LessThan             = mod == "M",
+                LessThan = mod == "M",
             };
         }
 
@@ -341,7 +343,7 @@ public static class TafParser
         if (VisWholeSmRe.IsMatch(s) && t.Peek2() is { } next && VisFracSmRe.IsMatch(next))
         {
             var whole = int.Parse(t.Next()!);
-            var fm    = VisFracSmRe.Match(t.Next()!);
+            var fm = VisFracSmRe.Match(t.Next()!);
             double frac = double.Parse(fm.Groups["n"].Value) / double.Parse(fm.Groups["d"].Value);
             return new Visibility { DistanceStatuteMiles = whole + frac };
         }
@@ -390,11 +392,11 @@ public static class TafParser
                 : [];
             result.Add(new WeatherPhenomenon
             {
-                Intensity     = m.Groups["int"].Value  is { Length: > 0 } i ? i : "",
-                Descriptor    = m.Groups["desc"].Value is { Length: > 0 } d ? d : null,
+                Intensity = m.Groups["int"].Value is { Length: > 0 } i ? i : "",
+                Descriptor = m.Groups["desc"].Value is { Length: > 0 } d ? d : null,
                 Precipitation = prec,
-                Obscuration   = m.Groups["obsc"].Value  is { Length: > 0 } o ? o : null,
-                Other         = m.Groups["other"].Value is { Length: > 0 } x ? x : null,
+                Obscuration = m.Groups["obsc"].Value is { Length: > 0 } o ? o : null,
+                Other = m.Groups["other"].Value is { Length: > 0 } x ? x : null,
             });
         }
         return result;
@@ -428,9 +430,9 @@ public static class TafParser
             t.Next();
             result.Add(new SkyCondition
             {
-                Cover                = m.Groups["cov"].Value,
-                HeightFeet           = m.Groups["ht"].Success ? int.Parse(m.Groups["ht"].Value) * 100 : null,
-                CloudType            = m.Groups["ct"].Success ? m.Groups["ct"].Value : null,
+                Cover = m.Groups["cov"].Value,
+                HeightFeet = m.Groups["ht"].Success ? int.Parse(m.Groups["ht"].Value) * 100 : null,
+                CloudType = m.Groups["ct"].Success ? m.Groups["ct"].Value : null,
                 IsVerticalVisibility = m.Groups["cov"].Value == "VV",
             });
         }
@@ -476,7 +478,7 @@ public static class TafParser
             if (fmMatch.Success)
             {
                 changeType = "FM";
-                fromDay  = int.Parse(fmMatch.Groups["d"].Value);
+                fromDay = int.Parse(fmMatch.Groups["d"].Value);
                 fromHour = int.Parse(fmMatch.Groups["h"].Value);
                 t.Next();
             }
@@ -492,10 +494,10 @@ public static class TafParser
                     if (vgm.Success)
                     {
                         t.Next();
-                        fromDay  = int.Parse(vgm.Groups["fd"].Value);
+                        fromDay = int.Parse(vgm.Groups["fd"].Value);
                         fromHour = int.Parse(vgm.Groups["fh"].Value);
-                        toDay    = int.Parse(vgm.Groups["td"].Value);
-                        toHour   = int.Parse(vgm.Groups["th"].Value);
+                        toDay = int.Parse(vgm.Groups["td"].Value);
+                        toHour = int.Parse(vgm.Groups["th"].Value);
                     }
                 }
             }
@@ -508,10 +510,10 @@ public static class TafParser
                     if (vgm.Success)
                     {
                         t.Next();
-                        fromDay  = int.Parse(vgm.Groups["fd"].Value);
+                        fromDay = int.Parse(vgm.Groups["fd"].Value);
                         fromHour = int.Parse(vgm.Groups["fh"].Value);
-                        toDay    = int.Parse(vgm.Groups["td"].Value);
-                        toHour   = int.Parse(vgm.Groups["th"].Value);
+                        toDay = int.Parse(vgm.Groups["td"].Value);
+                        toHour = int.Parse(vgm.Groups["th"].Value);
                     }
                 }
             }
@@ -523,20 +525,20 @@ public static class TafParser
                 wind = wind with { VariableFrom = varSector.Value.from, VariableTo = varSector.Value.to };
 
             var visibility = ConsumeVisibility(t);
-            var weather    = ConsumeWeatherPhenomena(t);
-            var sky        = ConsumeSkyConditions(t);
+            var weather = ConsumeWeatherPhenomena(t);
+            var sky = ConsumeSkyConditions(t);
 
             result.Add(new TafChangePeriod
             {
                 ChangeType = changeType,
-                FromDay    = fromDay,
-                FromHour   = fromHour,
-                ToDay      = toDay,
-                ToHour     = toHour,
-                Wind       = wind,
+                FromDay = fromDay,
+                FromHour = fromHour,
+                ToDay = toDay,
+                ToHour = toHour,
+                Wind = wind,
                 Visibility = visibility,
-                Weather    = weather,
-                Sky        = sky,
+                Weather = weather,
+                Sky = sky,
             });
         }
         return result;

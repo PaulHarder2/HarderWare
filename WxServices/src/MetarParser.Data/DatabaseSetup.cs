@@ -1,5 +1,6 @@
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
+
 using WxServices.Logging;
 
 namespace MetarParser.Data;
@@ -292,22 +293,22 @@ public static class DatabaseSetup
     private static bool IsTransientSqlNumber(int number) => number switch
     {
         // Client-side timeouts and network-layer failures.
-        -2     => true,   // Connection timeout expired.
-        20     => true,   // The instance of SQL Server you attempted to connect to does not support encryption (often transient during startup).
-        26     => true,   // Error Locating Server/Instance Specified — the post-reboot case we're fixing.
-        40     => true,   // Could not open a connection to SQL Server.
-        53     => true,   // Network path not found.
-        64     => true,   // Specified network name is no longer available.
-        121    => true,   // Semaphore timeout period has expired.
-        233    => true,   // No process is on the other end of the pipe.
-        258    => true,   // Cannot wait on a mutex.
-        1205   => true,   // Deadlock victim.
-        1222   => true,   // Lock request time out.
-        10053  => true,   // A transport-level error has occurred (connection forcibly closed).
-        10054  => true,   // Connection reset by peer.
-        10060  => true,   // Connection attempt timed out.
-        10061  => true,   // No connection because target machine actively refused it.
-        11001  => true,   // Host not found (DNS still warming up, for named-instance lookups).
+        -2 => true,   // Connection timeout expired.
+        20 => true,   // The instance of SQL Server you attempted to connect to does not support encryption (often transient during startup).
+        26 => true,   // Error Locating Server/Instance Specified — the post-reboot case we're fixing.
+        40 => true,   // Could not open a connection to SQL Server.
+        53 => true,   // Network path not found.
+        64 => true,   // Specified network name is no longer available.
+        121 => true,   // Semaphore timeout period has expired.
+        233 => true,   // No process is on the other end of the pipe.
+        258 => true,   // Cannot wait on a mutex.
+        1205 => true,   // Deadlock victim.
+        1222 => true,   // Lock request time out.
+        10053 => true,   // A transport-level error has occurred (connection forcibly closed).
+        10054 => true,   // Connection reset by peer.
+        10060 => true,   // Connection attempt timed out.
+        10061 => true,   // No connection because target machine actively refused it.
+        11001 => true,   // Host not found (DNS still warming up, for named-instance lookups).
 
         _ => false,
     };

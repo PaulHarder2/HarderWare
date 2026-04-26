@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Windows.Media.Imaging;
+
 using WxServices.Logging;
 
 namespace WxViewer;
@@ -13,22 +14,22 @@ namespace WxViewer;
 public sealed class MeteogramItem : INotifyPropertyChanged
 {
     /// <summary>ICAO station identifier (e.g. <c>"KDWH"</c>).</summary>
-    public string Icao         { get; }
+    public string Icao { get; }
 
     /// <summary>Human-readable locality name (e.g. <c>"The Woodlands"</c>).</summary>
     public string LocalityName { get; }
 
     /// <summary>Temperature unit used in the meteogram: <c>"F"</c> or <c>"C"</c>.</summary>
-    public string TempUnit     { get; }
+    public string TempUnit { get; }
 
     /// <summary>IANA timezone used for the meteogram time axis (e.g. <c>"America/Chicago"</c>).</summary>
-    public string Timezone     { get; }
+    public string Timezone { get; }
 
     /// <summary>
     /// Chart title displayed above the meteogram image
     /// (e.g. <c>"KDWH — The Woodlands (°F) · Chicago"</c>).
     /// </summary>
-    public string Title        { get; }
+    public string Title { get; }
 
     /// <summary>Absolute path to the full-period meteogram PNG.</summary>
     public string FullImagePath { get; }
@@ -68,13 +69,13 @@ public sealed class MeteogramItem : INotifyPropertyChanged
     /// <param name="fullImagePath">Absolute path to the full-period PNG.</param>
     public MeteogramItem(string icao, string localityName, string tempUnit, string timezone, string fullImagePath)
     {
-        Icao          = icao;
-        LocalityName  = localityName;
-        TempUnit      = tempUnit;
-        Timezone      = timezone;
+        Icao = icao;
+        LocalityName = localityName;
+        TempUnit = tempUnit;
+        Timezone = timezone;
         FullImagePath = fullImagePath;
-        Title         = $"{icao} — {localityName} (°{tempUnit}) · {TzCity(timezone)}";
-        FullImage     = LoadBitmap(fullImagePath);
+        Title = $"{icao} — {localityName} (°{tempUnit}) · {TzCity(timezone)}";
+        FullImage = LoadBitmap(fullImagePath);
     }
 
     /// <summary>
@@ -98,8 +99,8 @@ public sealed class MeteogramItem : INotifyPropertyChanged
         {
             var bmp = new BitmapImage();
             bmp.BeginInit();
-            bmp.UriSource     = new Uri(path, UriKind.Absolute);
-            bmp.CacheOption   = BitmapCacheOption.OnLoad;
+            bmp.UriSource = new Uri(path, UriKind.Absolute);
+            bmp.CacheOption = BitmapCacheOption.OnLoad;
             bmp.CreateOptions = BitmapCreateOptions.IgnoreImageCache;
             bmp.EndInit();
             bmp.Freeze();

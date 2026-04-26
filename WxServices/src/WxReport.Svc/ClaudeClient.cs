@@ -1,6 +1,8 @@
 using System.Net.Http.Json;
 using System.Text.Json.Serialization;
+
 using WxInterp;
+
 using WxServices.Common;
 using WxServices.Logging;
 
@@ -16,9 +18,9 @@ public sealed class ClaudeClient
     private const string AnthropicVersion = "2023-06-01";
 
     private readonly HttpClient _http;
-    private readonly string     _apiKey;
-    private readonly string     _model;
-    private readonly string     _personaPrefix;
+    private readonly string _apiKey;
+    private readonly string _model;
+    private readonly string _personaPrefix;
 
     /// <summary>Initializes a new instance of <see cref="ClaudeClient"/> with the given credentials, model, and persona prefix.</summary>
     /// <param name="http">HTTP client used for all requests to the Anthropic Messages API.</param>
@@ -31,9 +33,9 @@ public sealed class ClaudeClient
     /// </param>
     public ClaudeClient(HttpClient http, string apiKey, string model, string personaPrefix)
     {
-        _http          = http;
-        _apiKey        = apiKey;
-        _model         = model;
+        _http = http;
+        _apiKey = apiKey;
+        _model = model;
         _personaPrefix = personaPrefix;
     }
 
@@ -90,15 +92,15 @@ public sealed class ClaudeClient
         var weatherData = SnapshotDescriber.Describe(snapshot, tz, units);
 
         var currentConditionsSubtitle = BuildCurrentConditionsSubtitle(snapshot);
-        var currentConditionsHeading  = currentConditionsSubtitle is null
+        var currentConditionsHeading = currentConditionsSubtitle is null
             ? "\"Current Conditions\""
             : $"\"Current Conditions\" followed on a new line by the subtitle \"{currentConditionsSubtitle}\" " +
               $"(font-size 13px, font-style italic, color #6b8fa8, font-weight normal)";
         var forecastHeading = $"\"Forecast for {snapshot.LocalityName}\"";
 
-        var tempLabel  = units.Temperature == "C" ? "Celsius"    : "Fahrenheit";
-        var pressLabel = units.Pressure    == "kPa" ? "kPa"      : "inches of mercury (inHg)";
-        var windLabel  = units.WindSpeed   == "kph" ? "km/h"     : "mph";
+        var tempLabel = units.Temperature == "C" ? "Celsius" : "Fahrenheit";
+        var pressLabel = units.Pressure == "kPa" ? "kPa" : "inches of mercury (inHg)";
+        var windLabel = units.WindSpeed == "kph" ? "km/h" : "mph";
         var unitInstruction = $"Use {tempLabel} for temperatures, {pressLabel} for pressure, " +
                               $"and {windLabel} for wind speeds throughout. ";
 
@@ -213,9 +215,9 @@ public sealed class ClaudeClient
         // it is attached to, so this layout caches AboutPaul.md alone.
         var request = new
         {
-            model    = _model,
+            model = _model,
             max_tokens = 4096,
-            system   = new object[]
+            system = new object[]
             {
                 new
                 {
@@ -360,8 +362,8 @@ public sealed class ClaudeClient
     private static string? BuildCurrentConditionsSubtitle(WeatherSnapshot snap)
     {
         var municipality = snap.StationMunicipality;
-        var airportName  = snap.StationName;
-        var locality     = snap.LocalityName;
+        var airportName = snap.StationName;
+        var locality = snap.LocalityName;
 
         // Cities match — no subtitle
         if (municipality is not null &&
@@ -395,7 +397,7 @@ public sealed class ClaudeClient
 
     private sealed class ContentBlock
     {
-        [JsonPropertyName("type")]  public string? Type { get; set; }
-        [JsonPropertyName("text")]  public string? Text { get; set; }
+        [JsonPropertyName("type")] public string? Type { get; set; }
+        [JsonPropertyName("text")] public string? Text { get; set; }
     }
 }

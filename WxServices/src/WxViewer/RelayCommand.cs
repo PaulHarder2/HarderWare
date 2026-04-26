@@ -15,7 +15,7 @@ public sealed class RelayCommand : ICommand
     /// <summary>Initialises a command with a parameterised execute delegate and optional canExecute predicate.</summary>
     public RelayCommand(Action<object?> execute, Func<object?, bool>? canExecute = null)
     {
-        _execute    = execute;
+        _execute = execute;
         _canExecute = canExecute;
     }
 
@@ -25,10 +25,10 @@ public sealed class RelayCommand : ICommand
 
     public event EventHandler? CanExecuteChanged
     {
-        add    => CommandManager.RequerySuggested += value;
+        add => CommandManager.RequerySuggested += value;
         remove => CommandManager.RequerySuggested -= value;
     }
 
     public bool CanExecute(object? parameter) => _canExecute?.Invoke(parameter) ?? true;
-    public void Execute(object? parameter)    => _execute(parameter);
+    public void Execute(object? parameter) => _execute(parameter);
 }

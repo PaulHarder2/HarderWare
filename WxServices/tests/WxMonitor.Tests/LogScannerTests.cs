@@ -3,6 +3,7 @@
 // first-run baseline behaviour, and the latestTimestamp out-parameter.
 
 using WxMonitor.Svc;
+
 using Xunit;
 
 namespace WxMonitor.Tests;
@@ -189,7 +190,7 @@ public class LogScannerTests : IDisposable
         var entries = LogScanner.Scan(_path, since: T0, "ERROR", out _);
 
         Assert.Equal(2, entries.Count);
-        Assert.Contains("continuation of first",  entries[0].Text);
+        Assert.Contains("continuation of first", entries[0].Text);
         Assert.Contains("continuation of second", entries[1].Text);
     }
 }

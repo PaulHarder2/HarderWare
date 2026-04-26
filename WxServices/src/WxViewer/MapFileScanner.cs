@@ -3,6 +3,7 @@ using System.IO;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Windows.Threading;
+
 using WxServices.Logging;
 
 namespace WxViewer;
@@ -34,10 +35,10 @@ public sealed class MapFileScanner : IDisposable
         @"^meteogram_manifest_(?<date>\d{8})_(?<hour>\d{2})\.json$",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-    private readonly string     _directory;
+    private readonly string _directory;
     private readonly Dispatcher _dispatcher;
-    private FileSystemWatcher?  _pngWatcher;
-    private FileSystemWatcher?  _jsonWatcher;
+    private FileSystemWatcher? _pngWatcher;
+    private FileSystemWatcher? _jsonWatcher;
 
     /// <summary>
     /// Raised on the UI thread when PNG files are created, deleted, or renamed
@@ -50,7 +51,7 @@ public sealed class MapFileScanner : IDisposable
     /// <param name="dispatcher">The WPF UI dispatcher used to marshal change events.</param>
     public MapFileScanner(string directory, Dispatcher dispatcher)
     {
-        _directory  = directory;
+        _directory = directory;
         _dispatcher = dispatcher;
     }
 
@@ -73,14 +74,14 @@ public sealed class MapFileScanner : IDisposable
     {
         var w = new FileSystemWatcher(_directory, filter)
         {
-            NotifyFilter          = NotifyFilters.FileName,
+            NotifyFilter = NotifyFilters.FileName,
             IncludeSubdirectories = false,
-            EnableRaisingEvents   = true,
+            EnableRaisingEvents = true,
         };
         w.Created += OnFsEvent;
         w.Deleted += OnFsEvent;
         w.Renamed += OnFsRenamed;
-        w.Error   += OnWatcherError;
+        w.Error += OnWatcherError;
         return w;
     }
 
@@ -117,7 +118,7 @@ public sealed class MapFileScanner : IDisposable
 
         foreach (var path in Directory.EnumerateFiles(_directory, "synoptic_*.png"))
         {
-            var name  = Path.GetFileName(path);
+            var name = Path.GetFileName(path);
             var match = AnalysisRegex.Match(name);
             if (!match.Success) continue;
 
@@ -126,7 +127,7 @@ public sealed class MapFileScanner : IDisposable
             if (!int.TryParse(match.Groups["zoom"].Value, out var zoom)) continue;
 
             var label = match.Groups["label"].Value;
-            var key   = (label, obsUtc);
+            var key = (label, obsUtc);
 
             if (!groups.TryGetValue(key, out var zoomPaths))
                 groups[key] = zoomPaths = new Dictionary<int, string>();
@@ -160,7 +161,7 @@ public sealed class MapFileScanner : IDisposable
 
         foreach (var path in Directory.EnumerateFiles(_directory, "forecast_*.png"))
         {
-            var name  = Path.GetFileName(path);
+            var name = Path.GetFileName(path);
             var match = ForecastRegex.Match(name);
             if (!match.Success) continue;
 
@@ -180,9 +181,9 @@ public sealed class MapFileScanner : IDisposable
         foreach (var ((runUtc, fh), zoomPaths) in zoomGroups)
         {
             if (!zoomPaths.TryGetValue(1, out var z1Path)) continue; // require z1
-            var validUtc  = runUtc.AddHours(fh);
+            var validUtc = runUtc.AddHours(fh);
             var hourLabel = $"+{fh:D3}h  Valid: {validUtc:yyyy-MM-dd HH}Z";
-            var frame     = new ForecastFrame(fh, validUtc, z1Path, hourLabel, zoomPaths);
+            var frame = new ForecastFrame(fh, validUtc, z1Path, hourLabel, zoomPaths);
 
             if (!byRun.TryGetValue(runUtc, out var list))
                 byRun[runUtc] = list = [];
@@ -223,7 +224,7 @@ public sealed class MapFileScanner : IDisposable
 
         foreach (var path in Directory.EnumerateFiles(_directory, "meteogram_manifest_*.json"))
         {
-            var name  = Path.GetFileName(path);
+            var name = Path.GetFileName(path);
             var match = ManifestRegex.Match(name);
             if (!match.Success) continue;
 
@@ -249,17 +250,17 @@ public sealed class MapFileScanner : IDisposable
             using var doc = JsonDocument.Parse(File.ReadAllText(manifestPath));
             foreach (var entry in doc.RootElement.EnumerateArray())
             {
-                if (!entry.TryGetProperty("Icao",         out var icaoProp))     continue;
+                if (!entry.TryGetProperty("Icao", out var icaoProp)) continue;
                 if (!entry.TryGetProperty("LocalityName", out var localityProp)) continue;
-                if (!entry.TryGetProperty("TempUnit",     out var unitProp))     continue;
-                if (!entry.TryGetProperty("Timezone",     out var tzProp))       continue;
-                if (!entry.TryGetProperty("FileFull",     out var fileProp))     continue;
+                if (!entry.TryGetProperty("TempUnit", out var unitProp)) continue;
+                if (!entry.TryGetProperty("Timezone", out var tzProp)) continue;
+                if (!entry.TryGetProperty("FileFull", out var fileProp)) continue;
 
-                var icao     = icaoProp.GetString();
+                var icao = icaoProp.GetString();
                 var locality = localityProp.GetString();
-                var unit     = unitProp.GetString();
-                var tz       = tzProp.GetString();
-                var file     = fileProp.GetString();
+                var unit = unitProp.GetString();
+                var tz = tzProp.GetString();
+                var file = fileProp.GetString();
 
                 if (string.IsNullOrWhiteSpace(icao) || string.IsNullOrWhiteSpace(file)) continue;
 

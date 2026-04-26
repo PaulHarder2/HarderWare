@@ -3,7 +3,9 @@
 // sent to the Claude API.
 
 using WxInterp;
+
 using WxReport.Svc;
+
 using Xunit;
 
 namespace WxInterp.Tests;
@@ -12,23 +14,23 @@ public class SnapshotDescriberTests
 {
     private static WeatherSnapshot Base() => new()
     {
-        StationIcao            = "KDWH",
-        LocalityName           = "Spring",
-        ObservationTimeUtc     = new DateTime(2026, 3, 27, 12, 55, 0, DateTimeKind.Utc),
-        IsAutomated            = true,
-        WindDirectionDeg       = 180,
-        WindIsVariable         = false,
-        WindSpeedKt            = 12,
-        WindGustKt             = null,
-        Cavok                  = false,
+        StationIcao = "KDWH",
+        LocalityName = "Spring",
+        ObservationTimeUtc = new DateTime(2026, 3, 27, 12, 55, 0, DateTimeKind.Utc),
+        IsAutomated = true,
+        WindDirectionDeg = 180,
+        WindIsVariable = false,
+        WindSpeedKt = 12,
+        WindGustKt = null,
+        Cavok = false,
         VisibilityStatuteMiles = 10.0,
-        TemperatureCelsius     = 22.0,
-        TemperatureFahrenheit  = 71.6,
-        DewPointCelsius        = 15.0,
-        AltimeterInHg          = 29.98,
-        SkyLayers              = [],
-        WeatherPhenomena       = [],
-        ForecastPeriods        = [],
+        TemperatureCelsius = 22.0,
+        TemperatureFahrenheit = 71.6,
+        DewPointCelsius = 15.0,
+        AltimeterInHg = 29.98,
+        SkyLayers = [],
+        WeatherPhenomena = [],
+        ForecastPeriods = [],
     };
 
     // ── station / observation ─────────────────────────────────────────────────
@@ -54,14 +56,14 @@ public class SnapshotDescriberTests
     {
         var snap = new WeatherSnapshot
         {
-            StationIcao            = "KDWH",
-            LocalityName           = "Spring",
-            ObservationTimeUtc     = new DateTime(2026, 3, 27, 12, 55, 0, DateTimeKind.Utc),
-            IsAutomated            = false,
+            StationIcao = "KDWH",
+            LocalityName = "Spring",
+            ObservationTimeUtc = new DateTime(2026, 3, 27, 12, 55, 0, DateTimeKind.Utc),
+            IsAutomated = false,
             VisibilityStatuteMiles = 10.0,
-            SkyLayers              = [],
-            WeatherPhenomena       = [],
-            ForecastPeriods        = [],
+            SkyLayers = [],
+            WeatherPhenomena = [],
+            ForecastPeriods = [],
         };
         Assert.DoesNotContain("automated", SnapshotDescriber.Describe(snap, TimeZoneInfo.Utc));
     }
@@ -86,15 +88,15 @@ public class SnapshotDescriberTests
     {
         var snap = new WeatherSnapshot
         {
-            StationIcao            = "KDWH",
-            ObservationTimeUtc     = new DateTime(2026, 3, 27, 12, 55, 0, DateTimeKind.Utc),
-            WindDirectionDeg       = 180,
-            WindSpeedKt            = 12,
-            WindGustKt             = 22,
+            StationIcao = "KDWH",
+            ObservationTimeUtc = new DateTime(2026, 3, 27, 12, 55, 0, DateTimeKind.Utc),
+            WindDirectionDeg = 180,
+            WindSpeedKt = 12,
+            WindGustKt = 22,
             VisibilityStatuteMiles = 10.0,
-            SkyLayers              = [],
-            WeatherPhenomena       = [],
-            ForecastPeriods        = [],
+            SkyLayers = [],
+            WeatherPhenomena = [],
+            ForecastPeriods = [],
         };
         Assert.Contains("gusting 22 kt", SnapshotDescriber.Describe(snap, TimeZoneInfo.Utc));
     }
@@ -104,14 +106,14 @@ public class SnapshotDescriberTests
     {
         var snap = new WeatherSnapshot
         {
-            StationIcao            = "KDWH",
-            ObservationTimeUtc     = new DateTime(2026, 3, 27, 12, 55, 0, DateTimeKind.Utc),
-            WindIsVariable         = true,
-            WindSpeedKt            = 8,
+            StationIcao = "KDWH",
+            ObservationTimeUtc = new DateTime(2026, 3, 27, 12, 55, 0, DateTimeKind.Utc),
+            WindIsVariable = true,
+            WindSpeedKt = 8,
             VisibilityStatuteMiles = 10.0,
-            SkyLayers              = [],
-            WeatherPhenomena       = [],
-            ForecastPeriods        = [],
+            SkyLayers = [],
+            WeatherPhenomena = [],
+            ForecastPeriods = [],
         };
         Assert.Contains("variable", SnapshotDescriber.Describe(snap, TimeZoneInfo.Utc));
     }
@@ -121,13 +123,13 @@ public class SnapshotDescriberTests
     {
         var snap = new WeatherSnapshot
         {
-            StationIcao            = "KDWH",
-            ObservationTimeUtc     = new DateTime(2026, 3, 27, 12, 55, 0, DateTimeKind.Utc),
-            WindSpeedKt            = 0,
+            StationIcao = "KDWH",
+            ObservationTimeUtc = new DateTime(2026, 3, 27, 12, 55, 0, DateTimeKind.Utc),
+            WindSpeedKt = 0,
             VisibilityStatuteMiles = 10.0,
-            SkyLayers              = [],
-            WeatherPhenomena       = [],
-            ForecastPeriods        = [],
+            SkyLayers = [],
+            WeatherPhenomena = [],
+            ForecastPeriods = [],
         };
         Assert.Contains("calm", SnapshotDescriber.Describe(snap, TimeZoneInfo.Utc));
     }
@@ -147,12 +149,12 @@ public class SnapshotDescriberTests
     {
         var snap = new WeatherSnapshot
         {
-            StationIcao        = "KDWH",
+            StationIcao = "KDWH",
             ObservationTimeUtc = new DateTime(2026, 3, 27, 12, 55, 0, DateTimeKind.Utc),
-            Cavok              = true,
-            SkyLayers          = [],
-            WeatherPhenomena   = [],
-            ForecastPeriods    = [],
+            Cavok = true,
+            SkyLayers = [],
+            WeatherPhenomena = [],
+            ForecastPeriods = [],
         };
         Assert.Contains("CAVOK", SnapshotDescriber.Describe(snap, TimeZoneInfo.Utc));
     }
@@ -162,13 +164,13 @@ public class SnapshotDescriberTests
     {
         var snap = new WeatherSnapshot
         {
-            StationIcao            = "KDWH",
-            ObservationTimeUtc     = new DateTime(2026, 3, 27, 12, 55, 0, DateTimeKind.Utc),
+            StationIcao = "KDWH",
+            ObservationTimeUtc = new DateTime(2026, 3, 27, 12, 55, 0, DateTimeKind.Utc),
             VisibilityStatuteMiles = 0.25,
-            VisibilityLessThan     = true,
-            SkyLayers              = [],
-            WeatherPhenomena       = [],
-            ForecastPeriods        = [],
+            VisibilityLessThan = true,
+            SkyLayers = [],
+            WeatherPhenomena = [],
+            ForecastPeriods = [],
         };
         Assert.Contains("<", SnapshotDescriber.Describe(snap, TimeZoneInfo.Utc));
     }
@@ -184,12 +186,12 @@ public class SnapshotDescriberTests
     {
         var snap = new WeatherSnapshot
         {
-            StationIcao            = "KDWH",
-            ObservationTimeUtc     = new DateTime(2026, 3, 27, 12, 55, 0, DateTimeKind.Utc),
+            StationIcao = "KDWH",
+            ObservationTimeUtc = new DateTime(2026, 3, 27, 12, 55, 0, DateTimeKind.Utc),
             VisibilityStatuteMiles = 10.0,
-            SkyLayers              = [new SkyLayer { Coverage = SkyCoverage.Broken, HeightFeet = 2500 }],
-            WeatherPhenomena       = [],
-            ForecastPeriods        = [],
+            SkyLayers = [new SkyLayer { Coverage = SkyCoverage.Broken, HeightFeet = 2500 }],
+            WeatherPhenomena = [],
+            ForecastPeriods = [],
         };
         var text = SnapshotDescriber.Describe(snap, TimeZoneInfo.Utc);
         Assert.Contains("Broken", text);
@@ -201,12 +203,12 @@ public class SnapshotDescriberTests
     {
         var snap = new WeatherSnapshot
         {
-            StationIcao            = "KDWH",
-            ObservationTimeUtc     = new DateTime(2026, 3, 27, 12, 55, 0, DateTimeKind.Utc),
+            StationIcao = "KDWH",
+            ObservationTimeUtc = new DateTime(2026, 3, 27, 12, 55, 0, DateTimeKind.Utc),
             VisibilityStatuteMiles = 10.0,
-            SkyLayers              = [new SkyLayer { Coverage = SkyCoverage.Few, HeightFeet = 3000, CloudType = CloudType.Cumulonimbus }],
-            WeatherPhenomena       = [],
-            ForecastPeriods        = [],
+            SkyLayers = [new SkyLayer { Coverage = SkyCoverage.Few, HeightFeet = 3000, CloudType = CloudType.Cumulonimbus }],
+            WeatherPhenomena = [],
+            ForecastPeriods = [],
         };
         Assert.Contains("Cumulonimbus", SnapshotDescriber.Describe(snap, TimeZoneInfo.Utc));
     }
@@ -246,13 +248,13 @@ public class SnapshotDescriberTests
     {
         var snap = new WeatherSnapshot
         {
-            StationIcao            = "KDWH",
-            ObservationTimeUtc     = new DateTime(2026, 3, 27, 12, 55, 0, DateTimeKind.Utc),
+            StationIcao = "KDWH",
+            ObservationTimeUtc = new DateTime(2026, 3, 27, 12, 55, 0, DateTimeKind.Utc),
             VisibilityStatuteMiles = 10.0,
-            TafStationIcao         = null,
-            SkyLayers              = [],
-            WeatherPhenomena       = [],
-            ForecastPeriods        = [],
+            TafStationIcao = null,
+            SkyLayers = [],
+            WeatherPhenomena = [],
+            ForecastPeriods = [],
         };
         Assert.Contains("not available", SnapshotDescriber.Describe(snap, TimeZoneInfo.Utc));
     }
@@ -262,13 +264,13 @@ public class SnapshotDescriberTests
     {
         var snap = new WeatherSnapshot
         {
-            StationIcao            = "KDWH",
-            ObservationTimeUtc     = new DateTime(2026, 3, 27, 12, 55, 0, DateTimeKind.Utc),
+            StationIcao = "KDWH",
+            ObservationTimeUtc = new DateTime(2026, 3, 27, 12, 55, 0, DateTimeKind.Utc),
             VisibilityStatuteMiles = 10.0,
-            TafStationIcao         = "KIAH",
-            SkyLayers              = [],
-            WeatherPhenomena       = [],
-            ForecastPeriods        =
+            TafStationIcao = "KIAH",
+            SkyLayers = [],
+            WeatherPhenomena = [],
+            ForecastPeriods =
             [
                 new ForecastPeriod
                 {
@@ -293,13 +295,13 @@ public class SnapshotDescriberTests
         // Forecast period times must include the date so Claude knows the day of week
         var snap = new WeatherSnapshot
         {
-            StationIcao            = "KDWH",
-            ObservationTimeUtc     = new DateTime(2026, 3, 27, 12, 55, 0, DateTimeKind.Utc),
+            StationIcao = "KDWH",
+            ObservationTimeUtc = new DateTime(2026, 3, 27, 12, 55, 0, DateTimeKind.Utc),
             VisibilityStatuteMiles = 10.0,
-            TafStationIcao         = "KIAH",
-            SkyLayers              = [],
-            WeatherPhenomena       = [],
-            ForecastPeriods        =
+            TafStationIcao = "KIAH",
+            SkyLayers = [],
+            WeatherPhenomena = [],
+            ForecastPeriods =
             [
                 new ForecastPeriod
                 {

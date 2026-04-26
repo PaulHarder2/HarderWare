@@ -3,7 +3,9 @@
 // and that two snapshots produce equal or unequal fingerprints as expected.
 
 using WxInterp;
+
 using WxReport.Svc;
+
 using Xunit;
 
 namespace WxInterp.Tests;
@@ -12,25 +14,25 @@ public class SnapshotFingerprintTests
 {
     private static readonly SignificantChangeConfig DefaultCfg = new()
     {
-        WindThresholdKt       = 25,
+        WindThresholdKt = 25,
         VisibilityThresholdSm = 3.0,
     };
 
     // ── helpers ───────────────────────────────────────────────────────────────
 
     private static WeatherSnapshot Make(
-        int?   windKt      = 5,
-        double visSm       = 10.0,
-        bool   cavok       = false,
-        IReadOnlyList<SkyLayer>?       layers   = null,
-        IReadOnlyList<SnapshotWeather>? wx      = null) => new()
-    {
-        WindSpeedKt            = windKt,
-        VisibilityStatuteMiles = visSm,
-        Cavok                  = cavok,
-        SkyLayers              = layers ?? [],
-        WeatherPhenomena       = wx     ?? [],
-    };
+        int? windKt = 5,
+        double visSm = 10.0,
+        bool cavok = false,
+        IReadOnlyList<SkyLayer>? layers = null,
+        IReadOnlyList<SnapshotWeather>? wx = null) => new()
+        {
+            WindSpeedKt = windKt,
+            VisibilityStatuteMiles = visSm,
+            Cavok = cavok,
+            SkyLayers = layers ?? [],
+            WeatherPhenomena = wx ?? [],
+        };
 
     // ── wind ─────────────────────────────────────────────────────────────────
 

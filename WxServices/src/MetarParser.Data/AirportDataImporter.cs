@@ -1,7 +1,10 @@
 using System.Globalization;
 using System.Text;
+
 using MetarParser.Data.Entities;
+
 using Microsoft.EntityFrameworkCore;
+
 using WxServices.Logging;
 
 namespace MetarParser.Data;
@@ -57,9 +60,9 @@ public static class AirportDataImporter
         string regionsCsv;
         try
         {
-            csv          = await DownloadAsync(httpClient, CsvUrl,          ct);
+            csv = await DownloadAsync(httpClient, CsvUrl, ct);
             countriesCsv = await DownloadAsync(httpClient, CountriesCsvUrl, ct);
-            regionsCsv   = await DownloadAsync(httpClient, RegionsCsvUrl,   ct);
+            regionsCsv = await DownloadAsync(httpClient, RegionsCsvUrl, ct);
         }
         catch (Exception ex)
         {
@@ -68,7 +71,7 @@ public static class AirportDataImporter
         }
 
         var countryNames = ParseCountries(countriesCsv);
-        var regionNames  = ParseRegions(regionsCsv);
+        var regionNames = ParseRegions(regionsCsv);
         Logger.Info($"AirportDataImporter: loaded {countryNames.Count} countries, {regionNames.Count} regions.");
 
         var airportData = ParseCsv(csv);
@@ -80,13 +83,13 @@ public static class AirportDataImporter
         var existing = await ctx.WxStations
             .ToDictionaryAsync(s => s.IcaoId.Trim(), StringComparer.OrdinalIgnoreCase, ct);
 
-        int updated  = 0;
+        int updated = 0;
         int inserted = 0;
 
         foreach (var (icao, data) in airportData)
         {
             var countryCode = string.IsNullOrWhiteSpace(data.CountryCode) ? null : data.CountryCode;
-            var regionCode  = string.IsNullOrWhiteSpace(data.RegionCode)  ? null : data.RegionCode;
+            var regionCode = string.IsNullOrWhiteSpace(data.RegionCode) ? null : data.RegionCode;
 
             // OurAirports emits a placeholder subdivision "{country}-U-A" with name
             // "(unassigned)" for airports whose country lacks or omits a subdivision.
@@ -105,7 +108,7 @@ public static class AirportDataImporter
             }
 
             string? country = countryCode is not null && countryNames.TryGetValue(countryCode, out var cn) ? cn : null;
-            string? region  = regionCode  is not null && regionNames.TryGetValue(regionCode,   out var rn) ? rn : null;
+            string? region = regionCode is not null && regionNames.TryGetValue(regionCode, out var rn) ? rn : null;
 
             string? countryAbbr = countryCode is null
                 ? null
@@ -113,15 +116,15 @@ public static class AirportDataImporter
 
             if (existing.TryGetValue(icao, out var station))
             {
-                station.Name         = data.Name;
+                station.Name = data.Name;
                 station.Municipality = data.Municipality;
-                if (data.Lat.HasValue)         station.Lat         = data.Lat;
-                if (data.Lon.HasValue)         station.Lon         = data.Lon;
+                if (data.Lat.HasValue) station.Lat = data.Lat;
+                if (data.Lon.HasValue) station.Lon = data.Lon;
                 if (data.ElevationFt.HasValue) station.ElevationFt = data.ElevationFt;
-                station.Region      = region;
-                station.RegionCode  = regionCode;
-                station.RegionAbbr  = regionAbbr;
-                station.Country     = country;
+                station.Region = region;
+                station.RegionCode = regionCode;
+                station.RegionAbbr = regionAbbr;
+                station.Country = country;
                 station.CountryCode = countryCode;
                 station.CountryAbbr = countryAbbr;
                 updated++;
@@ -130,18 +133,18 @@ public static class AirportDataImporter
             {
                 ctx.WxStations.Add(new WxStation
                 {
-                    IcaoId       = icao,
-                    Name         = data.Name,
+                    IcaoId = icao,
+                    Name = data.Name,
                     Municipality = data.Municipality,
-                    Lat          = data.Lat,
-                    Lon          = data.Lon,
-                    ElevationFt  = data.ElevationFt,
-                    Region       = region,
-                    RegionCode   = regionCode,
-                    RegionAbbr   = regionAbbr,
-                    Country      = country,
-                    CountryCode  = countryCode,
-                    CountryAbbr  = countryAbbr,
+                    Lat = data.Lat,
+                    Lon = data.Lon,
+                    ElevationFt = data.ElevationFt,
+                    Region = region,
+                    RegionCode = regionCode,
+                    RegionAbbr = regionAbbr,
+                    Country = country,
+                    CountryCode = countryCode,
+                    CountryAbbr = countryAbbr,
                 });
                 inserted++;
             }
@@ -161,16 +164,16 @@ public static class AirportDataImporter
         var headerLine = reader.ReadLine();
         if (headerLine is null) return result;
 
-        var columns  = SplitCsvLine(headerLine);
-        int idxIcao    = columns.IndexOf("icao_code");
-        int idxIdent   = columns.IndexOf("ident");
-        int idxName    = columns.IndexOf("name");
-        int idxMuni    = columns.IndexOf("municipality");
-        int idxLat     = columns.IndexOf("latitude_deg");
-        int idxLon     = columns.IndexOf("longitude_deg");
-        int idxElev    = columns.IndexOf("elevation_ft");
+        var columns = SplitCsvLine(headerLine);
+        int idxIcao = columns.IndexOf("icao_code");
+        int idxIdent = columns.IndexOf("ident");
+        int idxName = columns.IndexOf("name");
+        int idxMuni = columns.IndexOf("municipality");
+        int idxLat = columns.IndexOf("latitude_deg");
+        int idxLon = columns.IndexOf("longitude_deg");
+        int idxElev = columns.IndexOf("elevation_ft");
         int idxCountry = columns.IndexOf("iso_country");
-        int idxRegion  = columns.IndexOf("iso_region");
+        int idxRegion = columns.IndexOf("iso_region");
 
         if (idxName < 0 || idxMuni < 0) return result;
 
@@ -180,33 +183,33 @@ public static class AirportDataImporter
             if (string.IsNullOrWhiteSpace(line)) continue;
             var fields = SplitCsvLine(line);
             int maxIdx = Math.Max(idxName, idxMuni);
-            if (idxIcao  >= 0) maxIdx = Math.Max(maxIdx, idxIcao);
+            if (idxIcao >= 0) maxIdx = Math.Max(maxIdx, idxIcao);
             if (idxIdent >= 0) maxIdx = Math.Max(maxIdx, idxIdent);
             if (fields.Count <= maxIdx) continue;
 
             // Prefer icao_code; fall back to ident for airports (e.g. K11R) that
             // carry only an FAA identifier and leave icao_code blank.
-            var icao = idxIcao  >= 0 ? fields[idxIcao].Trim()  : "";
+            var icao = idxIcao >= 0 ? fields[idxIcao].Trim() : "";
             if (string.IsNullOrEmpty(icao))
-                icao  = idxIdent >= 0 ? fields[idxIdent].Trim() : "";
+                icao = idxIdent >= 0 ? fields[idxIdent].Trim() : "";
             if (icao.Length != 4) continue;  // IcaoId column is nchar(4); skip non-standard identifiers
 
             var name = fields[idxName].Trim();
             var muni = fields[idxMuni].Trim();
 
-            double? lat  = TryParseDouble(fields, idxLat);
-            double? lon  = TryParseDouble(fields, idxLon);
+            double? lat = TryParseDouble(fields, idxLat);
+            double? lon = TryParseDouble(fields, idxLon);
             double? elev = TryParseDouble(fields, idxElev);
 
             var country = idxCountry >= 0 && idxCountry < fields.Count ? fields[idxCountry].Trim() : "";
-            var region  = idxRegion  >= 0 && idxRegion  < fields.Count ? fields[idxRegion].Trim()  : "";
+            var region = idxRegion >= 0 && idxRegion < fields.Count ? fields[idxRegion].Trim() : "";
 
             result[icao] = new AirportRow(
-                name.Length    > 0 ? Truncate(name, 100)  : null,
-                muni.Length    > 0 ? Truncate(muni, 100)  : null,
+                name.Length > 0 ? Truncate(name, 100) : null,
+                muni.Length > 0 ? Truncate(muni, 100) : null,
                 lat, lon, elev,
                 country.Length > 0 ? Truncate(country, 2) : null,
-                region.Length  > 0 ? Truncate(region, 10) : null);
+                region.Length > 0 ? Truncate(region, 10) : null);
         }
 
         return result;
@@ -307,8 +310,8 @@ public static class AirportDataImporter
     /// </summary>
     private static List<string> SplitCsvLine(string line)
     {
-        var fields   = new List<string>();
-        var sb       = new StringBuilder();
+        var fields = new List<string>();
+        var sb = new StringBuilder();
         bool inQuote = false;
 
         for (int i = 0; i < line.Length; i++)

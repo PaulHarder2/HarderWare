@@ -22,13 +22,15 @@
 //   1 — bad arguments, configuration problem, or write failure
 //   2 — address could not be geocoded
 
-using MetarParser.Data;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+
+using MetarParser.Data;
+
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 
 // ── Arguments ─────────────────────────────────────────────────────────────────
 
@@ -46,7 +48,7 @@ var address = args[0].Trim();
 var config = new ConfigurationBuilder()
     .SetBasePath(AppContext.BaseDirectory)
     .AddJsonFile("appsettings.shared.json", optional: false)
-    .AddJsonFile("appsettings.local.json",  optional: true)
+    .AddJsonFile("appsettings.local.json", optional: true)
     .Build();
 
 var connStr = config.GetConnectionString("WeatherData");
@@ -67,9 +69,9 @@ var dbOptions = new DbContextOptionsBuilder<WeatherDataContext>()
     .UseSqlServer(connStr)
     .Options;
 
-double? homeLat = double.TryParse(config["Fetch:HomeLatitude"],       out var hl)  ? hl  : null;
-double? homeLon = double.TryParse(config["Fetch:HomeLongitude"],      out var hlo) ? hlo : null;
-double? boxDeg  = double.TryParse(config["Fetch:BoundingBoxDegrees"], out var bd)  ? bd  : null;
+double? homeLat = double.TryParse(config["Fetch:HomeLatitude"], out var hl) ? hl : null;
+double? homeLon = double.TryParse(config["Fetch:HomeLongitude"], out var hlo) ? hlo : null;
+double? boxDeg = double.TryParse(config["Fetch:BoundingBoxDegrees"], out var bd) ? bd : null;
 
 var defaultLanguage = config["Report:DefaultLanguage"] ?? "English";
 
@@ -98,7 +100,7 @@ Console.WriteLine();
 
 const double SearchRadius = 2.5;
 var bbox = $"{lat - SearchRadius},{lon - SearchRadius},{lat + SearchRadius},{lon + SearchRadius}";
-var url  = $"https://aviationweather.gov/api/data/metar?bbox={bbox}&hours=1&format=json";
+var url = $"https://aviationweather.gov/api/data/metar?bbox={bbox}&hours=1&format=json";
 
 AwcMetar[]? awcResults;
 try
@@ -124,10 +126,10 @@ if (awcResults is not { Length: > 0 })
 // Sort by Haversine great-circle distance and take the five nearest.
 static double HaversineKm(double lat1, double lon1, double lat2, double lon2)
 {
-    const double R    = 6371.0;
-    var          dLat = (lat2 - lat1) * Math.PI / 180.0;
-    var          dLon = (lon2 - lon1) * Math.PI / 180.0;
-    var          a    = Math.Sin(dLat / 2) * Math.Sin(dLat / 2)
+    const double R = 6371.0;
+    var dLat = (lat2 - lat1) * Math.PI / 180.0;
+    var dLon = (lon2 - lon1) * Math.PI / 180.0;
+    var a = Math.Sin(dLat / 2) * Math.Sin(dLat / 2)
                       + Math.Cos(lat1 * Math.PI / 180.0) * Math.Cos(lat2 * Math.PI / 180.0)
                       * Math.Sin(dLon / 2) * Math.Sin(dLon / 2);
     return R * 2.0 * Math.Atan2(Math.Sqrt(a), Math.Sqrt(1 - a));
@@ -155,7 +157,7 @@ for (int i = 0; i < candidates.Count; i++)
     var icao = stn.IcaoId!;
 
     var metarCount = await ctx.Metars.CountAsync(m => m.StationIcao == icao);
-    var tafCount   = await ctx.Tafs.CountAsync(t => t.StationIcao == icao);
+    var tafCount = await ctx.Tafs.CountAsync(t => t.StationIcao == icao);
 
     DateTime? latest = metarCount > 0
         ? await ctx.Metars
@@ -169,7 +171,7 @@ for (int i = 0; i < candidates.Count; i++)
         .FirstOrDefaultAsync();
 
     var metarCol = metarCount == 0 ? "—" : $"{metarCount}";
-    var tafCol   = tafCount   == 0 ? "—" : $"{tafCount}";
+    var tafCol = tafCount == 0 ? "—" : $"{tafCount}";
 
     string latestCol;
     if (latest.HasValue)
@@ -199,7 +201,7 @@ if (homeLat.HasValue && homeLon.HasValue && boxDeg.HasValue)
     var latMax = homeLat.Value + boxDeg.Value;
     var lonMin = homeLon.Value - boxDeg.Value;
     var lonMax = homeLon.Value + boxDeg.Value;
-    var inBox  = lat >= latMin && lat <= latMax && lon >= lonMin && lon <= lonMax;
+    var inBox = lat >= latMin && lat <= latMax && lon >= lonMin && lon <= lonMax;
 
     Console.WriteLine($"Fetch bbox : {latMin:F1}°–{latMax:F1}°N, {Math.Abs(lonMax):F1}°–{Math.Abs(lonMin):F1}°W  (home ±{boxDeg:F0}°)");
     var bboxStatus = inBox
@@ -244,7 +246,7 @@ static string Prompt(string label, string? defaultValue = null)
     {
         Console.Write($"  {label}{hint}: ");
         var input = Console.ReadLine()?.Trim() ?? "";
-        if (input.Length > 0)  return input;
+        if (input.Length > 0) return input;
         if (defaultValue is not null) return defaultValue;
         Console.WriteLine("    (required — please enter a value)");
     }
@@ -253,16 +255,16 @@ static string Prompt(string label, string? defaultValue = null)
 Console.WriteLine("─── New recipient ────────────────────────────────────────────────────────────");
 Console.WriteLine();
 
-var recipientId  = Prompt("Id (e.g. \"john-en\")");
+var recipientId = Prompt("Id (e.g. \"john-en\")");
 var recipientName = Prompt("Name");
-var email        = Prompt("Email");
-var language     = Prompt("Language",                                         defaultValue: defaultLanguage);
-var timezone     = Prompt("Timezone",                                         defaultValue: "America/Chicago");
-var schedHours   = Prompt("Scheduled send hour(s) (e.g. \"7\" or \"6, 18\")", defaultValue: "7");
-var metarIcao    = Prompt("METAR ICAO(s)",                                    defaultValue: suggestedMetar.Length > 0 ? suggestedMetar : null);
-var tempUnit     = Prompt("Temperature unit (F/C)",                           defaultValue: "F");
-var pressureUnit = Prompt("Pressure unit (inHg/kPa)",                         defaultValue: "inHg");
-var windUnit     = Prompt("Wind speed unit (mph/kph)",                        defaultValue: "mph");
+var email = Prompt("Email");
+var language = Prompt("Language", defaultValue: defaultLanguage);
+var timezone = Prompt("Timezone", defaultValue: "America/Chicago");
+var schedHours = Prompt("Scheduled send hour(s) (e.g. \"7\" or \"6, 18\")", defaultValue: "7");
+var metarIcao = Prompt("METAR ICAO(s)", defaultValue: suggestedMetar.Length > 0 ? suggestedMetar : null);
+var tempUnit = Prompt("Temperature unit (F/C)", defaultValue: "F");
+var pressureUnit = Prompt("Pressure unit (inHg/kPa)", defaultValue: "inHg");
+var windUnit = Prompt("Wind speed unit (mph/kph)", defaultValue: "mph");
 
 Console.WriteLine();
 
@@ -326,22 +328,22 @@ try
 
     recipientsArray.Add(new JsonObject
     {
-        ["Id"]                 = recipientId,
-        ["Email"]              = email,
-        ["Name"]               = recipientName,
-        ["Address"]            = address,
-        ["LocalityName"]       = locality,
-        ["Language"]           = language,
-        ["Timezone"]           = timezone,
+        ["Id"] = recipientId,
+        ["Email"] = email,
+        ["Name"] = recipientName,
+        ["Address"] = address,
+        ["LocalityName"] = locality,
+        ["Language"] = language,
+        ["Timezone"] = timezone,
         ["ScheduledSendHours"] = schedHours,
-        ["Latitude"]           = lat,
-        ["Longitude"]          = lon,
-        ["MetarIcao"]          = metarIcao,
-        ["Units"]              = new JsonObject
+        ["Latitude"] = lat,
+        ["Longitude"] = lon,
+        ["MetarIcao"] = metarIcao,
+        ["Units"] = new JsonObject
         {
             ["Temperature"] = tempUnit,
-            ["Pressure"]    = pressureUnit,
-            ["WindSpeed"]   = windUnit,
+            ["Pressure"] = pressureUnit,
+            ["WindSpeed"] = windUnit,
         },
     });
 
@@ -365,6 +367,6 @@ return 0;
 internal sealed class AwcMetar
 {
     [JsonPropertyName("icaoId")] public string? IcaoId { get; set; }
-    [JsonPropertyName("lat")]    public double? Lat    { get; set; }
-    [JsonPropertyName("lon")]    public double? Lon    { get; set; }
+    [JsonPropertyName("lat")] public double? Lat { get; set; }
+    [JsonPropertyName("lon")] public double? Lon { get; set; }
 }

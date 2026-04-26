@@ -38,13 +38,13 @@ public enum CloudType { None, Cumulonimbus, ToweringCumulus }
 public sealed class SkyLayer
 {
     /// <summary>Coverage amount decoded from the cover code (FEW, SCT, BKN, OVC, etc.).</summary>
-    public SkyCoverage Coverage          { get; init; }
+    public SkyCoverage Coverage { get; init; }
     /// <summary>Cloud base or vertical-visibility height in feet AGL, or null when not reported.</summary>
-    public int?        HeightFeet        { get; init; }
+    public int? HeightFeet { get; init; }
     /// <summary>Significant cloud type (CB or TCU), if appended to the sky group.</summary>
-    public CloudType   CloudType         { get; init; }
+    public CloudType CloudType { get; init; }
     /// <summary>True when this layer represents a vertical visibility (VV) group rather than a cloud layer.</summary>
-    public bool        IsVerticalVisibility { get; init; }
+    public bool IsVerticalVisibility { get; init; }
 }
 
 // ── weather phenomena ─────────────────────────────────────────────────────────
@@ -76,17 +76,17 @@ public enum OtherPhenomenon { DustSandWhirls, Squalls, FunnelCloud, Sandstorm, D
 public sealed class SnapshotWeather
 {
     /// <summary>Intensity qualifier (light, moderate, heavy, or in the vicinity).</summary>
-    public WeatherIntensity       Intensity     { get; init; }
+    public WeatherIntensity Intensity { get; init; }
     /// <summary>Descriptor qualifier (showers, thunderstorm, freezing, etc.), or null if absent.</summary>
-    public WeatherDescriptor?     Descriptor    { get; init; }
+    public WeatherDescriptor? Descriptor { get; init; }
     /// <summary>One or more precipitation types present in the phenomenon group.</summary>
     public IReadOnlyList<PrecipitationType> Precipitation { get; init; } = [];
     /// <summary>Obscuration type (fog, mist, haze, etc.), or null if absent.</summary>
-    public WeatherObscuration?    Obscuration   { get; init; }
+    public WeatherObscuration? Obscuration { get; init; }
     /// <summary>Other phenomenon (squall, funnel cloud, etc.), or null if absent.</summary>
-    public OtherPhenomenon?       Other         { get; init; }
+    public OtherPhenomenon? Other { get; init; }
     /// <summary>True when this phenomenon appeared in a RE- (recent weather) group.</summary>
-    public bool                   IsRecent      { get; init; }
+    public bool IsRecent { get; init; }
 }
 
 // ── forecast ─────────────────────────────────────────────────────────────────
@@ -116,30 +116,30 @@ public enum ForecastChangeType
 public sealed class ForecastPeriod
 {
     /// <summary>How this period was introduced (BASE, BECMG, TEMPO, FM, PROB30, PROB40, etc.).</summary>
-    public ForecastChangeType  ChangeType            { get; init; }
+    public ForecastChangeType ChangeType { get; init; }
     /// <summary>UTC start of this period's validity window, or null for periods without an explicit from-time.</summary>
-    public DateTime?           ValidFromUtc          { get; init; }
+    public DateTime? ValidFromUtc { get; init; }
     /// <summary>UTC end of this period's validity window, or null for FM periods (open-ended until the next FM or TAF end).</summary>
-    public DateTime?           ValidToUtc            { get; init; }
+    public DateTime? ValidToUtc { get; init; }
 
     // wind
     /// <summary>Forecast wind direction in degrees true, or null when variable or not reported.</summary>
-    public int?  WindDirectionDeg { get; init; }
+    public int? WindDirectionDeg { get; init; }
     /// <summary>True when the forecast wind direction is variable (VRB).</summary>
-    public bool  WindIsVariable   { get; init; }
+    public bool WindIsVariable { get; init; }
     /// <summary>Forecast mean wind speed in knots, or null when not reported.</summary>
-    public int?  WindSpeedKt      { get; init; }
+    public int? WindSpeedKt { get; init; }
     /// <summary>Forecast gust speed in knots, or null when not reported.</summary>
-    public int?  WindGustKt       { get; init; }
+    public int? WindGustKt { get; init; }
 
     // visibility
     /// <summary>True when CAVOK was forecast (ceiling and visibility OK).</summary>
-    public bool    Cavok                  { get; init; }
+    public bool Cavok { get; init; }
     /// <summary>Forecast prevailing visibility in statute miles, or null when not reported or CAVOK.</summary>
     public double? VisibilityStatuteMiles { get; init; }
 
     /// <summary>Forecast sky conditions, ordered from lowest to highest layer.</summary>
-    public IReadOnlyList<SkyLayer>      SkyLayers        { get; init; } = [];
+    public IReadOnlyList<SkyLayer> SkyLayers { get; init; } = [];
     /// <summary>Forecast weather phenomena for this period.</summary>
     public IReadOnlyList<SnapshotWeather> WeatherPhenomena { get; init; } = [];
 }
@@ -159,28 +159,28 @@ public sealed class ForecastPeriod
 public sealed class GfsDailyForecast
 {
     /// <summary>UTC calendar date this summary covers.</summary>
-    public DateOnly Date               { get; init; }
+    public DateOnly Date { get; init; }
     /// <summary>Forecast high 2-metre temperature in degrees Celsius, or null if not available.</summary>
-    public float?   HighTempC          { get; init; }
+    public float? HighTempC { get; init; }
     /// <summary>Forecast high 2-metre temperature in degrees Fahrenheit, or null if not available.</summary>
-    public float?   HighTempF          { get; init; }
+    public float? HighTempF { get; init; }
     /// <summary>Forecast low 2-metre temperature in degrees Celsius, or null if not available.</summary>
-    public float?   LowTempC           { get; init; }
+    public float? LowTempC { get; init; }
     /// <summary>Forecast low 2-metre temperature in degrees Fahrenheit, or null if not available.</summary>
-    public float?   LowTempF           { get; init; }
+    public float? LowTempF { get; init; }
     /// <summary>Maximum sustained 10-metre wind speed during the day in knots, or null if not available.</summary>
-    public float?   MaxWindSpeedKt     { get; init; }
+    public float? MaxWindSpeedKt { get; init; }
     /// <summary>Wind direction in degrees true at the hour of maximum wind speed, or null if not available.</summary>
-    public int?     DominantWindDirDeg { get; init; }
+    public int? DominantWindDirDeg { get; init; }
     /// <summary>Maximum total cloud cover during the day as a percentage (0–100), or null if not available.</summary>
-    public float?   MaxCloudCoverPct   { get; init; }
+    public float? MaxCloudCoverPct { get; init; }
     /// <summary>Maximum surface-based CAPE during the day in J/kg, or null if not available.</summary>
-    public float?   MaxCapeJKg         { get; init; }
+    public float? MaxCapeJKg { get; init; }
     /// <summary>
     /// Maximum precipitation rate during the day in mm/hr, or null when all forecast
     /// hours are below the configured threshold or data is unavailable.
     /// </summary>
-    public float?   MaxPrecipRateMmHr  { get; init; }
+    public float? MaxPrecipRateMmHr { get; init; }
 }
 
 /// <summary>
@@ -191,9 +191,9 @@ public sealed class GfsDailyForecast
 public sealed class GfsForecast
 {
     /// <summary>UTC initialisation time of the GFS model run used to produce this forecast.</summary>
-    public DateTime                        ModelRunUtc { get; init; }
+    public DateTime ModelRunUtc { get; init; }
     /// <summary>Per-day summaries in ascending date order.</summary>
-    public IReadOnlyList<GfsDailyForecast> Days        { get; init; } = [];
+    public IReadOnlyList<GfsDailyForecast> Days { get; init; } = [];
 }
 
 // ── snapshot ─────────────────────────────────────────────────────────────────
@@ -237,7 +237,7 @@ public sealed class WeatherSnapshot
     // ── observation metadata ──────────────────────────────────────────────────
 
     /// <summary>ICAO identifier of the home METAR station.</summary>
-    public string   StationIcao       { get; init; } = "";
+    public string StationIcao { get; init; } = "";
     /// <summary>
     /// Municipality (city/town) of the METAR station from OurAirports
     /// (e.g. "College Station"), or <see langword="null"/> if unavailable.
@@ -251,31 +251,31 @@ public sealed class WeatherSnapshot
     public string? StationName { get; init; }
 
     /// <summary>Human-readable locality name from configuration (e.g. "Spring").</summary>
-    public string   LocalityName      { get; init; } = "";
+    public string LocalityName { get; init; } = "";
     /// <summary>UTC time of the METAR observation.</summary>
     public DateTime ObservationTimeUtc { get; init; }
     /// <summary>True when the observation was made by an automated station (AUTO).</summary>
-    public bool     IsAutomated       { get; init; }
+    public bool IsAutomated { get; init; }
 
     // ── wind ─────────────────────────────────────────────────────────────────
 
     /// <summary>Wind direction in degrees true, or null when variable.</summary>
-    public int?  WindDirectionDeg { get; init; }
+    public int? WindDirectionDeg { get; init; }
     /// <summary>True when the wind direction is variable (VRB).</summary>
-    public bool  WindIsVariable   { get; init; }
+    public bool WindIsVariable { get; init; }
     /// <summary>Mean wind speed in knots, or null when calm/not reported.</summary>
-    public int?  WindSpeedKt      { get; init; }
+    public int? WindSpeedKt { get; init; }
     /// <summary>Gust speed in knots, or null when not reported.</summary>
-    public int?  WindGustKt       { get; init; }
+    public int? WindGustKt { get; init; }
 
     // ── visibility ────────────────────────────────────────────────────────────
 
     /// <summary>True when CAVOK was reported.</summary>
-    public bool    Cavok                  { get; init; }
+    public bool Cavok { get; init; }
     /// <summary>Prevailing visibility in statute miles, or null when not reported.</summary>
     public double? VisibilityStatuteMiles { get; init; }
     /// <summary>True when the visibility was reported as less than the stated value (M qualifier).</summary>
-    public bool    VisibilityLessThan     { get; init; }
+    public bool VisibilityLessThan { get; init; }
 
     // ── sky ───────────────────────────────────────────────────────────────────
 
@@ -290,11 +290,11 @@ public sealed class WeatherSnapshot
     // ── temperature ───────────────────────────────────────────────────────────
 
     /// <summary>Air temperature in degrees Celsius, or null when not reported.</summary>
-    public double? TemperatureCelsius    { get; init; }
+    public double? TemperatureCelsius { get; init; }
     /// <summary>Air temperature converted to degrees Fahrenheit, or null when not reported.</summary>
     public double? TemperatureFahrenheit { get; init; }
     /// <summary>Dew-point temperature in degrees Celsius, or null when not reported.</summary>
-    public double? DewPointCelsius       { get; init; }
+    public double? DewPointCelsius { get; init; }
 
     // ── altimeter ─────────────────────────────────────────────────────────────
 

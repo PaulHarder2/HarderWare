@@ -7,13 +7,17 @@
 // Stop:      sc.exe stop WxReportSvc
 
 using MetarParser.Data;
-using WxServices.Common;
-using WxServices.Logging;
-using WxReport.Svc;
+
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.FileProviders;
+
 using OpenTelemetry.Metrics;
+
+using WxReport.Svc;
+
+using WxServices.Common;
+using WxServices.Logging;
 
 var installRoot = WxPaths.ReadInstallRoot();
 var paths = new WxPaths(installRoot);
@@ -151,10 +155,10 @@ static async Task ValidateConfigAsync(DbContextOptions<WeatherDataContext> dbOpt
     await using var ctx = new WeatherDataContext(dbOptions);
     var gs = await ctx.GlobalSettings.FirstOrDefaultAsync(x => x.Id == 1);
 
-    if (string.IsNullOrWhiteSpace(gs?.SmtpUsername))    issues.Add("SmtpUsername");
-    if (string.IsNullOrWhiteSpace(gs?.SmtpPassword))    issues.Add("SmtpPassword");
+    if (string.IsNullOrWhiteSpace(gs?.SmtpUsername)) issues.Add("SmtpUsername");
+    if (string.IsNullOrWhiteSpace(gs?.SmtpPassword)) issues.Add("SmtpPassword");
     if (string.IsNullOrWhiteSpace(gs?.SmtpFromAddress)) issues.Add("SmtpFromAddress");
-    if (string.IsNullOrWhiteSpace(gs?.ClaudeApiKey))    issues.Add("ClaudeApiKey");
+    if (string.IsNullOrWhiteSpace(gs?.ClaudeApiKey)) issues.Add("ClaudeApiKey");
 
     var recipientCount = await ctx.Recipients.CountAsync();
     if (recipientCount == 0) issues.Add("Recipients (none in database)");

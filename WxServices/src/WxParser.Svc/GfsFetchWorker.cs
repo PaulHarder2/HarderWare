@@ -1,7 +1,10 @@
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
+
 using MetarParser.Data;
+
 using Microsoft.EntityFrameworkCore;
+
 using WxServices.Common;
 using WxServices.Logging;
 
@@ -37,9 +40,9 @@ public sealed class GfsFetchWorker : BackgroundService
         IConfiguration config,
         DbContextOptions<WeatherDataContext> dbOptions)
     {
-        _config      = config;
-        _dbOptions   = dbOptions;
-        _gfsCycles   = _meter.CreateCounter<long>("wxparser.gfs.cycles.total", description: "Number of completed GFS fetch cycles.");
+        _config = config;
+        _dbOptions = dbOptions;
+        _gfsCycles = _meter.CreateCounter<long>("wxparser.gfs.cycles.total", description: "Number of completed GFS fetch cycles.");
         _gfsFailures = _meter.CreateCounter<long>("wxparser.gfs.failures.total", description: "Number of failed GFS fetch cycles.");
         _gfsDuration = _meter.CreateHistogram<double>("wxparser.gfs.cycle.duration.seconds", unit: "s", description: "Duration of each GFS fetch cycle.");
     }
@@ -101,7 +104,7 @@ public sealed class GfsFetchWorker : BackgroundService
                 return;
             }
 
-            var cfg   = LoadConfig();
+            var cfg = LoadConfig();
             var paths = new WxPaths(_config["InstallRoot"]);
 
             var tempPath = string.IsNullOrEmpty(cfg.TempPath)

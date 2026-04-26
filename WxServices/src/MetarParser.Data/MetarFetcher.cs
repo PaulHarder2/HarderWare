@@ -1,6 +1,9 @@
 using MetarParser.Data.Entities;
+
 using Microsoft.EntityFrameworkCore;
+
 using WxServices.Logging;
+
 using static MetarParser.MetarParser;
 
 namespace MetarParser.Data;
@@ -100,7 +103,7 @@ public static class MetarFetcher
 
         Logger.Info($"Received {lines.Count} METAR/SPECI report(s). Parsing...");
 
-        var parsed     = new List<(MetarReport Report, MetarRecord Entity)>();
+        var parsed = new List<(MetarReport Report, MetarRecord Entity)>();
         int parseErrors = 0;
 
         foreach (var line in lines)
@@ -127,7 +130,7 @@ public static class MetarFetcher
         using var ctx = new WeatherDataContext(dbOptions);
 
         var stations = parsed.Select(p => p.Entity.StationIcao).Distinct().ToList();
-        var minTime  = parsed.Min(p => p.Entity.ObservationUtc);
+        var minTime = parsed.Min(p => p.Entity.ObservationUtc);
 
         var existingKeys = ctx.Metars
             .Where(m => stations.Contains(m.StationIcao) && m.ObservationUtc >= minTime)

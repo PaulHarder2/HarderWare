@@ -1,6 +1,3 @@
-using MetarParser.Data;
-using MetarParser.Data.Entities;
-using Microsoft.EntityFrameworkCore;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Net.Mail;
@@ -9,6 +6,12 @@ using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+
+using MetarParser.Data;
+using MetarParser.Data.Entities;
+
+using Microsoft.EntityFrameworkCore;
+
 using WxServices.Logging;
 
 namespace WxManager;
@@ -19,13 +22,13 @@ namespace WxManager;
 internal sealed class RecipientListItem
 {
     /// <summary>Surrogate primary key from the <c>Recipients</c> table.</summary>
-    public int    DbId        { get; set; }
+    public int DbId { get; set; }
 
     /// <summary>Application-level recipient identifier (e.g. <c>"john-en"</c>).</summary>
     public string RecipientId { get; set; } = "";
 
     /// <summary>Display name of the recipient.</summary>
-    public string Name        { get; set; } = "";
+    public string Name { get; set; } = "";
 
     /// <summary>Returns a human-readable string shown in the ListBox.</summary>
     /// <returns>A string in the form <c>"RecipientId — Name"</c>.</returns>
@@ -36,28 +39,28 @@ internal sealed class RecipientListItem
 internal sealed class StationRow
 {
     /// <summary>ICAO station identifier.</summary>
-    public string Icao         { get; set; } = "";
+    public string Icao { get; set; } = "";
 
     /// <summary>Human-readable station name from <c>WxStations</c>, or empty if not found.</summary>
-    public string Name         { get; set; } = "";
+    public string Name { get; set; } = "";
 
     /// <summary>Great-circle distance from the geocoded address in kilometres.</summary>
-    public double DistKm       { get; set; }
+    public double DistKm { get; set; }
 
     /// <summary>Formatted distance string for display (e.g. <c>"12.3"</c>).</summary>
-    public string DistKmStr    => $"{DistKm:F1}";
+    public string DistKmStr => $"{DistKm:F1}";
 
     /// <summary>Number of METAR records in the local database for this station.</summary>
-    public int    MetarCount   { get; set; }
+    public int MetarCount { get; set; }
 
     /// <summary>Formatted METAR count for display; shows <c>"—"</c> when zero.</summary>
     public string MetarCountStr => MetarCount == 0 ? "—" : MetarCount.ToString();
 
     /// <summary>Number of TAF records in the local database for this station.</summary>
-    public int    TafCount     { get; set; }
+    public int TafCount { get; set; }
 
     /// <summary>Formatted TAF count for display; shows <c>"—"</c> when zero.</summary>
-    public string TafCountStr  => TafCount == 0 ? "—" : TafCount.ToString();
+    public string TafCountStr => TafCount == 0 ? "—" : TafCount.ToString();
 }
 
 /// <summary>DTO matching the Aviation Weather Center METAR API JSON response.</summary>
@@ -67,10 +70,10 @@ internal sealed class AwcMetar
     [JsonPropertyName("icaoId")] public string? IcaoId { get; set; }
 
     /// <summary>Station latitude from the AWC response.</summary>
-    [JsonPropertyName("lat")]    public double? Lat    { get; set; }
+    [JsonPropertyName("lat")] public double? Lat { get; set; }
 
     /// <summary>Station longitude from the AWC response.</summary>
-    [JsonPropertyName("lon")]    public double? Lon    { get; set; }
+    [JsonPropertyName("lon")] public double? Lon { get; set; }
 }
 
 // ── User control ──────────────────────────────────────────────────────────────
@@ -116,9 +119,9 @@ public partial class RecipientsTab : UserControl
         _dbOptions = App.DbOptions;
         InitializeComponent();
 
-        TempUnitBox.ItemsSource     = new[] { "F", "C" };
+        TempUnitBox.ItemsSource = new[] { "F", "C" };
         PressureUnitBox.ItemsSource = new[] { "inHg", "kPa" };
-        WindUnitBox.ItemsSource     = new[] { "mph", "kph" };
+        WindUnitBox.ItemsSource = new[] { "mph", "kph" };
         TzBox.ItemsSource = BuildIanaTimeZoneList();
 
         ClearRightPane();   // show defaults; buttons stay disabled (set in XAML)
@@ -183,7 +186,7 @@ public partial class RecipientsTab : UserControl
         RecipientList.SelectionChanged += RecipientList_SelectionChanged;
 
         ClearRightPane();
-        SaveBtn.IsEnabled   = true;
+        SaveBtn.IsEnabled = true;
         CancelBtn.IsEnabled = true;
         DeleteBtn.IsEnabled = false;
     }
@@ -242,9 +245,9 @@ public partial class RecipientsTab : UserControl
 
         SetLookupInProgress(true);
         HideMessages();
-        StationsGroup.Visibility   = Visibility.Collapsed;
-        StationsGrid.ItemsSource   = null;
-        BboxStatusText.Visibility  = Visibility.Collapsed;
+        StationsGroup.Visibility = Visibility.Collapsed;
+        StationsGrid.ItemsSource = null;
+        BboxStatusText.Visibility = Visibility.Collapsed;
 
         try
         {
@@ -258,19 +261,19 @@ public partial class RecipientsTab : UserControl
             }
 
             var (lat, lon, locality) = geo.Value;
-            LatBox.Text      = lat.ToString("F7");
-            LonBox.Text      = lon.ToString("F7");
+            LatBox.Text = lat.ToString("F7");
+            LonBox.Text = lon.ToString("F7");
             LocalityBox.Text = locality;
 
             // A successful geocode implicitly begins editing; enable Save/Cancel.
-            SaveBtn.IsEnabled   = true;
+            SaveBtn.IsEnabled = true;
             CancelBtn.IsEnabled = true;
 
             // Show the stations group with a searching advisory while the DB and AWC
             // queries run — the grid itself stays hidden until results are ready.
-            StationsGroup.Visibility        = Visibility.Visible;
+            StationsGroup.Visibility = Visibility.Visible;
             StationsSearchingText.Visibility = Visibility.Visible;
-            StationsGrid.Visibility         = Visibility.Collapsed;
+            StationsGrid.Visibility = Visibility.Collapsed;
 
             // ── Nearby METAR stations ─────────────────────────────────────────
 
@@ -307,7 +310,7 @@ public partial class RecipientsTab : UserControl
                 return;
             }
 
-            Logger.Info( $"Station lookup: Nearest {candidates.Count} candidate(s) within {SearchRadiusKm:F0} km of ({lat:F4}, {lon:F4})" );
+            Logger.Info($"Station lookup: Nearest {candidates.Count} candidate(s) within {SearchRadiusKm:F0} km of ({lat:F4}, {lon:F4})");
 
             // ── DB counts (batched) ───────────────────────────────────────────
 
@@ -365,11 +368,11 @@ public partial class RecipientsTab : UserControl
 
                 rows.Add(new StationRow
                 {
-                    Icao       = station.IcaoId,
-                    Name       = FormatStationName(station),
-                    DistKm     = distKm,
+                    Icao = station.IcaoId,
+                    Name = FormatStationName(station),
+                    DistKm = distKm,
                     MetarCount = displayCount,
-                    TafCount   = tafCounts.FirstOrDefault(x => x.Icao == station.IcaoId)?.Count ?? 0,
+                    TafCount = tafCounts.FirstOrDefault(x => x.Icao == station.IcaoId)?.Count ?? 0,
                 });
             }
 
@@ -388,8 +391,8 @@ public partial class RecipientsTab : UserControl
                         string.Join(", ", rows.Select(r => r.Icao)));
 
             StationsSearchingText.Visibility = Visibility.Collapsed;
-            StationsGrid.Visibility         = Visibility.Visible;
-            StationsGrid.ItemsSource        = rows;
+            StationsGrid.Visibility = Visibility.Visible;
+            StationsGrid.ItemsSource = rows;
 
             // Suggest MetarIcao only when the field is currently blank.
             if (string.IsNullOrEmpty(MetarIcaoBox.Text))
@@ -403,12 +406,12 @@ public partial class RecipientsTab : UserControl
 
                 if (inBox)
                 {
-                    BboxStatusText.Text       = "Address is within the fetch bounding box.";
+                    BboxStatusText.Text = "Address is within the fetch bounding box.";
                     BboxStatusText.Foreground = new SolidColorBrush(Color.FromRgb(0x88, 0xDD, 0x88));
                 }
                 else
                 {
-                    BboxStatusText.Text       = "Address is outside the fetch bounding box — " +
+                    BboxStatusText.Text = "Address is outside the fetch bounding box — " +
                                                "nearby stations may not accumulate local observations.";
                     BboxStatusText.Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0x88, 0x88));
                 }
@@ -471,22 +474,22 @@ public partial class RecipientsTab : UserControl
     private async void SaveBtn_Click(object sender, RoutedEventArgs e)
     {
         var recipientId = RecipientIdBox.Text.Trim();
-        var name        = NameBox.Text.Trim();
-        var email       = EmailBox.Text.Trim();
+        var name = NameBox.Text.Trim();
+        var email = EmailBox.Text.Trim();
 
-        if (string.IsNullOrEmpty(recipientId)) { ShowMessage("Id is required.");    return; }
-        if (string.IsNullOrEmpty(name))         { ShowMessage("Name is required.");  return; }
-        if (string.IsNullOrEmpty(email))        { ShowMessage("Email is required."); return; }
+        if (string.IsNullOrEmpty(recipientId)) { ShowMessage("Id is required."); return; }
+        if (string.IsNullOrEmpty(name)) { ShowMessage("Name is required."); return; }
+        if (string.IsNullOrEmpty(email)) { ShowMessage("Email is required."); return; }
 
         if (!Regex.IsMatch(recipientId, @"^[A-Za-z0-9_\-]+$"))
-            { ShowMessage("Id may only contain letters, digits, hyphens, and underscores."); return; }
+        { ShowMessage("Id may only contain letters, digits, hyphens, and underscores."); return; }
 
-        try   { _ = new MailAddress(email); }
+        try { _ = new MailAddress(email); }
         catch { ShowMessage("Email address is not valid."); return; }
 
         var tzValue = TzBox.Text.Trim().Length > 0 ? TzBox.Text.Trim() : "UTC";
         if (!BuildIanaTimeZoneList().Contains(tzValue))
-            { ShowMessage($"\"{tzValue}\" is not a recognized IANA timezone ID."); return; }
+        { ShowMessage($"\"{tzValue}\" is not a recognized IANA timezone ID."); return; }
 
         var scheduledHoursRaw = ScheduledHoursBox.Text.Trim();
         if (!string.IsNullOrWhiteSpace(scheduledHoursRaw))
@@ -495,7 +498,7 @@ public partial class RecipientsTab : UserControl
             {
                 var t = token.Trim();
                 if (!int.TryParse(t, out var h) || h < 0 || h > 23)
-                    { ShowMessage($"Scheduled hours must be integers 0\u201323, comma-separated (got \"{t}\")."); return; }
+                { ShowMessage($"Scheduled hours must be integers 0\u201323, comma-separated (got \"{t}\")."); return; }
             }
         }
 
@@ -505,18 +508,18 @@ public partial class RecipientsTab : UserControl
             foreach (var token in metarRaw.Split(','))
             {
                 if (!Regex.IsMatch(token.Trim(), @"^[A-Z0-9]{4}$", RegexOptions.IgnoreCase))
-                    { ShowMessage($"METAR ICAO codes must be exactly 4 alphanumeric characters (got \"{token.Trim()}\")."); return; }
+                { ShowMessage($"METAR ICAO codes must be exactly 4 alphanumeric characters (got \"{token.Trim()}\")."); return; }
             }
         }
 
         var tafRaw = TafIcaoBox.Text.Trim();
         if (!string.IsNullOrWhiteSpace(tafRaw) && !tafRaw.Equals("NONE", StringComparison.OrdinalIgnoreCase) &&
             !Regex.IsMatch(tafRaw, @"^[A-Z0-9]{4}$", RegexOptions.IgnoreCase))
-            { ShowMessage("TAF ICAO code must be exactly 4 alphanumeric characters, \"NONE\", or blank."); return; }
+        { ShowMessage("TAF ICAO code must be exactly 4 alphanumeric characters, \"NONE\", or blank."); return; }
 
         var lat = double.TryParse(LatBox.Text, out var lv) ? lv : (double?)null;
         var lon = double.TryParse(LonBox.Text, out var lnv) ? lnv : (double?)null;
-        if (lat is < -90 or > 90)   { ShowMessage("Latitude must be between \u221290 and +90."); return; }
+        if (lat is < -90 or > 90) { ShowMessage("Latitude must be between \u221290 and +90."); return; }
         if (lon is < -180 or > 180) { ShowMessage("Longitude must be between \u2212180 and +180."); return; }
 
         try
@@ -530,12 +533,12 @@ public partial class RecipientsTab : UserControl
             {
                 foreach (var token in metarRaw.Split(','))
                 {
-                    var icao    = token.Trim().ToUpperInvariant();
+                    var icao = token.Trim().ToUpperInvariant();
                     var station = await ctx.WxStations.FirstOrDefaultAsync(s => s.IcaoId == icao);
                     if (station is null)
-                        { ShowMessage($"METAR station \"{icao}\" was not found in the station database."); return; }
+                    { ShowMessage($"METAR station \"{icao}\" was not found in the station database."); return; }
                     if (station.Lat is null || station.Lon is null)
-                        { ShowMessage($"METAR station \"{icao}\" has no coordinates and cannot be used."); return; }
+                    { ShowMessage($"METAR station \"{icao}\" has no coordinates and cannot be used."); return; }
                     if (App.FetchRegion is { } fr1 && station.Lat.HasValue && station.Lon.HasValue
                         && !fr1.Contains(station.Lat.Value, station.Lon.Value))
                         bboxWarnings.Add($"{icao} is outside the fetch region");
@@ -544,12 +547,12 @@ public partial class RecipientsTab : UserControl
 
             if (!string.IsNullOrWhiteSpace(tafRaw) && !tafRaw.Equals("NONE", StringComparison.OrdinalIgnoreCase))
             {
-                var icao    = tafRaw.ToUpperInvariant();
+                var icao = tafRaw.ToUpperInvariant();
                 var station = await ctx.WxStations.FirstOrDefaultAsync(s => s.IcaoId == icao);
                 if (station is null)
-                    { ShowMessage($"TAF station \"{icao}\" was not found in the station database."); return; }
+                { ShowMessage($"TAF station \"{icao}\" was not found in the station database."); return; }
                 if (station.Lat is null || station.Lon is null)
-                    { ShowMessage($"TAF station \"{icao}\" has no coordinates and cannot be used."); return; }
+                { ShowMessage($"TAF station \"{icao}\" has no coordinates and cannot be used."); return; }
                 if (App.FetchRegion is { } fr2 && station.Lat.HasValue && station.Lon.HasValue
                     && !fr2.Contains(station.Lat.Value, station.Lon.Value))
                     bboxWarnings.Add($"TAF station {icao} is outside the fetch region");
@@ -575,21 +578,21 @@ public partial class RecipientsTab : UserControl
 
             var isNew = _currentRecipientDbId is null;
 
-            r.RecipientId        = recipientId;
-            r.Name               = name;
-            r.Email              = email;
-            r.Language           = NullIfEmpty(LanguageBox.Text);
-            r.Timezone           = TzBox.Text.Trim().Length > 0 ? TzBox.Text.Trim() : "UTC";
+            r.RecipientId = recipientId;
+            r.Name = name;
+            r.Email = email;
+            r.Language = NullIfEmpty(LanguageBox.Text);
+            r.Timezone = TzBox.Text.Trim().Length > 0 ? TzBox.Text.Trim() : "UTC";
             r.ScheduledSendHours = NullIfEmpty(ScheduledHoursBox.Text);
-            r.Address            = NullIfEmpty(AddressBox.Text);
-            r.LocalityName       = NullIfEmpty(LocalityBox.Text);
-            r.Latitude           = lat;
-            r.Longitude          = lon;
-            r.MetarIcao          = NullIfEmpty(MetarIcaoBox.Text);
-            r.TafIcao            = NullIfEmpty(TafIcaoBox.Text);
-            r.TempUnit           = TempUnitBox.SelectedItem?.ToString() ?? "F";
-            r.PressureUnit       = PressureUnitBox.SelectedItem?.ToString() ?? "inHg";
-            r.WindSpeedUnit      = WindUnitBox.SelectedItem?.ToString() ?? "mph";
+            r.Address = NullIfEmpty(AddressBox.Text);
+            r.LocalityName = NullIfEmpty(LocalityBox.Text);
+            r.Latitude = lat;
+            r.Longitude = lon;
+            r.MetarIcao = NullIfEmpty(MetarIcaoBox.Text);
+            r.TafIcao = NullIfEmpty(TafIcaoBox.Text);
+            r.TempUnit = TempUnitBox.SelectedItem?.ToString() ?? "F";
+            r.PressureUnit = PressureUnitBox.SelectedItem?.ToString() ?? "inHg";
+            r.WindSpeedUnit = WindUnitBox.SelectedItem?.ToString() ?? "mph";
 
             Logger.Info($"{(isNew ? "Inserting" : "Updating")} recipient '{recipientId}' ({name}, {email}).");
             await ctx.SaveChangesAsync();
@@ -696,28 +699,28 @@ public partial class RecipientsTab : UserControl
     {
         _currentRecipientDbId = r.Id;
 
-        RecipientIdBox.Text      = r.RecipientId;
-        NameBox.Text             = r.Name;
-        EmailBox.Text            = r.Email;
-        LanguageBox.Text         = r.Language ?? "";
-        TzBox.SelectedItem       = r.Timezone;
+        RecipientIdBox.Text = r.RecipientId;
+        NameBox.Text = r.Name;
+        EmailBox.Text = r.Email;
+        LanguageBox.Text = r.Language ?? "";
+        TzBox.SelectedItem = r.Timezone;
         if (TzBox.SelectedItem is null) TzBox.Text = r.Timezone;  // preserve unknown values
-        ScheduledHoursBox.Text   = r.ScheduledSendHours ?? "";
-        AddressBox.Text          = r.Address ?? "";
-        LocalityBox.Text         = r.LocalityName ?? "";
-        LatBox.Text              = r.Latitude?.ToString("F7") ?? "";
-        LonBox.Text              = r.Longitude?.ToString("F7") ?? "";
-        MetarIcaoBox.Text        = r.MetarIcao ?? "";
-        TafIcaoBox.Text          = r.TafIcao ?? "";
-        TempUnitBox.SelectedItem     = r.TempUnit;
+        ScheduledHoursBox.Text = r.ScheduledSendHours ?? "";
+        AddressBox.Text = r.Address ?? "";
+        LocalityBox.Text = r.LocalityName ?? "";
+        LatBox.Text = r.Latitude?.ToString("F7") ?? "";
+        LonBox.Text = r.Longitude?.ToString("F7") ?? "";
+        MetarIcaoBox.Text = r.MetarIcao ?? "";
+        TafIcaoBox.Text = r.TafIcao ?? "";
+        TempUnitBox.SelectedItem = r.TempUnit;
         PressureUnitBox.SelectedItem = r.PressureUnit;
-        WindUnitBox.SelectedItem     = r.WindSpeedUnit;
+        WindUnitBox.SelectedItem = r.WindSpeedUnit;
 
         HideMessages();
-        StationsGroup.Visibility  = Visibility.Collapsed;
-        StationsGrid.ItemsSource  = null;
+        StationsGroup.Visibility = Visibility.Collapsed;
+        StationsGrid.ItemsSource = null;
         BboxStatusText.Visibility = Visibility.Collapsed;
-        SaveBtn.IsEnabled   = true;
+        SaveBtn.IsEnabled = true;
         CancelBtn.IsEnabled = true;
         DeleteBtn.IsEnabled = true;
     }
@@ -731,8 +734,8 @@ public partial class RecipientsTab : UserControl
         RecipientIdBox.Clear();
         NameBox.Clear();
         EmailBox.Clear();
-        LanguageBox.Text       = App.DefaultLanguage;
-        TzBox.SelectedItem     = App.DefaultTimezone;
+        LanguageBox.Text = App.DefaultLanguage;
+        TzBox.SelectedItem = App.DefaultTimezone;
         ScheduledHoursBox.Text = App.DefaultScheduledSendHour.ToString();
         AddressBox.Clear();
         LocalityBox.Clear();
@@ -740,13 +743,13 @@ public partial class RecipientsTab : UserControl
         LonBox.Clear();
         MetarIcaoBox.Clear();
         TafIcaoBox.Clear();
-        TempUnitBox.SelectedIndex     = 0;  // "F"
+        TempUnitBox.SelectedIndex = 0;  // "F"
         PressureUnitBox.SelectedIndex = 0;  // "inHg"
-        WindUnitBox.SelectedIndex     = 0;  // "mph"
+        WindUnitBox.SelectedIndex = 0;  // "mph"
 
         HideMessages();
-        StationsGroup.Visibility  = Visibility.Collapsed;
-        StationsGrid.ItemsSource  = null;
+        StationsGroup.Visibility = Visibility.Collapsed;
+        StationsGrid.ItemsSource = null;
         BboxStatusText.Visibility = Visibility.Collapsed;
     }
 
@@ -762,7 +765,7 @@ public partial class RecipientsTab : UserControl
         EmailBox.Clear();
         LanguageBox.Clear();
         TzBox.SelectedItem = null;
-        TzBox.Text         = "";
+        TzBox.Text = "";
         ScheduledHoursBox.Clear();
         AddressBox.Clear();
         LocalityBox.Clear();
@@ -770,15 +773,15 @@ public partial class RecipientsTab : UserControl
         LonBox.Clear();
         MetarIcaoBox.Clear();
         TafIcaoBox.Clear();
-        TempUnitBox.SelectedIndex     = -1;
+        TempUnitBox.SelectedIndex = -1;
         PressureUnitBox.SelectedIndex = -1;
-        WindUnitBox.SelectedIndex     = -1;
+        WindUnitBox.SelectedIndex = -1;
 
         HideMessages();
-        StationsGroup.Visibility  = Visibility.Collapsed;
-        StationsGrid.ItemsSource  = null;
+        StationsGroup.Visibility = Visibility.Collapsed;
+        StationsGrid.ItemsSource = null;
         BboxStatusText.Visibility = Visibility.Collapsed;
-        SaveBtn.IsEnabled   = false;
+        SaveBtn.IsEnabled = false;
         CancelBtn.IsEnabled = false;
         DeleteBtn.IsEnabled = false;
     }
@@ -790,11 +793,11 @@ public partial class RecipientsTab : UserControl
     /// <sideeffects>Sets <c>MessagesText.Text</c>; sets <c>MessagesBorder.Visibility</c> to Visible.</sideeffects>
     private void ShowMessage(string message)
     {
-        MessagesText.Text               = message;
-        MessagesBorder.Background       = new SolidColorBrush(Color.FromRgb(0xFF, 0xF3, 0xCD));
-        MessagesBorder.BorderBrush      = new SolidColorBrush(Color.FromRgb(0xFF, 0xC1, 0x07));
-        MessagesText.Foreground         = new SolidColorBrush(Color.FromRgb(0x85, 0x64, 0x04));
-        MessagesBorder.Visibility       = Visibility.Visible;
+        MessagesText.Text = message;
+        MessagesBorder.Background = new SolidColorBrush(Color.FromRgb(0xFF, 0xF3, 0xCD));
+        MessagesBorder.BorderBrush = new SolidColorBrush(Color.FromRgb(0xFF, 0xC1, 0x07));
+        MessagesText.Foreground = new SolidColorBrush(Color.FromRgb(0x85, 0x64, 0x04));
+        MessagesBorder.Visibility = Visibility.Visible;
     }
 
     /// <summary>
@@ -805,11 +808,11 @@ public partial class RecipientsTab : UserControl
     /// <sideeffects>Sets <c>MessagesText.Text</c>; sets <c>MessagesBorder.Visibility</c> to Visible; schedules auto-hide.</sideeffects>
     private void ShowSuccessMessage(string message)
     {
-        MessagesText.Text               = message;
-        MessagesBorder.Background       = new SolidColorBrush(Color.FromRgb(0xD4, 0xED, 0xDA));
-        MessagesBorder.BorderBrush      = new SolidColorBrush(Color.FromRgb(0x28, 0xA7, 0x45));
-        MessagesText.Foreground         = new SolidColorBrush(Color.FromRgb(0x15, 0x57, 0x24));
-        MessagesBorder.Visibility       = Visibility.Visible;
+        MessagesText.Text = message;
+        MessagesBorder.Background = new SolidColorBrush(Color.FromRgb(0xD4, 0xED, 0xDA));
+        MessagesBorder.BorderBrush = new SolidColorBrush(Color.FromRgb(0x28, 0xA7, 0x45));
+        MessagesText.Foreground = new SolidColorBrush(Color.FromRgb(0x15, 0x57, 0x24));
+        MessagesBorder.Visibility = Visibility.Visible;
 
         _ = Task.Delay(App.SuccessMessageDismissMs).ContinueWith(_ => Dispatcher.Invoke(HideMessages));
     }
@@ -820,7 +823,7 @@ public partial class RecipientsTab : UserControl
     /// <sideeffects>Clears <c>MessagesText.Text</c>; sets <c>MessagesBorder.Visibility</c> to Collapsed.</sideeffects>
     private void HideMessages()
     {
-        MessagesText.Text         = "";
+        MessagesText.Text = "";
         MessagesBorder.Visibility = Visibility.Collapsed;
     }
 
@@ -832,7 +835,7 @@ public partial class RecipientsTab : UserControl
     private void SetLookupInProgress(bool inProgress)
     {
         LookUpBtn.IsEnabled = !inProgress;
-        LookUpBtn.Content   = inProgress ? "Looking up…" : "Look Up";
+        LookUpBtn.Content = inProgress ? "Looking up…" : "Look Up";
     }
 
     /// <summary>
@@ -878,8 +881,8 @@ public partial class RecipientsTab : UserControl
     {
         var parts = new List<string>(3);
         if (!string.IsNullOrWhiteSpace(s.Municipality)) parts.Add(s.Municipality!);
-        if (!string.IsNullOrWhiteSpace(s.RegionAbbr))   parts.Add(s.RegionAbbr!);
-        if (!string.IsNullOrWhiteSpace(s.CountryAbbr))  parts.Add(s.CountryAbbr!);
+        if (!string.IsNullOrWhiteSpace(s.RegionAbbr)) parts.Add(s.RegionAbbr!);
+        if (!string.IsNullOrWhiteSpace(s.CountryAbbr)) parts.Add(s.CountryAbbr!);
 
         if (parts.Count > 0) return string.Join(", ", parts);
         return s.Name ?? "";
@@ -910,10 +913,10 @@ public partial class RecipientsTab : UserControl
 
     private static double HaversineKm(double lat1, double lon1, double lat2, double lon2)
     {
-        const double R    = 6371.0;
-        var          dLat = (lat2 - lat1) * Math.PI / 180.0;
-        var          dLon = (lon2 - lon1) * Math.PI / 180.0;
-        var          a    = Math.Sin(dLat / 2) * Math.Sin(dLat / 2)
+        const double R = 6371.0;
+        var dLat = (lat2 - lat1) * Math.PI / 180.0;
+        var dLon = (lon2 - lon1) * Math.PI / 180.0;
+        var a = Math.Sin(dLat / 2) * Math.Sin(dLat / 2)
                           + Math.Cos(lat1 * Math.PI / 180.0) * Math.Cos(lat2 * Math.PI / 180.0)
                           * Math.Sin(dLon / 2) * Math.Sin(dLon / 2);
         return R * 2.0 * Math.Atan2(Math.Sqrt(a), Math.Sqrt(1 - a));

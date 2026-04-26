@@ -9,27 +9,27 @@ namespace MetarParser.Data.Entities;
 /// </summary>
 public class RecipientState
 {
-    public int      Id                       { get; set; }
+    public int Id { get; set; }
 
     /// <summary>Stable recipient identifier matching <see cref="Recipient.RecipientId"/> in the <c>Recipients</c> table.</summary>
-    public string   RecipientId              { get; set; } = "";
+    public string RecipientId { get; set; } = "";
 
     /// <summary>UTC time the most recent scheduled report was sent, or null if never sent.</summary>
-    public DateTime? LastScheduledSentUtc    { get; set; }
+    public DateTime? LastScheduledSentUtc { get; set; }
 
     /// <summary>UTC time the most recent unscheduled (change-triggered) report was sent, or null if never sent.</summary>
-    public DateTime? LastUnscheduledSentUtc  { get; set; }
+    public DateTime? LastUnscheduledSentUtc { get; set; }
 
     /// <summary>
     /// Compact fingerprint of the weather snapshot at the time of the last send.
     /// A change in fingerprint value indicates a significant weather change has occurred.
     /// </summary>
-    public string?  LastSnapshotFingerprint  { get; set; }
+    public string? LastSnapshotFingerprint { get; set; }
 
     /// <summary>
     /// ICAO of the METAR station used for the most recent report sent to this recipient.
     /// Used to detect station switches caused by the primary station having no recent data,
     /// so Claude can include context explaining the change in observation source.
     /// </summary>
-    public string?  LastMetarIcao            { get; set; }
+    public string? LastMetarIcao { get; set; }
 }

@@ -38,7 +38,7 @@ public static class LanguageHelper
         var match = CultureInfo.GetCultures(CultureTypes.NeutralCultures)
             .FirstOrDefault(c =>
                 c.EnglishName.ToLowerInvariant() == query ||
-                c.NativeName.ToLowerInvariant()  == query);
+                c.NativeName.ToLowerInvariant() == query);
 
         return match?.TwoLetterISOLanguageName ?? "en";
     }
@@ -48,14 +48,14 @@ public static class LanguageHelper
     /// <summary>Translated "HarderWare Service Announcement" subject lines, keyed on lower-case language name.</summary>
     private static readonly Dictionary<string, string> _subjects = new(StringComparer.OrdinalIgnoreCase)
     {
-        ["spanish"]    = "HarderWare Anuncio de servicio",
-        ["español"]    = "HarderWare Anuncio de servicio",
-        ["french"]     = "HarderWare Annonce de service",
-        ["français"]   = "HarderWare Annonce de service",
-        ["german"]     = "HarderWare Dienstankündigung",
-        ["deutsch"]    = "HarderWare Dienstankündigung",
+        ["spanish"] = "HarderWare Anuncio de servicio",
+        ["español"] = "HarderWare Anuncio de servicio",
+        ["french"] = "HarderWare Annonce de service",
+        ["français"] = "HarderWare Annonce de service",
+        ["german"] = "HarderWare Dienstankündigung",
+        ["deutsch"] = "HarderWare Dienstankündigung",
         ["portuguese"] = "HarderWare Anúncio de serviço",
-        ["português"]  = "HarderWare Anúncio de serviço",
+        ["português"] = "HarderWare Anúncio de serviço",
     };
 
     /// <summary>

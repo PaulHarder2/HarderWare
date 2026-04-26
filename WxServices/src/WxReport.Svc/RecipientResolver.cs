@@ -1,6 +1,9 @@
 using MetarParser.Data;
+
 using Microsoft.EntityFrameworkCore;
+
 using WxInterp;
+
 using WxServices.Logging;
 
 namespace WxReport.Svc;
@@ -13,7 +16,7 @@ namespace WxReport.Svc;
 public sealed class RecipientResolver
 {
     private readonly DbContextOptions<WeatherDataContext> _dbOptions;
-    private readonly HttpClient                           _httpClient;
+    private readonly HttpClient _httpClient;
 
     /// <summary>Initializes a new instance of <see cref="RecipientResolver"/> with the given dependencies.</summary>
     /// <param name="dbOptions">EF Core options used to query the database for nearby stations.</param>
@@ -22,7 +25,7 @@ public sealed class RecipientResolver
         DbContextOptions<WeatherDataContext> dbOptions,
         HttpClient httpClient)
     {
-        _dbOptions  = dbOptions;
+        _dbOptions = dbOptions;
         _httpClient = httpClient;
     }
 
@@ -51,16 +54,16 @@ public sealed class RecipientResolver
     {
         // .NET's JSON config provider maps JSON null to ""; normalize so null
         // checks below work correctly regardless of how the config was written.
-        if (string.IsNullOrWhiteSpace(recipient.Id))           recipient.Id           = null;
-        if (string.IsNullOrWhiteSpace(recipient.MetarIcao))    recipient.MetarIcao    = null;
-        if (string.IsNullOrWhiteSpace(recipient.TafIcao))      recipient.TafIcao      = null;
-        if (string.IsNullOrWhiteSpace(recipient.Address))      recipient.Address      = null;
+        if (string.IsNullOrWhiteSpace(recipient.Id)) recipient.Id = null;
+        if (string.IsNullOrWhiteSpace(recipient.MetarIcao)) recipient.MetarIcao = null;
+        if (string.IsNullOrWhiteSpace(recipient.TafIcao)) recipient.TafIcao = null;
+        if (string.IsNullOrWhiteSpace(recipient.Address)) recipient.Address = null;
         if (string.IsNullOrWhiteSpace(recipient.LocalityName)) recipient.LocalityName = null;
 
         if (recipient.MetarIcao is not null && recipient.TafIcao is not null)
             return true;
 
-        var label   = recipient.Id ?? recipient.Email;
+        var label = recipient.Id ?? recipient.Email;
         var changed = false;
 
         if (recipient.Latitude is null || recipient.Longitude is null)
@@ -83,7 +86,7 @@ public sealed class RecipientResolver
                 return false;
             }
 
-            recipient.Latitude  = geo.Value.Latitude;
+            recipient.Latitude = geo.Value.Latitude;
             recipient.Longitude = geo.Value.Longitude;
 
             if (string.IsNullOrWhiteSpace(recipient.LocalityName))
@@ -186,7 +189,7 @@ public sealed class RecipientResolver
         for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
             T? result = null;
-            try   { result = await operation(); }
+            try { result = await operation(); }
             catch { /* logged by the callee; treat as null */ }
 
             if (result is not null) return result;
@@ -226,10 +229,10 @@ public sealed class RecipientResolver
             return;
         }
 
-        row.Latitude  = recipient.Latitude;
+        row.Latitude = recipient.Latitude;
         row.Longitude = recipient.Longitude;
         row.MetarIcao = recipient.MetarIcao;
-        row.TafIcao   = recipient.TafIcao;
+        row.TafIcao = recipient.TafIcao;
 
         if (!string.IsNullOrWhiteSpace(recipient.LocalityName))
             row.LocalityName = recipient.LocalityName;

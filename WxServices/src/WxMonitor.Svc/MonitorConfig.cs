@@ -14,23 +14,23 @@ namespace WxMonitor.Svc;
 public class MonitorConfig
 {
     /// <summary>How often the monitor checks logs and heartbeats (minutes).</summary>
-    public int    IntervalMinutes      { get; set; } = 5;
+    public int IntervalMinutes { get; set; } = 5;
 
     /// <summary>Email address that receives alert messages.</summary>
-    public string AlertEmail           { get; set; } = "";
+    public string AlertEmail { get; set; } = "";
 
     /// <summary>Minimum log4net level that triggers an alert: DEBUG, INFO, WARN, ERROR, or FATAL.</summary>
-    public string AlertOnSeverity      { get; set; } = "ERROR";
+    public string AlertOnSeverity { get; set; } = "ERROR";
 
     /// <summary>Minimum minutes between repeat alerts of the same type for the same service.</summary>
-    public int    AlertCooldownMinutes { get; set; } = 60;
+    public int AlertCooldownMinutes { get; set; } = 60;
 
     /// <summary>
     /// Age in minutes beyond which the most recent METAR observation in the database is
     /// considered stale and triggers an alert.  Default 120 (2 hours).
     /// Set to 0 to disable the staleness check.
     /// </summary>
-    public int    MetarStalenessThresholdMinutes { get; set; } = 120;
+    public int MetarStalenessThresholdMinutes { get; set; } = 120;
 
     public List<WatchedServiceConfig> WatchedServices { get; set; } = [];
 }
@@ -39,15 +39,14 @@ public class MonitorConfig
 public class WatchedServiceConfig
 {
     /// <summary>Display name used in alert subjects and log messages.</summary>
-    public string Name                   { get; set; } = "";
+    public string Name { get; set; } = "";
 
     /// <summary>Absolute path to the service's log4net log file.</summary>
-    public string LogFile                { get; set; } = "";
+    public string LogFile { get; set; } = "";
 
     /// <summary>Absolute path to the service's heartbeat file.</summary>
-    public string HeartbeatFile          { get; set; } = "";
+    public string HeartbeatFile { get; set; } = "";
 
     /// <summary>Age in minutes beyond which a heartbeat is considered stale.</summary>
-    public int    HeartbeatMaxAgeMinutes { get; set; } = 30;
+    public int HeartbeatMaxAgeMinutes { get; set; } = 30;
 }
-
