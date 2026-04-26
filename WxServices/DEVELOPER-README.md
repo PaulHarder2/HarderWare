@@ -102,6 +102,15 @@ Server Express is running and the connection string is correct.
 dotnet build WxServices.sln
 ```
 
+## Code style
+
+C# style rules are defined in `WxServices/.editorconfig` at the solution root —
+the unmodified output of `dotnet new editorconfig` (Microsoft default ruleset).
+Visual Studio, JetBrains Rider, VS Code, and `dotnet format` all read this
+file automatically.
+
+To apply the rules to the solution: `dotnet format WxServices.sln`.
+
 ## Deploy
 
 The deploy script must be run from an **elevated** (Administrator) PowerShell
