@@ -92,7 +92,7 @@ The walkthrough is the moment Paul re-enters the loop. It serves three purposes:
 
 Wait for Paul to say "LGTM" or call out specific edits to adjust before proceeding to step 7. Do not start the test run until the walkthrough is accepted.
 
-## 7. Tests before PR (two sub-steps, both required)
+## 7. Tests before PR (the following sub-steps)
 
 **Added 2026-04-17.**
 
