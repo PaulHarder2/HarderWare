@@ -78,9 +78,10 @@ public class SnapshotDescriberTests
     [Fact]
     public void Describe_Wind_IncludesDirectionAndSpeed()
     {
+        // Default UnitPreferences emits wind in mph, not kt: 12 kt → 14 mph (1.15078 ratio).
         var text = SnapshotDescriber.Describe(Base(), TimeZoneInfo.Utc);
         Assert.Contains("180", text);
-        Assert.Contains("12 kt", text);
+        Assert.Contains("14 mph", text);
     }
 
     [Fact]
@@ -98,7 +99,8 @@ public class SnapshotDescriberTests
             WeatherPhenomena = [],
             ForecastPeriods = [],
         };
-        Assert.Contains("gusting 22 kt", SnapshotDescriber.Describe(snap, TimeZoneInfo.Utc));
+        // Default UnitPreferences emits wind in mph: 22 kt → 25 mph.
+        Assert.Contains("gusting 25 mph", SnapshotDescriber.Describe(snap, TimeZoneInfo.Utc));
     }
 
     [Fact]
@@ -216,19 +218,25 @@ public class SnapshotDescriberTests
     // ── temperature ───────────────────────────────────────────────────────────
 
     [Fact]
-    public void Describe_IncludesFahrenheitAndCelsius()
+    public void Describe_DefaultUnits_IncludesFahrenheit()
     {
+        // Describer respects UnitPreferences and emits the user's chosen unit only,
+        // not both. Default preferences select °F — Celsius must be absent.
         var text = SnapshotDescriber.Describe(Base(), TimeZoneInfo.Utc);
         Assert.Contains("°F", text);
-        Assert.Contains("°C", text);
+        Assert.DoesNotContain("°C", text);
     }
 
     [Fact]
-    public void Describe_IncludesDewPoint()
+    public void Describe_IncludesHumidity()
     {
+        // Describer no longer emits dew point directly; it computes humidity from
+        // temp + dew-point input via the Magnus formula. Base() fixture: T=22°C,
+        // Td=15°C → RH ≈ 64.5%. Assert against the specific rounded value to
+        // verify the formula, not just the format.
         var text = SnapshotDescriber.Describe(Base(), TimeZoneInfo.Utc);
-        Assert.Contains("Dew point", text);
-        Assert.Contains("15", text);
+        Assert.Contains("Humidity: 65%", text);
+        Assert.DoesNotContain("Dew point", text);
     }
 
     // ── altimeter ─────────────────────────────────────────────────────────────

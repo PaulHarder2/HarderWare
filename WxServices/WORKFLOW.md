@@ -110,7 +110,7 @@ Some changes (installer scripts, raw config files, prose-only doc edits) cannot 
 
 ### 7b. Run the full test suite
 
-`dotnet test WxServices.sln` must be green before creating the PR. Pre-existing failures in unrelated modules may remain out of scope, but they must be explicitly identified in the PR body so the reviewer (human or AI) knows they're not new regressions.
+`dotnet test WxServices.sln` must report zero failures before creating the PR. There are no pre-existing-failure exceptions: any failure must be resolved in this PR or split out into a blocking ticket first.
 
 **Exemption:** when the change cannot meaningfully affect test results — pure-docs PRs (WORKFLOW.md, DESIGN.md, etc.), pure-config PRs (e.g. `.coderabbit.yaml`), pure-asset PRs — skip the test run and note the exemption in the PR body. Same governing phrase as §7a applies: *"when it is possible and makes sense."* Running `dotnet test` against a diff that touches no executable surface is ceremony, not safety.
 
@@ -137,7 +137,7 @@ git push -u origin WX-NN-short-description
 gh pr create --title "WX-NN: short description" --body ...
 ```
 
-PR title is prefixed with `WX-NN:` for traceability. Body has a `## Summary` section and a `## Test plan` checklist. If any pre-existing test failures are unrelated to this PR, note them explicitly.
+PR title is prefixed with `WX-NN:` for traceability. Body has a `## Summary` section and a `## Test plan` checklist. If the §7b exemption is used (pure-docs / pure-config / pure-asset PR), note that the test suite was skipped and why.
 
 **Immediately after opening the PR, transition the Jira ticket from In Progress to In Review.** This is the mirror of the To Do → In Progress transition in §3: the code-writing phase has ended and the reviewing phase has started, and the Jira board should reflect that. Same board-hygiene and autopilot-tripwire reasoning applies. Added 2026-04-18 after Paul caught it missing from the first draft of this workflow — the ticket introducing the In-Progress-transition rule itself landed in a state that needed the very In-Review transition that rule had forgotten to mention.
 
