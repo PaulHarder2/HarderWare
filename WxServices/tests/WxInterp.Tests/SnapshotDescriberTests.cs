@@ -68,9 +68,9 @@ public class SnapshotDescriberTests
         Assert.DoesNotContain("automated", SnapshotDescriber.Describe(snap, TimeZoneInfo.Utc));
     }
 
+    // Current date/time line is essential so Claude knows what day it is
     [Fact]
     public void Describe_IncludesCurrentDateTime()
-        // Current date/time line is essential so Claude knows what day it is
         => Assert.Contains("Current date/time:", SnapshotDescriber.Describe(Base(), TimeZoneInfo.Utc));
 
     // ── wind ─────────────────────────────────────────────────────────────────
