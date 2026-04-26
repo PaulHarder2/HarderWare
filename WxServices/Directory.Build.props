@@ -20,6 +20,12 @@
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 
+  <!-- Run code-style analyzers on every build, not just on `dotnet format`.
+       Catches drift introduced through any editor (including non-VS editors). -->
+  <PropertyGroup>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+  </PropertyGroup>
+
   <!-- Remove stale *_wpftmp folders left behind by the WPF markup compiler.
        Runs only for WPF projects and only touches folders whose names start
        with the current project's name, so parallel builds of sibling
