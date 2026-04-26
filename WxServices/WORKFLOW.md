@@ -112,6 +112,8 @@ Some changes (installer scripts, raw config files, prose-only doc edits) cannot 
 
 `dotnet test WxServices.sln` must be green before creating the PR. Pre-existing failures in unrelated modules may remain out of scope, but they must be explicitly identified in the PR body so the reviewer (human or AI) knows they're not new regressions.
 
+**Exemption:** when the change cannot meaningfully affect test results — pure-docs PRs (WORKFLOW.md, DESIGN.md, etc.), pure-config PRs (e.g. `.coderabbit.yaml`), pure-asset PRs — skip the test run and note the exemption in the PR body. Same governing phrase as §7a applies: *"when it is possible and makes sense."* Running `dotnet test` against a diff that touches no executable surface is ceremony, not safety.
+
 ### 7c. Confirm acceptance criteria are met
 
 **Added 2026-04-19.**
