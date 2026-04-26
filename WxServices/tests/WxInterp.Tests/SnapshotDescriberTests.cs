@@ -221,19 +221,22 @@ public class SnapshotDescriberTests
     public void Describe_DefaultUnits_IncludesFahrenheit()
     {
         // Describer respects UnitPreferences and emits the user's chosen unit only,
-        // not both. Default preferences select °F.
+        // not both. Default preferences select °F — Celsius must be absent.
         var text = SnapshotDescriber.Describe(Base(), TimeZoneInfo.Utc);
         Assert.Contains("°F", text);
+        Assert.DoesNotContain("°C", text);
     }
 
     [Fact]
     public void Describe_IncludesHumidity()
     {
         // Describer no longer emits dew point directly; it computes humidity from
-        // temp + dew-point input via the Magnus formula and emits the % value.
+        // temp + dew-point input via the Magnus formula. Base() fixture: T=22°C,
+        // Td=15°C → RH ≈ 64.5%. Assert against the specific rounded value to
+        // verify the formula, not just the format.
         var text = SnapshotDescriber.Describe(Base(), TimeZoneInfo.Utc);
-        Assert.Contains("Humidity:", text);
-        Assert.Contains("%", text);
+        Assert.Contains("Humidity: 65%", text);
+        Assert.DoesNotContain("Dew point", text);
     }
 
     // ── altimeter ─────────────────────────────────────────────────────────────

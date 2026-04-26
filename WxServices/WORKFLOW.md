@@ -137,7 +137,7 @@ git push -u origin WX-NN-short-description
 gh pr create --title "WX-NN: short description" --body ...
 ```
 
-PR title is prefixed with `WX-NN:` for traceability. Body has a `## Summary` section and a `## Test plan` checklist. If any pre-existing test failures are unrelated to this PR, note them explicitly.
+PR title is prefixed with `WX-NN:` for traceability. Body has a `## Summary` section and a `## Test plan` checklist. If the §7b exemption is used (pure-docs / pure-config / pure-asset PR), note that the test suite was skipped and why.
 
 **Immediately after opening the PR, transition the Jira ticket from In Progress to In Review.** This is the mirror of the To Do → In Progress transition in §3: the code-writing phase has ended and the reviewing phase has started, and the Jira board should reflect that. Same board-hygiene and autopilot-tripwire reasoning applies. Added 2026-04-18 after Paul caught it missing from the first draft of this workflow — the ticket introducing the In-Progress-transition rule itself landed in a state that needed the very In-Review transition that rule had forgotten to mention.
 
