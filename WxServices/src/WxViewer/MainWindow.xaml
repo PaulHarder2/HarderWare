@@ -180,6 +180,17 @@
             </Grid>
         </Border>
 
+        <!-- Focus sentinel — see WX-46 in MainWindow.xaml.cs.  After a user clicks
+             a tab header we move keyboard focus here so that the Window focus
+             scope's stored FocusedElement is never a TabItem; this prevents
+             ButtonBase.OnLostMouseCapture (and similar focus paths) from being
+             redirected to a TabItem and triggering TabItem auto-select. -->
+        <Border x:Name="FocusSentinel"
+                DockPanel.Dock="Top"
+                Focusable="True"
+                KeyboardNavigation.IsTabStop="False"
+                Width="0" Height="0"/>
+
         <!-- ── Status bar ────────────────────────────────────────────────────── -->
         <StatusBar DockPanel.Dock="Bottom" Background="#111111">
             <StatusBarItem>
@@ -193,7 +204,8 @@
                     SelectionChanged="RootTabControl_SelectionChanged">
 
             <!-- ── Maps tab ──────────────────────────────────────────────────── -->
-            <TabItem Header="Maps">
+            <TabItem Header="Maps"
+                     PreviewMouseLeftButtonDown="TabHeader_PreviewMouseLeftButtonDown">
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" MinWidth="300"/>
@@ -457,7 +469,8 @@
             </TabItem>
 
             <!-- ── Meteograms tab ─────────────────────────────────────────────── -->
-            <TabItem Header="Meteograms">
+            <TabItem Header="Meteograms"
+                     PreviewMouseLeftButtonDown="TabHeader_PreviewMouseLeftButtonDown">
                 <Grid Background="#1a1a1a">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>

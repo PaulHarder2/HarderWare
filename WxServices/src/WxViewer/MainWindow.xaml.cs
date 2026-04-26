@@ -19,6 +19,13 @@ public partial class MainWindow : Window
     private Point  _panStart;
     private double _panStartTx, _panStartTy;
 
+    // WX-46 tab-switch focus guard.  Set by TabHeader_PreviewMouseLeftButtonDown
+    // to mark a SelectionChanged as user-initiated; cleared after the change is
+    // honored.  _reverting suppresses the re-entrant SelectionChanged that fires
+    // when we restore the previous tab.
+    private bool _userClickedTabHeader;
+    private bool _reverting;
+
     public MainWindow(MainViewModel viewModel)
     {
         InitializeComponent();
@@ -425,27 +432,65 @@ public partial class MainWindow : Window
     private void ComboBox_DropDownClosed(object sender, EventArgs e)
         => Keyboard.Focus(this);
 
-    // WX-46 diagnostic — logs whatever is causing the Maps→Meteograms tab
-    // switch so we can identify the mechanism (bubbled Selector event, focus
-    // traversal via RequestBringIntoView, programmatic setter, etc.) from a
-    // single repro. Remove once the real fix lands.
+    // WX-46: marks a SelectionChanged as user-initiated.  Attached to each
+    // TabItem in MainWindow.xaml.  PreviewMouseLeftButtonDown on a TabItem
+    // fires only for clicks on the tab header, not for clicks inside the
+    // tab body (the body is hosted by the TabControl, not the TabItem).
+    private void TabHeader_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        => _userClickedTabHeader = true;
+
+    // WX-46 fix + observability.
+    //
+    // (A) If a SelectionChanged fires without a preceding user click on a tab
+    //     header, the change is spurious (caused by a focus-scope redirect
+    //     after, e.g., ButtonBase.OnLostMouseCapture).  Revert it synchronously.
+    // (B) After a legitimate tab-header click, move keyboard focus to
+    //     FocusSentinel.  Without this, the Window focus scope stores the
+    //     newly-clicked TabItem as its FocusedElement, and a subsequent
+    //     focus-scope redirect from a Maps-pane Button would land on a
+    //     TabItem and trigger TabItem.OnPreviewGotKeyboardFocus auto-select.
+    //
+    // Each event is logged once with a [cause] tag (init / user /
+    // spurious-reverted) so the log line itself is the audit trail; per WX-48
+    // this logging is permanent.
     private void RootTabControl_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (!ReferenceEquals(e.OriginalSource, sender)) return;
+        if (_reverting) return;
 
-        var added   = e.AddedItems.Count   > 0 ? e.AddedItems[0]?.GetType().Name   ?? "?" : "(none)";
-        var removed = e.RemovedItems.Count > 0 ? e.RemovedItems[0]?.GetType().Name ?? "?" : "(none)";
-        var addedHeader = e.AddedItems.Count > 0 && e.AddedItems[0] is TabItem ti
-            ? ti.Header?.ToString() ?? "?"
-            : "?";
+        var addedHeader = e.AddedItems.Count > 0 && e.AddedItems[0] is TabItem at
+            ? at.Header?.ToString() ?? "?"
+            : "(none)";
+        var removedHeader = e.RemovedItems.Count > 0 && e.RemovedItems[0] is TabItem rt
+            ? rt.Header?.ToString() ?? "?"
+            : "(none)";
         var focused = Keyboard.FocusedElement?.GetType().Name ?? "(null)";
         var focusedName = (Keyboard.FocusedElement as FrameworkElement)?.Name ?? "";
 
+        bool isInit = e.RemovedItems.Count == 0;
+        bool isSpurious = !isInit && !_userClickedTabHeader;
+        string cause = isInit ? "init" : isSpurious ? "spurious-reverted" : "user";
+
         Logger.Info(
-            $"TabControl.SelectionChanged: added={added}({addedHeader}) removed={removed} " +
-            $"focus={focused} name='{focusedName}' origSrc={e.OriginalSource?.GetType().Name} " +
-            $"src={e.Source?.GetType().Name}");
-        Logger.Info("TabControl.SelectionChanged stack:\n" + new System.Diagnostics.StackTrace(fNeedFileInfo: true));
+            $"TabControl.SelectionChanged [{cause}]: {removedHeader} → {addedHeader}, " +
+            $"focus was {focused} '{focusedName}'");
+
+        // (A) Revert spurious changes.
+        if (isSpurious && e.RemovedItems[0] is TabItem prev)
+        {
+            _reverting = true;
+            try { prev.IsSelected = true; }
+            finally { _reverting = false; }
+            return;
+        }
+
+        if (isInit) return;
+
+        _userClickedTabHeader = false;
+
+        // (B) Move focus off the TabItem so the Window scope can't redirect
+        // future focus events to it.
+        Keyboard.Focus(FocusSentinel);
     }
 
     /// <summary>

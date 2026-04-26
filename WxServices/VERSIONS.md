@@ -5,6 +5,7 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 
 | Version | Commit  | Date       | Summary |
 |---------|---------|------------|---------|
+| 1.4.1   | 1395754 | 2026-04-26 | Fix Maps-tab control press jumping to Meteograms tab via WPF focus-scope redirect (WX-46) |
 | 1.4.0   | a47732a | 2026-04-25 | WxReport.Svc Claude calls now carry a cached author-persona prefix from `AboutPaul.md` (WX-50) |
 | 1.3.8   | 79ec475 | 2026-04-23 | Promote TabControl.SelectionChanged diagnostic to permanent logging (WX-48) |
 | 1.3.7   | 726c01d | 2026-04-18 | Analysis map MSLP now uses proper temperature-based reduction from altimeter (WX-35) |
@@ -24,6 +25,15 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 | 1.0.0   | 7a2a268 | 2026-04-07 | Initial versioned release |
 
 ---
+
+## 1.4.1 — Maps-tab focus-redirect tab-switch fix (2026-04-26)
+
+- **WX-46 (bug fix):** On the Maps tab, releasing the mouse on a `Button` (Reset Zoom, Step ◀/▶, Play/Pause) was switching the selected tab to Meteograms. The control's own action still executed, but the user had to re-click the Maps tab header before the next interaction. The bug was sequence-dependent — it only triggered after the user had clicked the Meteograms tab header at least once during the session — which is why earlier reproduction attempts on cold-started instances failed.
+- **Root cause:** `ButtonBase.OnLostMouseCapture` calls `Keyboard.Focus(...)` to keep keyboard focus on the button after the click. The focus call passes through the Window focus scope's class handler `FrameworkElement.OnPreviewGotKeyboardFocus`, which redirects focus to whatever is stored as the scope's `FocusedElement`. Once the user had clicked the Meteograms tab header, `TabItem.SetFocus` registered the Meteograms `TabItem` as that stored element. Subsequent button clicks therefore triggered `TabItem.OnPreviewGotKeyboardFocus` on the Meteograms `TabItem`, whose default behavior is to auto-select the tab on focus. The smoking-gun stack capture was logged to `wxviewer.log` on 2026-04-26 in two near-identical events, both bottoming out in `ButtonBase.OnMouseLeftButtonUp` → `OnLostMouseCapture` → `KeyboardDevice.Focus` → `FrameworkElement.OnPreviewGotKeyboardFocus` → `TabItem.OnPreviewGotKeyboardFocus(Meteograms)` → `IsSelected = true`.
+- **Fix layer A — guard `SelectionChanged`.** A `PreviewMouseLeftButtonDown` handler on each `TabItem` sets `_userClickedTabHeader = true`. `RootTabControl_SelectionChanged` reverts any selection change that fires without that flag set, by synchronously assigning `prev.IsSelected = true` inside a `_reverting` re-entry guard. The handler exits to ensure the synthetic selection event raised by the revert short-circuits at the guard. This is the defensive backstop — independent of any future WPF focus-routing edge case.
+- **Fix layer B — stop poisoning the Window focus scope.** A zero-size `Border` named `FocusSentinel` (Focusable, `KeyboardNavigation.IsTabStop="False"`) lives directly under the outer `DockPanel`, outside any `ToolBar` or `TabControl`. After every legitimate tab-header click, `Keyboard.Focus(FocusSentinel)` moves focus there so the Window scope's stored `FocusedElement` is never a `TabItem`. Future focus-scope redirects then land on the sentinel — a benign, non-`TabItem`, non-focus-scope element — and trigger no auto-select side effects.
+- **Logging now self-classifies.** The existing `TabControl.SelectionChanged` log line (kept permanent in WX-48 for forensic value) is reformatted as `TabControl.SelectionChanged [cause]: from → to, focus was Type 'Name'`, with `cause` ∈ {`init`, `user`, `spurious-reverted`}. One log entry per event covers all three states; the previous companion stack-trace log is dropped now that the underlying mechanism is identified. Any future regression in either layer of the fix will surface as a `[spurious-reverted]` line in normal operation.
+- **Acceptance criteria covered.** Maps-pane controls (Buttons, Sliders, ComboBoxes, ToggleButton) execute their action without changing the selected tab. Existing keyboard navigation (arrow keys, Ctrl+arrows, numpad zoom) continues to work because the `OnKeyDown` handler ignores focus when it is on a `Slider`, `ComboBox`, or `Selector` and the sentinel is none of those. ComboBox dropdowns continue to return keyboard focus to the Window via the `ComboBox_DropDownClosed` → `Keyboard.Focus(this)` path established in commit `aa82837`; with the sentinel in place, that path's redirect now lands on the sentinel rather than on a `TabItem`.
 
 ## 1.4.0 — Author-persona cached prefix on WxReport Claude calls (2026-04-25)
 
