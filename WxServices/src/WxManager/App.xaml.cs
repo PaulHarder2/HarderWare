@@ -64,6 +64,9 @@ public partial class App : Application
     /// <summary>Maximum tokens for Claude responses from <c>Claude:MaxTokens</c>. Defaults to <c>2048</c>.</summary>
     public static int ClaudeMaxTokens { get; private set; } = 2048;
 
+    /// <summary>What3Words API key from <c>What3Words:ApiKey</c> in <c>appsettings.local.json</c>. Empty if not configured; <c>///</c>-prefixed addresses will fail to resolve.</summary>
+    public static string What3WordsApiKey { get; private set; } = "";
+
     /// <summary>Maximum candidate stations evaluated during nearby-station lookup, from <c>WxManager:MaxNearbyStationsInLookup</c>. Defaults to <c>40</c>.</summary>
     public static int MaxNearbyStationsInLookup { get; private set; } = 40;
 
@@ -114,11 +117,30 @@ public partial class App : Application
                 "WxManager — Logging Error", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
 
-        var config = new ConfigurationBuilder()
-            .SetBasePath(AppContext.BaseDirectory)
-            .AddJsonFile("appsettings.shared.json", optional: false)
-            .AddJsonFile(new PhysicalFileProvider(wxPaths.InstallRoot), "appsettings.local.json", optional: true, reloadOnChange: false)
-            .Build();
+        IConfigurationRoot config;
+        try
+        {
+            config = new ConfigurationBuilder()
+                .SetBasePath(AppContext.BaseDirectory)
+                .AddJsonFile("appsettings.shared.json", optional: false)
+                .AddJsonFile(new PhysicalFileProvider(wxPaths.InstallRoot), "appsettings.local.json", optional: true, reloadOnChange: false)
+                .Build();
+        }
+        catch (Exception ex)
+        {
+            // Most common cause: malformed appsettings.local.json (missing comma, unbalanced
+            // brace, etc.). Surface the parser's own message — it usually names the file and
+            // line — rather than a silent process exit.
+            var detail = $"Failed to load configuration:\n\n{ex.Message}\n\n" +
+                         $"Check appsettings.shared.json (next to WxManager.exe) and " +
+                         $"appsettings.local.json (in {wxPaths.InstallRoot}) for malformed JSON.";
+            Logger.Error(detail, ex);
+            MessageBox.Show(detail,
+                "WxManager — Configuration Error",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+            Shutdown(1);
+            return;
+        }
 
         Configuration = config;
 
@@ -151,6 +173,7 @@ public partial class App : Application
         ClaudeApiVersion = config["Claude:ApiVersion"] ?? ClaudeApiVersion;
         if (int.TryParse(config["Claude:MaxTokens"], out var maxTok) && maxTok > 0)
             ClaudeMaxTokens = maxTok;
+        What3WordsApiKey = config["What3Words:ApiKey"] ?? "";
         if (int.TryParse(config["WxManager:MaxNearbyStationsInLookup"], out var maxNearby) && maxNearby > 0)
             MaxNearbyStationsInLookup = maxNearby;
         if (TryParseDouble(config["WxManager:StationLookupRadiusKm"]) is { } radiusKm && radiusKm > 0)

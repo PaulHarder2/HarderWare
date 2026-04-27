@@ -81,7 +81,7 @@ Console.WriteLine($"Address  : {address}");
 Console.WriteLine();
 
 using var http = new HttpClient();
-var geo = await AddressGeocoder.LookupAsync(address, http);
+var geo = await AddressGeocoder.LookupAsync(address, http, config["What3Words:ApiKey"]);
 
 if (geo is null)
 {

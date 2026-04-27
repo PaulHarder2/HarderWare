@@ -5,6 +5,7 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 
 | Version | Commit  | Date       | Summary |
 |---------|---------|------------|---------|
+| 1.5.0   | _pending_ | 2026-04-27 | Recipient address accepts What3Words `///word.word.word` and direct `lat, lon` decimal entry alongside street address; manual override of all fields (WX-52) |
 | 1.4.1   | 1395754 | 2026-04-26 | Fix Maps-tab control press jumping to Meteograms tab via WPF focus-scope redirect (WX-46) |
 | 1.4.0   | a47732a | 2026-04-25 | WxReport.Svc Claude calls now carry a cached author-persona prefix from `AboutPaul.md` (WX-50) |
 | 1.3.8   | 79ec475 | 2026-04-23 | Promote TabControl.SelectionChanged diagnostic to permanent logging (WX-48) |
@@ -25,6 +26,20 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 | 1.0.0   | 7a2a268 | 2026-04-07 | Initial versioned release |
 
 ---
+
+## 1.5.0 — Recipient address: three input paths plus manual escape (2026-04-27)
+
+- **WX-52 (feature):** The "Address" field on the WxManager → Recipients tab and the `Address` column on database recipient rows now accept three input forms, distinguished by leading characters:
+  - `///word.word.word` — a What3Words address. Resolved against `https://api.what3words.com/v3/convert-to-coordinates` using `What3Words:ApiKey` from `appsettings.local.json`. The `///` is much faster to type than a street address — Paul's bedroom is `///offer.loops.carb`.
+  - `lat, lon` — two decimal-degree numbers separated by a comma (e.g. `30.07, -95.55`). Parsed locally with no API call. `LocalityName` is left for the user to fill in.
+  - Anything else — passed to the existing Nominatim geocoder (unchanged behaviour).
+- **Dispatcher pattern.** `AddressGeocoder.LookupAsync(address, httpClient, w3wApiKey)` inspects the input, routes to the matching path, and returns `(lat, lon, locality)?`. The previous Nominatim-only body is now a private `LookupNominatimAsync`. `What3WordsClient` is a new sibling static class in `MetarParser.Data` that wraps the official `what3words.dotnet.wrapper` v4.1.0 NuGet package — `What3WordsV3.ConvertToCoordinates(words).RequestAsync()` returns an `APIResponse<Address>` whose `Error.Code`/`Error.Message` fields surface specific W3W diagnostics (`QuotaExceeded`, `BadOrigin`, etc.) directly into our log. The SDK manages its own internal `HttpClient`, so the `httpClient` parameter on `AddressGeocoder.LookupAsync` is now only consumed by the Nominatim path. A `///` input with a missing `What3Words:ApiKey` short-circuits with a logged error rather than touching the network. A `lat, lon` input with out-of-range values (lat outside ±90, lon outside ±180) returns null without parsing further.
+- **Latitude/Longitude stay read-only — direct entry routed through the Address field.** The `lat, lon` input form on the Address field already covers direct-coordinate entry *and* triggers the nearby-stations pipeline; making LatBox/LonBox individually editable would have created a redundant escape that bypasses station discovery. Locality, METAR ICAO, and TAF ICAO remain directly editable so individual fields can be corrected without re-running geocoding. The Look-Up failure message points at those manual fields: *"Address could not be resolved. Check the format and try again, or fill in Locality and METAR/TAF ICAO directly."*
+- **Locality preservation on `lat, lon` entry.** When `AddressGeocoder` returns an empty locality (the `lat, lon` direct-entry path), the LookUp handler no longer overwrites a locality the user already typed.
+- **Config plumbing.** `What3Words:ApiKey` is read from `appsettings.local.json`. `WxManager.App` exposes it as `App.What3WordsApiKey` (parallel to `App.ClaudeApiKey`); `WxReport.Svc.RecipientResolver` takes it as a constructor parameter, sourced from `_config["What3Words:ApiKey"]` at the two construction sites in `ReportWorker.cs`.
+- **Tests.** New `AddressGeocoderRoutingTests` in `MetarParser.Tests` cover the dispatcher: `lat, lon` parsing across signed/whitespace/range cases (verified with an `HttpClient` whose handler throws if called, proving no HTTP traffic on the direct-parse path); `///` short-circuits cleanly when the API key is empty or null; plain text routes to Nominatim (verified by asserting the host of the captured request).
+- **Docs.** `DESIGN.md` §4.7 updated to describe the three input paths. `INSTALL.md` §4 (Secrets) and §7 (Add Recipients) document the optional `What3Words:ApiKey` and the input forms. `DEVELOPER-README.md`'s `appsettings.local.json` sample picks up the new section.
+- **Defensive UX, surfaced by deployment.** While testing the W3W path, a missing comma between sibling objects in `appsettings.local.json` caused WxManager to exit silently — `ConfigurationBuilder.Build()` threw a `JsonException`, and `App.OnStartup` had no try/catch around it. The only evidence was a "starting" log line followed by nothing. Fix: wrap the config build in a try/catch that logs the parser's own message (which already names file and line) and shows a `MessageBox` pointing at both candidate config files (`appsettings.shared.json` next to the executable, `appsettings.local.json` under `InstallRoot`) before calling `Shutdown(1)`. Pattern matches the existing missing-`ConnectionStrings:WeatherData` handler. Scope is WxManager only — the four headless services have a similar gap, but Windows surfaces "service failed to start" for them, so the silent-exit UX hazard is unique to the WPF app.
 
 ## 1.4.1 — Maps-tab focus-redirect tab-switch fix (2026-04-26)
 

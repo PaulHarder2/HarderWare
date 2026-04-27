@@ -253,17 +253,20 @@ public partial class RecipientsTab : UserControl
         {
             // ── Geocode ──────────────────────────────────────────────────────────
 
-            var geo = await AddressGeocoder.LookupAsync(address, _http);
+            var geo = await AddressGeocoder.LookupAsync(address, _http, App.What3WordsApiKey);
             if (geo is null)
             {
-                ShowMessage("Address could not be geocoded — check spelling and try again.");
+                ShowMessage("Address could not be resolved. Check the format and try again, " +
+                            "or fill in Locality and METAR/TAF ICAO directly.");
                 return;
             }
 
             var (lat, lon, locality) = geo.Value;
             LatBox.Text = lat.ToString("F7");
             LonBox.Text = lon.ToString("F7");
-            LocalityBox.Text = locality;
+            // Lat,lon direct entry returns an empty locality — preserve any value the user already typed.
+            if (!string.IsNullOrWhiteSpace(locality))
+                LocalityBox.Text = locality;
 
             // A successful geocode implicitly begins editing; enable Save/Cancel.
             SaveBtn.IsEnabled = true;

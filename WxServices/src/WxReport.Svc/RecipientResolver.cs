@@ -17,16 +17,20 @@ public sealed class RecipientResolver
 {
     private readonly DbContextOptions<WeatherDataContext> _dbOptions;
     private readonly HttpClient _httpClient;
+    private readonly string? _w3wApiKey;
 
     /// <summary>Initializes a new instance of <see cref="RecipientResolver"/> with the given dependencies.</summary>
     /// <param name="dbOptions">EF Core options used to query the database for nearby stations.</param>
     /// <param name="httpClient">HTTP client used for address geocoding and airport coordinate lookups.</param>
+    /// <param name="w3wApiKey">What3Words API key (from <c>What3Words:ApiKey</c>); may be null if W3W input is never used.</param>
     public RecipientResolver(
         DbContextOptions<WeatherDataContext> dbOptions,
-        HttpClient httpClient)
+        HttpClient httpClient,
+        string? w3wApiKey = null)
     {
         _dbOptions = dbOptions;
         _httpClient = httpClient;
+        _w3wApiKey = w3wApiKey;
     }
 
     /// <summary>
@@ -76,7 +80,7 @@ public sealed class RecipientResolver
 
             Logger.Info($"{label}: geocoding address...");
             var geo = await RetryAsync(
-                () => AddressGeocoder.LookupAsync(recipient.Address, _httpClient),
+                () => AddressGeocoder.LookupAsync(recipient.Address, _httpClient, _w3wApiKey),
                 maxAttempts: 3, delay: TimeSpan.FromSeconds(2),
                 onRetry: attempt => Logger.Warn($"{label}: geocoding attempt {attempt} failed — retrying..."));
 

@@ -74,6 +74,9 @@ It is git-ignored and holds credentials:
   "Claude": {
     "ApiKey": "sk-ant-..."
   },
+  "What3Words": {
+    "ApiKey": "your-w3w-api-key"
+  },
   "Report": {
     "Recipients": [
       {

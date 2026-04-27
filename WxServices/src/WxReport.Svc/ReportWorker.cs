@@ -163,7 +163,7 @@ public sealed class ReportWorker : BackgroundService
             return;
         }
 
-        var resolver = new RecipientResolver(_dbOptions, _httpClient);
+        var resolver = new RecipientResolver(_dbOptions, _httpClient, _config["What3Words:ApiKey"]);
         if (!await resolver.EnsureResolvedAsync(recipient)) return;
 
         var preferredIcaos = ParseIcaoList(recipient.MetarIcao);
@@ -290,7 +290,7 @@ public sealed class ReportWorker : BackgroundService
 
             var claude = new ClaudeClient(_httpClient, claude_cfg.ApiKey, claude_cfg.Model, _persona.Text);
             var emailer = new SmtpSender(smtp, "WxReport");
-            var resolver = new RecipientResolver(_dbOptions, _httpClient);
+            var resolver = new RecipientResolver(_dbOptions, _httpClient, _config["What3Words:ApiKey"]);
             var now = DateTime.UtcNow;
             var reportsSent = 0;
 
