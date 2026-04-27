@@ -129,6 +129,70 @@ To add a new rule to the build-time enforced set: append a
 `WxServices/.globalconfig`. Elevating a rule can surface latent violations
 against existing code that need cleanup in the same PR.
 
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every pull request (open, push, reopen)
+and on every push to `master`. It also has a manual trigger
+(`workflow_dispatch`) for one-off re-runs from the Actions tab.
+
+**What runs**, in order, on `ubuntu-latest` against `.NET 8.0.x`:
+
+1. **Restore** — `dotnet restore WxServices.CI.slnf`
+2. **Build** — `dotnet build WxServices.CI.slnf -c Release --no-restore`
+3. **Test** — `dotnet test WxServices.CI.slnf -c Release --no-build`
+4. **Format check** — `dotnet format WxServices.CI.slnf --verify-no-changes`
+5. **Linux-publish smoke** — `dotnet publish` for each of the four
+   headless services (`WxParser.Svc`, `WxReport.Svc`, `WxMonitor.Svc`,
+   `WxVis.Svc`) with `-r linux-x64 --self-contained false`. Catches
+   case-sensitive path regressions and missing references that would
+   surface only on a non-Windows host.
+
+**Solution filter scope.** CI uses `WxServices.CI.slnf`, which lists the
+sixteen cross-platform projects (`net8.0` TFM). The two WPF projects
+(`WxManager`, `WxViewer`, both `net8.0-windows`) are intentionally
+excluded — they cannot build on a Linux runner without targeting-pack
+hacks, and there is no scenario in which a Linux-built WPF assembly is
+useful. WPF projects are gate-checked locally via `dotnet build` on the
+developer's Windows machine before deploy.
+
+**Reading a failure.** Open the PR's *Checks* tab on GitHub. Click the
+failing CI run, expand the failed step, and read the log. The most
+common failure modes:
+
+| Failure | Where it surfaces | Local fix |
+|---|---|---|
+| Build error | Build step | `dotnet build WxServices.CI.slnf -c Release` |
+| Test failure | Test step | `dotnet test WxServices.CI.slnf -c Release` |
+| Style/whitespace drift | Format check | `dotnet format WxServices.sln` (full sln; safe even though CI uses the filter) |
+| Linux-publish error | Publish step | `dotnet publish src/Wx*.Svc/Wx*.Svc.csproj -c Release -r linux-x64 --self-contained false` |
+
+**Re-running a stuck or failed workflow.** From the Actions tab,
+select the workflow run, then click **Re-run jobs → Re-run all jobs**
+or **Re-run failed jobs**. Concurrency control (`cancel-in-progress: true`)
+means a new push to the same PR will automatically cancel any in-flight
+run on that ref and start a fresh one — so often the simplest "re-run"
+is just an empty `git commit --allow-empty -m "ci kick" && git push`.
+
+**Caching.** `actions/setup-dotnet@v4` caches the NuGet package store
+keyed off all `*.csproj` files. After the first run on a given branch,
+restore drops from ~30 s to a few seconds.
+
+**Adding a new project.** A new cross-platform project (`net8.0`) must
+be added to `WxServices.CI.slnf` to participate in CI. New WPF projects
+should *not* be added — extend the local-Windows-only verification path
+instead.
+
+**Branch protection.** `master` is protected: every change must arrive via
+a pull request, and the merge button stays disabled until the
+`Build, test, format-check, Linux-publish smoke` check goes green. The
+"Do not allow bypassing" setting is on — even the repo owner cannot
+override the gate. PRs must also be up-to-date with `master` before
+merging, so semantic conflicts between concurrent PRs surface as a
+required rebase rather than a broken `master`. The protection rule
+lives at *Settings → Branches → Branch protection rules → master* in
+the GitHub UI; if you need to adjust the required check name (e.g.
+after renaming the workflow or its job), update it there.
+
 ## Deploy
 
 The deploy script must be run from an **elevated** (Administrator) PowerShell
