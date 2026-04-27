@@ -6,7 +6,6 @@
       "src\\MetarParser\\MetarParser.csproj",
       "src\\MetarParser.Data\\MetarParser.Data.csproj",
       "src\\TafParser\\TafParser.csproj",
-      "src\\WxAddRecipient\\WxAddRecipient.csproj",
       "src\\WxInterp\\WxInterp.csproj",
       "src\\WxMonitor.Svc\\WxMonitor.Svc.csproj",
       "src\\WxParser.Svc\\WxParser.Svc.csproj",
