@@ -205,6 +205,25 @@ to generate an app-specific password (requires 2-factor authentication).
 **Claude API Key:** Sign up at https://console.anthropic.com/ and create
 an API key.
 
+### What3Words API Key (Optional)
+
+If you want to enter recipient addresses as What3Words (e.g.
+`///offer.loops.carb`), get a free API key from
+https://developer.what3words.com/public-api and add it to
+`{InstallRoot}\appsettings.local.json` (create the file if it does not
+already exist):
+
+```json
+{
+  "What3Words": {
+    "ApiKey": "your-w3w-api-key"
+  }
+}
+```
+
+If the key is missing, `///` addresses fail with a logged error; street
+addresses and `lat, lon` decimal entries continue to work normally.
+
 ### Optional settings
 
 | Setting | Default | Description |
@@ -267,10 +286,19 @@ sc.exe start WxVisSvc
 Open **WxManager** (`C:\HarderWare\WxManager\WxManager.exe`).  Use the
 Recipients tab to add email subscribers:
 
-1. Enter an address in the lookup field and click **Search**.
+1. Enter the recipient's location in the address field and click **Look Up**. Three forms are accepted:
+   - **Street address** (e.g. `123 Main St, Springfield, IL`) — resolved via Nominatim (OpenStreetMap).
+   - **What3Words** (e.g. `///offer.loops.carb`) — resolved via the What3Words API; requires the optional API key in `appsettings.local.json` (see §4).
+   - **Decimal coordinates** (e.g. `30.07, -95.55`) — parsed locally with no API call. You will then fill in the Locality field manually.
 2. Select a nearby METAR station from the results.
 3. Fill in name, email, timezone, and preferred units.
 4. Click **Save**.
+
+If none of the three input forms resolves your address, you can still
+fill in Locality, METAR ICAO, and TAF ICAO directly. Latitude and
+Longitude remain read-only; for direct coordinates, enter `lat, lon`
+in the Address field and click **Look Up** so nearby-station discovery
+still runs.
 
 The report service picks up new recipients automatically on its next cycle.
 

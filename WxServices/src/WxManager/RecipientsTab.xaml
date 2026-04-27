@@ -175,13 +175,13 @@
                         <TextBlock Grid.Row="7"  Grid.Column="0" Text="Latitude" VerticalAlignment="Center" Margin="0,3"/>
                         <TextBox   Grid.Row="7"  Grid.Column="1" x:Name="LatBox" Margin="0,3"
                                    IsReadOnly="True"
-                                   ToolTip="Set automatically by Address Lookup"/>
+                                   ToolTip="Set automatically by Address Lookup. Enter 'lat, lon' decimals in the Address field for direct entry."/>
 
                         <!-- Longitude (read-only) -->
                         <TextBlock Grid.Row="8"  Grid.Column="0" Text="Longitude" VerticalAlignment="Center" Margin="0,3"/>
                         <TextBox   Grid.Row="8"  Grid.Column="1" x:Name="LonBox" Margin="0,3"
                                    IsReadOnly="True"
-                                   ToolTip="Set automatically by Address Lookup"/>
+                                   ToolTip="Set automatically by Address Lookup. Enter 'lat, lon' decimals in the Address field for direct entry."/>
 
                         <!-- METAR ICAO(s) -->
                         <TextBlock Grid.Row="9"  Grid.Column="0" Text="METAR ICAO(s)" VerticalAlignment="Center" Margin="0,3"/>
