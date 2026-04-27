@@ -43,7 +43,13 @@ public static class AddressGeocoder
     /// A tuple of (Latitude, Longitude, LocalityName) if resolved successfully,
     /// or <see langword="null"/> if the address cannot be geocoded.
     /// </returns>
-    /// <sideeffects>May make an HTTP GET request to Nominatim or What3Words. Writes log entries on failure.</sideeffects>
+    /// <sideeffects>
+    /// May make an HTTP GET request to Nominatim or What3Words.
+    /// Writes one INFO log line on entry naming the input and the chosen path,
+    /// and one INFO line on success (with resolved coordinates and locality)
+    /// or one WARN line on failure. Path-specific clients log their own
+    /// detailed error context (HTTP status, W3W error code, etc.) on top of these.
+    /// </sideeffects>
     public static async Task<(double Latitude, double Longitude, string LocalityName)?> LookupAsync(
         string address, HttpClient httpClient, string? w3wApiKey)
     {
@@ -54,36 +60,56 @@ public static class AddressGeocoder
         }
 
         var trimmed = address.Trim();
+        string path;
+        (double Latitude, double Longitude, string LocalityName)? result;
 
         if (W3wPattern.IsMatch(trimmed))
         {
+            path = "What3Words";
+            Logger.Info($"AddressGeocoder: looking up '{trimmed}' via {path}.");
             if (string.IsNullOrWhiteSpace(w3wApiKey))
             {
-                Logger.Error($"What3Words address '{trimmed}' supplied but What3Words:ApiKey is not configured.");
+                Logger.Error($"AddressGeocoder: '{trimmed}' supplied but What3Words:ApiKey is not configured — returning null.");
                 return null;
             }
             // The W3W SDK manages its own HttpClient; httpClient is only used by Nominatim.
-            return await What3WordsClient.LookupAsync(trimmed, w3wApiKey);
+            result = await What3WordsClient.LookupAsync(trimmed, w3wApiKey);
         }
-
-        if (LatLonPattern.Match(trimmed) is { Success: true } m)
+        else if (LatLonPattern.Match(trimmed) is { Success: true } m)
         {
+            path = "lat/lon";
+            Logger.Info($"AddressGeocoder: looking up '{trimmed}' via {path}.");
             if (!double.TryParse(m.Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var lat) ||
                 !double.TryParse(m.Groups[2].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var lon))
             {
-                Logger.Error($"AddressGeocoder: could not parse '{trimmed}' as lat,lon.");
+                Logger.Error($"AddressGeocoder: could not parse '{trimmed}' as lat,lon — returning null.");
                 return null;
             }
             if (lat is < -90 or > 90 || lon is < -180 or > 180)
             {
-                Logger.Error($"AddressGeocoder: lat/lon out of range in '{trimmed}' (lat must be -90..90, lon -180..180).");
+                Logger.Error($"AddressGeocoder: lat/lon out of range in '{trimmed}' (lat must be -90..90, lon -180..180) — returning null.");
                 return null;
             }
             // Direct-entry path supplies no locality; caller fills LocalityBox manually.
-            return (lat, lon, "");
+            result = (lat, lon, "");
+        }
+        else
+        {
+            path = "Nominatim";
+            Logger.Info($"AddressGeocoder: looking up '{trimmed}' via {path}.");
+            result = await LookupNominatimAsync(trimmed, httpClient);
         }
 
-        return await LookupNominatimAsync(trimmed, httpClient);
+        if (result is { } r)
+        {
+            Logger.Info($"AddressGeocoder: resolved '{trimmed}' via {path} → ({r.Latitude:F4}, {r.Longitude:F4}) locality='{r.LocalityName}'.");
+        }
+        else
+        {
+            Logger.Warn($"AddressGeocoder: could not resolve '{trimmed}' via {path} — see prior log for cause.");
+        }
+
+        return result;
     }
 
     /// <summary>
