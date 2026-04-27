@@ -294,9 +294,11 @@ Recipients tab to add email subscribers:
 3. Fill in name, email, timezone, and preferred units.
 4. Click **Save**.
 
-If none of the three input forms resolves your address, you can fill in
-Latitude, Longitude, Locality, METAR ICAO, and TAF ICAO directly — all of
-those fields are editable.
+If none of the three input forms resolves your address, you can still
+fill in Locality, METAR ICAO, and TAF ICAO directly. Latitude and
+Longitude remain read-only; for direct coordinates, enter `lat, lon`
+in the Address field and click **Look Up** so nearby-station discovery
+still runs.
 
 The report service picks up new recipients automatically on its next cycle.
 

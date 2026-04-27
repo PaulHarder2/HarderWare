@@ -730,7 +730,7 @@ Each pane has its own toolbar docked to the top of the pane, immediately above t
 
 - **Announcement** — Multi-line text editor for composing operator service announcements. Clicking **Send** loads the recipient list from the database, groups recipients by language, calls Claude to format the announcement as a professional HTML email for each language group (translating non-English groups), and sends via SMTP. Progress is shown inline. On complete success the text area is cleared; partial failures are reported in a dismissible amber message panel with selectable text.
 
-**Configuration:** Follows the same layered pattern as the services. `appsettings.shared.json` supplies settings shared across projects (`Smtp`, `Claude`, `Fetch`, `Report:DefaultLanguage`, `Report:DefaultScheduledSendHour`). WxManager-specific non-secret settings (`WxManager:` section — station lookup radius, display limits, default timezone, AWC endpoint, User-Agent, success-banner timing) live in WxManager's own `appsettings.json`. Secrets (`Claude:ApiKey`, `Smtp:Username`, `Smtp:Password`, `Smtp:FromAddress`) are read from the `GlobalSettings` database row (Id = 1), with `C:\HarderWare\appsettings.local.json` and a local `appsettings.local.json` beside the executable as fallbacks.
+**Configuration:** Follows the same layered pattern as the services. `appsettings.shared.json` supplies settings shared across projects (`Smtp`, `Claude`, `Fetch`, `Report:DefaultLanguage`, `Report:DefaultScheduledSendHour`). WxManager-specific non-secret settings (`WxManager:` section — station lookup radius, display limits, default timezone, AWC endpoint, User-Agent, success-banner timing) live in WxManager's own `appsettings.json`. Most secrets (`Claude:ApiKey`, `Smtp:Username`, `Smtp:Password`, `Smtp:FromAddress`) are read from the `GlobalSettings` database row (Id = 1), with `C:\HarderWare\appsettings.local.json` and a local `appsettings.local.json` beside the executable as fallbacks. `What3Words:ApiKey` is currently the file-based exception, configured directly in `appsettings.local.json`.
 
 **Deploy:** `.\Deploy-WxService.ps1 WxManager` publishes to `C:\HarderWare\WxManager`.
 
@@ -1002,7 +1002,7 @@ Each service loads configuration from up to two files, merged in order (later fi
 | `appsettings.shared.json` | Yes | All non-secret settings for every service and application |
 | `appsettings.local.json` | **No** | Per-machine overrides written by WxManager → Configure tab |
 
-Secrets (SMTP credentials, Claude API key) are stored exclusively in the `GlobalSettings` database row (Id = 1) and never appear in any configuration file. Use WxManager → Configure tab to set them.
+Most secrets (SMTP credentials, Claude API key) are stored in the `GlobalSettings` database row (Id = 1) and never appear in any configuration file. `What3Words:ApiKey` is currently the file-based exception (in `appsettings.local.json`). Use WxManager → Configure tab to set the database-stored secrets.
 
 ### appsettings.shared.json (WxServices root)
 
@@ -1033,7 +1033,7 @@ This single file contains every non-secret setting for all services and applicat
 
 ### Secrets — database
 
-**Secrets** (`GlobalSettings` table, Id = 1): managed via WxManager → Configure tab. Stored exclusively in the database — never in configuration files. Fields: `ClaudeApiKey`, `SmtpUsername`, `SmtpPassword`, `SmtpFromAddress`. Services read these at the start of every cycle.
+**Secrets** (`GlobalSettings` table, Id = 1): managed via WxManager → Configure tab. Stored in the database, not in configuration files. Fields: `ClaudeApiKey`, `SmtpUsername`, `SmtpPassword`, `SmtpFromAddress`. Services read these at the start of every cycle. `What3Words:ApiKey` is currently the file-based exception (in `appsettings.local.json`).
 
 ---
 

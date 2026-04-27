@@ -152,6 +152,12 @@ public static class AddressGeocoder
             return null;
         }
 
+        if (lat is < -90 or > 90 || lon is < -180 or > 180)
+        {
+            Logger.Error($"Nominatim returned out-of-range coordinates: lat={lat}, lon={lon} — returning null.");
+            return null;
+        }
+
         return (lat, lon, localityName);
     }
 
