@@ -16,6 +16,13 @@ concurrency:
 permissions:
   contents: read
 
+# Forward-opt into Node.js 24 for JavaScript actions ahead of GitHub's
+# 2026-06-02 default flip and the 2026-09-16 Node 20 removal. Eliminates
+# the deprecation warning and forward-tests our actions while we still
+# have schedule margin. Safe to leave in place after the default flips.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
     name: Build, test, format-check, Linux-publish smoke
