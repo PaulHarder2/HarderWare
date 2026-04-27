@@ -179,6 +179,17 @@ be added to `WxServices.CI.slnf` to participate in CI. New WPF projects
 should *not* be added — extend the local-Windows-only verification path
 instead.
 
+**Branch protection.** `master` is protected: every change must arrive via
+a pull request, and the merge button stays disabled until the
+`Build, test, format-check, Linux-publish smoke` check goes green. The
+"Do not allow bypassing" setting is on — even the repo owner cannot
+override the gate. PRs must also be up-to-date with `master` before
+merging, so semantic conflicts between concurrent PRs surface as a
+required rebase rather than a broken `master`. The protection rule
+lives at *Settings → Branches → Branch protection rules → master* in
+the GitHub UI; if you need to adjust the required check name (e.g.
+after renaming the workflow or its job), update it there.
+
 ## Deploy
 
 The deploy script must be run from an **elevated** (Administrator) PowerShell
