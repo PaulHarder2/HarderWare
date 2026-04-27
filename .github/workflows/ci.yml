@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+# Cancel in-flight runs for the same ref when a new push arrives. Saves
+# Actions minutes on rapid-fire force-pushes during PR iteration.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build, test, format-check, Linux-publish smoke
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: WxServices
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+          cache: true
+          cache-dependency-path: WxServices/**/*.csproj
+
+      - name: Restore (cross-platform projects)
+        run: dotnet restore WxServices.CI.slnf
+
+      - name: Build (Release)
+        run: dotnet build WxServices.CI.slnf -c Release --no-restore
+
+      - name: Test (Release)
+        run: dotnet test WxServices.CI.slnf -c Release --no-build --verbosity normal
+
+      - name: Format check (no changes allowed)
+        run: dotnet format WxServices.CI.slnf --verify-no-changes
+
+      # Linux-publish smoke for the four headless services. Catches case-sensitive
+      # path regressions, missing references, and similar Linux-specific issues
+      # before any future cloud-deploy work needs them.
+      - name: Publish WxParser.Svc (linux-x64)
+        run: dotnet publish src/WxParser.Svc/WxParser.Svc.csproj -c Release -r linux-x64 --self-contained false -o /tmp/publish/WxParser.Svc
+
+      - name: Publish WxReport.Svc (linux-x64)
+        run: dotnet publish src/WxReport.Svc/WxReport.Svc.csproj -c Release -r linux-x64 --self-contained false -o /tmp/publish/WxReport.Svc
+
+      - name: Publish WxMonitor.Svc (linux-x64)
+        run: dotnet publish src/WxMonitor.Svc/WxMonitor.Svc.csproj -c Release -r linux-x64 --self-contained false -o /tmp/publish/WxMonitor.Svc
+
+      - name: Publish WxVis.Svc (linux-x64)
+        run: dotnet publish src/WxVis.Svc/WxVis.Svc.csproj -c Release -r linux-x64 --self-contained false -o /tmp/publish/WxVis.Svc

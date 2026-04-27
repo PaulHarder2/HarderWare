@@ -1,0 +1,23 @@
+{
+  "solution": {
+    "path": "WxServices.sln",
+    "projects": [
+      "src\\GribParser\\GribParser.csproj",
+      "src\\MetarParser\\MetarParser.csproj",
+      "src\\MetarParser.Data\\MetarParser.Data.csproj",
+      "src\\TafParser\\TafParser.csproj",
+      "src\\WxAddRecipient\\WxAddRecipient.csproj",
+      "src\\WxInterp\\WxInterp.csproj",
+      "src\\WxMonitor.Svc\\WxMonitor.Svc.csproj",
+      "src\\WxParser.Svc\\WxParser.Svc.csproj",
+      "src\\WxReport.Svc\\WxReport.Svc.csproj",
+      "src\\WxServices.Common\\WxServices.Common.csproj",
+      "src\\WxServices.Logging\\WxServices.Logging.csproj",
+      "src\\WxVis.Svc\\WxVis.Svc.csproj",
+      "tests\\MetarParser.Tests\\MetarParser.Tests.csproj",
+      "tests\\TafParser.Tests\\TafParser.Tests.csproj",
+      "tests\\WxInterp.Tests\\WxInterp.Tests.csproj",
+      "tests\\WxMonitor.Tests\\WxMonitor.Tests.csproj"
+    ]
+  }
+}
