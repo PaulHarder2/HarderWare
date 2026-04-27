@@ -4,12 +4,14 @@
     are never synced to Dropbox. All obj/ and bin/ folders go under
     $(BuildCacheRoot). This file is automatically picked up by MSBuild for every
     project in this solution.
-  -->
-  <PropertyGroup>
-    <BuildCacheRoot>C:\HarderWare\BuildCache\WxServices</BuildCacheRoot>
-  </PropertyGroup>
 
-  <PropertyGroup>
+    Windows-only: the redirect is a Windows-specific concern (the source tree
+    lives in Dropbox on the developer's Windows machine). On Linux/macOS hosts
+    — including the CI runner — fall back to MSBuild's defaults so the absolute
+    Windows path doesn't get spliced into a non-existent location.
+  -->
+  <PropertyGroup Condition="'$(OS)' == 'Windows_NT'">
+    <BuildCacheRoot>C:\HarderWare\BuildCache\WxServices</BuildCacheRoot>
     <BaseIntermediateOutputPath>$(BuildCacheRoot)\$(MSBuildProjectName)\obj\</BaseIntermediateOutputPath>
     <BaseOutputPath>$(BuildCacheRoot)\$(MSBuildProjectName)\bin\</BaseOutputPath>
   </PropertyGroup>
