@@ -1,5 +1,4 @@
 // WxManager — Weather service management GUI.
-// Replaces WxAddRecipient with a tabbed WPF application.
 
 using System.Globalization;
 using System.Windows;
