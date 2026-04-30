@@ -5,7 +5,7 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 
 | Version | Commit  | Date       | Summary |
 |---------|---------|------------|---------|
-| 1.5.1   | _pending_ | 2026-04-30 | Bump `log4net` 2.0.17 → 3.3.1 to clear NU1902 advisory CVE-2026-40021 (WX-24) |
+| 1.5.1   | 5c9dd30 | 2026-04-30 | Bump `log4net` 2.0.17 → 3.3.1 to clear NU1902 advisory CVE-2026-40021 (WX-24) |
 | 1.5.0   | f5fa31d | 2026-04-27 | Recipient address accepts What3Words `///word.word.word` and direct `lat, lon` decimal entry alongside street address (WX-52) |
 | 1.4.1   | 1395754 | 2026-04-26 | Fix Maps-tab control press jumping to Meteograms tab via WPF focus-scope redirect (WX-46) |
 | 1.4.0   | a47732a | 2026-04-25 | WxReport.Svc Claude calls now carry a cached author-persona prefix from `AboutPaul.md` (WX-50) |
