@@ -5,6 +5,7 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 
 | Version | Commit  | Date       | Summary |
 |---------|---------|------------|---------|
+| 1.5.1   | _pending_ | 2026-04-30 | Bump `log4net` 2.0.17 → 3.3.1 to clear NU1902 advisory CVE-2026-40021 (WX-24) |
 | 1.5.0   | f5fa31d | 2026-04-27 | Recipient address accepts What3Words `///word.word.word` and direct `lat, lon` decimal entry alongside street address (WX-52) |
 | 1.4.1   | 1395754 | 2026-04-26 | Fix Maps-tab control press jumping to Meteograms tab via WPF focus-scope redirect (WX-46) |
 | 1.4.0   | a47732a | 2026-04-25 | WxReport.Svc Claude calls now carry a cached author-persona prefix from `AboutPaul.md` (WX-50) |
@@ -26,6 +27,15 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 | 1.0.0   | 7a2a268 | 2026-04-07 | Initial versioned release |
 
 ---
+
+## 1.5.1 — log4net 2.0.17 → 3.3.1 to clear NU1902 advisory (2026-04-30)
+
+- **WX-24 (security):** Bumped `log4net` from `2.0.17` to `3.3.1` in `WxServices/src/WxServices.Logging/WxServices.Logging.csproj`. Closes the NU1902 build warning for `GHSA-4f7c-pmjv-c25w` (CVE-2026-40021), a vulnerability in `XmlLayout` / `XmlLayoutSchemaLog4J` around XML 1.0 character sanitization in MDC fields. WxServices uses neither `XmlLayout` nor any MDC / `ThreadContext.Properties` manipulation, so we were never actually exposed to the attack — but the warning fired on every build, and 2.x is past its support window regardless.
+- **Single-file change.** Only the `<PackageReference>` version in `WxServices.Logging.csproj` moved. `log4net.shared.config` (PatternLayout + RollingFileAppender, the only layout we use) is unchanged. `Logger.cs` (`LogManager.GetLogger`, `ILog.Info/Warn/Error/Fatal/Debug`, `GlobalContext.Properties["LogFile"]`) is unchanged — log4net 3.x preserves all the API surface we touch.
+- **Verified format preservation.** A containerized smoke-run of `WxMonitor.Svc` (built against log4net 3.3.1, run inside `mcr.microsoft.com/dotnet/runtime:8.0` with a writable bind-mount for the log directory) writes log lines in the pre-upgrade format: `<utcdate> <level> [<file>::<method>:<line>] <message>`. CallerInfo capture via `[CallerFilePath]` / `[CallerMemberName]` / `[CallerLineNumber]` produces the same `Program.cs::<Main>$:N` shape, and ERROR-level entries with attached exceptions still serialize the stack trace correctly.
+- **Build clean.** `dotnet build` no longer emits NU1902 for log4net. The remaining NU1902 warnings (`MailKit 4.9.0`, `OpenTelemetry.Exporter.OpenTelemetryProtocol 1.15.2`) are pre-existing and tracked separately in WX-60.
+- **Tests pass.** All four test projects (`MetarParser.Tests`, `TafParser.Tests`, `WxInterp.Tests`, `WxMonitor.Tests`) pass with no regressions.
+- **No installer changes.** `HarderWare_WxServices.iss` and `Build-Release.ps1` reference `log4net.shared.config`, not the DLL — the DLL comes via NuGet/MSBuild — so no Inno Setup updates required. Build + deploy on Paul's Windows host produces a working release bundle.
 
 ## 1.5.0 — Recipient address: three input paths plus manual escape (2026-04-27)
 
