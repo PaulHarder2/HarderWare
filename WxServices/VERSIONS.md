@@ -5,6 +5,7 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 
 | Version | Commit  | Date       | Summary |
 |---------|---------|------------|---------|
+| 1.5.3   | 8ad5cd4 | 2026-05-01 | Set `ContentTransferEncoding` to `ContentEncoding.Base64` explicitly on inline meteogram parts to fix WX-60 regression that emptied the image body in transit (WX-70) |
 | 1.5.2   | 01867e7 | 2026-05-01 | Bump `MailKit` 4.9.0 → 4.16.0 and `OpenTelemetry` family 1.15.2 → 1.15.3 to clear remaining NU1902 advisories (WX-60) |
 | 1.5.1   | 5c9dd30 | 2026-04-30 | Bump `log4net` 2.0.17 → 3.3.1 to clear NU1902 advisory CVE-2026-40021 (WX-24) |
 | 1.5.0   | f5fa31d | 2026-04-27 | Recipient address accepts What3Words `///word.word.word` and direct `lat, lon` decimal entry alongside street address (WX-52) |
@@ -28,6 +29,14 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 | 1.0.0   | 7a2a268 | 2026-04-07 | Initial versioned release |
 
 ---
+
+## 1.5.3 — Restore inline meteogram in WxReport emails (2026-05-01)
+
+- **WX-70 (regression fix):** WX-60's MailKit 4.9.0 → 4.16.0 bump emptied the inline meteogram body in transit. The `multipart/related` part landed at recipients with the correct `Content-Id`, `Content-Type: image/png`, and `Content-Transfer-Encoding: base64`, but **zero body bytes** — so the HTML's `cid:meteogramAbbrev` reference resolved to a broken image.
+- **Cause.** When `MimePart.ContentTransferEncoding` is unset, MimeKit calls a "best encoding" inspector that reads the entire content stream to choose between 7bit/8bit/base64. In MimeKit 4.16 this inspector no longer rewinds the stream after reading, so by the time MailKit serializes the part for transmission the underlying `FileStream` is at EOF and the base64 encoder emits nothing. The PNG file on disk was always intact; the corruption was purely in the encoding-inspection path.
+- **Fix.** Set `ContentTransferEncoding = ContentEncoding.Base64` explicitly on the inline `MimePart` constructed in `WxServices/src/WxServices.Common/SmtpSender.cs`. PNG is binary-safe under base64; choosing it explicitly does not change the wire output for any valid send — it only removes the side-effect that's currently breaking serialization. One-line addition (plus a short comment explaining the WHY).
+- **No alternative paths affected.** `SmtpSender` is the only place we construct `MimePart` from a stream; the plain-text and HTML body parts use `TextPart` with a string `Text` setter, which goes through a different encoding path that was not regressed.
+- **Pending post-redeploy verification.** Once redeployed, a live paul-en report should carry a non-empty base64-encoded PNG body matching the bytes of the corresponding meteogram file on disk, with the meteogram rendering inline in the recipient's mail client.
 
 ## 1.5.2 — MailKit and OpenTelemetry bumps to clear remaining NU1902 advisories (2026-05-01)
 
