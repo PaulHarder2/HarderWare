@@ -5,6 +5,7 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 
 | Version | Commit  | Date       | Summary |
 |---------|---------|------------|---------|
+| 1.5.2   | _pending_ | 2026-05-01 | Bump `MailKit` 4.9.0 → 4.16.0 and `OpenTelemetry` family 1.15.2 → 1.15.3 to clear remaining NU1902 advisories (WX-60) |
 | 1.5.1   | 5c9dd30 | 2026-04-30 | Bump `log4net` 2.0.17 → 3.3.1 to clear NU1902 advisory CVE-2026-40021 (WX-24) |
 | 1.5.0   | f5fa31d | 2026-04-27 | Recipient address accepts What3Words `///word.word.word` and direct `lat, lon` decimal entry alongside street address (WX-52) |
 | 1.4.1   | 1395754 | 2026-04-26 | Fix Maps-tab control press jumping to Meteograms tab via WPF focus-scope redirect (WX-46) |
@@ -27,6 +28,17 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 | 1.0.0   | 7a2a268 | 2026-04-07 | Initial versioned release |
 
 ---
+
+## 1.5.2 — MailKit and OpenTelemetry bumps to clear remaining NU1902 advisories (2026-05-01)
+
+- **WX-60 (security):** Cleared the two NU1902 advisories that remained after WX-24's `log4net` upgrade.
+  - **MailKit 4.9.0 → 4.16.0** in `WxServices/src/WxServices.Common/WxServices.Common.csproj`. Closes `GHSA-9j88-vvj5-vhgr` (CVE-2026-41319) — a STARTTLS Response Injection vulnerability where the protocol stream's read buffer was not flushed when swapping to `SslStream`, allowing a MitM to inject pre-TLS bytes that would later be processed as trusted post-TLS responses, enabling SASL mechanism downgrade.
+  - **OpenTelemetry family 1.15.2 → 1.15.3** (`OpenTelemetry`, `OpenTelemetry.Exporter.OpenTelemetryProtocol`, `OpenTelemetry.Extensions.Hosting`) in all four service csprojs (`WxParser.Svc`, `WxMonitor.Svc`, `WxReport.Svc`, `WxVis.Svc`). Closes `GHSA-mr8r-92fq-pj8p` (CVE-2026-40891) — unbounded `grpc-status-details-bin` parsing in OTLP/gRPC retry handling that could allow a hostile collector to trigger excessive memory allocation. Although only the `Exporter.OpenTelemetryProtocol` package is named in the advisory, the OTel .NET SDK ships as a coordinated family release; bumping in lockstep avoids inter-package compatibility risk.
+- **Exposure assessment.** WxReport.Svc uses `SecureSocketOptions.StartTls` against Gmail on port 587 — exactly the code path the MailKit advisory targets. The OTel exporter ships metrics over OTLP/gRPC to the local Prometheus-translating collector, which is trusted, so the OTel DoS surface was not realistically exploitable in our deployment; the advisory is still cleared because leaving NU1902 warnings normalizes the practice of ignoring build noise.
+- **No code changes required.** `SmtpSender.cs` does not use `ServicePointManager.ServerCertificateValidationCallback` (the global hook MailKit 4.13.0 stopped honoring on .NET Core), does not depend on NTLM/GSSAPI mechanism selection (changed in 4.12.0), and does not embed CRLF in addresses (mitigated in 4.15.1). Standard PLAIN-over-STARTTLS to Gmail works unchanged.
+- **Build clean.** `dotnet build WxServices.sln` reports zero warnings and zero errors. With WX-24's `log4net` bump already on master, all NU1902 advisories are now resolved.
+- **Tests pass.** All four test projects (`MetarParser.Tests`, `TafParser.Tests`, `WxInterp.Tests`, `WxMonitor.Tests`) pass — 205 tests, zero failures.
+- **OTel endpoint behavior preserved.** The `1.15.x` SDK quirk requiring full `/v1/metrics` URLs in the OTLP exporter endpoint config is unchanged in 1.15.3 (patch-only release); no `appsettings.shared.json` updates required.
 
 ## 1.5.1 — log4net 2.0.17 → 3.3.1 to clear NU1902 advisory (2026-04-30)
 
