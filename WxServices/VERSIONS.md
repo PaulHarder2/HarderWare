@@ -5,7 +5,7 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 
 | Version | Commit  | Date       | Summary |
 |---------|---------|------------|---------|
-| 1.5.3   | 8ad5cd4 | 2026-05-01 | Set explicit `ContentTransferEncoding.Base64` on inline meteogram parts to fix WX-60 regression that emptied the image body in transit (WX-70) |
+| 1.5.3   | 8ad5cd4 | 2026-05-01 | Set `ContentTransferEncoding` to `ContentEncoding.Base64` explicitly on inline meteogram parts to fix WX-60 regression that emptied the image body in transit (WX-70) |
 | 1.5.2   | 01867e7 | 2026-05-01 | Bump `MailKit` 4.9.0 → 4.16.0 and `OpenTelemetry` family 1.15.2 → 1.15.3 to clear remaining NU1902 advisories (WX-60) |
 | 1.5.1   | 5c9dd30 | 2026-04-30 | Bump `log4net` 2.0.17 → 3.3.1 to clear NU1902 advisory CVE-2026-40021 (WX-24) |
 | 1.5.0   | f5fa31d | 2026-04-27 | Recipient address accepts What3Words `///word.word.word` and direct `lat, lon` decimal entry alongside street address (WX-52) |
