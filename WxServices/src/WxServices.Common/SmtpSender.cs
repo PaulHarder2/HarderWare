@@ -112,9 +112,13 @@ public sealed class SmtpSender
                         }
                         var img = new MimePart("image", "png")
                         {
+                            // Explicit encoding bypasses MimeKit's "best encoding" inspector,
+                            // which reads the stream without rewinding it — leaving the
+                            // FileStream at EOF so the actual transmission writes 0 bytes.
                             Content = new MimeContent(File.OpenRead(filePath)),
                             ContentDisposition = new ContentDisposition(ContentDisposition.Inline),
                             ContentId = cid,
+                            ContentTransferEncoding = ContentEncoding.Base64,
                         };
                         related.Add(img);
                     }
