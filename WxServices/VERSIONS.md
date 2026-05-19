@@ -5,6 +5,7 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 
 | Version | Commit  | Date       | Summary |
 |---------|---------|------------|---------|
+| 1.5.4   | _pending_ | 2026-05-19 | Adopt EF Core Migrations; replace `EnsureCreated` + hand-written idempotent DDL with a baseline migration and a `MigrateAsync` startup path (WX-72) |
 | 1.5.3   | 8ad5cd4 | 2026-05-01 | Set `ContentTransferEncoding` to `ContentEncoding.Base64` explicitly on inline meteogram parts to fix WX-60 regression that emptied the image body in transit (WX-70) |
 | 1.5.2   | 01867e7 | 2026-05-01 | Bump `MailKit` 4.9.0 → 4.16.0 and `OpenTelemetry` family 1.15.2 → 1.15.3 to clear remaining NU1902 advisories (WX-60) |
 | 1.5.1   | 5c9dd30 | 2026-04-30 | Bump `log4net` 2.0.17 → 3.3.1 to clear NU1902 advisory CVE-2026-40021 (WX-24) |
@@ -29,6 +30,22 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 | 1.0.0   | 7a2a268 | 2026-04-07 | Initial versioned release |
 
 ---
+
+## 1.5.4 — Adopt EF Core Migrations (2026-05-19)
+
+- **WX-72 (tech-debt / infra):** Replaced the previous schema-management hybrid — `EnsureCreatedAsync` plus a growing list of hand-written `IF NOT EXISTS` DDL blocks in `DatabaseSetup.cs` — with EF Core Migrations. New schema changes are now captured as versioned migration files under `src/MetarParser.Data/Migrations/` and applied automatically at service startup via `MigrateAsync`. The `__EFMigrationsHistory` table tracks what's been applied, which the previous pattern had no equivalent for.
+- **Why now.** The investigation phase of WX-71 surfaced that the existing `IF NOT EXISTS (table)`-wrapped `CREATE INDEX` for `IX_GfsGrid_Run_Hour` only fires on first-time table creation; an installation whose `GfsGrid` table predated the index would never have picked it up. That class of silent gap — indexes, constraints, defaults applied at table-grain idempotency instead of object-grain — is exactly what proper migrations make impossible. The hybrid was workable for early prototyping but had outgrown its scope.
+- **No runtime behaviour change.** The migration is internal-only — same tables, same indexes, same columns, same data on every existing installation. PATCH bump.
+- **Tooling.** Added a local-manifest dotnet tool entry for `dotnet-ef` pinned to `8.0.0` (matching the `Microsoft.EntityFrameworkCore.SqlServer` package version) at `.config/dotnet-tools.json`. New developers run `dotnet tool restore` once after clone. The repo's `Directory.Build.props` redirects `obj/` to `C:\HarderWare\BuildCache\...` on Windows, so EF tooling calls need `--msbuildprojectextensionspath` pointed at that redirected location.
+- **Design-time factory.** `WeatherDataContextDesignTimeFactory` implements `IDesignTimeDbContextFactory<WeatherDataContext>` so the EF CLI can introspect the model without needing a running service or a real connection string — it just needs the SQL Server dialect.
+- **Baseline migration.** `20260519174837_Baseline.cs` captures the schema as it stood at the cutover: 14 tables, all indexes (including the one that motivated this work), all foreign-key cascades. Generated faithfully from `OnModelCreating`. Spot-audited against the previous hand-written DDL; cosmetic drifts (column-level `DEFAULT` constraints, the `GlobalSettings` seed insert, the `GlobalSettings.Id` IDENTITY shape on existing prod) are tolerated rather than fixed because modifying the entity model is out of scope for this ticket.
+- **Baselining existing databases.** `DatabaseSetup.BaselineExistingSchemaIfNeededAsync` detects the case where a database created by the old pattern has the schema but no migration history, and inserts a row marking the baseline as already-applied before `MigrateAsync` runs. The detection logic short-circuits cleanly for the brand-new-machine case (no database) and the steady-state case (history already present). The history-table creation plus marker insert run inside a single transaction so a partial-success state cannot wedge a future restart.
+- **`DatabaseSetup.cs` simplified.** All `ExecuteSqlRawAsync` blocks that previously retrofitted additive changes are removed. The method now consists of the WX-28 retry loop, a single `BaselineExistingSchemaIfNeededAsync` call, and a single `MigrateAsync` call. No belt-and-suspenders fallback layer — a divergence between the migration history and a parallel idempotent-DDL path would be a worse bug than what we're solving.
+- **Docs.** `DESIGN.md` §9 (Database setup) rewritten to describe the migration pattern, the baselining behaviour, and the known drifts. `WORKFLOW.md` gains a new "Schema changes" section documenting the `dotnet ef migrations add <Name>` procedure so future schema work follows the same shape.
+- **`.editorconfig` exemption.** Auto-generated migration files trip the project's strict using-group formatting rules every time EF regenerates them. Added a `[**/Migrations/*.cs]` block setting `generated_code = true` so style analyzers leave the EF output alone.
+- **Build clean.** `dotnet build WxServices.sln` reports zero warnings, zero errors.
+- **Tests pass.** 205 tests across `MetarParser.Tests`, `TafParser.Tests`, `WxInterp.Tests`, `WxMonitor.Tests` — all green.
+- **Pre-merge verification required on Paul's Windows host.** The baselining logic depends on real SQL Server behaviour (`OBJECT_ID(...)` introspection, DDL inside a transaction) that the test suite does not exercise. Before merging: run one service binary against a backup copy of the prod DB and confirm logs show the baselining marker insert plus a clean `MigrateAsync` no-op; separately drop the database and confirm a fresh service start logs `MigrateAsync` creating the schema from the baseline migration.
 
 ## 1.5.3 — Restore inline meteogram in WxReport emails (2026-05-01)
 

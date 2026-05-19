@@ -170,6 +170,32 @@ Skip this step for pure-tooling / pure-docs PRs that did not bump the version (s
 5. Transition the Jira ticket to **Done**.
 6. **Stop at Done — do not transition to Closed.** The Done→Closed transition is Paul's deliberate human-review checkpoint. Report back what was done and let Paul press the final button.
 
+## Schema changes
+
+**Added 2026-05-19** (WX-72).
+
+The database schema is managed by EF Core Migrations, not hand-written SQL DDL. Any change that alters the EF model — adding a column, a table, an index, a constraint — must go through the migration pipeline, not into `DatabaseSetup.cs`.
+
+The procedure for a schema change inside a normal ticket:
+
+1. Edit the entity class and/or `WeatherDataContext.OnModelCreating` to describe the desired model.
+2. Restore the local `dotnet-ef` tool if it isn't yet: `dotnet tool restore`.
+3. Generate a new migration:
+
+   ```
+   dotnet ef migrations add <DescriptiveName> --project src/MetarParser.Data/MetarParser.Data.csproj
+   ```
+
+   On the Windows developer machine `--msbuildprojectextensionspath 'C:\HarderWare\BuildCache\WxServices\MetarParser.Data\obj'` is also needed because `Directory.Build.props` redirects `obj/` outside the Dropbox tree.
+
+4. Review the generated migration in `src/MetarParser.Data/Migrations/`. EF emits a faithful but sometimes verbose representation of the change — hand-edit it if a more efficient or readable form exists, but never change its *semantic* effect.
+5. Commit both the migration file and any model changes together.
+6. The migration runs automatically on the next service startup via `DatabaseSetup.EnsureSchemaAsync` → `MigrateAsync`.
+
+Do **not** add new `ExecuteSqlRawAsync` blocks to `DatabaseSetup.cs`. The single use of `ExecuteSqlRawAsync` that remains there is the baselining-marker insert that handles existing pre-WX-72 databases; it is not a precedent for new schema changes.
+
+If a schema change requires data movement that EF's generated `Up`/`Down` cannot express (e.g. backfilling a NOT NULL column with computed values), supplement the generated migration body with custom `migrationBuilder.Sql(...)` calls inside the same migration — keep all the change's effects in one migration so it is atomic.
+
 ## Known friction
 
 Dropbox's file watcher occasionally locks `.git/refs/remotes/origin/*.lock` or `.git/config.lock` during push. Symptoms: `error: could not lock config file` or `fatal: Unable to write new index file`. Push to GitHub usually succeeds regardless; `rm` the stale zero-byte lock file and re-run the tracking command. Not a bug in git or GitHub.
