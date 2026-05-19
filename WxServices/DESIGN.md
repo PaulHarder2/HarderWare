@@ -1138,6 +1138,20 @@ A design-time `DbContext` factory (`WeatherDataContextDesignTimeFactory`) provid
 
 The `dotnet-ef` CLI is pinned at the EF Core 8.0.0 version that matches the runtime package, installed as a local tool manifested in `.config/dotnet-tools.json`.  Restore it on a fresh clone with `dotnet tool restore`.
 
+##### Serializing concurrent migrations across services
+
+All four services start with Windows and race into `EnsureSchemaAsync` simultaneously.  EF Core 8 has no built-in migration lock (that arrived in EF Core 9), so two services applying the same pending migration concurrently would corrupt the schema on the loser side with errors like `2714 (object already exists)`.
+
+`DatabaseSetup.EnsureSchemaCoreAsync` therefore wraps the baseline-marker work and the `MigrateAsync` call in a SQL Server `sp_getapplock` named lock:
+
+- Resource name: `WxServices.MigrateAsync`.
+- `@LockMode = 'Exclusive'`, `@LockOwner = 'Session'`.  Session ownership ties the lock's lifetime to the SQL connection, so a service that crashes mid-migration auto-releases the lock when SQL Server detects the dead connection (no orphan-lock risk).
+- `@LockTimeout = 120000` (two minutes).  A typical migration runs in seconds; the cap protects against the pathological case where a service hangs without crashing.
+
+The applock is acquired on a connection pinned by `db.Database.OpenConnectionAsync` before the migration work and released best-effort afterwards (`sp_releaseapplock`; failure is logged but harmless because Session-scoped locks release on connection close).
+
+One case the applock does **not** cover: when the database itself does not yet exist (a true brand-new install), the `CREATE DATABASE` race is fought before any DB-scoped lock can be acquired.  This is handled by classifying `SqlException` number `1801` ("database X already exists") as transient in `IsTransientSqlNumber`, so the loser service's WX-28 retry loop sees the now-created DB on its next attempt and proceeds normally.
+
 ##### Baselining an existing database
 
 Installations whose schema was created by the pre-WX-72 setup (`EnsureCreatedAsync` + idempotent DDL) have all the expected tables but no `__EFMigrationsHistory` table.  A naïve `MigrateAsync` on such a database would try to re-create tables that already exist and fail.

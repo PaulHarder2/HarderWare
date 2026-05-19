@@ -98,8 +98,109 @@ public static class DatabaseSetup
     {
         await using var db = new WeatherDataContext(dbOptions);
 
-        await BaselineExistingSchemaIfNeededAsync(db, ct);
-        await db.Database.MigrateAsync(ct);
+        if (!await db.Database.CanConnectAsync(ct))
+        {
+            // The database doesn't exist yet — MigrateAsync will create it
+            // from scratch.  The CREATE DATABASE step cannot be protected by
+            // sp_getapplock (the applock requires an existing-DB connection),
+            // so concurrent first-boot races on CREATE DATABASE are handled
+            // by classifying error 1801 ("database already exists") as
+            // transient in IsTransientSqlNumber and letting the WX-28 retry
+            // loop converge.
+            await db.Database.MigrateAsync(ct);
+            return;
+        }
+
+        // The database exists, so multiple services racing to apply pending
+        // migrations would corrupt the schema on the loser side.  Serialize
+        // the migration work across services with sp_getapplock — SQL Server's
+        // built-in named-lock primitive.  LockOwner='Session' ties the lock's
+        // lifetime to this SQL connection, so a crashed service auto-releases
+        // it when SQL Server detects the dead connection.
+        await db.Database.OpenConnectionAsync(ct);
+        try
+        {
+            await AcquireMigrationsApplockAsync(db, ct);
+            try
+            {
+                await BaselineExistingSchemaIfNeededAsync(db, ct);
+                await db.Database.MigrateAsync(ct);
+            }
+            finally
+            {
+                await ReleaseMigrationsApplockAsync(db, ct);
+            }
+        }
+        finally
+        {
+            await db.Database.CloseConnectionAsync();
+        }
+    }
+
+    /// <summary>
+    /// Resource name for the SQL Server applock that serialises migration
+    /// runs across services.  Any value works as long as every service
+    /// agrees; this one is unambiguous in shared logs and `sp_getapplock`
+    /// diagnostics.
+    /// </summary>
+    private const string MigrationsApplockResource = "WxServices.MigrateAsync";
+
+    /// <summary>
+    /// Maximum time a service will wait for another service to release the
+    /// migrations applock before giving up.  Two minutes is generous: a
+    /// typical migration runs in seconds.  The cap protects against the
+    /// pathological case where the lock holder hangs without crashing
+    /// (which would otherwise release the Session-scoped lock).
+    /// </summary>
+    private const int MigrationsApplockTimeoutMs = 120_000;
+
+    private static async Task AcquireMigrationsApplockAsync(
+        WeatherDataContext db, CancellationToken ct)
+    {
+        // sp_getapplock returns negative values on failure (timeout, deadlock,
+        // canceled, error).  Raise those as a thrown exception so the WX-28
+        // retry loop classifies the failure correctly instead of silently
+        // proceeding with an unheld lock.
+        var rows = await db.Database.SqlQuery<int>(
+            $@"DECLARE @r int;
+               EXEC @r = sp_getapplock
+                   @Resource = {MigrationsApplockResource},
+                   @LockMode = N'Exclusive',
+                   @LockOwner = N'Session',
+                   @LockTimeout = {MigrationsApplockTimeoutMs};
+               SELECT @r AS Value;").ToListAsync(ct);
+
+        var result = rows.Count > 0 ? rows[0] : int.MinValue;
+        if (result < 0)
+        {
+            throw new InvalidOperationException(
+                $"Failed to acquire migrations applock '{MigrationsApplockResource}' " +
+                $"(sp_getapplock returned {result}).  Another service may be holding " +
+                $"it for longer than {MigrationsApplockTimeoutMs / 1000}s, or the lock " +
+                "request itself failed.");
+        }
+    }
+
+    private static async Task ReleaseMigrationsApplockAsync(
+        WeatherDataContext db, CancellationToken ct)
+    {
+        // Best-effort release.  SQL Server releases Session-scoped applocks
+        // automatically when the connection closes, so a failure here is
+        // harmless — log it and move on rather than masking the real
+        // exception that's already unwinding the stack.
+        try
+        {
+            await db.Database.ExecuteSqlInterpolatedAsync(
+                $@"EXEC sp_releaseapplock
+                    @Resource = {MigrationsApplockResource},
+                    @LockOwner = N'Session';", ct);
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn(
+                $"Releasing migrations applock failed: {ex.Message.TrimEnd('.')}.  " +
+                "The lock will release on connection close regardless.");
+        }
     }
 
     /// <summary>
@@ -233,6 +334,7 @@ public static class DatabaseSetup
         258 => true,   // Cannot wait on a mutex.
         1205 => true,   // Deadlock victim.
         1222 => true,   // Lock request time out.
+        1801 => true,   // CREATE DATABASE failed: database '<name>' already exists.  Fresh-install race between services; retry sees the existing DB and proceeds normally.
         10053 => true,   // A transport-level error has occurred (connection forcibly closed).
         10054 => true,   // Connection reset by peer.
         10060 => true,   // Connection attempt timed out.
