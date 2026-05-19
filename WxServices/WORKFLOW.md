@@ -108,11 +108,13 @@ Before pushing, explicitly ask whether the change warrants:
 
 Some changes (installer scripts, raw config files, prose-only doc edits) cannot be meaningfully unit-tested. That's fine — say so and move on. The phrase *"when it is possible and makes sense"* governs.
 
-### 7b. Run the full test suite
+### 7b. Run the full test suite and format check
 
 `dotnet test WxServices.sln` must report zero failures before creating the PR. There are no pre-existing-failure exceptions: any failure must be resolved in this PR or split out into a blocking ticket first.
 
-**Exemption:** when the change cannot meaningfully affect test results — pure-docs PRs (WORKFLOW.md, DESIGN.md, etc.), pure-config PRs (e.g. `.coderabbit.yaml`), pure-asset PRs — skip the test run and note the exemption in the PR body. Same governing phrase as §7a applies: *"when it is possible and makes sense."* Running `dotnet test` against a diff that touches no executable surface is ceremony, not safety.
+`dotnet format WxServices.CI.slnf --verify-no-changes` must also exit clean before push. CI runs this on every PR and a format-only failure costs a full CI round-trip plus a CodeRabbit-equivalent cycle on a mistake that is trivial to fix locally. *Added 2026-05-19 after WX-72's first CI run failed on two trailing-newline drifts.*
+
+**Exemption:** when the change cannot meaningfully affect test results — pure-docs PRs (WORKFLOW.md, DESIGN.md, etc.), pure-config PRs (e.g. `.coderabbit.yaml`), pure-asset PRs — skip the test run and note the exemption in the PR body. The format check still applies if any C# file changed, since `dotnet format` is cheap; skip only for diffs that touch no `.cs` files. Same governing phrase as §7a applies: *"when it is possible and makes sense."*
 
 ### 7c. Confirm acceptance criteria are met
 
@@ -170,6 +172,41 @@ Skip this step for pure-tooling / pure-docs PRs that did not bump the version (s
 5. Transition the Jira ticket to **Done**.
 6. **Stop at Done — do not transition to Closed.** The Done→Closed transition is Paul's deliberate human-review checkpoint. Report back what was done and let Paul press the final button.
 
+## Schema changes
+
+**Added 2026-05-19** (WX-72).
+
+The database schema is managed by EF Core Migrations, not hand-written SQL DDL. Any change that alters the EF model — adding a column, a table, an index, a constraint — must go through the migration pipeline, not into `DatabaseSetup.cs`.
+
+The procedure for a schema change inside a normal ticket:
+
+1. Edit the entity class and/or `WeatherDataContext.OnModelCreating` to describe the desired model.
+2. Restore the local `dotnet-ef` tool if it isn't yet: `dotnet tool restore`.
+3. Generate a new migration:
+
+   ```bash
+   dotnet ef migrations add <DescriptiveName> --project src/MetarParser.Data/MetarParser.Data.csproj
+   ```
+
+   On the Windows developer machine `--msbuildprojectextensionspath 'C:\HarderWare\BuildCache\WxServices\MetarParser.Data\obj'` is also needed because `Directory.Build.props` redirects `obj/` outside the Dropbox tree.
+
+4. Review the generated migration in `src/MetarParser.Data/Migrations/`. EF emits a faithful but sometimes verbose representation of the change — hand-edit it if a more efficient or readable form exists, but never change its *semantic* effect.
+5. Commit both the migration file and any model changes together.
+6. The migration runs automatically on the next service startup via `DatabaseSetup.EnsureSchemaAsync` → `MigrateAsync`.
+
+Do **not** add new `ExecuteSqlRawAsync` blocks to `DatabaseSetup.cs`. The single use of `ExecuteSqlRawAsync` that remains there is the baselining-marker insert that handles existing pre-WX-72 databases; it is not a precedent for new schema changes.
+
+If a schema change requires data movement that EF's generated `Up`/`Down` cannot express (e.g. backfilling a NOT NULL column with computed values), supplement the generated migration body with custom `migrationBuilder.Sql(...)` calls inside the same migration — keep all the change's effects in one migration so it is atomic.
+
 ## Known friction
 
-Dropbox's file watcher occasionally locks `.git/refs/remotes/origin/*.lock` or `.git/config.lock` during push. Symptoms: `error: could not lock config file` or `fatal: Unable to write new index file`. Push to GitHub usually succeeds regardless; `rm` the stale zero-byte lock file and re-run the tracking command. Not a bug in git or GitHub.
+### Dropbox-induced git lock failures on push
+
+Dropbox's file watcher occasionally locks `.git/refs/remotes/origin/*.lock` or `.git/config.lock` during push. The push itself almost always reaches GitHub regardless — the failure is purely in updating local git state.
+
+Two symptom families:
+
+- **`error: could not lock config file`** or **`fatal: Unable to write new index file`** — the push proceeded but the upstream-tracking config did not get written. Recovery: `rm` the stale zero-byte lock file under `.git/` and re-run the tracking command (e.g. `git branch --set-upstream-to=origin/<branch>`).
+- **`error: update_ref failed for ref 'refs/remotes/origin/<branch>'`** — the push reached GitHub but the local `refs/remotes/origin/<branch>` file did not get written, so `git branch -vv` shows no tracking and `gh pr create` rejects the branch with *"you must first push the current branch to a remote."* Recovery: `git fetch origin <branch>:refs/remotes/origin/<branch> --force` (or simply `git fetch origin`) to repopulate the local tracking ref from the remote, then re-run the failed command.
+
+Neither symptom indicates a problem with git, GitHub, or the commit itself — the commit is on the remote and visible to `git ls-remote`. The only thing the lock blocked is local bookkeeping.

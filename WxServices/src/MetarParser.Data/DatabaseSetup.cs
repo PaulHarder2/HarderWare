@@ -1,15 +1,17 @@
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 
 using WxServices.Logging;
 
 namespace MetarParser.Data;
 
 /// <summary>
-/// Consolidates all database schema creation and migration logic into a
-/// single idempotent method.  Every service calls <see cref="EnsureSchemaAsync"/>
-/// at startup; the first one to run creates the database and all tables,
-/// and subsequent calls are harmless no-ops.
+/// Consolidates all database schema creation and upgrade logic into a single
+/// idempotent method.  Every service calls <see cref="EnsureSchemaAsync"/> at
+/// startup; the first one to run applies any pending EF Core migrations, and
+/// subsequent calls are no-ops.
 /// <para>
 /// WX-28 wraps the schema setup in a retry loop so that a service booting
 /// before SQL Server is ready (e.g. after a Windows-Update-driven reboot)
@@ -18,6 +20,15 @@ namespace MetarParser.Data;
 /// <see cref="DatabaseUnavailableException"/> is thrown only after every
 /// attempt in <see cref="DatabaseStartupRetryOptions"/> has failed.
 /// </para>
+/// <para>
+/// WX-72 replaced the previous <c>EnsureCreatedAsync</c> + hand-written
+/// idempotent DDL pattern with EF Core Migrations.  Existing installations
+/// whose schema was created by the older pattern are silently baselined on
+/// first run with the new code: if the schema appears to exist but
+/// <c>__EFMigrationsHistory</c> does not, the baseline migration is marked
+/// as already-applied so <see cref="DatabaseFacade.MigrateAsync"/> does not
+/// try to re-create tables that are already present.
+/// </para>
 /// </summary>
 public static class DatabaseSetup
 {
@@ -25,15 +36,6 @@ public static class DatabaseSetup
     /// Ensures the <c>WeatherData</c> database and all required tables exist,
     /// retrying transient connection failures according to
     /// <paramref name="retry"/>.
-    /// <para>
-    /// <see cref="WeatherDataContext.Database.EnsureCreatedAsync"/> creates
-    /// the core tables defined in <see cref="WeatherDataContext.OnModelCreating"/>
-    /// only when the database is entirely absent — so this method also covers
-    /// the first-run case where SQL Server is up but the <c>WeatherData</c>
-    /// database itself does not yet exist.  The idempotent DDL statements
-    /// below handle tables and columns that were added after the initial
-    /// schema.
-    /// </para>
     /// </summary>
     /// <param name="dbOptions">EF Core options for the <see cref="WeatherDataContext"/>.</param>
     /// <param name="retry">Retry schedule; <c>null</c> uses <see cref="DatabaseStartupRetryOptions.Default"/>.</param>
@@ -96,171 +98,229 @@ public static class DatabaseSetup
     {
         await using var db = new WeatherDataContext(dbOptions);
 
-        await db.Database.EnsureCreatedAsync(ct);
+        if (!await db.Database.CanConnectAsync(ct))
+        {
+            // The database doesn't exist yet — MigrateAsync will create it
+            // from scratch.  The CREATE DATABASE step cannot be protected by
+            // sp_getapplock (the applock requires an existing-DB connection),
+            // so concurrent first-boot races on CREATE DATABASE are handled
+            // by classifying error 1801 ("database already exists") as
+            // transient in IsTransientSqlNumber and letting the WX-28 retry
+            // loop converge.
+            await db.Database.MigrateAsync(ct);
+            return;
+        }
 
-        // ── Tables added after initial schema ────────────────────────────────
-
-        await db.Database.ExecuteSqlRawAsync(@"
-            IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'GfsModelRuns')
-            BEGIN
-                CREATE TABLE [GfsModelRuns] (
-                    [ModelRunUtc] datetime2 NOT NULL,
-                    [IsComplete]  bit       NOT NULL DEFAULT 0,
-                    CONSTRAINT [PK_GfsModelRuns] PRIMARY KEY ([ModelRunUtc])
-                );
-            END", ct);
-
-        await db.Database.ExecuteSqlRawAsync(@"
-            IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'GfsGrid')
-            BEGIN
-                CREATE TABLE [GfsGrid] (
-                    [Id]           int       NOT NULL IDENTITY,
-                    [ModelRunUtc]  datetime2 NOT NULL,
-                    [ForecastHour] int       NOT NULL,
-                    [Lat]          real      NOT NULL,
-                    [Lon]          real      NOT NULL,
-                    [TmpC]         real      NULL,
-                    [DwpC]         real      NULL,
-                    [UGrdMs]       real      NULL,
-                    [VGrdMs]       real      NULL,
-                    [PRateKgM2s]   real      NULL,
-                    [TcdcPct]      real      NULL,
-                    [CapeJKg]      real      NULL,
-                    CONSTRAINT [PK_GfsGrid] PRIMARY KEY ([Id])
-                );
-                CREATE UNIQUE INDEX [UX_GfsGrid_Run_Hour_LatLon]
-                    ON [GfsGrid] ([ModelRunUtc], [ForecastHour], [Lat], [Lon]);
-                CREATE INDEX [IX_GfsGrid_Run_Hour]
-                    ON [GfsGrid] ([ModelRunUtc], [ForecastHour]);
-            END", ct);
-
-        await db.Database.ExecuteSqlRawAsync(@"
-            IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'Recipients')
-            BEGIN
-                CREATE TABLE [Recipients] (
-                    [Id]                 int            NOT NULL IDENTITY,
-                    [RecipientId]        nvarchar(100)  NOT NULL,
-                    [Email]              nvarchar(200)  NOT NULL,
-                    [Name]               nvarchar(200)  NOT NULL,
-                    [Language]           nvarchar(50)   NULL,
-                    [Timezone]           nvarchar(100)  NOT NULL DEFAULT 'UTC',
-                    [ScheduledSendHours] nvarchar(50)   NULL,
-                    [Address]            nvarchar(500)  NULL,
-                    [LocalityName]       nvarchar(200)  NULL,
-                    [Latitude]           float          NULL,
-                    [Longitude]          float          NULL,
-                    [MetarIcao]          nvarchar(100)  NULL,
-                    [TafIcao]            nvarchar(10)   NULL,
-                    [TempUnit]           nvarchar(10)   NOT NULL DEFAULT 'F',
-                    [PressureUnit]       nvarchar(10)   NOT NULL DEFAULT 'inHg',
-                    [WindSpeedUnit]      nvarchar(10)   NOT NULL DEFAULT 'mph',
-                    CONSTRAINT [PK_Recipients] PRIMARY KEY ([Id])
-                );
-                CREATE UNIQUE INDEX [UX_Recipients_RecipientId]
-                    ON [Recipients] ([RecipientId]);
-            END", ct);
-
-        await db.Database.ExecuteSqlRawAsync(@"
-            IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'GlobalSettings')
-            BEGIN
-                CREATE TABLE [GlobalSettings] (
-                    [Id]              int            NOT NULL,
-                    [ClaudeApiKey]    nvarchar(500)  NULL,
-                    [SmtpUsername]    nvarchar(200)  NULL,
-                    [SmtpPassword]    nvarchar(200)  NULL,
-                    [SmtpFromAddress] nvarchar(200)  NULL,
-                    CONSTRAINT [PK_GlobalSettings] PRIMARY KEY ([Id])
-                );
-                INSERT INTO [GlobalSettings] ([Id]) VALUES (1);
-            END", ct);
-
-        await db.Database.ExecuteSqlRawAsync(@"
-            IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'RecipientStates')
-            BEGIN
-                CREATE TABLE [RecipientStates] (
-                    [Id]                      int           NOT NULL IDENTITY,
-                    [RecipientId]             nvarchar(100) NOT NULL,
-                    [LastScheduledSentUtc]    datetime2     NULL,
-                    [LastUnscheduledSentUtc]  datetime2     NULL,
-                    [LastSnapshotFingerprint] nvarchar(200) NULL,
-                    [LastMetarIcao]           nchar(4)      NULL,
-                    CONSTRAINT [PK_RecipientStates] PRIMARY KEY ([Id])
-                );
-                CREATE UNIQUE INDEX [UX_RecipientStates_RecipientId]
-                    ON [RecipientStates] ([RecipientId]);
-            END", ct);
-
-        // ── Column migrations ────────────────────────────────────────────────
-
-        await db.Database.ExecuteSqlRawAsync(@"
-            IF NOT EXISTS (SELECT 1 FROM sys.columns
-                           WHERE object_id = OBJECT_ID('RecipientStates') AND name = 'LastMetarIcao')
-                ALTER TABLE [RecipientStates] ADD [LastMetarIcao] nchar(4) NULL;", ct);
-
-        await db.Database.ExecuteSqlRawAsync(@"
-            IF NOT EXISTS (
-                SELECT 1 FROM sys.columns
-                WHERE object_id = OBJECT_ID(N'WxStations') AND name = N'Municipality'
-            )
-            ALTER TABLE [WxStations] ADD [Municipality] nvarchar(100) NULL;", ct);
-
-        await db.Database.ExecuteSqlRawAsync(@"
-            IF NOT EXISTS (
-                SELECT 1 FROM sys.columns
-                WHERE object_id = OBJECT_ID(N'WxStations') AND name = N'AlwaysFetchDirect'
-            )
-            ALTER TABLE [WxStations] ADD [AlwaysFetchDirect] bit NULL;", ct);
-
-        // WX-13: Country and State/Province/Region fields on WxStations.
-        await db.Database.ExecuteSqlRawAsync(@"
-            IF NOT EXISTS (SELECT 1 FROM sys.columns
-                           WHERE object_id = OBJECT_ID(N'WxStations') AND name = N'Region')
-                ALTER TABLE [WxStations] ADD [Region] nvarchar(100) NULL;", ct);
-
-        await db.Database.ExecuteSqlRawAsync(@"
-            IF NOT EXISTS (SELECT 1 FROM sys.columns
-                           WHERE object_id = OBJECT_ID(N'WxStations') AND name = N'RegionCode')
-                ALTER TABLE [WxStations] ADD [RegionCode] nvarchar(10) NULL;", ct);
-
-        await db.Database.ExecuteSqlRawAsync(@"
-            IF NOT EXISTS (SELECT 1 FROM sys.columns
-                           WHERE object_id = OBJECT_ID(N'WxStations') AND name = N'RegionAbbr')
-                ALTER TABLE [WxStations] ADD [RegionAbbr] nvarchar(10) NULL;", ct);
-
-        await db.Database.ExecuteSqlRawAsync(@"
-            IF NOT EXISTS (SELECT 1 FROM sys.columns
-                           WHERE object_id = OBJECT_ID(N'WxStations') AND name = N'Country')
-                ALTER TABLE [WxStations] ADD [Country] nvarchar(100) NULL;", ct);
-
-        await db.Database.ExecuteSqlRawAsync(@"
-            IF NOT EXISTS (SELECT 1 FROM sys.columns
-                           WHERE object_id = OBJECT_ID(N'WxStations') AND name = N'CountryCode')
-                ALTER TABLE [WxStations] ADD [CountryCode] nchar(2) NULL;", ct);
-
-        await db.Database.ExecuteSqlRawAsync(@"
-            IF NOT EXISTS (SELECT 1 FROM sys.columns
-                           WHERE object_id = OBJECT_ID(N'WxStations') AND name = N'CountryAbbr')
-                ALTER TABLE [WxStations] ADD [CountryAbbr] nvarchar(10) NULL;", ct);
-
-        // WX-22: ReceivedUtc on Metars and Tafs.  Column was introduced in
-        // commit a70d81f (2026-03-30) as a NOT NULL EF property populated by
-        // the mappers, but no idempotent migration shipped with it.  These
-        // guards let a fresh clone or restore-from-old-backup pick up the
-        // column safely.  The DEFAULT SYSUTCDATETIME() only applies to the
-        // backfill of pre-existing rows at ALTER time — EF always supplies a
-        // value on insert, so the constraint is a no-op for new rows.
-        await db.Database.ExecuteSqlRawAsync(@"
-            IF NOT EXISTS (SELECT 1 FROM sys.columns
-                           WHERE object_id = OBJECT_ID(N'Metars') AND name = N'ReceivedUtc')
-                ALTER TABLE [Metars] ADD [ReceivedUtc] datetime2 NOT NULL
-                    CONSTRAINT [DF_Metars_ReceivedUtc] DEFAULT SYSUTCDATETIME();", ct);
-
-        await db.Database.ExecuteSqlRawAsync(@"
-            IF NOT EXISTS (SELECT 1 FROM sys.columns
-                           WHERE object_id = OBJECT_ID(N'Tafs') AND name = N'ReceivedUtc')
-                ALTER TABLE [Tafs] ADD [ReceivedUtc] datetime2 NOT NULL
-                    CONSTRAINT [DF_Tafs_ReceivedUtc] DEFAULT SYSUTCDATETIME();", ct);
+        // The database exists, so multiple services racing to apply pending
+        // migrations would corrupt the schema on the loser side.  Serialize
+        // the migration work across services with sp_getapplock — SQL Server's
+        // built-in named-lock primitive.  LockOwner='Session' ties the lock's
+        // lifetime to this SQL connection, so a crashed service auto-releases
+        // it when SQL Server detects the dead connection.
+        await db.Database.OpenConnectionAsync(ct);
+        try
+        {
+            await AcquireMigrationsApplockAsync(db, ct);
+            try
+            {
+                await BaselineExistingSchemaIfNeededAsync(db, ct);
+                await db.Database.MigrateAsync(ct);
+            }
+            finally
+            {
+                await ReleaseMigrationsApplockAsync(db, ct);
+            }
+        }
+        finally
+        {
+            await db.Database.CloseConnectionAsync();
+        }
     }
+
+    /// <summary>
+    /// Resource name for the SQL Server applock that serialises migration
+    /// runs across services.  Any value works as long as every service
+    /// agrees; this one is unambiguous in shared logs and `sp_getapplock`
+    /// diagnostics.
+    /// </summary>
+    private const string MigrationsApplockResource = "WxServices.MigrateAsync";
+
+    /// <summary>
+    /// Maximum time a service will wait for another service to release the
+    /// migrations applock before giving up.  Two minutes is generous: a
+    /// typical migration runs in seconds.  The cap protects against the
+    /// pathological case where the lock holder hangs without crashing
+    /// (which would otherwise release the Session-scoped lock).
+    /// </summary>
+    private const int MigrationsApplockTimeoutMs = 120_000;
+
+    private static async Task AcquireMigrationsApplockAsync(
+        WeatherDataContext db, CancellationToken ct)
+    {
+        // sp_getapplock returns negative values on failure (timeout, deadlock,
+        // canceled, error).  Raise those as a thrown exception so the WX-28
+        // retry loop classifies the failure correctly instead of silently
+        // proceeding with an unheld lock.
+        var rows = await db.Database.SqlQuery<int>(
+            $@"DECLARE @r int;
+               EXEC @r = sp_getapplock
+                   @Resource = {MigrationsApplockResource},
+                   @LockMode = N'Exclusive',
+                   @LockOwner = N'Session',
+                   @LockTimeout = {MigrationsApplockTimeoutMs};
+               SELECT @r AS Value;").ToListAsync(ct);
+
+        var result = rows.Count > 0 ? rows[0] : int.MinValue;
+        if (result < 0)
+        {
+            throw new MigrationApplockException(
+                result, MigrationsApplockResource, MigrationsApplockTimeoutMs);
+        }
+    }
+
+    /// <summary>
+    /// Raised when <c>sp_getapplock</c> returns a negative status code: <c>-1</c>
+    /// timeout, <c>-2</c> canceled, <c>-3</c> deadlock victim, or <c>-999</c>
+    /// parameter validation error.  The wait failures (-1, -2, -3) are
+    /// classified as transient by <see cref="IsTransientConnectionError"/> so
+    /// the WX-28 retry loop catches and retries them; <c>-999</c> is a code
+    /// bug in our <c>EXEC sp_getapplock</c> call and is *not* classified as
+    /// transient so it fails fast.
+    /// </summary>
+    private sealed class MigrationApplockException : Exception
+    {
+        public MigrationApplockException(int resultCode, string resource, int timeoutMs)
+            : base(BuildMessage(resultCode, resource, timeoutMs))
+        {
+            ResultCode = resultCode;
+        }
+
+        public int ResultCode { get; }
+
+        private static string BuildMessage(int resultCode, string resource, int timeoutMs)
+        {
+            var reason = resultCode switch
+            {
+                -1 => $"timed out after {timeoutMs / 1000}s waiting for another service to release the lock",
+                -2 => "request was canceled",
+                -3 => "request was chosen as a deadlock victim",
+                -999 => "sp_getapplock parameter validation failed (likely a code bug)",
+                _ => $"sp_getapplock returned unexpected code {resultCode}",
+            };
+            return $"Failed to acquire migrations applock '{resource}': {reason}.";
+        }
+    }
+
+    private static async Task ReleaseMigrationsApplockAsync(
+        WeatherDataContext db, CancellationToken ct)
+    {
+        // Best-effort release.  SQL Server releases Session-scoped applocks
+        // automatically when the connection closes, so a failure here is
+        // harmless — log it and move on rather than masking the real
+        // exception that's already unwinding the stack.
+        try
+        {
+            await db.Database.ExecuteSqlInterpolatedAsync(
+                $@"EXEC sp_releaseapplock
+                    @Resource = {MigrationsApplockResource},
+                    @LockOwner = N'Session';", ct);
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn(
+                $"Releasing migrations applock failed: {ex.Message.TrimEnd('.')}.  " +
+                "The lock will release on connection close regardless.");
+        }
+    }
+
+    /// <summary>
+    /// Detects the case where a database created by the pre-WX-72 schema setup
+    /// (i.e. <c>EnsureCreatedAsync</c> + hand-written idempotent DDL) is being
+    /// upgraded to the migrations-based setup for the first time.  In that
+    /// case the schema is already present but <c>__EFMigrationsHistory</c>
+    /// is not, so a plain <see cref="DatabaseFacade.MigrateAsync"/> would
+    /// attempt to re-create tables that already exist and fail.  The fix is
+    /// to insert a row for the baseline migration into a freshly-created
+    /// history table, making EF treat the baseline as already-applied.
+    /// </summary>
+    private static async Task BaselineExistingSchemaIfNeededAsync(
+        WeatherDataContext db, CancellationToken ct)
+    {
+        // If the database itself doesn't exist yet, MigrateAsync will create
+        // it from scratch — no baselining needed.
+        if (!await db.Database.CanConnectAsync(ct)) return;
+
+        // If __EFMigrationsHistory is already present, EF can reason about
+        // state on its own; do nothing.
+        if (await SchemaObjectExistsAsync(db, "__EFMigrationsHistory", ct)) return;
+
+        // If GfsGrid (a table introduced in the pre-migrations world and
+        // present in the baseline) does not exist, the database is either
+        // brand-new or pre-dates that table.  Either way, MigrateAsync can
+        // safely run from the beginning.
+        if (!await SchemaObjectExistsAsync(db, "GfsGrid", ct)) return;
+
+        var migrationsAssembly = db.GetService<IMigrationsAssembly>();
+        var baselineMigrationId = migrationsAssembly.Migrations.Keys
+            .OrderBy(k => k, StringComparer.Ordinal)
+            .First();
+
+        Logger.Info(
+            $"Baselining existing database: marking '{baselineMigrationId}' " +
+            "as already applied.");
+
+        // All four services call EnsureSchemaAsync at Windows boot; on the
+        // first start after the WX-72 upgrade they can race here.  TRY/CATCH
+        // around the CREATE TABLE and the INSERT keeps the operation
+        // idempotent: the loser of the race silently no-ops on the specific
+        // SQL Server error numbers ("object already exists" for CREATE,
+        // "duplicate key" for INSERT).  Any other error still propagates.
+        var strategy = db.Database.CreateExecutionStrategy();
+        await strategy.ExecuteAsync(async () =>
+        {
+            await using var tx = await db.Database.BeginTransactionAsync(ct);
+
+            await db.Database.ExecuteSqlInterpolatedAsync($@"
+                BEGIN TRY
+                    CREATE TABLE [__EFMigrationsHistory] (
+                        [MigrationId] nvarchar(150) NOT NULL,
+                        [ProductVersion] nvarchar(32) NOT NULL,
+                        CONSTRAINT [PK___EFMigrationsHistory] PRIMARY KEY ([MigrationId])
+                    );
+                END TRY
+                BEGIN CATCH
+                    IF ERROR_NUMBER() <> 2714 THROW;
+                END CATCH;
+
+                BEGIN TRY
+                    INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+                    VALUES ({baselineMigrationId}, {EfCoreProductVersion});
+                END TRY
+                BEGIN CATCH
+                    IF ERROR_NUMBER() NOT IN (2601, 2627) THROW;
+                END CATCH;", ct);
+
+            await tx.CommitAsync(ct);
+        });
+    }
+
+    private static async Task<bool> SchemaObjectExistsAsync(
+        WeatherDataContext db, string tableName, CancellationToken ct)
+    {
+        var result = await db.Database
+            .SqlQuery<int?>($"SELECT OBJECT_ID({tableName}, 'U') AS Value")
+            .ToListAsync(ct);
+        return result.Count > 0 && result[0].HasValue;
+    }
+
+    /// <summary>
+    /// EF Core product version recorded into <c>__EFMigrationsHistory</c> for
+    /// baselined rows.  Must match the <c>Microsoft.EntityFrameworkCore.SqlServer</c>
+    /// package version in <c>MetarParser.Data.csproj</c>.  Used only for the
+    /// baselining backfill — migrations generated by EF tooling fill this
+    /// automatically.
+    /// </summary>
+    private const string EfCoreProductVersion = "8.0.0";
 
     /// <summary>
     /// Classifies an exception raised from EF Core startup as transient
@@ -277,6 +337,13 @@ public static class DatabaseSetup
         for (var cur = ex; cur is not null; cur = cur.InnerException)
         {
             if (cur is SqlException sql && IsTransientSqlNumber(sql.Number))
+                return true;
+
+            // Applock wait failures — another service is holding the migration
+            // lock; the retry loop should converge once that service finishes.
+            // Parameter-validation (-999) is a code bug and intentionally stays
+            // non-transient.
+            if (cur is MigrationApplockException { ResultCode: -1 or -2 or -3 })
                 return true;
         }
         return false;
@@ -304,6 +371,7 @@ public static class DatabaseSetup
         258 => true,   // Cannot wait on a mutex.
         1205 => true,   // Deadlock victim.
         1222 => true,   // Lock request time out.
+        1801 => true,   // CREATE DATABASE failed: database '<name>' already exists.  Fresh-install race between services; retry sees the existing DB and proceeds normally.
         10053 => true,   // A transport-level error has occurred (connection forcibly closed).
         10054 => true,   // Connection reset by peer.
         10060 => true,   // Connection attempt timed out.
