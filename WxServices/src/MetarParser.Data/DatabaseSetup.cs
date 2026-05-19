@@ -173,11 +173,41 @@ public static class DatabaseSetup
         var result = rows.Count > 0 ? rows[0] : int.MinValue;
         if (result < 0)
         {
-            throw new InvalidOperationException(
-                $"Failed to acquire migrations applock '{MigrationsApplockResource}' " +
-                $"(sp_getapplock returned {result}).  Another service may be holding " +
-                $"it for longer than {MigrationsApplockTimeoutMs / 1000}s, or the lock " +
-                "request itself failed.");
+            throw new MigrationApplockException(
+                result, MigrationsApplockResource, MigrationsApplockTimeoutMs);
+        }
+    }
+
+    /// <summary>
+    /// Raised when <c>sp_getapplock</c> returns a negative status code: <c>-1</c>
+    /// timeout, <c>-2</c> canceled, <c>-3</c> deadlock victim, or <c>-999</c>
+    /// parameter validation error.  The wait failures (-1, -2, -3) are
+    /// classified as transient by <see cref="IsTransientConnectionError"/> so
+    /// the WX-28 retry loop catches and retries them; <c>-999</c> is a code
+    /// bug in our <c>EXEC sp_getapplock</c> call and is *not* classified as
+    /// transient so it fails fast.
+    /// </summary>
+    private sealed class MigrationApplockException : Exception
+    {
+        public MigrationApplockException(int resultCode, string resource, int timeoutMs)
+            : base(BuildMessage(resultCode, resource, timeoutMs))
+        {
+            ResultCode = resultCode;
+        }
+
+        public int ResultCode { get; }
+
+        private static string BuildMessage(int resultCode, string resource, int timeoutMs)
+        {
+            var reason = resultCode switch
+            {
+                -1 => $"timed out after {timeoutMs / 1000}s waiting for another service to release the lock",
+                -2 => "request was canceled",
+                -3 => "request was chosen as a deadlock victim",
+                -999 => "sp_getapplock parameter validation failed (likely a code bug)",
+                _ => $"sp_getapplock returned unexpected code {resultCode}",
+            };
+            return $"Failed to acquire migrations applock '{resource}': {reason}.";
         }
     }
 
@@ -307,6 +337,13 @@ public static class DatabaseSetup
         for (var cur = ex; cur is not null; cur = cur.InnerException)
         {
             if (cur is SqlException sql && IsTransientSqlNumber(sql.Number))
+                return true;
+
+            // Applock wait failures — another service is holding the migration
+            // lock; the retry loop should converge once that service finishes.
+            // Parameter-validation (-999) is a code bug and intentionally stays
+            // non-transient.
+            if (cur is MigrationApplockException { ResultCode: -1 or -2 or -3 })
                 return true;
         }
         return false;
