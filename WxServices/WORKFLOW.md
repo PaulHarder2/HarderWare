@@ -200,4 +200,13 @@ If a schema change requires data movement that EF's generated `Up`/`Down` cannot
 
 ## Known friction
 
-Dropbox's file watcher occasionally locks `.git/refs/remotes/origin/*.lock` or `.git/config.lock` during push. Symptoms: `error: could not lock config file` or `fatal: Unable to write new index file`. Push to GitHub usually succeeds regardless; `rm` the stale zero-byte lock file and re-run the tracking command. Not a bug in git or GitHub.
+### Dropbox-induced git lock failures on push
+
+Dropbox's file watcher occasionally locks `.git/refs/remotes/origin/*.lock` or `.git/config.lock` during push. The push itself almost always reaches GitHub regardless — the failure is purely in updating local git state.
+
+Two symptom families:
+
+- **`error: could not lock config file`** or **`fatal: Unable to write new index file`** — the push proceeded but the upstream-tracking config did not get written. Recovery: `rm` the stale zero-byte lock file under `.git/` and re-run the tracking command (e.g. `git branch --set-upstream-to=origin/<branch>`).
+- **`error: update_ref failed for ref 'refs/remotes/origin/<branch>'`** — the push reached GitHub but the local `refs/remotes/origin/<branch>` file did not get written, so `git branch -vv` shows no tracking and `gh pr create` rejects the branch with *"you must first push the current branch to a remote."* Recovery: `git fetch origin <branch>:refs/remotes/origin/<branch> --force` (or simply `git fetch origin`) to repopulate the local tracking ref from the remote, then re-run the failed command.
+
+Neither symptom indicates a problem with git, GitHub, or the commit itself — the commit is on the remote and visible to `git ls-remote`. The only thing the lock blocked is local bookkeeping.
