@@ -138,21 +138,36 @@ public static class DatabaseSetup
             $"Baselining existing database: marking '{baselineMigrationId}' " +
             "as already applied.");
 
+        // All four services call EnsureSchemaAsync at Windows boot; on the
+        // first start after the WX-72 upgrade they can race here.  TRY/CATCH
+        // around the CREATE TABLE and the INSERT keeps the operation
+        // idempotent: the loser of the race silently no-ops on the specific
+        // SQL Server error numbers ("object already exists" for CREATE,
+        // "duplicate key" for INSERT).  Any other error still propagates.
         var strategy = db.Database.CreateExecutionStrategy();
         await strategy.ExecuteAsync(async () =>
         {
             await using var tx = await db.Database.BeginTransactionAsync(ct);
 
-            await db.Database.ExecuteSqlRawAsync(@"
-                CREATE TABLE [__EFMigrationsHistory] (
-                    [MigrationId] nvarchar(150) NOT NULL,
-                    [ProductVersion] nvarchar(32) NOT NULL,
-                    CONSTRAINT [PK___EFMigrationsHistory] PRIMARY KEY ([MigrationId])
-                );", ct);
+            await db.Database.ExecuteSqlInterpolatedAsync($@"
+                BEGIN TRY
+                    CREATE TABLE [__EFMigrationsHistory] (
+                        [MigrationId] nvarchar(150) NOT NULL,
+                        [ProductVersion] nvarchar(32) NOT NULL,
+                        CONSTRAINT [PK___EFMigrationsHistory] PRIMARY KEY ([MigrationId])
+                    );
+                END TRY
+                BEGIN CATCH
+                    IF ERROR_NUMBER() <> 2714 THROW;
+                END CATCH;
 
-            await db.Database.ExecuteSqlInterpolatedAsync(
-                $"INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion]) VALUES ({baselineMigrationId}, {EfCoreProductVersion});",
-                ct);
+                BEGIN TRY
+                    INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+                    VALUES ({baselineMigrationId}, {EfCoreProductVersion});
+                END TRY
+                BEGIN CATCH
+                    IF ERROR_NUMBER() NOT IN (2601, 2627) THROW;
+                END CATCH;", ct);
 
             await tx.CommitAsync(ct);
         });

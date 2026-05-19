@@ -1156,7 +1156,8 @@ The history-table creation and the marker insert run inside a single transaction
 The baseline migration was generated from the current EF model (`OnModelCreating`).  Existing production databases were created by the old `EnsureCreatedAsync` path plus hand-rolled additive DDL, which left some cosmetic drift between what the new model says and what those tables actually look like:
 
 - `GlobalSettings.Id` is `INT NOT NULL IDENTITY` in the model and in the baseline; existing prod tables created it as `INT NOT NULL` without identity.  Code uses an explicit `Id = 1` either way, so neither schema breaks.
-- Several string columns (`Recipients.Timezone`, `Recipients.TempUnit`, `Recipients.PressureUnit`, `Recipients.WindSpeedUnit`, `GfsModelRuns.IsComplete`) had `DEFAULT` constraints in the old DDL.  EF always supplies values on insert, so the defaults were cosmetic and are not preserved by the migration.
+- Several string columns (`Recipients.Timezone`, `Recipients.TempUnit`, `Recipients.PressureUnit`, `Recipients.WindSpeedUnit`) had `DEFAULT` string-literal constraints in the old DDL.  EF always supplies values on insert, so the defaults were cosmetic and are not preserved by the migration.
+- The `GfsModelRuns.IsComplete` bit column similarly had a `DEFAULT 0` constraint that the migration does not preserve, for the same reason: EF supplies the value on insert.
 - `Metars.ReceivedUtc` and `Tafs.ReceivedUtc` had `DEFAULT SYSUTCDATETIME()` solely to backfill the column when it was first introduced; the default is not needed on new inserts.
 - `GlobalSettings` had a one-time `INSERT (Id) VALUES (1)` seed on first install; the application code already handles a missing row (`ConfigureTab` creates it on demand), so the seed is not reintroduced.
 

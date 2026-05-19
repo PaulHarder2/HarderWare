@@ -108,11 +108,13 @@ Before pushing, explicitly ask whether the change warrants:
 
 Some changes (installer scripts, raw config files, prose-only doc edits) cannot be meaningfully unit-tested. That's fine — say so and move on. The phrase *"when it is possible and makes sense"* governs.
 
-### 7b. Run the full test suite
+### 7b. Run the full test suite and format check
 
 `dotnet test WxServices.sln` must report zero failures before creating the PR. There are no pre-existing-failure exceptions: any failure must be resolved in this PR or split out into a blocking ticket first.
 
-**Exemption:** when the change cannot meaningfully affect test results — pure-docs PRs (WORKFLOW.md, DESIGN.md, etc.), pure-config PRs (e.g. `.coderabbit.yaml`), pure-asset PRs — skip the test run and note the exemption in the PR body. Same governing phrase as §7a applies: *"when it is possible and makes sense."* Running `dotnet test` against a diff that touches no executable surface is ceremony, not safety.
+`dotnet format WxServices.CI.slnf --verify-no-changes` must also exit clean before push. CI runs this on every PR and a format-only failure costs a full CI round-trip plus a CodeRabbit-equivalent cycle on a mistake that is trivial to fix locally. *Added 2026-05-19 after WX-72's first CI run failed on two trailing-newline drifts.*
+
+**Exemption:** when the change cannot meaningfully affect test results — pure-docs PRs (WORKFLOW.md, DESIGN.md, etc.), pure-config PRs (e.g. `.coderabbit.yaml`), pure-asset PRs — skip the test run and note the exemption in the PR body. The format check still applies if any C# file changed, since `dotnet format` is cheap; skip only for diffs that touch no `.cs` files. Same governing phrase as §7a applies: *"when it is possible and makes sense."*
 
 ### 7c. Confirm acceptance criteria are met
 
@@ -182,7 +184,7 @@ The procedure for a schema change inside a normal ticket:
 2. Restore the local `dotnet-ef` tool if it isn't yet: `dotnet tool restore`.
 3. Generate a new migration:
 
-   ```
+   ```bash
    dotnet ef migrations add <DescriptiveName> --project src/MetarParser.Data/MetarParser.Data.csproj
    ```
 
