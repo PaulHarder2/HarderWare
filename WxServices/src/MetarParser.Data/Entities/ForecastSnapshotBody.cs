@@ -42,17 +42,53 @@ public sealed record ForecastSnapshotBody
         WriteIndented = false,
     };
 
-    /// <summary>Serialize to the canonical JSON form persisted in the DB column.</summary>
-    public string Serialize() => JsonSerializer.Serialize(this, SerializerOptions);
+    /// <summary>Serialize to the canonical JSON form persisted in the DB column.  Calls <see cref="Validate"/> first so malformed bodies cannot be persisted.</summary>
+    public string Serialize()
+    {
+        Validate();
+        return JsonSerializer.Serialize(this, SerializerOptions);
+    }
 
     /// <summary>
     /// Deserialize from JSON.  Throws <see cref="JsonException"/> on invalid
     /// input (unknown enum values, malformed JSON, missing required fields,
-    /// type mismatches).
+    /// type mismatches, or violation of the precipPhenomenon-iff-non-none
+    /// invariant — see <see cref="Validate"/>).
     /// </summary>
-    public static ForecastSnapshotBody Deserialize(string json) =>
-        JsonSerializer.Deserialize<ForecastSnapshotBody>(json, SerializerOptions)
-        ?? throw new JsonException("Deserialized snapshot body was null.");
+    public static ForecastSnapshotBody Deserialize(string json)
+    {
+        var body = JsonSerializer.Deserialize<ForecastSnapshotBody>(json, SerializerOptions)
+            ?? throw new JsonException("Deserialized snapshot body was null.");
+        body.Validate();
+        return body;
+    }
+
+    /// <summary>
+    /// Enforce the precipPhenomenon-iff-non-none invariant: every block must
+    /// have a non-null <see cref="ForecastSnapshotBlock.PrecipPhenomenon"/>
+    /// exactly when its <see cref="ForecastSnapshotBlock.PrecipExpectation"/>
+    /// is not <see cref="PrecipExpectation.None"/>.  Called from both
+    /// <see cref="Serialize"/> (so malformed bodies never reach the DB) and
+    /// <see cref="Deserialize"/> (so malformed JSON never returns as a valid
+    /// object), so neither persistence nor reads can produce semantically
+    /// invalid bodies.  Throws <see cref="JsonException"/> on violation.
+    /// </summary>
+    private void Validate()
+    {
+        for (int i = 0; i < Blocks.Count; i++)
+        {
+            var block = Blocks[i];
+            bool isNone = block.PrecipExpectation == PrecipExpectation.None;
+            bool hasPhenomenon = block.PrecipPhenomenon is not null;
+            if (isNone == hasPhenomenon)
+            {
+                throw new JsonException(
+                    $"Block {i} (startUtc={block.StartUtc:O}) violates the precipPhenomenon invariant: " +
+                    $"precipExpectation={block.PrecipExpectation}, precipPhenomenon={block.PrecipPhenomenon?.ToString() ?? "null"}. " +
+                    "precipPhenomenon must be null exactly when precipExpectation is None.");
+            }
+        }
+    }
 }
 
 /// <summary>One uniform 6-hour block within a <see cref="ForecastSnapshotBody"/>.</summary>

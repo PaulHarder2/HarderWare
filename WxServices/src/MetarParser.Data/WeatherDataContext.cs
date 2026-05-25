@@ -386,7 +386,9 @@ public sealed class WeatherDataContext : DbContext
 
             e.Property(x => x.StationIcao).HasMaxLength(4).IsFixedLength().IsRequired();
             e.Property(x => x.GeneratedAtUtc).IsRequired();
-            e.Property(x => x.SchemaVersion).IsRequired();
+            e.Property(x => x.SchemaVersion)
+             .IsRequired()
+             .HasDefaultValue(ForecastSnapshotBody.SchemaVersionCurrent);
             e.Property(x => x.Body).HasColumnType("nvarchar(max)").IsRequired();
 
             // One snapshot per station per commit instant; also supports

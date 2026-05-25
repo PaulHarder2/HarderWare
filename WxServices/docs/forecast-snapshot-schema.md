@@ -48,7 +48,7 @@ A snapshot is the structured representation of what WxReport told a recipient at
 | `windKt` | `{ min, max }` of `integer` | Knots. Matches the METAR/TAF native unit. |
 | `gustOutlook` | enum | `none`, `occasional`, `frequent`. Categorical to fit Claude's working-memory framing — specific gust values may surface in the email when warranted. |
 | `precipExpectation` | enum | `none`, `possible`, `likely`, `certain`. |
-| `precipPhenomenon` | enum or absent | `rain`, `thunderstorm`, `mixed`, `snow`, `freezing_precip`. Must be absent (omitted from JSON) exactly when `precipExpectation == "none"`. `freezing_precip` covers freezing rain, freezing drizzle, and sleet — bucketed together because they are equally road-slickening and equally safety-critical. |
+| `precipPhenomenon` | enum or absent | `rain`, `thunderstorm`, `mixed`, `snow`, `freezing_precip`. Must be absent (omitted from JSON) exactly when `precipExpectation == "none"`. This invariant is enforced at serialize and deserialize time — bodies that violate it cannot be persisted or returned. `freezing_precip` covers freezing rain, freezing drizzle, and sleet — bucketed together because they are equally road-slickening and equally safety-critical. |
 | `severeFlag` | `bool` | Safety-critical flag. The rules that set it live in WX-81 (significance-tier prompting); WX-76 reserves the column. |
 | `visibilityExpectation` | enum | `poor`, `reduced`, `good`. Three tiers chosen for plans-affecting granularity at 6-hour resolution. |
 

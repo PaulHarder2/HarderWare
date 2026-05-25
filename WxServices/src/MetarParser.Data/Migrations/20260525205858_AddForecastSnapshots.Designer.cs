@@ -41,7 +41,9 @@ namespace MetarParser.Data.Migrations
                         .HasColumnType("datetime2");
 
                     b.Property<int>("SchemaVersion")
-                        .HasColumnType("int");
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(1);
 
                     b.Property<string>("StationIcao")
                         .IsRequired()

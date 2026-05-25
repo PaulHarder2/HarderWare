@@ -198,6 +198,59 @@ public class ForecastSnapshotBodyTests
         Assert.Throws<JsonException>(() => ForecastSnapshotBody.Deserialize(json));
     }
 
+    [Fact]
+    public void Deserialize_RejectsPrecipNoneWithPhenomenon()
+    {
+        // precipExpectation = "none" but precipPhenomenon is non-null — violates the invariant.
+        const string json = """
+            {
+              "schemaVersion": 1,
+              "blocks": [
+                {
+                  "startUtc": "2026-05-26T00:00:00Z",
+                  "skyState": "overcast",
+                  "obscuration": "none",
+                  "temperatureCelsius": { "min": 8.2, "max": 14.7 },
+                  "windKt": { "min": 5, "max": 12 },
+                  "gustOutlook": "none",
+                  "precipExpectation": "none",
+                  "precipPhenomenon": "rain",
+                  "severeFlag": false,
+                  "visibilityExpectation": "good"
+                }
+              ]
+            }
+            """;
+
+        Assert.Throws<JsonException>(() => ForecastSnapshotBody.Deserialize(json));
+    }
+
+    [Fact]
+    public void Deserialize_RejectsNonNonePrecipMissingPhenomenon()
+    {
+        // precipExpectation = "likely" but precipPhenomenon is omitted (defaults to null) — violates the invariant.
+        const string json = """
+            {
+              "schemaVersion": 1,
+              "blocks": [
+                {
+                  "startUtc": "2026-05-26T00:00:00Z",
+                  "skyState": "overcast",
+                  "obscuration": "none",
+                  "temperatureCelsius": { "min": 8.2, "max": 14.7 },
+                  "windKt": { "min": 5, "max": 12 },
+                  "gustOutlook": "occasional",
+                  "precipExpectation": "likely",
+                  "severeFlag": false,
+                  "visibilityExpectation": "good"
+                }
+              ]
+            }
+            """;
+
+        Assert.Throws<JsonException>(() => ForecastSnapshotBody.Deserialize(json));
+    }
+
     // ── Defaults ─────────────────────────────────────────────────────────────
 
     [Fact]

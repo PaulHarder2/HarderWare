@@ -19,7 +19,7 @@ namespace MetarParser.Data.Migrations
                         .Annotation("SqlServer:Identity", "1, 1"),
                     StationIcao = table.Column<string>(type: "nchar(4)", fixedLength: true, maxLength: 4, nullable: false),
                     GeneratedAtUtc = table.Column<DateTime>(type: "datetime2", nullable: false),
-                    SchemaVersion = table.Column<int>(type: "int", nullable: false),
+                    SchemaVersion = table.Column<int>(type: "int", nullable: false, defaultValue: 1),
                     Body = table.Column<string>(type: "nvarchar(max)", nullable: false)
                 },
                 constraints: table =>
