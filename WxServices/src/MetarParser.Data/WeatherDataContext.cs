@@ -93,6 +93,15 @@ public sealed class WeatherDataContext : DbContext
     public DbSet<WxStation> WxStations => Set<WxStation>();
 
     /// <summary>
+    /// The <c>ForecastSnapshots</c> table — one row per committed forecast
+    /// snapshot per station.  The persisted anchor that later report cycles
+    /// diff against to decide whether the forecast has been invalidated.
+    /// Introduced under WX-76 for the WX-47 rearchitecture; populated by WX-77,
+    /// persisted by WX-78, and reasoned over by WX-79.
+    /// </summary>
+    public DbSet<ForecastSnapshot> ForecastSnapshots => Set<ForecastSnapshot>();
+
+    /// <summary>
     /// Configures the EF Core model: table names, column types, indexes,
     /// and relationships between entities.
     /// </summary>
@@ -366,6 +375,27 @@ public sealed class WeatherDataContext : DbContext
             // Support fast "all points for run X at forecast hour Y" queries.
             e.HasIndex(x => new { x.ModelRunUtc, x.ForecastHour })
              .HasDatabaseName("IX_GfsGrid_Run_Hour");
+        });
+
+        // ── ForecastSnapshots ────────────────────────────────────────────────
+
+        modelBuilder.Entity<ForecastSnapshot>(e =>
+        {
+            e.ToTable("ForecastSnapshots");
+            e.HasKey(x => x.Id);
+
+            e.Property(x => x.StationIcao).HasMaxLength(4).IsFixedLength().IsRequired();
+            e.Property(x => x.GeneratedAtUtc).IsRequired();
+            e.Property(x => x.SchemaVersion)
+             .IsRequired()
+             .HasDefaultValue(ForecastSnapshotBody.SchemaVersionCurrent);
+            e.Property(x => x.Body).HasColumnType("nvarchar(max)").IsRequired();
+
+            // One snapshot per station per commit instant; also supports
+            // the "most recent snapshot for station X" lookup.
+            e.HasIndex(x => new { x.StationIcao, x.GeneratedAtUtc })
+             .IsUnique()
+             .HasDatabaseName("UX_ForecastSnapshots_Station_GeneratedAt");
         });
     }
 }
