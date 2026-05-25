@@ -35,7 +35,8 @@ A groomed ticket has, at minimum:
 
 - Their Jira Original estimate field is left empty.
 - Their description ends with a **Planning Estimate** section — a rough aggregate hour count (*"hopefully better than order-of-magnitude, but maybe not"*) plus an approximate sub-ticket count.
-- Child tickets are created **just-in-time**, not at Epic-grooming time. Each child is groomed individually before it is picked up for work. This avoids front-loading grooming sessions for children whose scope isn't yet in focus.
+- Child tickets are created **just-in-time** by default, not at Epic-grooming time. Each child is groomed individually before it is picked up for work. This avoids front-loading grooming sessions for children whose scope isn't yet in focus.
+- **Opt-in: up-front child creation and grooming.** When the Epic's Acceptance section already names the children with enough scope to estimate, the children may be created and groomed up-front. The trade is real summed Original estimates on the Epic — better calibration data — against the re-estimation risk that working an early child reshapes a later one. Bounded by a tripwire: if the summed-child Original estimates ever drift more than 25% from the initial aggregate, re-groom the Epic (refresh the Planning Estimate; reconsider whether the decomposition still holds; restructure or add sub-tickets as needed). *Added 2026-05-25 from WX-47, the first Epic to use this opt-in.*
 
 If a ticket reaches §3 (transition to In Progress) without grooming, pause and groom it first. The cost of a grooming conversation is much less than the cost of implementing the wrong thing.
 
