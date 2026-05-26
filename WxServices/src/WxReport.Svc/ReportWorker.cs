@@ -273,7 +273,7 @@ public sealed class ReportWorker : BackgroundService
         state.LastMetarIcao = snapshot.StationIcao;
 
         try { await ctx.SaveChangesAsync(ct); }
-        catch (Exception ex) when (ex is not OperationCanceledException) { Logger.Error("Failed to save state after startup report.", ex); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { Logger.Error($"{recipient.Id} {recipient.Email} ({recipient.Name}): failed to save state after startup report.", ex); }
     }
 
     // ── cycle ─────────────────────────────────────────────────────────────────
