@@ -102,6 +102,14 @@ public sealed class WeatherDataContext : DbContext
     public DbSet<ForecastSnapshot> ForecastSnapshots => Set<ForecastSnapshot>();
 
     /// <summary>
+    /// The <c>CommittedSends</c> table — one row per report-send to a single
+    /// recipient, anchored to a <see cref="ForecastSnapshot"/> and carrying
+    /// the Claude reasoning trace and rendered email body.  Introduced under
+    /// WX-78; the trace column is reserved for WX-79.
+    /// </summary>
+    public DbSet<CommittedSend> CommittedSends => Set<CommittedSend>();
+
+    /// <summary>
     /// Configures the EF Core model: table names, column types, indexes,
     /// and relationships between entities.
     /// </summary>
@@ -396,6 +404,33 @@ public sealed class WeatherDataContext : DbContext
             e.HasIndex(x => new { x.StationIcao, x.GeneratedAtUtc })
              .IsUnique()
              .HasDatabaseName("UX_ForecastSnapshots_Station_GeneratedAt");
+        });
+
+        // ── CommittedSends ───────────────────────────────────────────────────
+
+        modelBuilder.Entity<CommittedSend>(e =>
+        {
+            e.ToTable("CommittedSends");
+            e.HasKey(x => x.Id);
+
+            e.Property(x => x.RecipientId).HasMaxLength(100).IsRequired();
+            e.Property(x => x.ReasoningTrace).HasColumnType("nvarchar(max)");
+            e.Property(x => x.EmailBody).HasColumnType("nvarchar(max)");
+            e.Property(x => x.CreatedAtUtc).IsRequired();
+            e.Property(x => x.SchemaVersion)
+             .IsRequired()
+             .HasDefaultValue(CommittedSend.SchemaVersionCurrent);
+
+            e.HasOne(x => x.ForecastSnapshot)
+             .WithMany()
+             .HasForeignKey(x => x.ForecastSnapshotId)
+             .OnDelete(DeleteBehavior.Restrict);
+
+            // Supports the "most recent send to recipient X" query that WX-79
+            // and WX-80 lean on; DESC on CreatedAtUtc favors latest-first scans.
+            e.HasIndex(x => new { x.RecipientId, x.CreatedAtUtc })
+             .IsDescending(false, true)
+             .HasDatabaseName("IX_CommittedSends_Recipient_CreatedAt");
         });
     }
 }

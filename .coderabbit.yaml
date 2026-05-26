@@ -18,6 +18,17 @@ reviews:
   # can decline bad suggestions with a one-line reply.
   profile: assertive
 
+  # Submit reviews as CHANGES_REQUESTED (blocking the merge button)
+  # when actionable findings exist, and auto-transition to APPROVED
+  # once findings are resolved and checks pass. Default (false) lets
+  # CodeRabbit submit every review as COMMENTED regardless of
+  # severity, which decoupled the merge-button decoration from
+  # actual review substance -- WX-78 surfaced this when a Major
+  # "outside diff range" finding lived only in the review body
+  # while the merge state stayed CLEAN. See WX-78 PR conversation
+  # for the precipitating incident.
+  request_changes_workflow: true
+
   # Top-of-PR one-paragraph summary makes large PRs easier to triage
   # at a glance, especially ones with bundled unrelated tweaks.
   high_level_summary: true

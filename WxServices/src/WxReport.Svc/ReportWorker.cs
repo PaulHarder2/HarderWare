@@ -294,6 +294,11 @@ public sealed class ReportWorker : BackgroundService
             var now = DateTime.UtcNow;
             var reportsSent = 0;
 
+            // One stub ForecastSnapshot per station per cycle, shared across
+            // recipients that happen to anchor on the same station.  WX-78
+            // placeholder until WX-77 lands the real GfsSnapshotBuilder.
+            var stubSnapshotsByStation = new Dictionary<string, ForecastSnapshot>(StringComparer.Ordinal);
+
             foreach (var recipient in cfg.Recipients)
             {
                 if (string.IsNullOrWhiteSpace(recipient.Email)) continue;
@@ -383,6 +388,26 @@ public sealed class ReportWorker : BackgroundService
                 var scheduledHours = ParseHourList(recipient.ScheduledSendHours ?? cfg.DefaultScheduledSendHours);
                 var scheduledHour = scheduledHours.Count > 0 ? scheduledHours[0] : 7;
                 var tz = ResolveTimezone(recipient.Timezone);
+
+                // WX-78: write the provisional CommittedSend before invoking Claude.
+                // Anchored to a stub ForecastSnapshot (WX-77 will populate it).
+                // Persisted now so that a Claude failure still leaves an audit row.
+                if (!stubSnapshotsByStation.TryGetValue(snapshot.StationIcao, out var anchorSnapshot))
+                {
+                    anchorSnapshot = BuildStubForecastSnapshot(snapshot.StationIcao, now);
+                    ctx.ForecastSnapshots.Add(anchorSnapshot);
+                    stubSnapshotsByStation[snapshot.StationIcao] = anchorSnapshot;
+                }
+                var committedSend = new CommittedSend
+                {
+                    ForecastSnapshot = anchorSnapshot,
+                    RecipientId = recipient.Id!,
+                    CreatedAtUtc = DateTime.UtcNow,
+                };
+                ctx.CommittedSends.Add(committedSend);
+                await ctx.SaveChangesAsync(ct);
+                Logger.Debug($"{recipient.Id} {recipient.Email} ({recipient.Name}): wrote provisional CommittedSend Id={committedSend.Id}.");
+
                 var claudeSw = Stopwatch.StartNew();
                 var report = await claude.GenerateReportAsync(
                     snapshot, language, recipient.Name, tz,
@@ -397,9 +422,16 @@ public sealed class ReportWorker : BackgroundService
 
                 if (report is null)
                 {
-                    Logger.Error($"{recipient.Id} {recipient.Email} ({recipient.Name}): Claude returned no report — skipping send.");
+                    Logger.Error($"{recipient.Id} {recipient.Email} ({recipient.Name}): Claude returned no report — skipping send.  Provisional CommittedSend Id={committedSend.Id} left in place.");
                     continue;
                 }
+
+                // WX-78: Claude succeeded — overwrite the provisional row with
+                // the rendered email body.  ReasoningTrace stays null until
+                // WX-79 wires Claude tool-use returns.
+                committedSend.EmailBody = report;
+                await ctx.SaveChangesAsync(ct);
+                Logger.Debug($"{recipient.Id} {recipient.Email} ({recipient.Name}): overwrote CommittedSend Id={committedSend.Id} with Claude body.");
 
                 var subject = BuildSubject(snapshot, language, tz, severity, recipientName: recipient.Name);
                 var plainFallback = SnapshotDescriber.Describe(snapshot, tz, recipient.Units);
@@ -423,6 +455,21 @@ public sealed class ReportWorker : BackgroundService
                 _reportsSent.Add(1);
                 Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): report sent.");
 
+                // WX-78: stamp and persist the actual-sent time on the CommittedSend row
+                // independently of the RecipientState save below.  A failure in the
+                // RecipientState save would otherwise leave a successfully delivered
+                // message audited as SentAtUtc = null, violating the lifecycle invariant
+                // that null means "didn't actually send."
+                committedSend.SentAtUtc = DateTime.UtcNow;
+                try
+                {
+                    await ctx.SaveChangesAsync(ct);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    Logger.Error($"{recipient.Id} {recipient.Email} ({recipient.Name}): failed to persist CommittedSend.SentAtUtc Id={committedSend.Id} after successful email send.", ex);
+                }
+
                 if (reason is "scheduled" or "first")
                     state.LastScheduledSentUtc = now;
                 else
@@ -442,7 +489,7 @@ public sealed class ReportWorker : BackgroundService
                     await ctx.SaveChangesAsync(ct);
                     reportsSent++;
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     Logger.Error($"{recipient.Id} {recipient.Email} ({recipient.Name}): failed to save recipient state.", ex);
                 }
@@ -460,6 +507,27 @@ public sealed class ReportWorker : BackgroundService
             _cycleDuration.Record(cycleSw.Elapsed.TotalSeconds);
             WriteHeartbeat(cfg.HeartbeatFile);
         }
+    }
+
+    // ── persistence helpers ───────────────────────────────────────────────────
+
+    /// <summary>
+    /// Build a placeholder <see cref="ForecastSnapshot"/> used by WX-78's
+    /// persistence flow until WX-77 lands the real <c>GfsSnapshotBuilder</c>.
+    /// The body is an empty <see cref="ForecastSnapshotBody"/>; WX-77 will
+    /// swap the call site to populate it with real 6-hour blocks.
+    /// </summary>
+    /// <param name="stationIcao">ICAO of the station the send anchors against.</param>
+    /// <param name="generatedAtUtc">UTC time stamp for the snapshot's unique key.</param>
+    private static ForecastSnapshot BuildStubForecastSnapshot(string stationIcao, DateTime generatedAtUtc)
+    {
+        return new ForecastSnapshot
+        {
+            StationIcao = stationIcao,
+            GeneratedAtUtc = generatedAtUtc,
+            SchemaVersion = ForecastSnapshotBody.SchemaVersionCurrent,
+            Body = new ForecastSnapshotBody().Serialize(),
+        };
     }
 
     // ── send-decision logic ───────────────────────────────────────────────────
