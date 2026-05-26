@@ -455,9 +455,20 @@ public sealed class ReportWorker : BackgroundService
                 _reportsSent.Add(1);
                 Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): report sent.");
 
-                // WX-78: stamp the actual-sent time on the CommittedSend row.
-                // Persisted by the SaveChangesAsync that follows the RecipientState update below.
+                // WX-78: stamp and persist the actual-sent time on the CommittedSend row
+                // independently of the RecipientState save below.  A failure in the
+                // RecipientState save would otherwise leave a successfully delivered
+                // message audited as SentAtUtc = null, violating the lifecycle invariant
+                // that null means "didn't actually send."
                 committedSend.SentAtUtc = DateTime.UtcNow;
+                try
+                {
+                    await ctx.SaveChangesAsync(ct);
+                }
+                catch (Exception ex)
+                {
+                    Logger.Error($"{recipient.Id} {recipient.Email} ({recipient.Name}): failed to persist CommittedSend.SentAtUtc Id={committedSend.Id} after successful email send.", ex);
+                }
 
                 if (reason is "scheduled" or "first")
                     state.LastScheduledSentUtc = now;
