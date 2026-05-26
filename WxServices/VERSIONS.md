@@ -5,7 +5,7 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 
 | Version | Commit  | Date       | Summary |
 |---------|---------|------------|---------|
-| 1.6.0   | _pending_ | 2026-05-26 | Persistence layer for the WX-47 rearchitecture: new `CommittedSend` entity, FK to `ForecastSnapshot`, and a write-before-Claude / overwrite-on-success / leave-on-failure lifecycle in `ReportWorker`. Schema lands an `AddCommittedSends` migration; cycles now persist one row per send (WX-78) |
+| 1.6.0   | 88a1625 | 2026-05-26 | Persistence layer for the WX-47 rearchitecture: new `CommittedSend` entity, FK to `ForecastSnapshot`, and a write-before-Claude / overwrite-on-success / leave-on-failure lifecycle in `ReportWorker`. Schema lands an `AddCommittedSends` migration; cycles now persist one row per send (WX-78) |
 | 1.5.5   | 6252d32 | 2026-05-25 | Forecast snapshot schema: `ForecastSnapshot` entity, `ForecastSnapshotBody` JSON record, and `AddForecastSnapshots` migration. Foundation for the WX-47 rearchitecture; no user-visible behaviour change yet (WX-76) |
 | 1.5.4   | a92618f | 2026-05-19 | Adopt EF Core Migrations; replace `EnsureCreated` + hand-written idempotent DDL with a baseline migration and a `MigrateAsync` startup path (WX-72) |
 | 1.5.3   | 8ad5cd4 | 2026-05-01 | Set `ContentTransferEncoding` to `ContentEncoding.Base64` explicitly on inline meteogram parts to fix WX-60 regression that emptied the image body in transit (WX-70) |
