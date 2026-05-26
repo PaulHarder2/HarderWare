@@ -12,6 +12,13 @@
 # below; any key not set here falls through to the CodeRabbit default.
 
 reviews:
+  # Skip CodeRabbit review on landscape-scans/ -- these are agent-generated
+  # monthly digests delivered primarily by email. The PR exists only to
+  # satisfy master branch protection; CR comments on these files would be
+  # friction we explicitly designed the routine to avoid.
+  path_filters:
+    - "!landscape-scans/**"
+
   # "assertive" gives more comprehensive feedback than the default
   # "chill" profile. Trade-off: more findings per PR, including some
   # that aren't worth acting on. Net positive for a small team that
