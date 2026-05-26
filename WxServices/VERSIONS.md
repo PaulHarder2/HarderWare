@@ -5,6 +5,7 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 
 | Version | Commit  | Date       | Summary |
 |---------|---------|------------|---------|
+| 1.6.1   | aa01722 | 2026-05-26 | Close two WX-78 audit-trail gaps surfaced by the 1.6.0 deploy log smoke test: `SendStartupReportAsync` now writes the `CommittedSend` lifecycle (was skipping it entirely); the two persistence boundary log lines promoted from Debug to Info so they appear in `wxreport-svc.log` at default log level (WX-86) |
 | 1.6.0   | 88a1625 | 2026-05-26 | Persistence layer for the WX-47 rearchitecture: new `CommittedSend` entity, FK to `ForecastSnapshot`, and a write-before-Claude / overwrite-on-success / leave-on-failure lifecycle in `ReportWorker`. Schema lands an `AddCommittedSends` migration; cycles now persist one row per send (WX-78) |
 | 1.5.5   | 6252d32 | 2026-05-25 | Forecast snapshot schema: `ForecastSnapshot` entity, `ForecastSnapshotBody` JSON record, and `AddForecastSnapshots` migration. Foundation for the WX-47 rearchitecture; no user-visible behaviour change yet (WX-76) |
 | 1.5.4   | a92618f | 2026-05-19 | Adopt EF Core Migrations; replace `EnsureCreated` + hand-written idempotent DDL with a baseline migration and a `MigrateAsync` startup path (WX-72) |
@@ -32,6 +33,15 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 | 1.0.0   | 7a2a268 | 2026-04-07 | Initial versioned release |
 
 ---
+
+## 1.6.1 — Close WX-78 audit-trail gaps surfaced by the 1.6.0 deploy (2026-05-26)
+
+- **WX-86 (defect fix):** Two gaps in 1.6.0's `CommittedSend` persistence flow surfaced when Paul truncated `wxreport-svc.log` before deploying 1.6.0 and observed that the new lifecycle boundaries were nowhere in the log even after a successful startup-report send and a full normal cycle.
+- **Gap 1: `SendStartupReportAsync` skipped the new persistence.** 1.6.0 added the provisional-write / overwrite / `SentAtUtc` lifecycle to `RunCycleAsync` only. The one-shot at-startup send (called once per service launch) bypassed it entirely — emails went out without producing a `CommittedSend` row, violating the WX-47 audit-trail invariant that every successful send anchors to a snapshot and a persisted row. The startup path now mirrors the cycle path exactly: stub `ForecastSnapshot` + provisional `CommittedSend` before Claude, overwrite on success, `SentAtUtc` stamped + saved independently after the SMTP send. `OperationCanceledException` is filtered out of both startup-path catches (consistent with the cycle path after WX-78's CR round).
+- **Gap 2: persistence boundary logs at Debug level.** 1.6.0's two new boundary lines (`wrote provisional CommittedSend Id=N`, `overwrote CommittedSend Id=N with Claude body`) were `Logger.Debug`. WxReport.Svc runs at Info level in production, so the lines were filtered out — exactly the visibility hook Paul wanted for first-deploy smoke testing was invisible. Both lines promoted to `Logger.Info` and added to the startup path symmetrically.
+- **No schema or entity change.** Pure-code defect closure on the persistence flow.
+- **Test suite.** Build clean, 218/218 tests green, format check clean. Behavior-level tests still blocked on the same DI refactor noted in WX-78's PR; the visible-log boundaries become the manual verification surface until that lands.
+- **PATCH bump.** Defect closure on 1.6.0's stated behavior, not a new feature.
 
 ## 1.6.0 — Persistence layer for the WX-47 rearchitecture (2026-05-26)
 
