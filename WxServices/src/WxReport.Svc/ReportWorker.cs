@@ -186,6 +186,22 @@ public sealed class ReportWorker : BackgroundService
         var scheduledHours = ParseHourList(recipient.ScheduledSendHours ?? cfg.DefaultScheduledSendHours);
         var scheduledHour = scheduledHours.Count > 0 ? scheduledHours[0] : 7;
         var tz = ResolveTimezone(recipient.Timezone);
+
+        // WX-86: write the provisional CommittedSend before invoking Claude,
+        // mirroring RunCycleAsync.  A Claude failure still leaves an audit
+        // row showing what we were about to send for the startup path.
+        var anchorSnapshot = BuildStubForecastSnapshot(snapshot.StationIcao, DateTime.UtcNow);
+        ctx.ForecastSnapshots.Add(anchorSnapshot);
+        var committedSend = new CommittedSend
+        {
+            ForecastSnapshot = anchorSnapshot,
+            RecipientId = recipient.Id!,
+            CreatedAtUtc = DateTime.UtcNow,
+        };
+        ctx.CommittedSends.Add(committedSend);
+        await ctx.SaveChangesAsync(ct);
+        Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): wrote provisional CommittedSend Id={committedSend.Id}.");
+
         var claude = new ClaudeClient(_httpClient, claude_cfg.ApiKey, claude_cfg.Model, _persona.Text);
         var report = await claude.GenerateReportAsync(
             snapshot, language, recipient.Name, tz,
@@ -196,9 +212,15 @@ public sealed class ReportWorker : BackgroundService
 
         if (report is null)
         {
-            Logger.Error($"{recipient.Id} {recipient.Email} ({recipient.Name}): Claude returned no report for startup send.");
+            Logger.Error($"{recipient.Id} {recipient.Email} ({recipient.Name}): Claude returned no report for startup send.  Provisional CommittedSend Id={committedSend.Id} left in place.");
             return;
         }
+
+        // WX-86: Claude succeeded — overwrite the provisional row with the
+        // rendered email body.  ReasoningTrace stays null until WX-79.
+        committedSend.EmailBody = report;
+        await ctx.SaveChangesAsync(ct);
+        Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): overwrote CommittedSend Id={committedSend.Id} with Claude body.");
 
         var subject = BuildSubject(snapshot, language, tz, recipientName: recipient.Name);
         var plainFallback = SnapshotDescriber.Describe(snapshot, tz, recipient.Units);
@@ -222,6 +244,19 @@ public sealed class ReportWorker : BackgroundService
 
         Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): startup report sent.");
 
+        // WX-86: stamp and persist SentAtUtc independently of the RecipientState
+        // save below, so a RecipientState failure doesn't leave a successfully
+        // delivered startup report audited as SentAtUtc = null.
+        committedSend.SentAtUtc = DateTime.UtcNow;
+        try
+        {
+            await ctx.SaveChangesAsync(ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Logger.Error($"{recipient.Id} {recipient.Email} ({recipient.Name}): failed to persist CommittedSend.SentAtUtc Id={committedSend.Id} after successful startup-report send.", ex);
+        }
+
         // Update state so the MinGap check prevents an immediate duplicate
         // from the first normal cycle.
         var state = await ctx.RecipientStates
@@ -238,7 +273,7 @@ public sealed class ReportWorker : BackgroundService
         state.LastMetarIcao = snapshot.StationIcao;
 
         try { await ctx.SaveChangesAsync(ct); }
-        catch (Exception ex) { Logger.Error("Failed to save state after startup report.", ex); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { Logger.Error("Failed to save state after startup report.", ex); }
     }
 
     // ── cycle ─────────────────────────────────────────────────────────────────
@@ -406,7 +441,7 @@ public sealed class ReportWorker : BackgroundService
                 };
                 ctx.CommittedSends.Add(committedSend);
                 await ctx.SaveChangesAsync(ct);
-                Logger.Debug($"{recipient.Id} {recipient.Email} ({recipient.Name}): wrote provisional CommittedSend Id={committedSend.Id}.");
+                Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): wrote provisional CommittedSend Id={committedSend.Id}.");
 
                 var claudeSw = Stopwatch.StartNew();
                 var report = await claude.GenerateReportAsync(
@@ -431,7 +466,7 @@ public sealed class ReportWorker : BackgroundService
                 // WX-79 wires Claude tool-use returns.
                 committedSend.EmailBody = report;
                 await ctx.SaveChangesAsync(ct);
-                Logger.Debug($"{recipient.Id} {recipient.Email} ({recipient.Name}): overwrote CommittedSend Id={committedSend.Id} with Claude body.");
+                Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): overwrote CommittedSend Id={committedSend.Id} with Claude body.");
 
                 var subject = BuildSubject(snapshot, language, tz, severity, recipientName: recipient.Name);
                 var plainFallback = SnapshotDescriber.Describe(snapshot, tz, recipient.Units);
