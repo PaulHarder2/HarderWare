@@ -465,7 +465,7 @@ public sealed class ReportWorker : BackgroundService
                 {
                     await ctx.SaveChangesAsync(ct);
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     Logger.Error($"{recipient.Id} {recipient.Email} ({recipient.Name}): failed to persist CommittedSend.SentAtUtc Id={committedSend.Id} after successful email send.", ex);
                 }
@@ -489,7 +489,7 @@ public sealed class ReportWorker : BackgroundService
                     await ctx.SaveChangesAsync(ct);
                     reportsSent++;
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     Logger.Error($"{recipient.Id} {recipient.Email} ({recipient.Name}): failed to save recipient state.", ex);
                 }
