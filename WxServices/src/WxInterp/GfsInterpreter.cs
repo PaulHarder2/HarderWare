@@ -6,16 +6,18 @@ namespace WxInterp;
 
 /// <summary>
 /// Queries the database for the most recent complete GFS model run and produces
-/// a <see cref="GfsForecast"/> by bilinear interpolation over the four surrounding
-/// 0.25° grid points.
+/// either a daily-summary <see cref="GfsForecast"/> or an hourly-resolution
+/// <see cref="GfsHourlyForecast"/> by bilinear interpolation over the four
+/// surrounding 0.25° grid points.
 /// </summary>
 public static class GfsInterpreter
 {
     private const double GridRes = 0.25; // GFS 0.25° horizontal resolution
 
     /// <summary>
-    /// Builds a <see cref="GfsForecast"/> at an exact geographic location by
-    /// bilinear interpolation over the four surrounding GFS grid points.
+    /// Builds a daily-summary <see cref="GfsForecast"/> at an exact geographic
+    /// location by bilinear interpolation over the four surrounding GFS grid
+    /// points.
     /// <para>
     /// All 121 forecast hours (f000–f120) are retrieved in a single database query.
     /// Each variable is interpolated independently per hour; results are then grouped
@@ -43,6 +45,72 @@ public static class GfsInterpreter
         DbContextOptions<WeatherDataContext> dbOptions,
         float precipThresholdMmHr = 0.1f,
         CancellationToken ct = default)
+    {
+        var loaded = await LoadAndInterpolateHourlyAsync(lat, lon, dbOptions, ct);
+        if (loaded is null) return null;
+
+        var (modelRunUtc, hours) = loaded.Value;
+
+        var days = hours
+            .GroupBy(h => DateOnly.FromDateTime(h.ValidTimeUtc))
+            .OrderBy(g => g.Key)
+            .Select(g => BuildDailyForecast(g.Key, [.. g], precipThresholdMmHr))
+            .ToList();
+
+        return new GfsForecast
+        {
+            ModelRunUtc = modelRunUtc,
+            Days = days,
+        };
+    }
+
+    /// <summary>
+    /// Builds an hourly-resolution <see cref="GfsHourlyForecast"/> at an exact
+    /// geographic location.  Each of the 121 forecast hours (f000–f120) of the
+    /// most recent complete GFS run is bilinearly interpolated from the four
+    /// surrounding 0.25° grid points; raw values are returned unaggregated so
+    /// callers (notably the WX-77 snapshot builder) can do their own grouping.
+    /// </summary>
+    /// <param name="lat">Recipient latitude in decimal degrees North.</param>
+    /// <param name="lon">Recipient longitude in decimal degrees East (negative = West).</param>
+    /// <param name="dbOptions">EF Core options for opening a <see cref="WeatherDataContext"/>.</param>
+    /// <param name="ct">Cancellation token propagated to EF Core queries.</param>
+    /// <returns>
+    /// A populated <see cref="GfsHourlyForecast"/>, or <see langword="null"/> if
+    /// no complete GFS run exists or no grid data is found near the specified
+    /// coordinates.
+    /// </returns>
+    public static async Task<GfsHourlyForecast?> GetHourlyForecastAsync(
+        double lat,
+        double lon,
+        DbContextOptions<WeatherDataContext> dbOptions,
+        CancellationToken ct = default)
+    {
+        var loaded = await LoadAndInterpolateHourlyAsync(lat, lon, dbOptions, ct);
+        if (loaded is null) return null;
+
+        var (modelRunUtc, hours) = loaded.Value;
+
+        return new GfsHourlyForecast
+        {
+            ModelRunUtc = modelRunUtc,
+            Hours = hours,
+        };
+    }
+
+    // ── shared interpolation core ────────────────────────────────────────────
+
+    /// <summary>
+    /// Loads the most recent complete GFS run and interpolates each forecast hour
+    /// at the requested coordinates.  Both <see cref="GetForecastAsync"/> and
+    /// <see cref="GetHourlyForecastAsync"/> share this step; downstream grouping
+    /// or aggregation is the caller's responsibility.
+    /// </summary>
+    private static async Task<(DateTime ModelRunUtc, List<GfsHourlyPoint> Hours)?> LoadAndInterpolateHourlyAsync(
+        double lat,
+        double lon,
+        DbContextOptions<WeatherDataContext> dbOptions,
+        CancellationToken ct)
     {
         await using var ctx = new WeatherDataContext(dbOptions);
 
@@ -86,9 +154,10 @@ public static class GfsInterpreter
         var t = (aLat1 > aLat0) ? (float)((lat - aLat0) / (aLat1 - aLat0)) : 0.5f;
         var s = (aLon1 > aLon0) ? (float)((lon - aLon0) / (aLon1 - aLon0)) : 0.5f;
 
-        // Interpolate each forecast hour, then summarise by UTC calendar date.
+        // Interpolate each forecast hour.
         var hourlyPoints = rows
             .GroupBy(g => g.ForecastHour)
+            .OrderBy(g => g.Key)
             .Select(g =>
             {
                 var sw = g.FirstOrDefault(p => p.Lat == aLat0 && p.Lon == aLon0);
@@ -97,6 +166,7 @@ public static class GfsInterpreter
                 var ne = g.FirstOrDefault(p => p.Lat == aLat1 && p.Lon == aLon1);
 
                 var tmpC = BilerpNullable(sw?.TmpC, se?.TmpC, nw?.TmpC, ne?.TmpC, t, s);
+                var dwpC = BilerpNullable(sw?.DwpC, se?.DwpC, nw?.DwpC, ne?.DwpC, t, s);
                 var uGrd = BilerpNullable(sw?.UGrdMs, se?.UGrdMs, nw?.UGrdMs, ne?.UGrdMs, t, s);
                 var vGrd = BilerpNullable(sw?.VGrdMs, se?.VGrdMs, nw?.VGrdMs, ne?.VGrdMs, t, s);
                 var pRate = BilerpNullable(sw?.PRateKgM2s, se?.PRateKgM2s, nw?.PRateKgM2s, ne?.PRateKgM2s, t, s);
@@ -117,29 +187,21 @@ public static class GfsInterpreter
                 // Convert precipitation rate from mm/s to mm/hr.
                 float? precipMmHr = pRate.HasValue ? pRate.Value * 3600f : null;
 
-                return new HourlyPoint(
-                    ValidTime: run.ModelRunUtc.AddHours(g.Key),
-                    TmpC: tmpC,
-                    WindKt: windKt,
-                    WindDir: windDir,
-                    PrecipMmHr: precipMmHr,
-                    TcdcPct: tcdc,
-                    CapeJKg: cape);
+                return new GfsHourlyPoint
+                {
+                    ValidTimeUtc = run.ModelRunUtc.AddHours(g.Key),
+                    TmpC = tmpC,
+                    DwpC = dwpC,
+                    WindKt = windKt,
+                    WindDirDeg = windDir,
+                    PrecipMmHr = precipMmHr,
+                    TcdcPct = tcdc,
+                    CapeJKg = cape,
+                };
             })
-            .OrderBy(h => h.ValidTime)
             .ToList();
 
-        var days = hourlyPoints
-            .GroupBy(h => DateOnly.FromDateTime(h.ValidTime))
-            .OrderBy(g => g.Key)
-            .Select(g => BuildDailyForecast(g.Key, g.ToList(), precipThresholdMmHr))
-            .ToList();
-
-        return new GfsForecast
-        {
-            ModelRunUtc = run.ModelRunUtc,
-            Days = days,
-        };
+        return (run.ModelRunUtc, hourlyPoints);
     }
 
     // ── daily summary ─────────────────────────────────────────────────────────
@@ -154,7 +216,7 @@ public static class GfsInterpreter
     /// <returns>A <see cref="GfsDailyForecast"/> for the day.</returns>
     private static GfsDailyForecast BuildDailyForecast(
         DateOnly date,
-        List<HourlyPoint> hours,
+        List<GfsHourlyPoint> hours,
         float precipThresholdMmHr)
     {
         // Temperature high/low.
@@ -169,7 +231,7 @@ public static class GfsInterpreter
         if (windHours.Count > 0)
         {
             maxWindKt = windHours.Max(h => h.WindKt!.Value);
-            maxWindDir = windHours.First(h => h.WindKt == maxWindKt).WindDir;
+            maxWindDir = windHours.First(h => h.WindKt == maxWindKt).WindDirDeg;
         }
 
         // Cloud cover and CAPE.
@@ -221,16 +283,4 @@ public static class GfsInterpreter
              + t * (1 - s) * nw.Value
              + t * s * ne.Value;
     }
-
-    // ── private types ─────────────────────────────────────────────────────────
-
-    /// <summary>Interpolated weather values for a single forecast valid-time.</summary>
-    private record struct HourlyPoint(
-        DateTime ValidTime,
-        float? TmpC,
-        float? WindKt,
-        int? WindDir,
-        float? PrecipMmHr,
-        float? TcdcPct,
-        float? CapeJKg);
 }
