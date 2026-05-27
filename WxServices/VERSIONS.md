@@ -5,6 +5,7 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 
 | Version | Commit  | Date       | Summary |
 |---------|---------|------------|---------|
+| 1.6.2   | 8a5d5ba | 2026-05-27 | GFS → provisional snapshot builder for the WX-47 rearchitecture: new `GfsSnapshotBuilder.Build(GfsHourlyForecast) → ForecastSnapshotBody` projects a GFS hourly forecast into the uniform 6-hour blocks defined by WX-76; `GfsInterpreter` gains `GetHourlyForecastAsync` alongside the existing daily-summary API. No runtime change yet — the builder is library-only until WX-79 wires it into the report path (WX-77) |
 | 1.6.1   | aa01722 | 2026-05-26 | Close two WX-78 audit-trail gaps surfaced by the 1.6.0 deploy log smoke test: `SendStartupReportAsync` now writes the `CommittedSend` lifecycle (was skipping it entirely); the two persistence boundary log lines promoted from Debug to Info so they appear in `wxreport-svc.log` at default log level (WX-86) |
 | 1.6.0   | 88a1625 | 2026-05-26 | Persistence layer for the WX-47 rearchitecture: new `CommittedSend` entity, FK to `ForecastSnapshot`, and a write-before-Claude / overwrite-on-success / leave-on-failure lifecycle in `ReportWorker`. Schema lands an `AddCommittedSends` migration; cycles now persist one row per send (WX-78) |
 | 1.5.5   | 6252d32 | 2026-05-25 | Forecast snapshot schema: `ForecastSnapshot` entity, `ForecastSnapshotBody` JSON record, and `AddForecastSnapshots` migration. Foundation for the WX-47 rearchitecture; no user-visible behaviour change yet (WX-76) |
