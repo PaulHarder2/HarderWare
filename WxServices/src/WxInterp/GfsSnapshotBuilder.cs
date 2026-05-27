@@ -149,9 +149,9 @@ public static class GfsSnapshotBuilder
     {
         if (tcdcValues.Count == 0) return SkyState.MostlyCloudy;
         var max = tcdcValues.Max();
-        if (max < SkyClearMaxPct) return SkyState.Clear;
-        if (max < SkyPartlyMaxPct) return SkyState.PartlyCloudy;
-        if (max < SkyMostlyMaxPct) return SkyState.MostlyCloudy;
+        if (max <= SkyClearMaxPct) return SkyState.Clear;
+        if (max <= SkyPartlyMaxPct) return SkyState.PartlyCloudy;
+        if (max <= SkyMostlyMaxPct) return SkyState.MostlyCloudy;
         return SkyState.Overcast;
     }
 

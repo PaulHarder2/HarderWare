@@ -151,6 +151,17 @@ public class GfsSnapshotBuilderTests
         Assert.Equal(SkyState.Overcast, body.Blocks[0].SkyState);
     }
 
+    [Fact]
+    public void SkyState_MaxAtClearBoundary_StaysClear()
+    {
+        // The SkyClearMaxPct ceiling is inclusive: TCDC = 20 maps to Clear, not
+        // PartlyCloudy.  Pinned to prevent a regression to strict `<` comparison.
+        var body = GfsSnapshotBuilder.Build(Forecast(
+            Hour(0, tcdcPct: 10), Hour(1, tcdcPct: 15), Hour(2, tcdcPct: 18),
+            Hour(3, tcdcPct: 20), Hour(4, tcdcPct: 10), Hour(5, tcdcPct: 5)));
+        Assert.Equal(SkyState.Clear, body.Blocks[0].SkyState);
+    }
+
     // ── precipitation expectation ────────────────────────────────────────────
 
     [Fact]

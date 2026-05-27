@@ -60,7 +60,7 @@ public static class GfsInterpreter
         return new GfsForecast
         {
             ModelRunUtc = modelRunUtc,
-            Days = days,
+            Days = days.AsReadOnly(),
         };
     }
 
@@ -94,7 +94,7 @@ public static class GfsInterpreter
         return new GfsHourlyForecast
         {
             ModelRunUtc = modelRunUtc,
-            Hours = hours,
+            Hours = hours.AsReadOnly(),
         };
     }
 
