@@ -4,6 +4,18 @@ Notes/
 # Machine-local secrets — never commit
 appsettings.local.json
 
+# Credential-file-type exclusions (WX-91) — keep secrets out by file-type,
+# not just by path, so a future credential-bearing file is excluded by
+# default rather than needing a one-off rule.
+*.env
+*.pfx
+*.p12
+*.key
+*.pem
+id_rsa*
+*.cer
+secrets.*
+
 # Claude Code per-project state — runtime lock + accreted permission allowlist
 .claude/
 
