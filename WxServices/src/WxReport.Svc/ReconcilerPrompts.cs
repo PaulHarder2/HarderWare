@@ -121,20 +121,20 @@ internal static class ReconcilerPrompts
                                 },
                                 properties = new
                                 {
-                                    startUtc              = new { type = "string", format = "date-time" },
-                                    skyState              = new { type = "string", @enum = new[] { "clear", "partly_cloudy", "mostly_cloudy", "overcast" } },
-                                    obscuration           = new { type = "string", @enum = new[] { "none", "fog", "haze", "smoke", "dust" } },
-                                    temperatureCelsius    = new { type = "object", required = new[] { "min", "max" }, properties = new { min = new { type = "number" }, max = new { type = "number" } } },
-                                    windKt                = new { type = "object", required = new[] { "min", "max" }, properties = new { min = new { type = "integer" }, max = new { type = "integer" } } },
-                                    gustOutlook           = new { type = "string", @enum = new[] { "none", "occasional", "frequent" } },
-                                    precipExpectation     = new { type = "string", @enum = new[] { "none", "possible", "likely", "certain" } },
-                                    precipPhenomenon      = new
+                                    startUtc = new { type = "string", format = "date-time" },
+                                    skyState = new { type = "string", @enum = new[] { "clear", "partly_cloudy", "mostly_cloudy", "overcast" } },
+                                    obscuration = new { type = "string", @enum = new[] { "none", "fog", "haze", "smoke", "dust" } },
+                                    temperatureCelsius = new { type = "object", required = new[] { "min", "max" }, properties = new { min = new { type = "number" }, max = new { type = "number" } } },
+                                    windKt = new { type = "object", required = new[] { "min", "max" }, properties = new { min = new { type = "integer" }, max = new { type = "integer" } } },
+                                    gustOutlook = new { type = "string", @enum = new[] { "none", "occasional", "frequent" } },
+                                    precipExpectation = new { type = "string", @enum = new[] { "none", "possible", "likely", "certain" } },
+                                    precipPhenomenon = new
                                     {
                                         type = new[] { "string", "null" },
                                         @enum = new object?[] { null, "rain", "thunderstorm", "mixed", "snow", "freezing_precip" },
                                         description = "Required when precipExpectation != 'none'; must be null or omitted when 'none'.",
                                     },
-                                    severeFlag            = new { type = "boolean" },
+                                    severeFlag = new { type = "boolean" },
                                     visibilityExpectation = new { type = "string", @enum = new[] { "poor", "reduced", "good" } },
                                 },
                             },
