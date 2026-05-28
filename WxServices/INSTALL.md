@@ -328,7 +328,7 @@ To enable it:
 
 2. **Create the Grafana admin-password file.**  Open Notepad and create
    `C:\HarderWare\observability\.env` containing a single line:
-   ```
+   ```properties
    GRAFANA_ADMIN_PASSWORD=<your-chosen-strong-password>
    ```
    Pick a strong password and save it somewhere safe (a password manager
@@ -338,7 +338,7 @@ To enable it:
 
 3. **Start the Docker stack.**  Open a **Command Prompt** (Docker Desktop
    must be running) and type these two commands:
-   ```
+   ```cmd
    cd C:\HarderWare\observability
    docker compose up -d
    ```
