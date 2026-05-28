@@ -39,6 +39,12 @@ public sealed class ReportWorker : BackgroundService
     private readonly Counter<long> _reportsSent;
     private readonly Counter<long> _sendFailures;
     private readonly Counter<long> _claudeCalls;
+    private readonly Counter<long> _claudeInputTokens;
+    private readonly Counter<long> _claudeOutputTokens;
+    private readonly Counter<long> _claudeCacheReadTokens;
+    private readonly Counter<long> _claudeCacheCreationTokens;
+    private readonly Counter<long> _claudeToolUseSuccess;
+    private readonly Counter<long> _claudeMalformedOutput;
     private readonly Histogram<double> _cycleDuration;
     private readonly Histogram<double> _claudeDuration;
 
@@ -61,6 +67,12 @@ public sealed class ReportWorker : BackgroundService
         _reportsSent = _meter.CreateCounter<long>("wxreport.sends.total", description: "Number of reports successfully sent.");
         _sendFailures = _meter.CreateCounter<long>("wxreport.send.failures.total", description: "Number of failed email sends.");
         _claudeCalls = _meter.CreateCounter<long>("wxreport.claude.calls.total", description: "Number of Claude API calls.");
+        _claudeInputTokens = _meter.CreateCounter<long>("wxreport.claude.tokens.input.total", description: "Total billed input tokens (cached + uncached) across reconciliation calls.");
+        _claudeOutputTokens = _meter.CreateCounter<long>("wxreport.claude.tokens.output.total", description: "Total output tokens generated across reconciliation calls.");
+        _claudeCacheReadTokens = _meter.CreateCounter<long>("wxreport.claude.cache.read.total", description: "Total input tokens served from prior cache writes (cache hits).");
+        _claudeCacheCreationTokens = _meter.CreateCounter<long>("wxreport.claude.cache.write.total", description: "Total input tokens written to the cache (cache misses with cacheable prefix).");
+        _claudeToolUseSuccess = _meter.CreateCounter<long>("wxreport.claude.tool_use.success.total", description: "Number of reconciliation calls returning a parseable three-artifact tool_use response.");
+        _claudeMalformedOutput = _meter.CreateCounter<long>("wxreport.claude.malformed_output.total", description: "Number of reconciliation calls failing schema validation (skip-and-log path).");
         _cycleDuration = _meter.CreateHistogram<double>("wxreport.cycle.duration.seconds", unit: "s", description: "Duration of each report cycle.");
         _claudeDuration = _meter.CreateHistogram<double>("wxreport.claude.duration.seconds", unit: "s", description: "Duration of each Claude API call.");
     }
@@ -228,10 +240,17 @@ public sealed class ReportWorker : BackgroundService
 
         if (reconcileResult is not ReconcileResult.Success success)
         {
+            _claudeMalformedOutput.Add(1);
             var reason = ((ReconcileResult.Failure)reconcileResult).Reason;
             Logger.Error($"{recipient.Id} {recipient.Email} ({recipient.Name}): Reconciliation failed for startup send: {reason}.  Provisional CommittedSend Id={committedSend.Id} left in place.");
             return;
         }
+
+        _claudeToolUseSuccess.Add(1);
+        _claudeInputTokens.Add(success.Tokens.InputTokens);
+        _claudeOutputTokens.Add(success.Tokens.OutputTokens);
+        _claudeCacheReadTokens.Add(success.Tokens.CacheReadInputTokens);
+        _claudeCacheCreationTokens.Add(success.Tokens.CacheCreationInputTokens);
 
         // WX-79: persist the reconciled snapshot row and re-anchor the
         // CommittedSend.  EmailBody is the pre-meteogram wrapped HTML
@@ -492,10 +511,17 @@ public sealed class ReportWorker : BackgroundService
 
                 if (reconcileResult is not ReconcileResult.Success success)
                 {
+                    _claudeMalformedOutput.Add(1);
                     var failureReason = ((ReconcileResult.Failure)reconcileResult).Reason;
                     Logger.Error($"{recipient.Id} {recipient.Email} ({recipient.Name}): Reconciliation failed: {failureReason}.  Provisional CommittedSend Id={committedSend.Id} left in place.");
                     continue;
                 }
+
+                _claudeToolUseSuccess.Add(1);
+                _claudeInputTokens.Add(success.Tokens.InputTokens);
+                _claudeOutputTokens.Add(success.Tokens.OutputTokens);
+                _claudeCacheReadTokens.Add(success.Tokens.CacheReadInputTokens);
+                _claudeCacheCreationTokens.Add(success.Tokens.CacheCreationInputTokens);
 
                 // WX-79: persist the reconciled snapshot row and re-anchor the
                 // CommittedSend.  EmailBody is the pre-meteogram wrapped HTML
