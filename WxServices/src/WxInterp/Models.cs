@@ -305,6 +305,16 @@ public sealed class WeatherSnapshot
 
     /// <summary>ICAO identifier of the TAF station used for the forecast, or null if unavailable.</summary>
     public string? TafStationIcao { get; init; }
+    /// <summary>
+    /// UTC time the active TAF was issued, or <see langword="null"/> when no TAF is available.
+    /// Surfaced (WX-79) so the forecast reconciliation pass can compare against the GFS model run time.
+    /// </summary>
+    public DateTime? TafIssuanceUtc { get; init; }
+    /// <summary>
+    /// UTC end of the active TAF's validity window, or <see langword="null"/> when no TAF is available.
+    /// Surfaced (WX-79) so the forecast reconciliation pass can scope TAF preference to in-window blocks.
+    /// </summary>
+    public DateTime? TafValidToUtc { get; init; }
     /// <summary>All TAF periods in order (BASE first, then change groups).</summary>
     public IReadOnlyList<ForecastPeriod> ForecastPeriods { get; init; } = [];
 

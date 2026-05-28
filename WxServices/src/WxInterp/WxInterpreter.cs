@@ -397,6 +397,8 @@ public static class WxInterpreter
             DewPointCelsius = metar.DewPointCelsius,
             AltimeterInHg = altInHg,
             TafStationIcao = taf?.StationIcao,
+            TafIssuanceUtc = taf?.IssuanceUtc,
+            TafValidToUtc = taf?.ValidToUtc,
             ForecastPeriods = forecastPeriods,
             GfsForecast = gfsForecast,
         };
@@ -426,6 +428,8 @@ public static class WxInterpreter
             ObservationUnavailableNote = unavailableNote,
             LocalityName = localityName,
             TafStationIcao = taf?.StationIcao,
+            TafIssuanceUtc = taf?.IssuanceUtc,
+            TafValidToUtc = taf?.ValidToUtc,
             ForecastPeriods = forecastPeriods,
             GfsForecast = gfsForecast,
         };
