@@ -190,7 +190,8 @@ public sealed class ReportWorker : BackgroundService
         // WX-86: write the provisional CommittedSend before invoking Claude,
         // mirroring RunCycleAsync.  A Claude failure still leaves an audit
         // row showing what we were about to send for the startup path.
-        var anchorSnapshot = BuildStubForecastSnapshot(snapshot.StationIcao, DateTime.UtcNow);
+        var anchorSnapshot = await BuildProvisionalForecastSnapshotAsync(
+            snapshot.StationIcao, recipient.Latitude, recipient.Longitude, DateTime.UtcNow, ct);
         ctx.ForecastSnapshots.Add(anchorSnapshot);
         var committedSend = new CommittedSend
         {
@@ -329,11 +330,6 @@ public sealed class ReportWorker : BackgroundService
             var now = DateTime.UtcNow;
             var reportsSent = 0;
 
-            // One stub ForecastSnapshot per station per cycle, shared across
-            // recipients that happen to anchor on the same station.  WX-78
-            // placeholder until WX-77 lands the real GfsSnapshotBuilder.
-            var stubSnapshotsByStation = new Dictionary<string, ForecastSnapshot>(StringComparer.Ordinal);
-
             foreach (var recipient in cfg.Recipients)
             {
                 if (string.IsNullOrWhiteSpace(recipient.Email)) continue;
@@ -425,14 +421,12 @@ public sealed class ReportWorker : BackgroundService
                 var tz = ResolveTimezone(recipient.Timezone);
 
                 // WX-78: write the provisional CommittedSend before invoking Claude.
-                // Anchored to a stub ForecastSnapshot (WX-77 will populate it).
+                // Anchored to a per-recipient provisional ForecastSnapshot built
+                // from the recipient's lat/lon via GfsSnapshotBuilder (WX-77).
                 // Persisted now so that a Claude failure still leaves an audit row.
-                if (!stubSnapshotsByStation.TryGetValue(snapshot.StationIcao, out var anchorSnapshot))
-                {
-                    anchorSnapshot = BuildStubForecastSnapshot(snapshot.StationIcao, now);
-                    ctx.ForecastSnapshots.Add(anchorSnapshot);
-                    stubSnapshotsByStation[snapshot.StationIcao] = anchorSnapshot;
-                }
+                var anchorSnapshot = await BuildProvisionalForecastSnapshotAsync(
+                    snapshot.StationIcao, recipient.Latitude, recipient.Longitude, now, ct);
+                ctx.ForecastSnapshots.Add(anchorSnapshot);
                 var committedSend = new CommittedSend
                 {
                     ForecastSnapshot = anchorSnapshot,
@@ -547,21 +541,39 @@ public sealed class ReportWorker : BackgroundService
     // ── persistence helpers ───────────────────────────────────────────────────
 
     /// <summary>
-    /// Build a placeholder <see cref="ForecastSnapshot"/> used by WX-78's
-    /// persistence flow until WX-77 lands the real <c>GfsSnapshotBuilder</c>.
-    /// The body is an empty <see cref="ForecastSnapshotBody"/>; WX-77 will
-    /// swap the call site to populate it with real 6-hour blocks.
+    /// Builds a per-recipient provisional <see cref="ForecastSnapshot"/> for
+    /// the WX-78 audit row and the WX-79 reconciliation pass.  The body is the
+    /// GFS-derived deterministic projection produced by
+    /// <see cref="GfsSnapshotBuilder.Build"/> at the recipient's coordinates
+    /// (WX-77).  When the recipient has no coordinates configured or no GFS
+    /// data is available for the location, the body is empty (schema-version-1,
+    /// no blocks); the auditable shape stays valid.
     /// </summary>
-    /// <param name="stationIcao">ICAO of the station the send anchors against.</param>
-    /// <param name="generatedAtUtc">UTC time stamp for the snapshot's unique key.</param>
-    private static ForecastSnapshot BuildStubForecastSnapshot(string stationIcao, DateTime generatedAtUtc)
+    /// <param name="stationIcao">ICAO of the METAR station the snapshot anchors against.</param>
+    /// <param name="lat">Recipient latitude in decimal degrees North, or <see langword="null"/> when not configured.</param>
+    /// <param name="lon">Recipient longitude in decimal degrees East (negative = West), or <see langword="null"/> when not configured.</param>
+    /// <param name="generatedAtUtc">UTC time stamp for the snapshot's unique-key column.</param>
+    /// <param name="ct">Cancellation token propagated to the GFS hourly-forecast query.</param>
+    /// <returns>An unattached <see cref="ForecastSnapshot"/> ready to be added to the <see cref="WeatherDataContext"/>.</returns>
+    private async Task<ForecastSnapshot> BuildProvisionalForecastSnapshotAsync(
+        string stationIcao, double? lat, double? lon, DateTime generatedAtUtc, CancellationToken ct)
     {
+        GfsHourlyForecast? hourly = null;
+        if (lat.HasValue && lon.HasValue)
+        {
+            hourly = await GfsInterpreter.GetHourlyForecastAsync(lat.Value, lon.Value, _dbOptions, ct);
+        }
+
+        var body = hourly is not null
+            ? GfsSnapshotBuilder.Build(hourly)
+            : new ForecastSnapshotBody();
+
         return new ForecastSnapshot
         {
             StationIcao = stationIcao,
             GeneratedAtUtc = generatedAtUtc,
             SchemaVersion = ForecastSnapshotBody.SchemaVersionCurrent,
-            Body = new ForecastSnapshotBody().Serialize(),
+            Body = body.Serialize(),
         };
     }
 
