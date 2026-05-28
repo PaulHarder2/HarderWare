@@ -16,7 +16,8 @@
       "tests\\MetarParser.Tests\\MetarParser.Tests.csproj",
       "tests\\TafParser.Tests\\TafParser.Tests.csproj",
       "tests\\WxInterp.Tests\\WxInterp.Tests.csproj",
-      "tests\\WxMonitor.Tests\\WxMonitor.Tests.csproj"
+      "tests\\WxMonitor.Tests\\WxMonitor.Tests.csproj",
+      "tests\\WxReport.Tests\\WxReport.Tests.csproj"
     ]
   }
 }
