@@ -326,20 +326,31 @@ To enable it:
    metrics at all (no background HTTP traffic, nothing in the logs
    beyond a single "Telemetry disabled" line at startup).
 
-2. **Start the Docker stack.**  Open a **Command Prompt** (Docker Desktop
+2. **Create the Grafana admin-password file.**  Open Notepad and create
+   `C:\HarderWare\observability\.env` containing a single line:
+   ```
+   GRAFANA_ADMIN_PASSWORD=<your-chosen-strong-password>
+   ```
+   Pick a strong password and save it somewhere safe (a password manager
+   is the cleanest option) — you'll need it to log into Grafana.
+   Without this file, `docker compose up` will refuse to start the stack
+   and print a clear error mentioning `GRAFANA_ADMIN_PASSWORD`.
+
+3. **Start the Docker stack.**  Open a **Command Prompt** (Docker Desktop
    must be running) and type these two commands:
    ```
    cd C:\HarderWare\observability
    docker compose up -d
    ```
 
-3. **Restart WxParserSvc** so it picks up the new configuration.
+4. **Restart WxParserSvc** so it picks up the new configuration.
    Open the **Windows Services app**, find **WxParserSvc**, right-click
    it, choose **Restart**.  (Or in PowerShell as administrator:
    `sc.exe stop WxParserSvc` then `sc.exe start WxParserSvc`.)
 
-4. **Open the dashboards:**
-   - **Grafana:** http://localhost:3000 (admin / grafana)
+5. **Open the dashboards:**
+   - **Grafana:** http://localhost:3000 (log in as `admin` with the
+     password you set in step 2)
    - **Prometheus:** http://localhost:9090
 
 The WxParser dashboard is provisioned automatically and displays in UTC.
