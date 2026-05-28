@@ -202,8 +202,14 @@ public sealed class ReportWorker : BackgroundService
         // WX-86: write the provisional CommittedSend before invoking Claude,
         // mirroring RunCycleAsync.  A Claude failure still leaves an audit
         // row showing what we were about to send for the startup path.
+        // Anchor key falls back to the TAF station when the METAR station is
+        // empty (observationless-snapshot path), so anchor rows never carry an
+        // empty key (WX-79 CR finding).
+        var snapshotKey = !string.IsNullOrWhiteSpace(snapshot.StationIcao)
+            ? snapshot.StationIcao
+            : (snapshot.TafStationIcao ?? "");
         var anchorSnapshot = await BuildProvisionalForecastSnapshotAsync(
-            snapshot.StationIcao, recipient.Latitude, recipient.Longitude, DateTime.UtcNow, ct);
+            snapshotKey, recipient.Latitude, recipient.Longitude, DateTime.UtcNow, ct);
         ctx.ForecastSnapshots.Add(anchorSnapshot);
         var committedSend = new CommittedSend
         {
@@ -218,8 +224,15 @@ public sealed class ReportWorker : BackgroundService
         var reconciler = new ForecastReconciler(
             new ClaudeClient(_httpClient, claude_cfg.ApiKey, claude_cfg.Model, _persona.Text));
 
-        var priorSnapshot = await ctx.ForecastSnapshots
-            .Where(s => s.StationIcao == snapshot.StationIcao && s.Id != anchorSnapshot.Id)
+        // Prior-snapshot lookup is recipient-keyed via CommittedSends so two
+        // recipients sharing a station don't cross-contaminate each other's
+        // reconciliation context.  SentAtUtc.HasValue restricts to snapshots
+        // we actually delivered — Claude-failed audit rows don't count as
+        // priors (WX-79 CR finding).
+        var priorSnapshot = await ctx.CommittedSends
+            .Where(cs => cs.RecipientId == recipient.Id && cs.SentAtUtc.HasValue)
+            .Select(cs => cs.ForecastSnapshot)
+            .Where(s => s.Id != anchorSnapshot.Id)
             .OrderByDescending(s => s.GeneratedAtUtc)
             .FirstOrDefaultAsync(ct);
 
@@ -473,8 +486,15 @@ public sealed class ReportWorker : BackgroundService
                 // Anchored to a per-recipient provisional ForecastSnapshot built
                 // from the recipient's lat/lon via GfsSnapshotBuilder (WX-77).
                 // Persisted now so that a Claude failure still leaves an audit row.
+                // Anchor key falls back to the TAF station when the METAR station
+                // is empty; GeneratedAtUtc is per-insert (not the cycle-scoped
+                // `now`) so two recipients sharing a station don't collide on the
+                // unique index (StationIcao, GeneratedAtUtc) — WX-79 CR findings.
+                var snapshotKey = !string.IsNullOrWhiteSpace(snapshot.StationIcao)
+                    ? snapshot.StationIcao
+                    : (snapshot.TafStationIcao ?? "");
                 var anchorSnapshot = await BuildProvisionalForecastSnapshotAsync(
-                    snapshot.StationIcao, recipient.Latitude, recipient.Longitude, now, ct);
+                    snapshotKey, recipient.Latitude, recipient.Longitude, DateTime.UtcNow, ct);
                 ctx.ForecastSnapshots.Add(anchorSnapshot);
                 var committedSend = new CommittedSend
                 {
@@ -486,8 +506,15 @@ public sealed class ReportWorker : BackgroundService
                 await ctx.SaveChangesAsync(ct);
                 Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): wrote provisional CommittedSend Id={committedSend.Id}.");
 
-                var priorSnapshot = await ctx.ForecastSnapshots
-                    .Where(s => s.StationIcao == snapshot.StationIcao && s.Id != anchorSnapshot.Id)
+                // Prior-snapshot lookup is recipient-keyed via CommittedSends so
+                // two recipients sharing a station don't cross-contaminate each
+                // other's reconciliation context.  SentAtUtc.HasValue restricts
+                // to snapshots we actually delivered — Claude-failed audit rows
+                // don't count as priors (WX-79 CR finding).
+                var priorSnapshot = await ctx.CommittedSends
+                    .Where(cs => cs.RecipientId == recipient.Id && cs.SentAtUtc.HasValue)
+                    .Select(cs => cs.ForecastSnapshot)
+                    .Where(s => s.Id != anchorSnapshot.Id)
                     .OrderByDescending(s => s.GeneratedAtUtc)
                     .FirstOrDefaultAsync(ct);
 
