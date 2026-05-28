@@ -1,5 +1,10 @@
 # Image versions are pinned (WX-17, 2026-04-15) for reproducibility.  Bump
 # deliberately when upgrading; check upstream release notes for breaking changes.
+#
+# This stack requires observability/.env with GRAFANA_ADMIN_PASSWORD set
+# (WX-91, 2026-05-28).  The .env file is gitignored; source of truth for the
+# value is RoboForm.  Without it, `docker compose up` fails fast with a named
+# error rather than silently falling back to a weak default.
 services:
   prometheus:
     image: prom/prometheus:v3.11.2
@@ -29,7 +34,7 @@ services:
       - ./grafana/provisioning:/etc/grafana/provisioning
       - ./grafana/dashboards:/var/lib/grafana/dashboards
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=grafana
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD must be set in observability/.env}
       - GF_USERS_ALLOW_SIGN_UP=false
       - GF_USERS_DEFAULT_TIMEZONE=utc
 

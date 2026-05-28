@@ -1246,7 +1246,7 @@ All services  ──OTLP/HTTP──▶  otel-collector  ──Prometheus scrape�
 |---|---|---|
 | `otel-collector` | `otel/opentelemetry-collector:latest` | Receives OTLP metrics; exposes Prometheus scrape endpoint |
 | `prometheus` | `prom/prometheus:latest` | Scrapes collector; stores time-series data |
-| `grafana` | `grafana/grafana:11.4.0` | Dashboard UI (admin password: `grafana`); default timezone UTC |
+| `grafana` | `grafana/grafana:11.4.0` | Dashboard UI (admin password seeded from `observability/.env`, WX-91); default timezone UTC |
 
 Start the stack from the `observability/` directory:
 ```

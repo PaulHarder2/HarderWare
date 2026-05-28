@@ -240,13 +240,24 @@ registration is a one-time step.
 
 ## Start the observability stack
 
+Before first launch on a fresh clone, create `observability/.env` with the
+Grafana admin password:
+
+```bash
+echo "GRAFANA_ADMIN_PASSWORD=<value-from-RoboForm>" > observability/.env
+```
+
+The file is gitignored (WX-91). Without it, `docker compose up` fails fast
+with a named error rather than booting Grafana with a weak default. The
+source of truth for the password is the Grafana entry in RoboForm.
+
 ```bash
 cd observability
 docker compose up -d
 ```
 
-This starts Prometheus (port 9090) and Grafana (port 3000, admin/grafana).
-The WxParser dashboard is provisioned automatically.
+This starts Prometheus (port 9090) and Grafana (port 3000, admin / value
+from `.env`). The WxParser dashboard is provisioned automatically.
 
 ## Configuration layering
 
