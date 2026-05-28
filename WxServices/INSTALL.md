@@ -119,7 +119,7 @@ Miniconda provides the Python environment for weather map rendering.
 2. Open the **Anaconda Prompt** (click Start, type `Anaconda Prompt`,
    press Enter) and create the wxvis environment:
 
-   ```
+   ```bash
    conda create -n wxvis python=3.11 -y
    conda activate wxvis
    pip install -r C:\HarderWare\WxVis\requirements.txt
@@ -129,7 +129,7 @@ Miniconda provides the Python environment for weather map rendering.
 
 3. Note the full path to the environment's `python.exe`, e.g.:
 
-   ```
+   ```text
    C:\Users\<YourName>\miniconda3\envs\wxvis\python.exe
    ```
 
