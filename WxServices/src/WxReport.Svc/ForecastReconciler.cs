@@ -83,7 +83,7 @@ public sealed class ForecastReconciler
     /// </summary>
     /// <param name="snapshot">Recipient's <see cref="WeatherSnapshot"/>; supplies METAR, TAF periods, GFS daily summary, and per-station metadata used in the rendering rules.</param>
     /// <param name="provisional">GFS-derived provisional snapshot body produced by <see cref="GfsSnapshotBuilder.Build"/> (the first pass).</param>
-    /// <param name="gfsModelRunUtc">UTC initialisation time of the GFS run the provisional was built from; supplied to Claude for the issuance-time comparison in reconciliation step 1.</param>
+    /// <param name="gfsModelRunUtc">UTC initialisation time of the GFS run the provisional was built from; supplied to Claude for the issuance-time comparison in reconciliation step 1.  <see langword="null"/> when no GFS data was available for the recipient's location (provisional body will be empty in that case).</param>
     /// <param name="tafIssuanceUtc">UTC time the active TAF was issued, or <see langword="null"/> when no TAF is available.  Required for reconciliation step 1.</param>
     /// <param name="tafValidToUtc">UTC end of the TAF's validity window, or <see langword="null"/> when no TAF is available.  Helps Claude scope step 1 to in-window blocks.</param>
     /// <param name="prior">Most recently committed <see cref="ForecastSnapshot"/> for this station, or <see langword="null"/> on a first send.  Drives the news judgment in reconciliation step 3.</param>
@@ -101,7 +101,7 @@ public sealed class ForecastReconciler
     public async Task<ReconcileResult> ReconcileAsync(
         WeatherSnapshot snapshot,
         ForecastSnapshotBody provisional,
-        DateTime gfsModelRunUtc,
+        DateTime? gfsModelRunUtc,
         DateTime? tafIssuanceUtc,
         DateTime? tafValidToUtc,
         ForecastSnapshot? prior,
@@ -285,7 +285,7 @@ public sealed class ForecastReconciler
     // SnapshotDescriber), the TAF issuance/validity timestamps, and the
     // prior snapshot's generated-at timestamp + body when present.
     private static string BuildUserMessage(
-        WeatherSnapshot snapshot, ForecastSnapshotBody provisional, DateTime gfsModelRunUtc,
+        WeatherSnapshot snapshot, ForecastSnapshotBody provisional, DateTime? gfsModelRunUtc,
         DateTime? tafIssuanceUtc, DateTime? tafValidToUtc, ForecastSnapshot? prior,
         string recipientName, TimeZoneInfo tz, UnitPreferences units)
     {
@@ -294,7 +294,8 @@ public sealed class ForecastReconciler
           .AppendLine(" and emit your three artifacts via the submit_reconciled_report tool.");
         sb.AppendLine();
 
-        sb.Append("provisional_snapshot.gfs_model_run_utc: ").AppendLine(gfsModelRunUtc.ToString("O"));
+        sb.Append("provisional_snapshot.gfs_model_run_utc: ")
+          .AppendLine(gfsModelRunUtc.HasValue ? gfsModelRunUtc.Value.ToString("O") : "null (no GFS data available)");
         sb.AppendLine("provisional_snapshot.body:");
         sb.AppendLine(provisional.Serialize());
         sb.AppendLine();

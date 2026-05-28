@@ -203,25 +203,54 @@ public sealed class ReportWorker : BackgroundService
         await ctx.SaveChangesAsync(ct);
         Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): wrote provisional CommittedSend Id={committedSend.Id}.");
 
-        var claude = new ClaudeClient(_httpClient, claude_cfg.ApiKey, claude_cfg.Model, _persona.Text);
-        var report = await claude.GenerateReportAsync(
-            snapshot, language, recipient.Name, tz,
+        var reconciler = new ForecastReconciler(
+            new ClaudeClient(_httpClient, claude_cfg.ApiKey, claude_cfg.Model, _persona.Text));
+
+        var priorSnapshot = await ctx.ForecastSnapshots
+            .Where(s => s.StationIcao == snapshot.StationIcao && s.Id != anchorSnapshot.Id)
+            .OrderByDescending(s => s.GeneratedAtUtc)
+            .FirstOrDefaultAsync(ct);
+
+        var provisionalBody = ForecastSnapshotBody.Deserialize(anchorSnapshot.Body);
+
+        var reconcileResult = await reconciler.ReconcileAsync(
+            snapshot, provisionalBody,
+            snapshot.GfsForecast?.ModelRunUtc,
+            snapshot.TafIssuanceUtc, snapshot.TafValidToUtc,
+            priorSnapshot,
+            language, recipient.Name, tz,
             isFirstReport: false,
             scheduledHour: scheduledHour,
             units: recipient.Units,
+            changeSeverity: ChangeSeverity.None,
+            previousMetarIcao: null,
             ct: ct);
 
-        if (report is null)
+        if (reconcileResult is not ReconcileResult.Success success)
         {
-            Logger.Error($"{recipient.Id} {recipient.Email} ({recipient.Name}): Claude returned no report for startup send.  Provisional CommittedSend Id={committedSend.Id} left in place.");
+            var reason = ((ReconcileResult.Failure)reconcileResult).Reason;
+            Logger.Error($"{recipient.Id} {recipient.Email} ({recipient.Name}): Reconciliation failed for startup send: {reason}.  Provisional CommittedSend Id={committedSend.Id} left in place.");
             return;
         }
 
-        // WX-86: Claude succeeded — overwrite the provisional row with the
-        // rendered email body.  ReasoningTrace stays null until WX-79.
+        // WX-79: persist the reconciled snapshot row and re-anchor the
+        // CommittedSend.  EmailBody is the pre-meteogram wrapped HTML
+        // (matches the CommittedSend.EmailBody = Claude artifact convention);
+        // ReasoningTrace is the audit log Claude produced.
+        var reconciledSnapshot = new ForecastSnapshot
+        {
+            StationIcao = snapshot.StationIcao,
+            GeneratedAtUtc = DateTime.UtcNow,
+            SchemaVersion = ForecastSnapshotBody.SchemaVersionCurrent,
+            Body = success.FinalSnapshot.Serialize(),
+        };
+        ctx.ForecastSnapshots.Add(reconciledSnapshot);
+        committedSend.ForecastSnapshot = reconciledSnapshot;
+        var report = WrapAsEmailHtml(success.EmailBody, language, snapshot, tz);
         committedSend.EmailBody = report;
+        committedSend.ReasoningTrace = success.ReasoningTrace;
         await ctx.SaveChangesAsync(ct);
-        Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): overwrote CommittedSend Id={committedSend.Id} with Claude body.");
+        Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): reconciled CommittedSend Id={committedSend.Id} → ForecastSnapshot Id={reconciledSnapshot.Id}.");
 
         var subject = BuildSubject(snapshot, language, tz, recipientName: recipient.Name);
         var plainFallback = SnapshotDescriber.Describe(snapshot, tz, recipient.Units);
@@ -324,7 +353,8 @@ public sealed class ReportWorker : BackgroundService
             foreach (var id in duplicateIds)
                 Logger.Error($"Duplicate recipient Id '{id}' — all entries with this Id will be skipped.");
 
-            var claude = new ClaudeClient(_httpClient, claude_cfg.ApiKey, claude_cfg.Model, _persona.Text);
+            var reconciler = new ForecastReconciler(
+                new ClaudeClient(_httpClient, claude_cfg.ApiKey, claude_cfg.Model, _persona.Text));
             var emailer = new SmtpSender(smtp, "WxReport");
             var resolver = new RecipientResolver(_dbOptions, _httpClient, _config["What3Words:ApiKey"]);
             var now = DateTime.UtcNow;
@@ -437,9 +467,20 @@ public sealed class ReportWorker : BackgroundService
                 await ctx.SaveChangesAsync(ct);
                 Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): wrote provisional CommittedSend Id={committedSend.Id}.");
 
+                var priorSnapshot = await ctx.ForecastSnapshots
+                    .Where(s => s.StationIcao == snapshot.StationIcao && s.Id != anchorSnapshot.Id)
+                    .OrderByDescending(s => s.GeneratedAtUtc)
+                    .FirstOrDefaultAsync(ct);
+
+                var provisionalBody = ForecastSnapshotBody.Deserialize(anchorSnapshot.Body);
+
                 var claudeSw = Stopwatch.StartNew();
-                var report = await claude.GenerateReportAsync(
-                    snapshot, language, recipient.Name, tz,
+                var reconcileResult = await reconciler.ReconcileAsync(
+                    snapshot, provisionalBody,
+                    snapshot.GfsForecast?.ModelRunUtc,
+                    snapshot.TafIssuanceUtc, snapshot.TafValidToUtc,
+                    priorSnapshot,
+                    language, recipient.Name, tz,
                     isFirstReport: reason == "first",
                     scheduledHour: scheduledHour,
                     units: recipient.Units,
@@ -449,18 +490,31 @@ public sealed class ReportWorker : BackgroundService
                 _claudeDuration.Record(claudeSw.Elapsed.TotalSeconds);
                 _claudeCalls.Add(1);
 
-                if (report is null)
+                if (reconcileResult is not ReconcileResult.Success success)
                 {
-                    Logger.Error($"{recipient.Id} {recipient.Email} ({recipient.Name}): Claude returned no report — skipping send.  Provisional CommittedSend Id={committedSend.Id} left in place.");
+                    var failureReason = ((ReconcileResult.Failure)reconcileResult).Reason;
+                    Logger.Error($"{recipient.Id} {recipient.Email} ({recipient.Name}): Reconciliation failed: {failureReason}.  Provisional CommittedSend Id={committedSend.Id} left in place.");
                     continue;
                 }
 
-                // WX-78: Claude succeeded — overwrite the provisional row with
-                // the rendered email body.  ReasoningTrace stays null until
-                // WX-79 wires Claude tool-use returns.
+                // WX-79: persist the reconciled snapshot row and re-anchor the
+                // CommittedSend.  EmailBody is the pre-meteogram wrapped HTML
+                // (matches the CommittedSend.EmailBody = Claude artifact
+                // convention); ReasoningTrace is the audit log Claude produced.
+                var reconciledSnapshot = new ForecastSnapshot
+                {
+                    StationIcao = snapshot.StationIcao,
+                    GeneratedAtUtc = DateTime.UtcNow,
+                    SchemaVersion = ForecastSnapshotBody.SchemaVersionCurrent,
+                    Body = success.FinalSnapshot.Serialize(),
+                };
+                ctx.ForecastSnapshots.Add(reconciledSnapshot);
+                committedSend.ForecastSnapshot = reconciledSnapshot;
+                var report = WrapAsEmailHtml(success.EmailBody, language, snapshot, tz);
                 committedSend.EmailBody = report;
+                committedSend.ReasoningTrace = success.ReasoningTrace;
                 await ctx.SaveChangesAsync(ct);
-                Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): overwrote CommittedSend Id={committedSend.Id} with Claude body.");
+                Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): reconciled CommittedSend Id={committedSend.Id} → ForecastSnapshot Id={reconciledSnapshot.Id}.");
 
                 var subject = BuildSubject(snapshot, language, tz, severity, recipientName: recipient.Name);
                 var plainFallback = SnapshotDescriber.Describe(snapshot, tz, recipient.Units);
@@ -575,6 +629,74 @@ public sealed class ReportWorker : BackgroundService
             SchemaVersion = ForecastSnapshotBody.SchemaVersionCurrent,
             Body = body.Serialize(),
         };
+    }
+
+    // ── email envelope ────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Wraps the inner HTML body produced by Claude in the standard WxReport
+    /// email envelope: <c>&lt;!DOCTYPE html&gt;</c>, language-tagged
+    /// <c>&lt;html&gt;</c>, viewport meta, and the dark-blue footer line
+    /// carrying observation/GFS/version metadata.  The result is the
+    /// pre-meteogram HTML stored on <see cref="CommittedSend.EmailBody"/>;
+    /// meteogram replacement happens immediately after, before SMTP send.
+    /// </summary>
+    /// <param name="innerBodyHtml">Inner content of the <c>&lt;body&gt;</c> tag returned by Claude (no doctype, no html/body wrappers, no markdown).</param>
+    /// <param name="language">Natural-language name of the recipient's language; used to derive the <c>lang</c> attribute via <see cref="LanguageHelper.ToIetfTag"/>.</param>
+    /// <param name="snapshot">Weather snapshot supplying station + observation time + GFS run for the footer line.</param>
+    /// <param name="tz">Recipient's timezone (presently unused — footer timestamps are UTC by Paul's request — but reserved for future per-recipient footer localisation).</param>
+    /// <returns>The fully wrapped HTML ready for meteogram replacement and SMTP delivery.</returns>
+    private static string WrapAsEmailHtml(string innerBodyHtml, string language, WeatherSnapshot snapshot, TimeZoneInfo tz)
+    {
+        _ = tz;
+        var langCode = LanguageHelper.ToIetfTag(language);
+        var footer = BuildFooterHtml(snapshot);
+
+        return $"""
+            <!DOCTYPE html>
+            <html lang="{langCode}">
+            <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            </head>
+            <body style="margin:0;padding:16px;background:#f0f4f8;font-family:Arial,Helvetica,sans-serif;">
+            {innerBodyHtml.Trim()}
+            {footer}
+            </body>
+            </html>
+            """;
+    }
+
+    /// <summary>
+    /// Builds a dark-blue footer div containing the observation timestamp,
+    /// station ICAO, GFS model run cycle, and product version.  Generated
+    /// deterministically in C# so the data is always accurate and consistently
+    /// formatted regardless of report language.  Ported from the pre-WX-79
+    /// <c>ClaudeClient.BuildFooterHtml</c>.
+    /// </summary>
+    /// <param name="snap">Snapshot supplying station, observation time, and GFS run.</param>
+    /// <returns>An HTML string for the footer div.</returns>
+    private static string BuildFooterHtml(WeatherSnapshot snap)
+    {
+        var gfsPart = snap.GfsForecast is { } gfs
+            ? $" &middot; GFS: {gfs.ModelRunUtc:yyyy-MM-dd HHmm}Z"
+            : " &middot; GFS: n/a";
+
+        var obsPart = snap.ObservationAvailable
+            ? $"{snap.StationIcao}: {snap.ObservationTimeUtc:yyyy-MM-dd HHmm}Z"
+            : "No current observation";
+
+        var line = $"{obsPart}{gfsPart}"
+                 + $" &middot; HarderWare WxServices {WxPaths.ProductVersion}";
+
+        return $"""
+            <div style="max-width:600px;margin:0 auto;">
+            <!--meteogram-->
+            <div style="background:#1a3a5c;color:#c8daea;font-size:12px;text-align:center;padding:10px 20px;border-radius:0 0 6px 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+            {line}
+            </div>
+            </div>
+            """;
     }
 
     // ── send-decision logic ───────────────────────────────────────────────────
