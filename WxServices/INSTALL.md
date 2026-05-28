@@ -86,17 +86,21 @@ required `cygwin1.dll` alongside, so it runs under any Windows identity
    unless you install wgrib2 somewhere else.
 
 3. Verify from an ordinary Command Prompt:
+
    ```cmd
    C:\HarderWare\wgrib2\wgrib2.exe --version
    ```
+
    You should see a version line (e.g. `v3.1.3rc2 10/22/2023 ...`).
    wgrib2 exits with code 8 on `--version`; that's normal.
 
 4. For services running as `NT SERVICE\*` accounts, grant each account
    Read + Execute on the folder:
+
    ```powershell
    icacls C:\HarderWare\wgrib2 /grant "NT SERVICE\WxParserSvc:(OI)(CI)RX" /T
    ```
+
    Only `WxParserSvc` actually invokes wgrib2; granting all four
    `NT SERVICE\Wx*Svc` accounts is a harmless convenience.
 
@@ -114,17 +118,21 @@ Miniconda provides the Python environment for weather map rendering.
 
 2. Open the **Anaconda Prompt** (click Start, type `Anaconda Prompt`,
    press Enter) and create the wxvis environment:
+
    ```
    conda create -n wxvis python=3.11 -y
    conda activate wxvis
    pip install -r C:\HarderWare\WxVis\requirements.txt
    ```
+
    (Adjust the path if you chose a different install root.)
 
 3. Note the full path to the environment's `python.exe`, e.g.:
+
    ```
    C:\Users\<YourName>\miniconda3\envs\wxvis\python.exe
    ```
+
    You will need this for configuration.
 
 ### 2.5 Docker Desktop (Optional — for Observability)
@@ -316,21 +324,25 @@ To enable it:
 
 1. **Turn telemetry on in configuration.**  In `appsettings.shared.json`,
    set `Telemetry:Enabled` to `true`:
+
    ```json
    "Telemetry": {
      "Enabled": true,
      "OtlpEndpoint": "http://localhost:4318/v1/metrics"
    }
    ```
+
    If telemetry is left `false`, WxParserSvc will not attempt to export
    metrics at all (no background HTTP traffic, nothing in the logs
    beyond a single "Telemetry disabled" line at startup).
 
 2. **Create the Grafana admin-password file.**  Open Notepad and create
    `C:\HarderWare\observability\.env` containing a single line:
+
    ```properties
    GRAFANA_ADMIN_PASSWORD=<your-chosen-strong-password>
    ```
+
    Pick a strong password and save it somewhere safe (a password manager
    is the cleanest option) — you'll need it to log into Grafana.
    Without this file, `docker compose up` will refuse to start the stack
@@ -338,6 +350,7 @@ To enable it:
 
 3. **Start the Docker stack.**  Open a **Command Prompt** (Docker Desktop
    must be running) and type these two commands:
+
    ```cmd
    cd C:\HarderWare\observability
    docker compose up -d
