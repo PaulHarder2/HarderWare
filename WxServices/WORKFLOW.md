@@ -4,7 +4,7 @@ Last updated 2026-04-23.
 
 This document is the authoritative workflow for landing a change in WxServices. It is a snapshot of the rules Paul and Claude have agreed on over time; when something here conflicts with an ad-hoc direction, this document wins unless the conflict is flagged and the document updated.
 
-The flow intentionally trades speed for audit: every change maps to a Jira ticket, every release maps to an immutable commit hash, and every substantive code change has been seen by a second pair of eyes (CodeRabbit) — and, as of 2026-05-29, by Claude's own `/code-review` first (§7d).
+The flow intentionally trades speed for audit: every change maps to a Jira ticket, every release maps to an immutable commit hash, and every substantive code change has been seen by two reviewers — Claude's `/code-review` first (§7d, as of 2026-05-29), then CodeRabbit as the independent second pass (§9).
 
 ## 1. Groom the ticket
 
@@ -137,7 +137,7 @@ CodeRabbit costs money per review. Handing a paid reviewer code with test failur
 
 **Added 2026-05-29.**
 
-After the §6 walkthrough and the §7a–7c gates — but **before the push opens the PR to CodeRabbit** — run Claude's code-review agents (the `/code-review` skill) over the diff and resolve every valid finding. This applies to every PR, including pure-docs ones where the §7b test run is exempt. CodeRabbit (§9) is then the independent *second* reviewer, not the first.
+After the §6 walkthrough and the §7a–7c gates — but **before the push opens the PR to CodeRabbit** — run Claude's code-review agents (the `/code-review` skill — the interactive local form, which reviews the working-tree diff with no PR required) and resolve every valid finding. This applies to every PR, including pure-docs ones where the §7b test run is exempt. CodeRabbit (§9) is then the independent *second* reviewer, not the first.
 
 Treat Claude's findings exactly as CodeRabbit's (§9): fix the valid ones, decline the bad ones with a written rationale, don't apply every suggestion reflexively. Note this Claude pass is a *self*-review — the same model family that wrote the code — so it does **not** replace CodeRabbit's cross-model independence; it front-loads the catch so the paid, independent reviewer sees already-cleaned code.
 
