@@ -87,6 +87,14 @@ var host = Host.CreateDefaultBuilder(args)
         services.AddSingleton(LoadPersonaPrefix());
         var claudeTimeoutSeconds = ctx.Configuration.GetValue(
             "Claude:TimeoutSeconds", ClaudeConfig.DefaultTimeoutSeconds);
+        if (claudeTimeoutSeconds <= 0)
+        {
+            // HttpClient.Timeout rejects zero/negative with ArgumentOutOfRangeException;
+            // a misconfigured value must not crash service startup.
+            Logger.Warn($"Claude:TimeoutSeconds={claudeTimeoutSeconds} is not positive; " +
+                $"falling back to {ClaudeConfig.DefaultTimeoutSeconds}s.");
+            claudeTimeoutSeconds = ClaudeConfig.DefaultTimeoutSeconds;
+        }
         services.AddHttpClient("WxReport", c =>
         {
             c.DefaultRequestHeaders.Add("User-Agent", "WxReport/1.0");
