@@ -146,19 +146,20 @@ public sealed class ClaudeClient
                 Logger.Info("Claude API request canceled by host shutdown.");
                 return null;
             }
-            catch (Exception ex)
-                when (attempt < maxAttempts && (ex is HttpRequestException || ex is TaskCanceledException))
+            catch (Exception ex) when (attempt < maxAttempts && ex is HttpRequestException)
             {
-                // Transient failures: a connection error, or an HttpClient.Timeout
-                // (surfaced as TaskCanceledException with ct *not* signalled — the
-                // shutdown case is handled above).  WX-100: a reconciliation timeout
-                // used to skip retry and fail the whole pass; treat it as transient.
+                // Connection-level failures are transient — retry with backoff.
                 Logger.Warn($"Claude API request failed (attempt {attempt}/{maxAttempts}): {ex.Message}");
                 await Task.Delay(TimeSpan.FromSeconds(attempt * 2), ct);
                 continue;
             }
             catch (Exception ex)
             {
+                // Includes an HttpClient.Timeout (TaskCanceledException, ct not
+                // signalled).  WX-100: the dedicated Claude client's generous timeout
+                // makes timeouts rare, and a timeout at that ceiling signals a real
+                // stall, not a blip — so fail the pass and recover next cycle rather
+                // than retrying a multi-minute call up to 3x (code-review finding).
                 Logger.Error($"Claude API request failed: {ex}");
                 return null;
             }

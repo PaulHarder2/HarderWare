@@ -32,6 +32,7 @@ public sealed class ReportWorker : BackgroundService
     private readonly IConfiguration _config;
     private readonly DbContextOptions<WeatherDataContext> _dbOptions;
     private readonly HttpClient _httpClient;
+    private readonly HttpClient _claudeHttpClient;
     private readonly PersonaPrefix _persona;
 
     private readonly Meter _meter = new("WxReport.Svc", "1.0.0");
@@ -51,7 +52,7 @@ public sealed class ReportWorker : BackgroundService
     /// <summary>Initializes a new instance of <see cref="ReportWorker"/> with the given dependencies.</summary>
     /// <param name="config">Application configuration used to load the <c>Report</c> config section each cycle.</param>
     /// <param name="dbOptions">EF Core options for opening a <see cref="WeatherDataContext"/> to read/write recipient state.</param>
-    /// <param name="httpClientFactory">Factory used to obtain the named <c>WxReport</c> HTTP client for Claude and geocoding calls.</param>
+    /// <param name="httpClientFactory">Factory for the named <c>WxReport</c> client (geocoding/airport lookups, 100s default timeout) and the <c>Claude</c> client (reconciliation, long timeout per WX-100).</param>
     /// <param name="persona">Author-persona prefix loaded once at startup and threaded into every Claude call.</param>
     public ReportWorker(
         IConfiguration config,
@@ -62,6 +63,9 @@ public sealed class ReportWorker : BackgroundService
         _config = config;
         _dbOptions = dbOptions;
         _httpClient = httpClientFactory.CreateClient("WxReport");
+        // Separate client for Claude: its long reconciliation timeout (WX-100)
+        // must not bleed into the fast-fail geocoding/airport calls on _httpClient.
+        _claudeHttpClient = httpClientFactory.CreateClient("Claude");
         _persona = persona;
         _reportCycles = _meter.CreateCounter<long>("wxreport.cycles.total", description: "Number of completed report cycles.");
         _reportsSent = _meter.CreateCounter<long>("wxreport.sends.total", description: "Number of reports successfully sent.");
@@ -222,7 +226,7 @@ public sealed class ReportWorker : BackgroundService
         Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): wrote provisional CommittedSend Id={committedSend.Id}.");
 
         var reconciler = new ForecastReconciler(
-            new ClaudeClient(_httpClient, claude_cfg.ApiKey, claude_cfg.Model, _persona.Text));
+            new ClaudeClient(_claudeHttpClient, claude_cfg.ApiKey, claude_cfg.Model, _persona.Text));
 
         // Prior-snapshot lookup is recipient-keyed via CommittedSends so two
         // recipients sharing a station don't cross-contaminate each other's
@@ -386,7 +390,7 @@ public sealed class ReportWorker : BackgroundService
                 Logger.Error($"Duplicate recipient Id '{id}' — all entries with this Id will be skipped.");
 
             var reconciler = new ForecastReconciler(
-                new ClaudeClient(_httpClient, claude_cfg.ApiKey, claude_cfg.Model, _persona.Text));
+                new ClaudeClient(_claudeHttpClient, claude_cfg.ApiKey, claude_cfg.Model, _persona.Text));
             var emailer = new SmtpSender(smtp, "WxReport");
             var resolver = new RecipientResolver(_dbOptions, _httpClient, _config["What3Words:ApiKey"]);
             var now = DateTime.UtcNow;
