@@ -4,7 +4,7 @@ Last updated 2026-04-23.
 
 This document is the authoritative workflow for landing a change in WxServices. It is a snapshot of the rules Paul and Claude have agreed on over time; when something here conflicts with an ad-hoc direction, this document wins unless the conflict is flagged and the document updated.
 
-The flow intentionally trades speed for audit: every change maps to a Jira ticket, every release maps to an immutable commit hash, and every line of merged code has been seen by a second pair of eyes (CodeRabbit).
+The flow intentionally trades speed for audit: every change maps to a Jira ticket, every release maps to an immutable commit hash, and every substantive code change has been seen by two reviewers — Claude's `/code-review` first (§7d, as of 2026-05-29), then CodeRabbit as the independent second pass (§9).
 
 ## 1. Groom the ticket
 
@@ -133,6 +133,16 @@ Reason: acceptance criteria are the ticket's explicit contract. Tests verify cod
 
 CodeRabbit costs money per review. Handing a paid reviewer code with test failures wastes both the fee and Paul's follow-up attention. This guardrail keeps the review budget focused on design and correctness issues the tests can't catch.
 
+### 7d. Claude `/code-review` first
+
+**Added 2026-05-29.**
+
+After the §6 walkthrough and the §7a–7c gates — but **before the push opens the PR to CodeRabbit** — run Claude's code-review agents (the `/code-review` skill — the interactive local form, which reviews the working-tree diff with no PR required) and resolve every valid finding. This applies to every PR, including pure-docs ones where the §7b test run is exempt. CodeRabbit (§9) is then the independent *second* reviewer, not the first.
+
+Treat Claude's findings exactly as CodeRabbit's (§9): fix the valid ones, decline the bad ones with a written rationale, don't apply every suggestion reflexively. Note this Claude pass is a *self*-review — the same model family that wrote the code — so it does **not** replace CodeRabbit's cross-model independence; it front-loads the catch so the paid, independent reviewer sees already-cleaned code.
+
+Reason: on WX-100 (2026-05-29) CodeRabbit reviewed and *approved* the first cut, and a Claude `/code-review` pass afterward caught a genuine availability regression CR had missed (a retry-on-timeout change that could stall a report cycle for ~15 minutes and trip the heartbeat-stale monitor). Running Claude first catches that class of issue before a CodeRabbit cycle is spent and before a regression ever reaches an approved state.
+
 ## 8. Push and open PR
 
 ```bash
@@ -146,15 +156,17 @@ PR title is prefixed with `WX-NN:` for traceability. Body has a `## Summary` sec
 
 ## 9. CodeRabbit review
 
-CodeRabbit (OpenAI-backed) auto-reviews within ~5 minutes. Address valid findings with follow-up commits on the same branch. Decline bad suggestions with a clear rationale written into a reply comment — don't apply every suggestion reflexively. Example precedent: the `App.UserAgent` suggestion on PR #2 was declined because it would have inverted the dependency layering.
+CodeRabbit is the **second** reviewer: Claude's `/code-review` (§7d) runs on the working tree before the PR opens, with its findings resolved first. CodeRabbit (OpenAI-backed) then auto-reviews within ~5 minutes. Address valid findings with follow-up commits on the same branch. Decline bad suggestions with a clear rationale written into a reply comment — don't apply every suggestion reflexively. Example precedent: the `App.UserAgent` suggestion on PR #2 was declined because it would have inverted the dependency layering.
 
-AI-reviewer independence matters here: CodeRabbit is OpenAI, Claude is Anthropic. The two-AI split is deliberate — it means the reviewer is not the same model that wrote the code.
+AI-reviewer independence matters here: CodeRabbit is OpenAI, Claude is Anthropic. The two-AI split is deliberate — the Claude pass (§7d) front-loads the catch, but it is a self-review, so CodeRabbit remains the cross-model second opinion on the final diff.
 
 CodeRabbit's behavior is tuned via `.coderabbit.yaml` at the repo root (added in WX-32). The config enables the `assertive` review profile, high-level summaries, Jira-issue linking, effort estimates, and per-path guidance for C#, Python, Markdown, and PowerShell. Tune as needed; changes to the yaml are themselves PRs through this same workflow.
 
 ## 10. Hash-fill commit
 
 When CodeRabbit is clean, add a **separate commit** whose sole change is filling in the v1.N.N commit hash in `VERSIONS.md` (replacing `_pending_`). The hash to record is the SHA of the commit that introduced the `Directory.Build.props` version bump — equivalently, the feature branch's HEAD at the moment *before* this hash-fill commit is added. It is never the hash-fill commit itself, and never the merge commit.
+
+This hash-fill commit does **not** gate on a fresh CodeRabbit review. It is a deterministic `_pending_`→hash substitution, and the substantive change has by now cleared both Claude's `/code-review` (§7d) and CodeRabbit. Merge it as soon as **CI** is green; CodeRabbit still posts its quick check on the commit, but we do not wait on a re-review. *Added 2026-05-29 — supersedes the earlier "wait for CR even on the hash-fill" practice, which added latency with no payoff on a mechanical edit.*
 
 Skip this step for pure-tooling / pure-docs PRs that did not bump the version (see §5).
 
