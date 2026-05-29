@@ -5,6 +5,7 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 
 | Version | Commit  | Date       | Summary |
 |---------|---------|------------|---------|
+| 1.7.1   | _pending_ | 2026-05-29 | Fix WX-79 regression: the reconciliation Claude call inherited the 100s default `HttpClient.Timeout`, but the pass routinely generates for 60-100s, so ~1-in-3 reports were silently dropped (`TaskCanceledException`). Raise the timeout to a tunable `Claude:TimeoutSeconds` (default 300s) and reclassify a non-shutdown timeout as a retryable transient (it previously skipped the retry loop). Histogram boundaries for `wxreport.claude.duration.seconds` extended past the old 60s cap that hid the latency (WX-100) |
 | 1.7.0   | 5845742 | 2026-05-28 | Claude two-pass forecast reconciliation (WX-79): GFS-derived deterministic provisional snapshot now feeds Claude as input to a tool-use reconciliation pass; Claude returns refined snapshot + HTML email body + reasoning trace, all persisted. Replaces the observation-to-observation fingerprint logic that produced the 2026-04-21 KDWH double-send. New `ForecastReconciler` class; `ClaudeClient` simplified to a thin Anthropic wrapper. Six new OTel instruments for token + outcome telemetry |
 | 1.6.2   | 8a5d5ba | 2026-05-27 | GFS → provisional snapshot builder for the WX-47 rearchitecture: new `GfsSnapshotBuilder.Build(GfsHourlyForecast) → ForecastSnapshotBody` projects a GFS hourly forecast into the uniform 6-hour blocks defined by WX-76; `GfsInterpreter` gains `GetHourlyForecastAsync` alongside the existing daily-summary API. No runtime change yet — the builder is library-only until WX-79 wires it into the report path (WX-77) |
 | 1.6.1   | aa01722 | 2026-05-26 | Close two WX-78 audit-trail gaps surfaced by the 1.6.0 deploy log smoke test: `SendStartupReportAsync` now writes the `CommittedSend` lifecycle (was skipping it entirely); the two persistence boundary log lines promoted from Debug to Info so they appear in `wxreport-svc.log` at default log level (WX-86) |
@@ -35,6 +36,16 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 | 1.0.0   | 7a2a268 | 2026-04-07 | Initial versioned release |
 
 ---
+
+## 1.7.1 — Fix reconciliation timeout dropping ~1-in-3 reports (2026-05-29)
+
+- **WX-100 (regression from WX-79).** The reconciliation pass shipped in 1.7.0 reused the `"WxReport"` `HttpClient`, which never set `Timeout` and so inherited .NET's 100s default. Production logs from the first full day (2026-05-29) showed the reconciliation call naturally runs **60-100s** — successes clustered at 84-97s — so the timeout sat flush against the operation's own latency. Result: **11 of 33 reconciliations failed (~33%)**, every failure a `TaskCanceledException` at exactly 100s, and each failure silently skipped that recipient's email for the cycle.
+- **Fix A — headroom.** New tunable `ClaudeConfig.TimeoutSeconds` (config key `Claude:TimeoutSeconds`, default 300s), applied to the named `"WxReport"` client at registration in `Program.cs`. 300s is ~3× the observed worst case.
+- **Fix B — a timeout is a retryable transient.** `ClaudeClient`'s retry loop previously caught only `HttpRequestException`, so a timeout (`TaskCanceledException`) skipped retry and failed the whole pass. It now classifies a `TaskCanceledException` whose request token is *not* signalled as transient (warn + backoff + retry), while a genuine host-shutdown cancellation (token signalled) still aborts immediately without retry.
+- **Observability fix folded in.** The `wxreport.claude.duration.seconds` histogram topped out at a 60s bucket, so every 60-100s reconciliation landed in the overflow bucket — which is *why the latency wall was invisible in telemetry*. Boundaries extended to `[1, 2, 5, 10, 20, 30, 60, 90, 120, 180, 300]` so the tail past the timeout is now visible.
+- **Tests.** Two new cases in `WxReport.Tests` driving `ClaudeClient.InvokeReconciliationAsync` directly: a real client timeout (100ms client timeout against a stalling handler) is retried and recovers; a mid-flight shutdown cancellation aborts on the first attempt with no retry.
+- **Follow-up.** WX-101 will switch the reconciliation call to streaming (SSE), which removes the wall-clock ceiling entirely and supersedes the overall-timeout knob with an idle/read timeout.
+- **PATCH bump.** Bug fix, no behaviour change for recipients (beyond getting the reports they were already supposed to get).
 
 ## 1.7.0 — Claude two-pass forecast reconciliation (2026-05-28)
 

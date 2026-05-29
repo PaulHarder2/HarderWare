@@ -89,10 +89,21 @@ public class SignificantChangeConfig
 /// </summary>
 public class ClaudeConfig
 {
+    /// <summary>Default per-request HTTP timeout for Claude Messages API calls, in seconds.</summary>
+    public const int DefaultTimeoutSeconds = 300;
+
     public string? ApiKey { get; set; }
 
     /// <summary>Claude model ID to use for text generation.</summary>
     public string Model { get; set; } = "claude-haiku-4-5-20251001";
+
+    /// <summary>
+    /// Per-request HTTP timeout for Claude Messages API calls, in seconds.
+    /// The WX-79 reconciliation pass routinely generates for 60-100s; the .NET
+    /// default <c>HttpClient.Timeout</c> of 100s sat right against that latency
+    /// and dropped ~1-in-3 reports (WX-100).  Default gives generous headroom.
+    /// </summary>
+    public int TimeoutSeconds { get; set; } = DefaultTimeoutSeconds;
 }
 
 

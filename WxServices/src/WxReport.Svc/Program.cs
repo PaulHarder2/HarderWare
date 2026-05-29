@@ -61,7 +61,10 @@ var host = Host.CreateDefaultBuilder(args)
                  .AddView("wxreport.claude.duration.seconds",
                     new ExplicitBucketHistogramConfiguration
                     {
-                        Boundaries = [1, 2, 5, 10, 15, 20, 30, 60]
+                        // Reconciliation (WX-79) routinely runs 60-100s; the old
+                        // 60s top bucket hid that latency, masking WX-100.  Extend
+                        // boundaries past the timeout ceiling so the tail is visible.
+                        Boundaries = [1, 2, 5, 10, 20, 30, 60, 90, 120, 180, 300]
                     });
 
                 if (telemetryEnabled)
@@ -82,9 +85,15 @@ var host = Host.CreateDefaultBuilder(args)
 
         services.AddSingleton(dbOptions);
         services.AddSingleton(LoadPersonaPrefix());
+        var claudeTimeoutSeconds = ctx.Configuration.GetValue(
+            "Claude:TimeoutSeconds", ClaudeConfig.DefaultTimeoutSeconds);
         services.AddHttpClient("WxReport", c =>
         {
             c.DefaultRequestHeaders.Add("User-Agent", "WxReport/1.0");
+            // The reconciliation pass (WX-79) routinely generates for 60-100s; the
+            // 100s HttpClient default dropped ~1-in-3 reports (WX-100).  Raise the
+            // ceiling well clear of observed latency.
+            c.Timeout = TimeSpan.FromSeconds(claudeTimeoutSeconds);
         });
         services.AddHostedService<ReportWorker>();
     })
