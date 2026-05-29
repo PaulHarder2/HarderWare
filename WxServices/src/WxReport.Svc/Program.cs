@@ -61,7 +61,12 @@ var host = Host.CreateDefaultBuilder(args)
                  .AddView("wxreport.claude.duration.seconds",
                     new ExplicitBucketHistogramConfiguration
                     {
-                        Boundaries = [1, 2, 5, 10, 15, 20, 30, 60]
+                        // Reconciliation (WX-79) routinely runs 60-100s; the old
+                        // 60s top bucket hid that latency in overflow, masking
+                        // WX-100.  Extend past the 60s cap so the 60-100s tail is
+                        // resolvable; 360 sits above the default 300s timeout so a
+                        // timed-out call is distinguishable from a near-ceiling one.
+                        Boundaries = [1, 2, 5, 10, 20, 30, 60, 90, 120, 180, 300, 360]
                     });
 
                 if (telemetryEnabled)
@@ -82,9 +87,34 @@ var host = Host.CreateDefaultBuilder(args)
 
         services.AddSingleton(dbOptions);
         services.AddSingleton(LoadPersonaPrefix());
+
+        // Geocoding + airport-lookup client. Keeps the 100s HttpClient default so a
+        // stalled upstream lookup fails fast; the Claude timeout below must not bleed
+        // into this path (WX-100 code-review finding).
         services.AddHttpClient("WxReport", c =>
         {
             c.DefaultRequestHeaders.Add("User-Agent", "WxReport/1.0");
+        });
+
+        // Dedicated Claude client. The WX-79 reconciliation pass routinely generates
+        // for 60-100s, so the 100s HttpClient default dropped ~1-in-3 reports
+        // (WX-100). A separate client raises the ceiling without slowing the
+        // fast-fail lookups above. TimeoutSeconds is the single source of truth
+        // (same typed ClaudeConfig the worker binds).
+        var claudeConfig = ctx.Configuration.GetSection("Claude").Get<ClaudeConfig>() ?? new ClaudeConfig();
+        var claudeTimeoutSeconds = claudeConfig.TimeoutSeconds;
+        if (claudeTimeoutSeconds <= 0)
+        {
+            // HttpClient.Timeout rejects zero/negative with ArgumentOutOfRangeException;
+            // a misconfigured value must not crash service startup.
+            Logger.Warn($"Claude:TimeoutSeconds={claudeTimeoutSeconds} is not positive; " +
+                $"falling back to {ClaudeConfig.DefaultTimeoutSeconds}s.");
+            claudeTimeoutSeconds = ClaudeConfig.DefaultTimeoutSeconds;
+        }
+        services.AddHttpClient("Claude", c =>
+        {
+            c.DefaultRequestHeaders.Add("User-Agent", "WxReport/1.0");
+            c.Timeout = TimeSpan.FromSeconds(claudeTimeoutSeconds);
         });
         services.AddHostedService<ReportWorker>();
     })
