@@ -70,17 +70,23 @@ public class ForecastReconcilerTests
     public async Task SkipSend_WhenNotAllowed_ReturnsFailure_NotNotNews()
     {
         // A guaranteed send (scheduled / first / startup) passes allowSkip:false
-        // and forces submit_reconciled_report; if Claude nonetheless returns
-        // skip_send, the reconciler must treat it as malformed (Failure), never
-        // silently suppress a send that must always go out.
+        // and forces submit_reconciled_report. If Claude nonetheless returns
+        // skip_send, the send must never be silently suppressed — the result must
+        // be Failure, not NotNews.
+        //
+        // WX-80: enforcement now lives primarily at the API boundary — ClaudeClient
+        // rejects the un-offered skip_send (returns null) before it reaches the
+        // reconciler, which then surfaces a Failure. The reconciler's own
+        // !allowSkip guard remains as documented defense in depth. Either path
+        // yields the same end-to-end contract this test pins, so we assert the
+        // behavior (Failure, not NotNews) rather than a specific reason string.
         var responseJson = BuildClaudeResponseJsonWithRawInput(
             """{ "reasoning_trace": "trying to skip a guaranteed send" }""",
             toolName: "skip_send");
 
         var result = await RunReconciler(responseJson, allowSkip: false);
 
-        var failure = Assert.IsType<ReconcileResult.Failure>(result);
-        Assert.Contains("non-skippable", failure.Reason);
+        Assert.IsType<ReconcileResult.Failure>(result); // never silently a NotNews
     }
 
     [Fact]

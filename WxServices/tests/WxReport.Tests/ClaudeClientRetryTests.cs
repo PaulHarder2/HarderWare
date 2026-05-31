@@ -34,6 +34,57 @@ public class ClaudeClientRetryTests
         }
         """;
 
+    private const string SkipSendResponse = """
+        {
+          "id": "msg_test",
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            { "type": "tool_use", "id": "toolu_x", "name": "skip_send", "input": { "reasoning_trace": "no news" } }
+          ],
+          "model": "claude-sonnet-4-6",
+          "stop_reason": "tool_use",
+          "usage": { "input_tokens": 1, "output_tokens": 1 }
+        }
+        """;
+
+    [Fact(Timeout = 10_000)]
+    public async Task SkipSend_OnNonSkippableCycle_IsRejectedAtBoundary()
+    {
+        // WX-80: skip_send is only offered when allowSkip is true. A skip_send
+        // returned on a guaranteed (allowSkip=false) cycle violates the contract
+        // ClaudeClient itself set via tool_choice, so the parse layer rejects it
+        // rather than letting an un-offered tool propagate to the reconciler.
+        var handler = new ScriptedHandler((req, ct) => Task.FromResult(
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(SkipSendResponse, Encoding.UTF8, "application/json"),
+            }));
+        var client = new ClaudeClient(new HttpClient(handler), apiKey: "k", model: "claude-sonnet-4-6", personaPrefix: "persona");
+
+        var result = await client.InvokeReconciliationAsync("rules", "payload", allowSkip: false, CancellationToken.None);
+
+        Assert.Null(result); // un-offered tool rejected at the boundary
+    }
+
+    [Fact(Timeout = 10_000)]
+    public async Task SkipSend_OnSkippableCycle_IsAccepted()
+    {
+        // The same skip_send on a cycle that offered it (allowSkip=true) is valid
+        // and flows through as the skip_send tool result.
+        var handler = new ScriptedHandler((req, ct) => Task.FromResult(
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(SkipSendResponse, Encoding.UTF8, "application/json"),
+            }));
+        var client = new ClaudeClient(new HttpClient(handler), apiKey: "k", model: "claude-sonnet-4-6", personaPrefix: "persona");
+
+        var result = await client.InvokeReconciliationAsync("rules", "payload", allowSkip: true, CancellationToken.None);
+
+        Assert.NotNull(result);
+        Assert.Equal("skip_send", result!.ToolName);
+    }
+
     [Fact(Timeout = 10_000)]
     public async Task Timeout_IsNotRetried_AndFailsThePass()
     {

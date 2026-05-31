@@ -218,13 +218,20 @@ public sealed class ClaudeClient
                 return null;
             }
 
+            // Enforce the allowSkip contract on the way back: skip_send is only a
+            // valid response on a cycle that offered it (see toolChoice above). A
+            // skip_send returned when allowSkip is false is a contract violation —
+            // reject it here at the API boundary rather than let an un-offered tool
+            // propagate downstream. This makes ClaudeReconciliationResult.ToolName
+            // always a tool that was actually permitted for this cycle.
             var toolUse = parsed?.Content?.FirstOrDefault(
                 c => c.Type == "tool_use"
-                  && (c.Name == "submit_reconciled_report" || c.Name == "skip_send"));
+                  && (c.Name == "submit_reconciled_report"
+                   || (allowSkip && c.Name == "skip_send")));
 
             if (toolUse?.Name is null)
             {
-                Logger.Error("Claude response contained no submit_reconciled_report or skip_send tool_use block.");
+                Logger.Error($"Claude response contained no valid tool_use block (allowSkip={allowSkip}).");
                 return null;
             }
 
