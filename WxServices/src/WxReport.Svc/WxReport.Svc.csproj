@@ -7,6 +7,11 @@
     <AssemblyName>WxReport.Svc</AssemblyName>
     <WindowsService>true</WindowsService>
   </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="WxReport.Tests" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="8.0.0" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="8.0.0" />

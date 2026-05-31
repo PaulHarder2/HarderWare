@@ -5,6 +5,7 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 
 | Version | Commit  | Date       | Summary |
 |---------|---------|------------|---------|
+| 1.8.0   | c0ff6d6 | 2026-05-31 | Trigger consolidation (WX-47 epic): a unified input-identity pre-filter plus a Claude invalidation gate replace the observation-to-observation `SnapshotFingerprint` behind the 2026-04-21 KDWH double-send. All four trigger sources (METAR/TAF/GFS arrival, scheduled) flow through one path; Claude can now decline to send via a two-tool choice (`submit_reconciled_report` / `skip_send`). New additive `RecipientState.LastClaudeInputHash` column drives the pre-filter. New trigger/skip telemetry; dead `SignificantChangeConfig` removed (WX-80) |
 | 1.7.1   | 2064964 | 2026-05-29 | Fix WX-79 regression: the reconciliation Claude call inherited the 100s default `HttpClient.Timeout`, but the pass routinely generates for 60-100s, so ~1-in-3 reports were silently dropped (`TaskCanceledException`). Give Claude its own `HttpClient` with a tunable `Claude:TimeoutSeconds` ceiling (default 300s), kept off the shared geocoding/airport-lookup client so those still fail fast. A timeout fails the pass and recovers next cycle (not retried — retrying a multi-minute call would stall the cycle). Histogram boundaries for `wxreport.claude.duration.seconds` extended past the old 60s cap that hid the latency (WX-100) |
 | 1.7.0   | 5845742 | 2026-05-28 | Claude two-pass forecast reconciliation (WX-79): GFS-derived deterministic provisional snapshot now feeds Claude as input to a tool-use reconciliation pass; Claude returns refined snapshot + HTML email body + reasoning trace, all persisted. Replaces the observation-to-observation fingerprint logic that produced the 2026-04-21 KDWH double-send. New `ForecastReconciler` class; `ClaudeClient` simplified to a thin Anthropic wrapper. Six new OTel instruments for token + outcome telemetry |
 | 1.6.2   | 8a5d5ba | 2026-05-27 | GFS → provisional snapshot builder for the WX-47 rearchitecture: new `GfsSnapshotBuilder.Build(GfsHourlyForecast) → ForecastSnapshotBody` projects a GFS hourly forecast into the uniform 6-hour blocks defined by WX-76; `GfsInterpreter` gains `GetHourlyForecastAsync` alongside the existing daily-summary API. No runtime change yet — the builder is library-only until WX-79 wires it into the report path (WX-77) |
@@ -36,6 +37,15 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 | 1.0.0   | 7a2a268 | 2026-04-07 | Initial versioned release |
 
 ---
+
+## 1.8.0 — Trigger consolidation: unified pre-filter + Claude invalidation gate (2026-05-31)
+
+- **WX-80 (WX-47 epic).** Replaces the observation-to-observation `SnapshotFingerprint` — the logic behind the 2026-04-21 KDWH double-send, which fired an unscheduled update for rain the prior forecast had already predicted — with a two-part pipeline that all four trigger sources (METAR/TAF/GFS arrival, scheduled) flow through.
+- **Cheap C# pre-filter.** Each cycle computes a raw *input identity* (METAR obs-time + station, TAF issuance, GFS model run), persisted per recipient in the new `RecipientState.LastClaudeInputHash` column. If nothing advanced since the last Claude call, the cycle is a no-op and no tokens are spent. Significance is no longer judged in C# — the deleted fingerprint's thresholds were exactly the judgment-in-C# that misfired on KDWH.
+- **Claude invalidation gate.** When an input has advanced, Claude chooses between two tools: `submit_reconciled_report` (send) or `skip_send` (not news). Scheduled/first/startup sends force the submit tool and can never be skipped. On a "not news" result the input hash is recorded and the reasoning trace persisted, but no email is sent and the committed snapshot does not advance — so the anchor always equals "what we last told the recipient" (the prior-snapshot lookup already filters on `SentAtUtc`).
+- **Schema.** Additive `RecipientState.LastClaudeInputHash` via EF migration `AddRecipientStateClaudeInputHash`; applied automatically on next startup. The now-vestigial `LastSnapshotFingerprint` column is left for WX-83 to drop.
+- **Cleanup / observability.** Deleted `SnapshotFingerprint` (and its `WxInterp.Tests`); extracted the `ChangeSeverity` enum (dropped the now-meaningless `Minor`; `Alert` reserved for WX-81's tiering). Removed the dead `SignificantChangeConfig` and its appsettings block. New OTel instruments: `wxreport.triggers.total` (tagged by `trigger.type`), `wxreport.prefilter.skips.total`, `wxreport.claude.not_news.total`.
+- **MINOR bump.** New feature, backwards-compatible; the additive column needs no data migration.
 
 ## 1.7.1 — Fix reconciliation timeout dropping ~1-in-3 reports (2026-05-29)
 

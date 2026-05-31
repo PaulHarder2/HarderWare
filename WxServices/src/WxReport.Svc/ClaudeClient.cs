@@ -30,9 +30,11 @@ public sealed record TokenUsage(
 /// <see cref="MetarParser.Data.Entities.ForecastSnapshotBody.Deserialize"/>,
 /// which enforces both shape and the precipPhenomenon-iff-non-none invariant.
 /// </summary>
+/// <param name="ToolName">Name of the tool Claude invoked — <c>"submit_reconciled_report"</c> to send, or <c>"skip_send"</c> for the WX-80 "not news" outcome.</param>
 /// <param name="ToolUseInput">JsonElement representing the tool_use block's <c>input</c> object.</param>
 /// <param name="Tokens">Token-usage metadata extracted from the response's <c>usage</c> block.</param>
 public sealed record ClaudeReconciliationResult(
+    string ToolName,
     JsonElement ToolUseInput,
     TokenUsage Tokens);
 
@@ -71,12 +73,15 @@ public sealed class ClaudeClient
     /// <summary>
     /// Invokes Claude with tool-use enabled to perform the WX-79 forecast
     /// reconciliation pass.  Builds the three-block system prompt (persona +
-    /// reconciliation guidance + per-recipient rendering rules), forces the
-    /// <c>submit_reconciled_report</c> tool, posts to the Anthropic Messages
-    /// API with retry/backoff, and returns the raw tool_use input JSON plus
-    /// token-usage metadata.  Returns <see langword="null"/> on HTTP failure,
-    /// on a missing or wrong-named tool_use block, or on response-parse
-    /// failure.
+    /// reconciliation guidance + per-recipient rendering rules), offers the
+    /// reconciliation tool(s) per <paramref name="allowSkip"/> (forcing
+    /// <c>submit_reconciled_report</c> when <see langword="false"/>, or offering
+    /// it alongside <c>skip_send</c> with <c>tool_choice: any</c> when
+    /// <see langword="true"/>), posts to the Anthropic Messages API with
+    /// retry/backoff, and returns the selected tool's name and raw tool_use
+    /// input JSON plus token-usage metadata.  Returns <see langword="null"/> on
+    /// HTTP failure, on a missing or wrong-named tool_use block, or on
+    /// response-parse failure.
     ///
     /// <para>
     /// Schema validation of the returned input is the caller's responsibility:
@@ -95,14 +100,33 @@ public sealed class ClaudeClient
     /// User message carrying the structured payload (provisional snapshot,
     /// observation, forecast, prior snapshot, with their timestamps).
     /// </param>
+    /// <param name="allowSkip">
+    /// When <see langword="true"/> (unscheduled, arrival-triggered cycles), both
+    /// the <c>submit_reconciled_report</c> and <c>skip_send</c> tools are offered
+    /// and <c>tool_choice</c> is <c>any</c>, so Claude may decline to send.  When
+    /// <see langword="false"/> (scheduled / first / startup sends), only
+    /// <c>submit_reconciled_report</c> is offered and forced — those cycles are
+    /// always worth sending and must never be skipped.
+    /// </param>
     /// <param name="ct">Cancellation token propagated to the HTTP request so that host shutdown aborts an in-flight API call.</param>
-    /// <returns>The parsed tool_use input plus token usage on success; <see langword="null"/> on transport, schema, or parse failure.</returns>
+    /// <returns>The chosen tool's name and input plus token usage on success; <see langword="null"/> on transport, schema, or parse failure.</returns>
     /// <sideeffects>Makes an HTTP POST request to the Anthropic Messages API. Writes error log entries on failure.</sideeffects>
     public async Task<ClaudeReconciliationResult?> InvokeReconciliationAsync(
         string perRecipientSystemPrompt,
         string userMessageText,
+        bool allowSkip,
         CancellationToken ct = default)
     {
+        // Arrival-triggered cycles offer Claude the invalidation gate (submit OR
+        // skip, tool_choice "any"); scheduled/first/startup cycles force the
+        // submit tool so a guaranteed send can never be skipped.
+        var tools = allowSkip
+            ? new[] { ReconcilerPrompts.BuildSubmitReconciledReportTool(), ReconcilerPrompts.BuildSkipSendTool() }
+            : new[] { ReconcilerPrompts.BuildSubmitReconciledReportTool() };
+        object toolChoice = allowSkip
+            ? new { type = "any" }
+            : new { type = "tool", name = "submit_reconciled_report" };
+
         var request = new
         {
             model = _model,
@@ -118,8 +142,8 @@ public sealed class ClaudeClient
                 },
                 new { type = "text", text = perRecipientSystemPrompt },
             },
-            tools = new[] { ReconcilerPrompts.BuildSubmitReconciledReportTool() },
-            tool_choice = new { type = "tool", name = "submit_reconciled_report" },
+            tools,
+            tool_choice = toolChoice,
             messages = new[]
             {
                 new { role = "user", content = userMessageText },
@@ -194,14 +218,33 @@ public sealed class ClaudeClient
                 return null;
             }
 
-            var toolUse = parsed?.Content?.FirstOrDefault(
-                c => c.Type == "tool_use" && c.Name == "submit_reconciled_report");
+            // Enforce the allowSkip contract on the way back: a valid reconciliation
+            // response is exactly one tool_use block whose name is permitted for this
+            // cycle. submit_reconciled_report is always permitted; skip_send only when
+            // allowSkip is true (the cycle offered it via toolChoice above). Anything
+            // else — zero blocks, more than one block (a self-contradictory submit+skip
+            // would otherwise be resolved by arbitrary ordering), or an un-offered tool
+            // — is malformed output: reject it here at the API boundary (return null ->
+            // caller's Failure path) rather than guess. This keeps the choice
+            // deterministic and makes ClaudeReconciliationResult.ToolName always a tool
+            // that was actually permitted for this cycle.
+            var toolUseBlocks = parsed?.Content?.Where(c => c.Type == "tool_use").ToList();
 
-            if (toolUse is null)
+            if (toolUseBlocks is not { Count: 1 })
             {
-                Logger.Error("Claude response contained no submit_reconciled_report tool_use block.");
+                Logger.Error($"Claude response had {toolUseBlocks?.Count ?? 0} tool_use block(s); expected exactly 1 (allowSkip={allowSkip}).");
                 return null;
             }
+
+            var toolName = toolUseBlocks[0].Name;
+            if (toolName is not ("submit_reconciled_report" or "skip_send")
+                || (toolName == "skip_send" && !allowSkip))
+            {
+                Logger.Error($"Claude response tool_use '{toolName}' is not permitted for allowSkip={allowSkip}.");
+                return null;
+            }
+
+            var toolUse = toolUseBlocks[0];
 
             var usage = parsed?.Usage;
             var tokens = new TokenUsage(
@@ -210,7 +253,7 @@ public sealed class ClaudeClient
                 CacheReadInputTokens: usage?.CacheReadInputTokens ?? 0,
                 CacheCreationInputTokens: usage?.CacheCreationInputTokens ?? 0);
 
-            return new ClaudeReconciliationResult(toolUse.Input, tokens);
+            return new ClaudeReconciliationResult(toolName, toolUse.Input, tokens);
         }
     }
 
