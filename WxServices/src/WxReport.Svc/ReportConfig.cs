@@ -35,51 +35,7 @@ public class ReportConfig
     /// </summary>
     public float PrecipRateThresholdMmHr { get; set; } = 0.1f;
 
-    public SignificantChangeConfig SignificantChange { get; set; } = new();
     public List<RecipientConfig> Recipients { get; set; } = [];
-}
-
-/// <summary>Thresholds used by <see cref="SnapshotFingerprint"/> to determine whether a weather change is significant enough to trigger an unscheduled report.</summary>
-public class SignificantChangeConfig
-{
-    /// <summary>Wind speed at or above this threshold (kt) is considered a significant condition.</summary>
-    public int WindThresholdKt { get; set; } = 25;
-
-    /// <summary>Visibility below this threshold (SM) is considered a significant condition.</summary>
-    public double VisibilityThresholdSm { get; set; } = 3.0;
-
-    /// <summary>
-    /// Minimum change in the GFS forecast high temperature (°F) between report
-    /// cycles that triggers an unscheduled alert.  The fingerprint buckets the
-    /// forecast high to this resolution, so a change of this many degrees or more
-    /// will produce a different fingerprint.  Default 15°F.
-    /// </summary>
-    public int ForecastHighChangeDegF { get; set; } = 15;
-
-    /// <summary>
-    /// Minimum change in the GFS forecast low temperature (°F) between report
-    /// cycles that triggers an unscheduled alert.  The fingerprint buckets the
-    /// forecast low to this resolution, so a change of this many degrees or more
-    /// will produce a different fingerprint.  Default 15°F.
-    /// </summary>
-    public int ForecastLowChangeDegF { get; set; } = 15;
-
-    /// <summary>
-    /// Surface-based CAPE threshold in J/kg above which a day is considered to
-    /// carry meaningful thunderstorm potential in the fingerprint.  When any
-    /// forecast day crosses this threshold (or stops crossing it), the fingerprint
-    /// changes and an unscheduled alert is sent.  Default 1000 J/kg.
-    /// </summary>
-    public int CapeThresholdJKg { get; set; } = 1000;
-
-    /// <summary>
-    /// Maximum precipitation rate in mm/hr that any GFS forecast day must reach or
-    /// exceed to be counted as having meaningful precipitation in the fingerprint
-    /// (<c>GP</c> field).  When any day crosses this threshold (or drops below it),
-    /// the fingerprint changes and an unscheduled update may be sent.
-    /// Default 2.0 mm/hr (moderate rain).
-    /// </summary>
-    public float GfsPrecipThresholdMmHr { get; set; } = 2.0f;
 }
 
 /// <summary>

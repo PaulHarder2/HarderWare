@@ -30,9 +30,11 @@ public sealed record TokenUsage(
 /// <see cref="MetarParser.Data.Entities.ForecastSnapshotBody.Deserialize"/>,
 /// which enforces both shape and the precipPhenomenon-iff-non-none invariant.
 /// </summary>
+/// <param name="ToolName">Name of the tool Claude invoked — <c>"submit_reconciled_report"</c> to send, or <c>"skip_send"</c> for the WX-80 "not news" outcome.</param>
 /// <param name="ToolUseInput">JsonElement representing the tool_use block's <c>input</c> object.</param>
 /// <param name="Tokens">Token-usage metadata extracted from the response's <c>usage</c> block.</param>
 public sealed record ClaudeReconciliationResult(
+    string ToolName,
     JsonElement ToolUseInput,
     TokenUsage Tokens);
 
@@ -95,14 +97,33 @@ public sealed class ClaudeClient
     /// User message carrying the structured payload (provisional snapshot,
     /// observation, forecast, prior snapshot, with their timestamps).
     /// </param>
+    /// <param name="allowSkip">
+    /// When <see langword="true"/> (unscheduled, arrival-triggered cycles), both
+    /// the <c>submit_reconciled_report</c> and <c>skip_send</c> tools are offered
+    /// and <c>tool_choice</c> is <c>any</c>, so Claude may decline to send.  When
+    /// <see langword="false"/> (scheduled / first / startup sends), only
+    /// <c>submit_reconciled_report</c> is offered and forced — those cycles are
+    /// always worth sending and must never be skipped.
+    /// </param>
     /// <param name="ct">Cancellation token propagated to the HTTP request so that host shutdown aborts an in-flight API call.</param>
-    /// <returns>The parsed tool_use input plus token usage on success; <see langword="null"/> on transport, schema, or parse failure.</returns>
+    /// <returns>The chosen tool's name and input plus token usage on success; <see langword="null"/> on transport, schema, or parse failure.</returns>
     /// <sideeffects>Makes an HTTP POST request to the Anthropic Messages API. Writes error log entries on failure.</sideeffects>
     public async Task<ClaudeReconciliationResult?> InvokeReconciliationAsync(
         string perRecipientSystemPrompt,
         string userMessageText,
+        bool allowSkip,
         CancellationToken ct = default)
     {
+        // Arrival-triggered cycles offer Claude the invalidation gate (submit OR
+        // skip, tool_choice "any"); scheduled/first/startup cycles force the
+        // submit tool so a guaranteed send can never be skipped.
+        var tools = allowSkip
+            ? new[] { ReconcilerPrompts.BuildSubmitReconciledReportTool(), ReconcilerPrompts.BuildSkipSendTool() }
+            : new[] { ReconcilerPrompts.BuildSubmitReconciledReportTool() };
+        object toolChoice = allowSkip
+            ? new { type = "any" }
+            : new { type = "tool", name = "submit_reconciled_report" };
+
         var request = new
         {
             model = _model,
@@ -118,8 +139,8 @@ public sealed class ClaudeClient
                 },
                 new { type = "text", text = perRecipientSystemPrompt },
             },
-            tools = new[] { ReconcilerPrompts.BuildSubmitReconciledReportTool() },
-            tool_choice = new { type = "tool", name = "submit_reconciled_report" },
+            tools,
+            tool_choice = toolChoice,
             messages = new[]
             {
                 new { role = "user", content = userMessageText },
@@ -195,11 +216,12 @@ public sealed class ClaudeClient
             }
 
             var toolUse = parsed?.Content?.FirstOrDefault(
-                c => c.Type == "tool_use" && c.Name == "submit_reconciled_report");
+                c => c.Type == "tool_use"
+                  && (c.Name == "submit_reconciled_report" || c.Name == "skip_send"));
 
-            if (toolUse is null)
+            if (toolUse?.Name is null)
             {
-                Logger.Error("Claude response contained no submit_reconciled_report tool_use block.");
+                Logger.Error("Claude response contained no submit_reconciled_report or skip_send tool_use block.");
                 return null;
             }
 
@@ -210,7 +232,7 @@ public sealed class ClaudeClient
                 CacheReadInputTokens: usage?.CacheReadInputTokens ?? 0,
                 CacheCreationInputTokens: usage?.CacheCreationInputTokens ?? 0);
 
-            return new ClaudeReconciliationResult(toolUse.Input, tokens);
+            return new ClaudeReconciliationResult(toolUse.Name, toolUse.Input, tokens);
         }
     }
 

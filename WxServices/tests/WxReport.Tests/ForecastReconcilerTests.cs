@@ -46,6 +46,41 @@ public class ForecastReconcilerTests
         Assert.Equal(10, success.Tokens.CacheCreationInputTokens);
     }
 
+    // ── invalidation gate: skip_send ────────────────────────────────────────
+
+    [Fact]
+    public async Task SkipSend_WhenAllowed_ReturnsNotNews_WithTraceAndTokens()
+    {
+        var responseJson = BuildClaudeResponseJsonWithRawInput(
+            """{ "reasoning_trace": "Observed rain matches the prior forecast — not news." }""",
+            inputTokens: 70, outputTokens: 12,
+            cacheReadInputTokens: 60, cacheCreationInputTokens: 0,
+            toolName: "skip_send");
+
+        var result = await RunReconciler(responseJson, allowSkip: true);
+
+        var notNews = Assert.IsType<ReconcileResult.NotNews>(result);
+        Assert.Equal("Observed rain matches the prior forecast — not news.", notNews.ReasoningTrace);
+        Assert.Equal(70, notNews.Tokens.InputTokens);
+        Assert.Equal(12, notNews.Tokens.OutputTokens);
+        Assert.Equal(60, notNews.Tokens.CacheReadInputTokens);
+    }
+
+    [Fact]
+    public async Task SkipSend_MissingReasoningTrace_ReturnsFailure()
+    {
+        // skip_send with no reasoning_trace fails schema validation rather than
+        // silently suppressing a send with no recorded rationale.
+        var responseJson = BuildClaudeResponseJsonWithRawInput(
+            """{ }""",
+            toolName: "skip_send");
+
+        var result = await RunReconciler(responseJson, allowSkip: true);
+
+        var failure = Assert.IsType<ReconcileResult.Failure>(result);
+        Assert.Contains("Schema validation failed", failure.Reason);
+    }
+
     // ── failure: transport ──────────────────────────────────────────────────
 
     [Fact]
@@ -202,13 +237,13 @@ public class ForecastReconcilerTests
 
     // ── helpers ─────────────────────────────────────────────────────────────
 
-    private static async Task<ReconcileResult> RunReconciler(string anthropicResponseJson)
+    private static async Task<ReconcileResult> RunReconciler(string anthropicResponseJson, bool allowSkip = false)
         => await RunReconciler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent(anthropicResponseJson, Encoding.UTF8, "application/json"),
-        });
+        }, allowSkip);
 
-    private static async Task<ReconcileResult> RunReconciler(Func<HttpRequestMessage, HttpResponseMessage> respond)
+    private static async Task<ReconcileResult> RunReconciler(Func<HttpRequestMessage, HttpResponseMessage> respond, bool allowSkip = false)
     {
         var http = new HttpClient(new StubHandler(respond));
         var claude = new ClaudeClient(http, apiKey: "test-key", model: "claude-sonnet-4-6", personaPrefix: "Persona text.");
@@ -228,7 +263,8 @@ public class ForecastReconcilerTests
             scheduledHour: 7,
             units: null,
             changeSeverity: ChangeSeverity.None,
-            previousMetarIcao: null);
+            previousMetarIcao: null,
+            allowSkip: allowSkip);
     }
 
     private static WeatherSnapshot BuildSnapshot() => new()
@@ -261,7 +297,8 @@ public class ForecastReconcilerTests
         int inputTokens = 10,
         int outputTokens = 10,
         int cacheReadInputTokens = 0,
-        int cacheCreationInputTokens = 0)
+        int cacheCreationInputTokens = 0,
+        string toolName = "submit_reconciled_report")
     {
         return $$"""
             {
@@ -272,7 +309,7 @@ public class ForecastReconcilerTests
                 {
                   "type": "tool_use",
                   "id": "toolu_test",
-                  "name": "submit_reconciled_report",
+                  "name": "{{toolName}}",
                   "input": {{toolInputJson}}
                 }
               ],

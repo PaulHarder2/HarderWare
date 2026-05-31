@@ -56,10 +56,25 @@ internal static class ReconcilerPrompts
              projection prevails. Adjust the earliest block(s) accordingly.
 
           3. Compare against prior_snapshot, if present. The diff is the basis for
-             the "is this news?" judgment — surface meaningful divergences in
-             email_body; suppress trivial drift.
+             the "is this news?" judgment. If the new evidence is genuinely worth
+             telling the recipient about, produce a report. If it merely confirms
+             or trivially drifts from what the prior_snapshot already committed —
+             e.g. observed weather the prior forecast already predicted — it is
+             NOT news.
 
-        Return all three artifacts via the submit_reconciled_report tool:
+        You have two tools, and you must call exactly one of them:
+
+          • submit_reconciled_report — when this cycle is worth sending. Return all
+            three artifacts (below).
+          • skip_send — when this cycle is NOT news worth sending: return only a
+            reasoning_trace explaining why no email is warranted. No email is sent
+            and the committed forecast is left unchanged.
+
+        The per-recipient instructions state whether skipping is permitted for
+        this cycle. Scheduled and first sends are always worth sending — never
+        skip them. Only unscheduled, arrival-triggered cycles may be skipped.
+
+        When you DO send, return all three artifacts via the submit_reconciled_report tool:
 
           • final_snapshot — your refined ForecastSnapshotBody. Same schema as
             provisional_snapshot: schemaVersion 1, ordered 6-hour blocks aligned
@@ -71,7 +86,7 @@ internal static class ReconcilerPrompts
           • reasoning_trace — brief audit log naming what changed at each of the
             three reconciliation steps above. Plain English.
 
-        Always emit via the tool. Never return free text outside the tool call.
+        Always act via one of the two tools. Never return free text outside a tool call.
         """;
 
     /// <summary>
@@ -145,6 +160,37 @@ internal static class ReconcilerPrompts
                 {
                     type = "string",
                     description = "Brief audit log naming what changed at each of the three reconciliation steps.",
+                },
+            },
+        },
+    };
+
+    /// <summary>
+    /// Builds the Anthropic tool definition for the WX-80 invalidation gate's
+    /// "not news" outcome.  Offered alongside
+    /// <see cref="BuildSubmitReconciledReportTool"/> only on unscheduled,
+    /// arrival-triggered cycles (where skipping is permitted); Claude calls it
+    /// when the new evidence is not worth emailing.  It returns just a
+    /// reasoning_trace — no email, no snapshot — and the caller suppresses the
+    /// send while leaving the committed forecast unchanged.
+    /// </summary>
+    /// <returns>The serialisable tool definition for the skip-send decision.</returns>
+    internal static object BuildSkipSendTool() => new
+    {
+        name = "skip_send",
+        description = "Use when the new evidence is NOT news worth emailing the recipient — "
+            + "e.g. it confirms or only trivially drifts from the prior committed forecast. "
+            + "No email is sent and the committed forecast is left unchanged.",
+        input_schema = new
+        {
+            type = "object",
+            required = new[] { "reasoning_trace" },
+            properties = new
+            {
+                reasoning_trace = new
+                {
+                    type = "string",
+                    description = "Brief plain-English explanation of why this cycle's evidence is not news worth sending.",
                 },
             },
         },

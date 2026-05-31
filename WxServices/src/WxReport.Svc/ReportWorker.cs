@@ -46,6 +46,9 @@ public sealed class ReportWorker : BackgroundService
     private readonly Counter<long> _claudeCacheCreationTokens;
     private readonly Counter<long> _claudeToolUseSuccess;
     private readonly Counter<long> _claudeMalformedOutput;
+    private readonly Counter<long> _triggers;
+    private readonly Counter<long> _preFilterSkips;
+    private readonly Counter<long> _claudeNotNews;
     private readonly Histogram<double> _cycleDuration;
     private readonly Histogram<double> _claudeDuration;
 
@@ -77,6 +80,9 @@ public sealed class ReportWorker : BackgroundService
         _claudeCacheCreationTokens = _meter.CreateCounter<long>("wxreport.claude.cache.write.total", description: "Total input tokens written to the cache (cache misses with cacheable prefix).");
         _claudeToolUseSuccess = _meter.CreateCounter<long>("wxreport.claude.tool_use.success.total", description: "Number of reconciliation calls returning a parseable three-artifact tool_use response.");
         _claudeMalformedOutput = _meter.CreateCounter<long>("wxreport.claude.malformed_output.total", description: "Number of reconciliation calls failing schema validation (skip-and-log path).");
+        _triggers = _meter.CreateCounter<long>("wxreport.triggers.total", description: "Send triggers fired, tagged by trigger.type (first, scheduled, metar, taf, gfs, multiple).");
+        _preFilterSkips = _meter.CreateCounter<long>("wxreport.prefilter.skips.total", description: "Cycles where no input advanced since the last Claude call, so the call was skipped (pre-filter no-op).");
+        _claudeNotNews = _meter.CreateCounter<long>("wxreport.claude.not_news.total", description: "Reconciliation calls where Claude's invalidation gate judged the evidence not news and suppressed the send.");
         _cycleDuration = _meter.CreateHistogram<double>("wxreport.cycle.duration.seconds", unit: "s", description: "Duration of each report cycle.");
         _claudeDuration = _meter.CreateHistogram<double>("wxreport.claude.duration.seconds", unit: "s", description: "Duration of each Claude API call.");
     }
@@ -253,7 +259,18 @@ public sealed class ReportWorker : BackgroundService
             units: recipient.Units,
             changeSeverity: ChangeSeverity.None,
             previousMetarIcao: null,
+            allowSkip: false, // startup is an unconditional verification send — never skippable
             ct: ct);
+
+        if (reconcileResult is ReconcileResult.NotNews)
+        {
+            // Unreachable today: startup forces submit_reconciled_report (allowSkip:false),
+            // so Claude cannot choose skip_send.  Guard defensively so a future change that
+            // makes skipping reachable degrades to a logged no-op instead of an
+            // InvalidCastException on the Failure cast below.
+            Logger.Warn($"{recipient.Id} {recipient.Email} ({recipient.Name}): unexpected skip_send on a guaranteed startup send — no email sent. Provisional CommittedSend Id={committedSend.Id} left in place.");
+            return;
+        }
 
         if (reconcileResult is not ReconcileResult.Success success)
         {
@@ -335,7 +352,7 @@ public sealed class ReportWorker : BackgroundService
         }
 
         state.LastUnscheduledSentUtc = DateTime.UtcNow;
-        state.LastSnapshotFingerprint = SnapshotFingerprint.Compute(snapshot, cfg.SignificantChange);
+        state.LastClaudeInputHash = InputIdentity.From(snapshot).Serialize();
         state.LastMetarIcao = snapshot.StationIcao;
 
         try { await ctx.SaveChangesAsync(ct); }
@@ -454,20 +471,35 @@ public sealed class ReportWorker : BackgroundService
                 else
                     Logger.Warn($"{recipient.Id} {recipient.Email} ({recipient.Name}): no GFS forecast available.");
 
-                var fingerprint = SnapshotFingerprint.Compute(snapshot, cfg.SignificantChange);
-                var (shouldSend, reason, severity) = ShouldSend(recipient, state, fingerprint, cfg, now,
-                    observationAvailable: snapshot.ObservationAvailable);
+                // WX-80: the cheap pre-filter compares this cycle's raw input
+                // identity (observation time, TAF issuance, GFS run) against the
+                // identity at the last Claude call.  Significance is Claude's job,
+                // not a C# fingerprint's — this only avoids paying tokens to ask
+                // Claude about evidence it has already seen.
+                var inputIdentity = InputIdentity.From(snapshot);
+                var inputHash = inputIdentity.Serialize();
+                var (shouldSend, reason, severity, allowSkip) = ShouldSend(recipient, state, inputIdentity, cfg, now);
 
-                if (shouldSend && reason == "change" && state.LastSnapshotFingerprint is not null)
+                if (!shouldSend)
                 {
-                    var changeDesc = SnapshotFingerprint.DescribeChanges(
-                        state.LastSnapshotFingerprint, fingerprint, snapshot, cfg.SignificantChange);
-                    Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): unscheduled send triggered — {changeDesc}");
+                    if (reason == "prefilter-skip")
+                    {
+                        _preFilterSkips.Add(1);
+                        Logger.Debug($"{recipient.Id} {recipient.Email} ({recipient.Name}): no input changed since last Claude call — pre-filter skip.");
+                    }
+                    continue;
                 }
 
-                if (!shouldSend) continue;
+                // Label the trigger for telemetry: scheduled/first by reason, an
+                // arrival by which input(s) advanced since the last Claude call.
+                var triggerType = reason == "change"
+                    ? ArrivalLabel(inputIdentity.ChangedSourcesSince(state.LastClaudeInputHash))
+                    : reason;
+                _triggers.Add(1, new KeyValuePair<string, object?>("trigger.type", triggerType));
 
-                Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): generating {reason} report.");
+                Logger.Info(reason == "change"
+                    ? $"{recipient.Id} {recipient.Email} ({recipient.Name}): {triggerType} arrival — invoking Claude invalidation gate."
+                    : $"{recipient.Id} {recipient.Email} ({recipient.Name}): generating {reason} report.");
 
                 // Detect station switch: if the METAR source changed from what was used in
                 // the last report, pass the previous ICAO to Claude so it can note the change.
@@ -536,9 +568,37 @@ public sealed class ReportWorker : BackgroundService
                     units: recipient.Units,
                     changeSeverity: severity,
                     previousMetarIcao: previousMetarIcao,
+                    allowSkip: allowSkip,
                     ct: ct);
                 _claudeDuration.Record(claudeSw.Elapsed.TotalSeconds);
                 _claudeCalls.Add(1);
+
+                // WX-80 invalidation gate: Claude judged the arrival not news.
+                // Record the input hash so the next identical cycle pre-filter-skips,
+                // persist the reasoning trace for diagnosability, but do NOT send and
+                // do NOT advance last-sent or the committed anchor — the provisional
+                // keeps SentAtUtc = null, so it never becomes a prior snapshot.
+                if (reconcileResult is ReconcileResult.NotNews notNews)
+                {
+                    _claudeNotNews.Add(1);
+                    _claudeInputTokens.Add(notNews.Tokens.InputTokens);
+                    _claudeOutputTokens.Add(notNews.Tokens.OutputTokens);
+                    _claudeCacheReadTokens.Add(notNews.Tokens.CacheReadInputTokens);
+                    _claudeCacheCreationTokens.Add(notNews.Tokens.CacheCreationInputTokens);
+
+                    state.LastClaudeInputHash = inputHash;
+                    committedSend.ReasoningTrace = notNews.ReasoningTrace;
+                    try
+                    {
+                        await ctx.SaveChangesAsync(ct);
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        Logger.Error($"{recipient.Id} {recipient.Email} ({recipient.Name}): failed to persist not-news state for CommittedSend Id={committedSend.Id}.", ex);
+                    }
+                    Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): Claude judged the {triggerType} arrival not news — no send. Provisional CommittedSend Id={committedSend.Id} left unsent.");
+                    continue;
+                }
 
                 if (reconcileResult is not ReconcileResult.Success success)
                 {
@@ -615,14 +675,16 @@ public sealed class ReportWorker : BackgroundService
                 else
                     state.LastUnscheduledSentUtc = now;
 
-                // Only capture the fingerprint and station when we have real observation
-                // data; otherwise leave the last-known values in place so change-detection
+                // Record the evidence identity behind this send so the next
+                // unchanged cycle pre-filter-skips. Set on every actual send,
+                // even observationless ones (TAF/GFS identity still advances).
+                state.LastClaudeInputHash = inputHash;
+
+                // Only capture the station when we have real observation data;
+                // otherwise leave the last-known value so station-switch detection
                 // resumes correctly once observations return.
                 if (snapshot.ObservationAvailable)
-                {
-                    state.LastSnapshotFingerprint = fingerprint;
                     state.LastMetarIcao = snapshot.StationIcao;
-                }
 
                 try
                 {
@@ -759,55 +821,65 @@ public sealed class ReportWorker : BackgroundService
     // ── send-decision logic ───────────────────────────────────────────────────
 
     /// <summary>
-    /// Determines whether a weather report should be sent to a recipient right now,
-    /// and why.  Three send triggers are evaluated in priority order:
+    /// Determines whether to invoke Claude for a recipient right now, and why.
+    /// Triggers are evaluated in priority order:
     /// <list type="number">
-    ///   <item><b>first</b> — recipient has never received any report.</item>
+    ///   <item><b>first</b> — recipient has never received any report. Always sends.</item>
     ///   <item><b>scheduled</b> — the daily scheduled hour has arrived in the
-    ///   recipient's timezone and no scheduled report has been sent today.</item>
-    ///   <item><b>change</b> — conditions have changed significantly since the
-    ///   last send and the minimum inter-send gap has elapsed.</item>
+    ///   recipient's timezone and no scheduled report has been sent in that slot.
+    ///   Always sends; bypasses the pre-filter.</item>
+    ///   <item><b>change</b> — an input (METAR/TAF/GFS) has advanced since the
+    ///   last Claude call (the WX-80 pre-filter passed). Routes to the Claude
+    ///   invalidation gate, which may still judge it not news.</item>
     /// </list>
+    /// The minimum inter-send gap is enforced before either non-first trigger.
+    /// Unlike the pre-WX-80 logic, significance is <em>not</em> decided here — the
+    /// pre-filter only asks "has any input changed?"; "is it worth sending?" is
+    /// Claude's call via <paramref name="state"/>'s gate.
     /// </summary>
     /// <param name="recipient">Recipient config providing timezone and scheduled-send-hour.</param>
-    /// <param name="state">Persisted state recording when reports were last sent and the last known fingerprint.</param>
-    /// <param name="fingerprint">Current-conditions fingerprint computed by <see cref="SnapshotFingerprint.Compute"/>.</param>
+    /// <param name="state">Persisted state: last send times and the last-Claude-call input hash.</param>
+    /// <param name="inputIdentity">This cycle's raw input identity (observation time, TAF issuance, GFS run).</param>
     /// <param name="cfg">Report config providing the minimum inter-send gap and default scheduled hour.</param>
     /// <param name="nowUtc">The UTC clock time to use as "now" for all comparisons.</param>
     /// <returns>
-    /// A tuple of (<c>send</c>, <c>reason</c>, <c>severity</c>).
-    /// When <c>send</c> is <see langword="false"/>, <c>reason</c> is an empty string
-    /// and <c>severity</c> is <see cref="ChangeSeverity.None"/>.
-    /// When <see langword="true"/>, <c>reason</c> is <c>"first"</c>, <c>"scheduled"</c>,
-    /// or <c>"change"</c>, and <c>severity</c> is the classified change severity
-    /// (<see cref="ChangeSeverity.None"/> for scheduled/first sends).
-    /// A <c>"change"</c> send with <see cref="ChangeSeverity.Minor"/> is suppressed
-    /// — the method returns <c>send = false</c> in that case.
+    /// A tuple of (<c>send</c>, <c>reason</c>, <c>severity</c>, <c>allowSkip</c>).
+    /// <c>reason</c> is <c>"first"</c>, <c>"scheduled"</c>, or <c>"change"</c> when
+    /// sending; <c>"gap"</c> (rate-limited) or <c>"prefilter-skip"</c> (no input
+    /// advanced) when not. <c>allowSkip</c> is <see langword="true"/> only for the
+    /// <c>"change"</c> trigger, enabling Claude's "not news" gate; scheduled and
+    /// first sends are guaranteed and never skippable.
     /// </returns>
-    private static (bool send, string reason, ChangeSeverity severity) ShouldSend(
+    internal static (bool send, string reason, ChangeSeverity severity, bool allowSkip) ShouldSend(
         RecipientConfig recipient,
         RecipientState state,
-        string fingerprint,
+        InputIdentity inputIdentity,
         ReportConfig cfg,
-        DateTime nowUtc,
-        bool observationAvailable = true)
+        DateTime nowUtc)
     {
         // Brand-new recipient — send an introductory report on the first cycle.
         if (!state.LastScheduledSentUtc.HasValue && !state.LastUnscheduledSentUtc.HasValue)
-            return (true, "first", ChangeSeverity.None);
+            return (true, "first", ChangeSeverity.None, false);
 
         var minGap = TimeSpan.FromMinutes(cfg.MinGapMinutes);
 
-        // Last time any report was sent to this recipient.
-        var lastSentUtc = state.LastScheduledSentUtc > state.LastUnscheduledSentUtc
-            ? state.LastScheduledSentUtc
-            : state.LastUnscheduledSentUtc;
+        // Last time any report was sent to this recipient.  Use Max (which
+        // ignores nulls) rather than a nullable `>` ternary: `a > b` is false
+        // whenever either operand is null, so the old ternary returned the null
+        // side when only one timestamp was set — skipping the gap check after a
+        // scheduled-only send and letting an arrival fire with no rate limit.
+        var lastSentUtc = new[] { state.LastScheduledSentUtc, state.LastUnscheduledSentUtc }.Max();
 
-        // Enforce minimum gap.
+        // Enforce minimum gap.  Note: LastClaudeInputHash is deliberately NOT
+        // touched on this path — an input that advanced during the gap must still
+        // read as "changed" once the gap clears, so the deferred send fires on the
+        // next eligible cycle.  A future refactor must not move the hash update
+        // into the gap path, or post-gap arrival sends would be silently swallowed
+        // (covered by ShouldSendTests.PostGap_AdvancedInput_SendsOnceGapClears).
         if (lastSentUtc.HasValue && (nowUtc - lastSentUtc.Value) < minGap)
-            return (false, "", ChangeSeverity.None);
+            return (false, "gap", ChangeSeverity.None, false);
 
-        // ── Scheduled send ────────────────────────────────────────────────────
+        // ── Scheduled send (always sends; bypasses the pre-filter) ────────────
 
         var tz = ResolveTimezone(recipient.Timezone);
         var localNow = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, tz);
@@ -829,31 +901,44 @@ public sealed class ReportWorker : BackgroundService
                 && state.LastScheduledSentUtc.Value >= slotStartUtc;
 
             if (!sentAfterSlotStart)
-                return (true, "scheduled", ChangeSeverity.None);
+                return (true, "scheduled", ChangeSeverity.None, false);
         }
 
-        // ── Significant-change send ───────────────────────────────────────────
+        // ── Arrival pre-filter (WX-80) ────────────────────────────────────────
 
-        // When no current observation is available, the observation portion of
-        // the fingerprint is meaningless (wind/visibility/phenomena default to
-        // "calm/good/none").  Suppress change-triggered sends in that case to
-        // avoid false-clearing alerts, and resume on the next cycle that has
-        // real data.
-        if (observationAvailable
-            && state.LastSnapshotFingerprint is not null
-            && state.LastSnapshotFingerprint != fingerprint)
-        {
-            var severity = SnapshotFingerprint.ClassifyChange(state.LastSnapshotFingerprint, fingerprint);
-            if (severity == ChangeSeverity.Minor)
-            {
-                Logger.Debug($"Fingerprint changed but severity is Minor — suppressing unscheduled send.");
-                return (false, "", ChangeSeverity.Minor);
-            }
-            return (true, "change", severity);
-        }
+        // Cheap C# gate: has any input advanced since the last Claude call? If
+        // not, skip the call entirely. If so, route to the Claude invalidation
+        // gate (allowSkip) — Claude decides whether the advance is news worth an
+        // unscheduled email. This replaces the deleted observation-to-observation
+        // fingerprint, which decided significance in C# and misfired on KDWH.
+        var changed = inputIdentity.ChangedSourcesSince(state.LastClaudeInputHash);
+        if (changed.Count == 0)
+            return (false, "prefilter-skip", ChangeSeverity.None, false);
 
-        return (false, "", ChangeSeverity.None);
+        return (true, "change", ChangeSeverity.Update, true);
     }
+
+    /// <summary>
+    /// Maps the set of inputs that advanced this cycle to a single low-cardinality
+    /// telemetry label for the <c>wxreport.triggers.total</c> counter's
+    /// <c>trigger.type</c> tag: the lone source's name when exactly one advanced,
+    /// <c>"multiple"</c> when several did, or <c>"unknown"</c> for the (not
+    /// expected on a change trigger) empty set.
+    /// </summary>
+    /// <param name="changed">The sources whose identity advanced since the last Claude call.</param>
+    /// <returns>A stable label: <c>"metar"</c>, <c>"taf"</c>, <c>"gfs"</c>, <c>"multiple"</c>, or <c>"unknown"</c>.</returns>
+    private static string ArrivalLabel(IReadOnlyList<TriggerSource> changed) => changed.Count switch
+    {
+        0 => "unknown",
+        1 => changed[0] switch
+        {
+            TriggerSource.Metar => "metar",
+            TriggerSource.Taf => "taf",
+            TriggerSource.Gfs => "gfs",
+            _ => "unknown",
+        },
+        _ => "multiple",
+    };
 
     /// <summary>
     /// Resolves an IANA or Windows timezone ID to a <see cref="TimeZoneInfo"/>.

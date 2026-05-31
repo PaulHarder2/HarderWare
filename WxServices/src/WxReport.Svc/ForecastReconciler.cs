@@ -34,10 +34,22 @@ public abstract record ReconcileResult
         TokenUsage Tokens) : ReconcileResult;
 
     /// <summary>
-    /// Reconciliation did not produce a valid three-artifact result.  Reasons
-    /// include API transport failure, missing or wrong-named tool_use block,
-    /// malformed tool input JSON, schema-violation in <c>final_snapshot</c>,
-    /// or violation of the precipPhenomenon-iff-non-none invariant.
+    /// The WX-80 invalidation gate fired: Claude judged the cycle's evidence
+    /// not news worth sending and called <c>skip_send</c> instead of
+    /// <c>submit_reconciled_report</c>.  No email is sent and the committed
+    /// forecast is left unchanged; the caller persists
+    /// <see cref="ReasoningTrace"/> on the provisional row for diagnosability.
+    /// Only reachable on cycles invoked with <c>allowSkip = true</c>.
+    /// </summary>
+    /// <param name="ReasoningTrace">Claude's plain-English explanation of why this cycle is not news.</param>
+    /// <param name="Tokens">Token-usage metadata for the call (a skip still costs tokens).</param>
+    public sealed record NotNews(string ReasoningTrace, TokenUsage Tokens) : ReconcileResult;
+
+    /// <summary>
+    /// Reconciliation did not produce a valid result.  Reasons include API
+    /// transport failure, missing or wrong-named tool_use block, malformed tool
+    /// input JSON, schema-violation in <c>final_snapshot</c>, or violation of the
+    /// precipPhenomenon-iff-non-none invariant.
     /// </summary>
     /// <param name="Reason">Short human-readable description of why reconciliation failed.</param>
     public sealed record Failure(string Reason) : ReconcileResult;
@@ -95,8 +107,9 @@ public sealed class ForecastReconciler
     /// <param name="units">Unit preferences for the rendered email; defaults to US customary when <see langword="null"/>.</param>
     /// <param name="changeSeverity">Severity of the trigger that caused this send (alert, update, or none).</param>
     /// <param name="previousMetarIcao">ICAO of the previous report's station, when it differs from the current snapshot's station; <see langword="null"/> when no station change occurred.</param>
+    /// <param name="allowSkip">When <see langword="true"/> (unscheduled, arrival-triggered cycles), Claude may decline to send via the <c>skip_send</c> tool, yielding a <see cref="ReconcileResult.NotNews"/>.  When <see langword="false"/> (scheduled / first / startup), the send is guaranteed and skipping is not offered.</param>
     /// <param name="ct">Cancellation token propagated to the underlying HTTP call.</param>
-    /// <returns>A <see cref="ReconcileResult.Success"/> on a clean three-artifact return; a <see cref="ReconcileResult.Failure"/> otherwise.</returns>
+    /// <returns>A <see cref="ReconcileResult.Success"/> on a clean three-artifact return; a <see cref="ReconcileResult.NotNews"/> when Claude skips an arrival-triggered send; a <see cref="ReconcileResult.Failure"/> otherwise.</returns>
     /// <sideeffects>Makes one HTTP POST to the Anthropic Messages API via <see cref="ClaudeClient.InvokeReconciliationAsync"/>.  Writes error log entries on schema-validation failure.</sideeffects>
     public async Task<ReconcileResult> ReconcileAsync(
         WeatherSnapshot snapshot,
@@ -113,26 +126,35 @@ public sealed class ForecastReconciler
         UnitPreferences? units,
         ChangeSeverity changeSeverity,
         string? previousMetarIcao,
+        bool allowSkip,
         CancellationToken ct = default)
     {
         units ??= new UnitPreferences();
 
         var perRecipientPrompt = BuildPerRecipientSystemPrompt(
-            snapshot, language, units, isFirstReport, scheduledHour, changeSeverity, previousMetarIcao);
+            snapshot, language, units, isFirstReport, scheduledHour, changeSeverity, previousMetarIcao, allowSkip);
 
         var userMessage = BuildUserMessage(
             snapshot, provisional, gfsModelRunUtc, tafIssuanceUtc, tafValidToUtc, prior, recipientName, tz, units);
 
-        var apiResult = await _claude.InvokeReconciliationAsync(perRecipientPrompt, userMessage, ct);
+        var apiResult = await _claude.InvokeReconciliationAsync(perRecipientPrompt, userMessage, allowSkip, ct);
         if (apiResult is null)
         {
             return new ReconcileResult.Failure(
-                "Claude API call failed or returned no submit_reconciled_report tool_use block.");
+                "Claude API call failed or returned no submit_reconciled_report or skip_send tool_use block.");
         }
 
         try
         {
             var input = apiResult.ToolUseInput;
+
+            // Invalidation gate: Claude chose skip_send — not news worth sending.
+            if (apiResult.ToolName == "skip_send")
+            {
+                var skipTrace = input.GetProperty("reasoning_trace").GetString()
+                    ?? throw new JsonException("reasoning_trace is null");
+                return new ReconcileResult.NotNews(skipTrace, apiResult.Tokens);
+            }
 
             var emailBody = input.GetProperty("email_body").GetString()
                 ?? throw new JsonException("email_body is null");
@@ -160,7 +182,8 @@ public sealed class ForecastReconciler
     // intermediate-state only.
     private static string BuildPerRecipientSystemPrompt(
         WeatherSnapshot snapshot, string language, UnitPreferences units,
-        bool isFirstReport, int scheduledHour, ChangeSeverity changeSeverity, string? previousMetarIcao)
+        bool isFirstReport, int scheduledHour, ChangeSeverity changeSeverity, string? previousMetarIcao,
+        bool allowSkip)
     {
         var currentConditionsSubtitle = BuildCurrentConditionsSubtitle(snapshot);
         var currentConditionsHeading = currentConditionsSubtitle is null
@@ -209,6 +232,14 @@ public sealed class ForecastReconciler
                 + "what has changed (e.g. a forecast risk that has appeared, or a significant temperature shift). ",
             _ => "",
         };
+
+        var skipInstruction = allowSkip
+            ? "This is an unscheduled, arrival-triggered cycle. Apply the invalidation gate: if the "
+              + "new evidence is not news worth sending — it confirms, or only trivially drifts from, "
+              + "what the prior committed forecast already told this recipient — call the skip_send tool "
+              + "with a brief reasoning_trace instead of producing a report. Only call "
+              + "submit_reconciled_report when the change is genuinely worth an unscheduled email. "
+            : "This cycle is always worth sending — call submit_reconciled_report. Do not call skip_send. ";
 
         return
             $"You are producing a weather report email in HTML format, written in {language}, "
@@ -274,7 +305,8 @@ public sealed class ForecastReconciler
             + "snow, sleet, or a wintry mix is possible and mention it if so. "
             + welcomeInstruction
             + stationChangeInstruction
-            + changeAlertInstruction;
+            + changeAlertInstruction
+            + skipInstruction;
     }
 
     // ── user message ─────────────────────────────────────────────────────────
