@@ -36,6 +36,9 @@ public class InputIdentityTests
     [InlineData("M:|T:none|G:none")]      // empty value
     [InlineData("M:m1|bogus|G:g1")]       // segment with no "K:" prefix
     [InlineData("X:m1|T:t1|G:g1")]        // unrecognized key
+    [InlineData("M:a|M:b|G:g1")]          // duplicate key (only 3 segments, T missing)
+    [InlineData("M:m1|T:t1")]             // too few segments
+    [InlineData("M:m1|T:t1|G:g1|G:g2")]   // too many segments
     [InlineData("garbage")]
     public void Parse_MalformedSegment_FailsClosedToAllNone(string serialized)
     {

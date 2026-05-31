@@ -73,12 +73,15 @@ public sealed class ClaudeClient
     /// <summary>
     /// Invokes Claude with tool-use enabled to perform the WX-79 forecast
     /// reconciliation pass.  Builds the three-block system prompt (persona +
-    /// reconciliation guidance + per-recipient rendering rules), forces the
-    /// <c>submit_reconciled_report</c> tool, posts to the Anthropic Messages
-    /// API with retry/backoff, and returns the raw tool_use input JSON plus
-    /// token-usage metadata.  Returns <see langword="null"/> on HTTP failure,
-    /// on a missing or wrong-named tool_use block, or on response-parse
-    /// failure.
+    /// reconciliation guidance + per-recipient rendering rules), offers the
+    /// reconciliation tool(s) per <paramref name="allowSkip"/> (forcing
+    /// <c>submit_reconciled_report</c> when <see langword="false"/>, or offering
+    /// it alongside <c>skip_send</c> with <c>tool_choice: any</c> when
+    /// <see langword="true"/>), posts to the Anthropic Messages API with
+    /// retry/backoff, and returns the selected tool's name and raw tool_use
+    /// input JSON plus token-usage metadata.  Returns <see langword="null"/> on
+    /// HTTP failure, on a missing or wrong-named tool_use block, or on
+    /// response-parse failure.
     ///
     /// <para>
     /// Schema validation of the returned input is the caller's responsibility:

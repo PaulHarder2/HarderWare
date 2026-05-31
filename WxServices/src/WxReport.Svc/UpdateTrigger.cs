@@ -72,26 +72,30 @@ public readonly record struct InputIdentity(string Metar, string Taf, string Gfs
     /// <returns>The parsed identity.</returns>
     public static InputIdentity Parse(string? serialized)
     {
+        // Fail closed: anything other than exactly the three expected "K:V"
+        // segments (M, T, G — each present once, each with a non-empty value)
+        // discards the whole identity to the all-"none" baseline.  A corrupt or
+        // partial stored hash then reads as differing from any real input,
+        // routing the cycle to Claude rather than silently skipping a send on a
+        // half-parsed identity.  Serialize always emits exactly "M:..|T:..|G:..".
         if (string.IsNullOrWhiteSpace(serialized)) return new(None, None, None);
-        string m = None, t = None, g = None;
-        foreach (var part in serialized.Split('|'))
+        var parts = serialized.Split('|');
+        if (parts.Length != 3) return new(None, None, None);
+
+        string? m = null, t = null, g = null;
+        foreach (var part in parts)
         {
-            // Fail closed: any malformed segment (no "K:" prefix, empty value, or
-            // unrecognized key) discards the whole identity to the all-"none"
-            // baseline.  A corrupt stored hash then reads as differing from any
-            // real input, routing the cycle to Claude rather than silently
-            // skipping a send on a half-parsed identity.
             if (part.Length < 3 || part[1] != ':') return new(None, None, None);
             var val = part[2..];
             switch (part[0])
             {
-                case 'M': m = val; break;
-                case 'T': t = val; break;
-                case 'G': g = val; break;
-                default: return new(None, None, None);
+                case 'M' when m is null: m = val; break;
+                case 'T' when t is null: t = val; break;
+                case 'G' when g is null: g = val; break;
+                default: return new(None, None, None); // unknown or duplicate key
             }
         }
-        return new(m, t, g);
+        return new(m, t, g); // all three are non-null here: 3 parts, no dupes, no unknowns
     }
 
     /// <summary>
