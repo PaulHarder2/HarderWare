@@ -218,22 +218,33 @@ public sealed class ClaudeClient
                 return null;
             }
 
-            // Enforce the allowSkip contract on the way back: skip_send is only a
-            // valid response on a cycle that offered it (see toolChoice above). A
-            // skip_send returned when allowSkip is false is a contract violation —
-            // reject it here at the API boundary rather than let an un-offered tool
-            // propagate downstream. This makes ClaudeReconciliationResult.ToolName
-            // always a tool that was actually permitted for this cycle.
-            var toolUse = parsed?.Content?.FirstOrDefault(
-                c => c.Type == "tool_use"
-                  && (c.Name == "submit_reconciled_report"
-                   || (allowSkip && c.Name == "skip_send")));
+            // Enforce the allowSkip contract on the way back: a valid reconciliation
+            // response is exactly one tool_use block whose name is permitted for this
+            // cycle. submit_reconciled_report is always permitted; skip_send only when
+            // allowSkip is true (the cycle offered it via toolChoice above). Anything
+            // else — zero blocks, more than one block (a self-contradictory submit+skip
+            // would otherwise be resolved by arbitrary ordering), or an un-offered tool
+            // — is malformed output: reject it here at the API boundary (return null ->
+            // caller's Failure path) rather than guess. This keeps the choice
+            // deterministic and makes ClaudeReconciliationResult.ToolName always a tool
+            // that was actually permitted for this cycle.
+            var toolUseBlocks = parsed?.Content?.Where(c => c.Type == "tool_use").ToList();
 
-            if (toolUse?.Name is null)
+            if (toolUseBlocks is not { Count: 1 })
             {
-                Logger.Error($"Claude response contained no valid tool_use block (allowSkip={allowSkip}).");
+                Logger.Error($"Claude response had {toolUseBlocks?.Count ?? 0} tool_use block(s); expected exactly 1 (allowSkip={allowSkip}).");
                 return null;
             }
+
+            var toolName = toolUseBlocks[0].Name;
+            if (toolName is not ("submit_reconciled_report" or "skip_send")
+                || (toolName == "skip_send" && !allowSkip))
+            {
+                Logger.Error($"Claude response tool_use '{toolName}' is not permitted for allowSkip={allowSkip}.");
+                return null;
+            }
+
+            var toolUse = toolUseBlocks[0];
 
             var usage = parsed?.Usage;
             var tokens = new TokenUsage(
@@ -242,7 +253,7 @@ public sealed class ClaudeClient
                 CacheReadInputTokens: usage?.CacheReadInputTokens ?? 0,
                 CacheCreationInputTokens: usage?.CacheCreationInputTokens ?? 0);
 
-            return new ClaudeReconciliationResult(toolUse.Name, toolUse.Input, tokens);
+            return new ClaudeReconciliationResult(toolName, toolUse.Input, tokens);
         }
     }
 

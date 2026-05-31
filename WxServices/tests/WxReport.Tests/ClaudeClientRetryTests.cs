@@ -85,6 +85,41 @@ public class ClaudeClientRetryTests
         Assert.Equal("skip_send", result!.ToolName);
     }
 
+    private const string DualToolUseResponse = """
+        {
+          "id": "msg_test",
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            { "type": "tool_use", "id": "toolu_a", "name": "skip_send", "input": { "reasoning_trace": "no news" } },
+            { "type": "tool_use", "id": "toolu_b", "name": "submit_reconciled_report", "input": { "ok": true } }
+          ],
+          "model": "claude-sonnet-4-6",
+          "stop_reason": "tool_use",
+          "usage": { "input_tokens": 1, "output_tokens": 1 }
+        }
+        """;
+
+    [Fact(Timeout = 10_000)]
+    public async Task MultipleToolUseBlocks_AreRejected_NotOrderDependent()
+    {
+        // WX-80: a self-contradictory response carrying BOTH submit_reconciled_report
+        // and skip_send is malformed — the parser must reject it (exactly-one-block
+        // contract) rather than arbitrarily resolve the conflict by block ordering.
+        // allowSkip:true so both names are individually permitted; the rejection is
+        // purely about the block count.
+        var handler = new ScriptedHandler((req, ct) => Task.FromResult(
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(DualToolUseResponse, Encoding.UTF8, "application/json"),
+            }));
+        var client = new ClaudeClient(new HttpClient(handler), apiKey: "k", model: "claude-sonnet-4-6", personaPrefix: "persona");
+
+        var result = await client.InvokeReconciliationAsync("rules", "payload", allowSkip: true, CancellationToken.None);
+
+        Assert.Null(result); // ambiguous multi-block response rejected at the boundary
+    }
+
     [Fact(Timeout = 10_000)]
     public async Task Timeout_IsNotRetried_AndFailsThePass()
     {
