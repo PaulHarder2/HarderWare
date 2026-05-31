@@ -76,13 +76,19 @@ public readonly record struct InputIdentity(string Metar, string Taf, string Gfs
         string m = None, t = None, g = None;
         foreach (var part in serialized.Split('|'))
         {
-            if (part.Length < 2 || part[1] != ':') continue;
+            // Fail closed: any malformed segment (no "K:" prefix, empty value, or
+            // unrecognized key) discards the whole identity to the all-"none"
+            // baseline.  A corrupt stored hash then reads as differing from any
+            // real input, routing the cycle to Claude rather than silently
+            // skipping a send on a half-parsed identity.
+            if (part.Length < 3 || part[1] != ':') return new(None, None, None);
             var val = part[2..];
             switch (part[0])
             {
                 case 'M': m = val; break;
                 case 'T': t = val; break;
                 case 'G': g = val; break;
+                default: return new(None, None, None);
             }
         }
         return new(m, t, g);

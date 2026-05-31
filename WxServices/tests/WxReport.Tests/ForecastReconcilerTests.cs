@@ -67,6 +67,23 @@ public class ForecastReconcilerTests
     }
 
     [Fact]
+    public async Task SkipSend_WhenNotAllowed_ReturnsFailure_NotNotNews()
+    {
+        // A guaranteed send (scheduled / first / startup) passes allowSkip:false
+        // and forces submit_reconciled_report; if Claude nonetheless returns
+        // skip_send, the reconciler must treat it as malformed (Failure), never
+        // silently suppress a send that must always go out.
+        var responseJson = BuildClaudeResponseJsonWithRawInput(
+            """{ "reasoning_trace": "trying to skip a guaranteed send" }""",
+            toolName: "skip_send");
+
+        var result = await RunReconciler(responseJson, allowSkip: false);
+
+        var failure = Assert.IsType<ReconcileResult.Failure>(result);
+        Assert.Contains("non-skippable", failure.Reason);
+    }
+
+    [Fact]
     public async Task SkipSend_MissingReasoningTrace_ReturnsFailure()
     {
         // skip_send with no reasoning_trace fails schema validation rather than

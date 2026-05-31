@@ -262,16 +262,9 @@ public sealed class ReportWorker : BackgroundService
             allowSkip: false, // startup is an unconditional verification send — never skippable
             ct: ct);
 
-        if (reconcileResult is ReconcileResult.NotNews)
-        {
-            // Unreachable today: startup forces submit_reconciled_report (allowSkip:false),
-            // so Claude cannot choose skip_send.  Guard defensively so a future change that
-            // makes skipping reachable degrades to a logged no-op instead of an
-            // InvalidCastException on the Failure cast below.
-            Logger.Warn($"{recipient.Id} {recipient.Email} ({recipient.Name}): unexpected skip_send on a guaranteed startup send — no email sent. Provisional CommittedSend Id={committedSend.Id} left in place.");
-            return;
-        }
-
+        // Startup passes allowSkip:false, so ReconcileAsync never returns NotNews
+        // here — a stray skip_send is converted to Failure at the reconciler and
+        // handled by this branch (logged, provisional left in place).
         if (reconcileResult is not ReconcileResult.Success success)
         {
             _claudeMalformedOutput.Add(1);

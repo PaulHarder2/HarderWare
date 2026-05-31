@@ -32,6 +32,19 @@ public class InputIdentityTests
         Assert.Equal(new InputIdentity("none", "none", "none"), InputIdentity.Parse("  "));
     }
 
+    [Theory]
+    [InlineData("M:|T:none|G:none")]      // empty value
+    [InlineData("M:m1|bogus|G:g1")]       // segment with no "K:" prefix
+    [InlineData("X:m1|T:t1|G:g1")]        // unrecognized key
+    [InlineData("garbage")]
+    public void Parse_MalformedSegment_FailsClosedToAllNone(string serialized)
+    {
+        // A corrupt stored hash must read as the all-"none" baseline so it
+        // differs from any real input and routes to Claude, rather than yielding
+        // a half-parsed identity that could spuriously match.
+        Assert.Equal(new InputIdentity("none", "none", "none"), InputIdentity.Parse(serialized));
+    }
+
     [Fact]
     public void ChangedSourcesSince_Identical_IsEmpty()
     {

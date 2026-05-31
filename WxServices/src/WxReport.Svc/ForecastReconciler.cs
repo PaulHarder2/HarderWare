@@ -149,8 +149,18 @@ public sealed class ForecastReconciler
             var input = apiResult.ToolUseInput;
 
             // Invalidation gate: Claude chose skip_send — not news worth sending.
+            // Enforce the skip contract here, at the reconciler, rather than
+            // relying on each caller to guard: skip_send is only valid on a
+            // cycle that offered it (allowSkip). A skip_send when allowSkip is
+            // false means a guaranteed send (scheduled / first / startup) was
+            // wrongly skipped — treat it as malformed output (Failure) so the
+            // provisional stays and the caller's Failure path logs it, instead
+            // of silently suppressing a send that must always go out.
             if (apiResult.ToolName == "skip_send")
             {
+                if (!allowSkip)
+                    return new ReconcileResult.Failure("Claude returned skip_send on a non-skippable (guaranteed) send.");
+
                 var skipTrace = input.GetProperty("reasoning_trace").GetString()
                     ?? throw new JsonException("reasoning_trace is null");
                 return new ReconcileResult.NotNews(skipTrace, apiResult.Tokens);
