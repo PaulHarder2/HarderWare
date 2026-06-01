@@ -200,17 +200,22 @@ flowchart TD
     NEAREST --> CACHE["Cache to Recipients table in DB"]
     CACHE --> SNAP
 
-    RESOLVED -->|Yes| SNAP["Build WeatherSnapshot from DB\n(METAR + TAF + GFS forecast)"]
+    RESOLVED -->|Yes| SNAP["Build WeatherSnapshot from DB\n(METAR + TAF + GFS)"]
     DB --> SNAP
 
-    SNAP --> FP["Compute change fingerprint"]
-    FP --> SEND{Should send?}
-    SEND -->|No| EACH
-    SEND -->|Yes| DESC["SnapshotDescriber to structured text"]
-    DESC --> CLAUDE
-    CLAUDE -->|report text| EMAIL["Send via SMTP"]
+    SNAP --> PROV["GfsSnapshotBuilder → provisional\nForecastSnapshotBody (6-hr blocks)"]
+    PROV --> GATE{"Pre-filter: input identity\nadvanced? (or scheduled / first)"}
+    GATE -->|No| EACH
+    GATE -->|Yes| WRITE["Persist provisional CommittedSend\n+ ForecastSnapshot (safety fallback)"]
+    WRITE --> RECON["ForecastReconciler → Claude\n(provisional + METAR + TAF + prior committed)"]
+    RECON --> CLAUDE
+    CLAUDE -->|"tool-use result"| DECIDE{submit or skip?}
+    DECIDE -->|skip_send| NOSEND["No email; committed snapshot\nleft unchanged"]
+    NOSEND --> EACH
+    DECIDE -->|submit_reconciled_report| FINAL["Overwrite committed snapshot\nwith final_snapshot; persist\nreasoning_trace + email_body"]
+    FINAL --> EMAIL["Send via SMTP"]
     EMAIL --> SMTP
-    SMTP --> STATE["Update RecipientState in DB"]
+    SMTP --> STATE["Update RecipientState\n(LastClaudeInputHash, timestamps)"]
     STATE --> EACH
 
     EACH --> DONE([Cycle complete])
@@ -423,38 +428,36 @@ flowchart TD
     F -->|No| SKIP[Skip recipient]
     D -->|Yes| G[Build WeatherSnapshot]
     F -->|Yes| G
-    G --> H[Compute fingerprint]
-    H --> I{Should send?}
-    I -->|No| C
-    I -->|Yes — scheduled / first / change| J[SnapshotDescriber → structured text]
-    J --> K[Claude API → report text]
+    G --> G2[GfsSnapshotBuilder → provisional ForecastSnapshotBody]
+    G2 --> H{Pre-filter: input identity advanced?\nor scheduled / first?}
+    H -->|No| C
+    H -->|Yes| W[Persist provisional CommittedSend + ForecastSnapshot]
+    W --> J[ForecastReconciler → Claude two-pass reconciliation]
+    J --> I{submit or skip?}
+    I -->|skip_send| C
+    I -->|submit_reconciled_report| K[Persist final snapshot + reasoning_trace + email_body]
     K --> K2[Attach 48h meteogram PNG if available]
     K2 --> L[Send email with cid: inline image]
     L --> M[Update RecipientState in DB]
     M --> C
 ```
 
-**Send-decision logic:**
-- **First run:** Immediately sends a welcome + weather report.
-- **Scheduled:** Sends once per configured hour when that hour arrives in the recipient's local timezone. Multiple hours can be specified (e.g. `"6, 18"` for morning and evening); default is `"7"`. Subject line: "Weather report — …".
-- **Significant change:** Sends an unscheduled report when the weather fingerprint changes and the classified severity is `Update` or `Alert`, subject to a minimum gap between sends (default 60 minutes). `Minor` severity changes are suppressed. Subject line and Claude prompt vary by severity:
+**Send-decision logic (WX-47 rearchitecture):**
 
-| Severity | Trigger | Subject line | Claude opening |
-|---|---|---|---|
-| `Alert` | Dangerous observed-condition flag appeared: wind, visibility, or thunderstorm rose above threshold | "Weather alert — …" | One urgent sentence naming the new condition |
-| `Update` | Observed precipitation appeared; GFS risk flag (CAPE or precip) appeared; or forecast high/low temperature bucket shifted | "Weather update — …" | One or two sentences summarising what changed |
-| `Minor` | "Conditions improved" — observed flags (wind, visibility, thunderstorm, precipitation) cleared, or GFS risk flags cleared — send suppressed | — send suppressed — | — |
+The decision is split into a cheap deterministic gate followed by an LLM judgment. C# no longer judges *significance* — that responsibility moved entirely into Claude's reasoning. (The retired fingerprint approach judged significance in C# and produced the 2026-04-21 KDWH double-send.)
 
-**Significant-change thresholds (configurable):**
-| Condition | Default threshold |
-|---|---|
-| Wind speed | ≥ 25 kt |
-| Visibility | < 3.0 SM |
-| Ceiling | < 3,000 ft AGL |
-| GFS forecast high temperature | Changes by ≥ 15 °F (next calendar day) |
-| GFS forecast low temperature | Changes by ≥ 15 °F (next calendar day) |
-| GFS CAPE | Any forecast day ≥ 1,000 J/kg |
-| GFS precipitation rate | Any forecast day ≥ 2.0 mm/hr |
+- **First run / startup:** Immediately sends a welcome + weather report. Bypasses the pre-filter.
+- **Scheduled:** Sends once per configured hour when that hour arrives in the recipient's local timezone. Multiple hours can be specified (e.g. `"6, 18"` for morning and evening); default is `"7"`. Bypasses the pre-filter. Subject line: "Weather report — …".
+- **Unified input-identity pre-filter (WX-80):** For non-scheduled, non-first cycles, `ReportWorker.ShouldSend` asks a single cheap C# question — *has any input identity advanced since the last Claude call?* The input identity (`InputIdentity`) is the METAR station + observation time, the TAF issuance time, and the GFS model run, serialized into `RecipientState.LastClaudeInputHash`. If nothing advanced, the cycle is skipped without paying for a Claude call. There is no significance threshold in this gate.
+- **Claude two-pass reconciliation (WX-79):** When an input has advanced, `ForecastReconciler.ReconcileAsync` sends Claude the provisional snapshot (from `GfsSnapshotBuilder`), the current METAR, the current TAF, and the prior committed snapshot, and asks it to reconcile them and decide whether the change is *news*. Claude responds via tool-use with either:
+  - `submit_reconciled_report` — an HTML `email_body`, a refined `final_snapshot`, and a `reasoning_trace`; the report is sent.
+  - `skip_send` — a `reasoning_trace` only; no email is sent (the WX-80 invalidation gate).
+
+  Significance-tier guidance (WX-81) steers the "is this news?" judgment **in the prompt**, not in C#: the safety-critical / plans-affecting / ambient-interest tiers, the directional-asymmetry rule (a worsening trend is more newsworthy than the equivalent improvement), and the 34 kt line. Subject-line and opening phrasing follow from Claude's reconciliation rather than a C#-classified severity.
+
+**Significance judged against the committed forecast (not C# thresholds):**
+
+There is no C# threshold table any more. Whether a change warrants an unscheduled send is judged by Claude, comparing the freshly reconciled snapshot against the last *committed* forecast (what we last told the recipient), steered by the WX-81 significance tiers in the prompt. The committed/anchor snapshot advances only on an actual send, so each reconciliation always diffs against "what the recipient last saw."
 
 **METAR station fallback (tiered):**
 1. Try each ICAO in the recipient's `MetarIcao` list (comma-separated, preference order); a station is only accepted if its most recent observation is within the last 3 hours.
@@ -464,7 +467,7 @@ flowchart TD
 
 The config is never updated when a fallback station is used; a warning is logged with the fallback station's distance in miles.  When the station used differs from the one in `RecipientState.LastMetarIcao` (i.e. the station changed since the last report), Claude is informed via the prompt and includes a brief, matter-of-fact note in the report — in the change-summary band for unscheduled sends, or in the closing summary for scheduled ones.  `LastMetarIcao` is updated on every successful send *that carried a real observation*; forecast-only sends leave it untouched so change-detection resumes cleanly once observations return.
 
-Observation-less sends also suppress change-triggered unscheduled sends — the observation portion of the fingerprint would default to "calm / good visibility / no phenomena" and could produce a misleading "conditions cleared!" alert. `RecipientState.LastSnapshotFingerprint` is not updated in that case either, so the next cycle with a real observation compares to the last genuine state.
+Observation-less cycles are handled by the same input-identity pre-filter and Claude gate, with no special significance bookkeeping. When no recent observation is available, the METAR component of the input identity is simply absent, so an advance is driven only by the TAF issuance or GFS model run; the reconciler is given the snapshot without a current observation and decides whether the forecast-only change is news. Because there is no observation-to-observation fingerprint, a missing observation can no longer manufacture a misleading "conditions cleared!" send, and `LastClaudeInputHash` advances only on an actual send — so when observations return, the reconciler resumes diffing against the last genuinely committed forecast.
 
 **Recipient resolution (one-time, cached):**
 1. Geocode `Address` via Nominatim → lat/lon + locality name.
@@ -479,11 +482,12 @@ Observation-less sends also suppress change-triggered unscheduled sends — the 
 | `RecipientResolver` | WxReport.Svc | Address geocoding and station resolution; cache write-back; retries geocoding up to 3× |
 | `WxInterpreter` | WxInterp | Queries DB → `WeatherSnapshot` (METAR + TAF + GFS); station fallback logic |
 | `GfsInterpreter` | WxInterp | Bilinear interpolation over the four surrounding 0.25° GFS grid points → `GfsForecast` |
-| `SnapshotDescriber` | WxReport.Svc | `WeatherSnapshot` → structured plain-text for Claude; unit-aware (temperature, pressure, wind speed); outputs relative humidity (computed from temperature and dew point) rather than raw dew point |
-| `ClaudeClient` | WxReport.Svc | Anthropic Messages API wrapper; generates HTML email body; accepts `UnitPreferences` and `ChangeSeverity` to tailor the system prompt per recipient; injects the cached author-persona prefix as the first `system` content block (see *Persona prefix* below); retries transient failures (429, 529, 5xx, `HttpRequestException`) up to 3 times with linear backoff |
+| `GfsSnapshotBuilder` | WxInterp | Deterministically projects the GFS forecast into a provisional `ForecastSnapshotBody` (uniform 6-hour blocks aligned to 00/06/12/18Z) — the "first pass" Claude reconciles against the observations |
+| `ForecastReconciler` | WxReport.Svc | Orchestrates the Claude two-pass reconciliation (WX-79): sends the provisional snapshot + current METAR + current TAF + prior committed snapshot, and returns Claude's tool-use decision — `submit_reconciled_report` (email body + refined snapshot + reasoning trace) or `skip_send` (reasoning trace only) |
+| `SnapshotDescriber` | WxReport.Svc | `WeatherSnapshot` → structured plain-text used by `ForecastReconciler` to render Claude's user message; unit-aware (temperature, pressure, wind speed); outputs relative humidity (computed from temperature and dew point) rather than raw dew point |
+| `ClaudeClient` | WxReport.Svc | Thin Anthropic Messages API wrapper (`InvokeReconciliationAsync`), driven by `ForecastReconciler`; injects the cached author-persona prefix as the first `system` content block (see *Persona prefix* below); retries transient failures (429, 529, 5xx, `HttpRequestException`) up to 3 times with linear backoff |
 | `PersonaPrefix` | WxReport.Svc | Tiny record wrapping the contents of `AboutPaul.md`, loaded once at service startup and threaded into every `ClaudeClient` so it can be sent as a cached system-prompt prefix |
 | `SmtpSender` | WxServices.Common | MailKit SMTP wrapper; `SendAsync` accepts optional `htmlBody` and `inlineImages`; sends `multipart/alternative` (plain-text + HTML); HTML part is wrapped in `multipart/related` when inline images are provided (`cid:` URI support); `fromName` set per-service at construction time; all failures (including invalid addresses and SMTP errors) are caught and return `false` rather than throwing |
-| `SnapshotFingerprint` | WxReport.Svc | Computes an 8-field pipe-delimited fingerprint (W, V, TS, PR, GH, GL, GC, GP) from significant weather fields; `ClassifyChange` compares two fingerprints and returns a `ChangeSeverity` value |
 
 **Metrics emitted (OpenTelemetry):**
 
@@ -498,7 +502,7 @@ Observation-less sends also suppress change-triggered unscheduled sends — the 
 
 **Persona prefix (cached) — `AboutPaul.md`:**
 
-The Anthropic Messages API is stateless: every call begins with no knowledge of who Paul is, what voice he writes in, or what content rules he wants applied. To give Claude that context without paying for it on every call, every `ClaudeClient.GenerateReportAsync` request opens with an author-persona prefix — the full contents of `AboutPaul.md` at the repo root — sent as the first element of the `system` content-block array, with `cache_control: { type: "ephemeral" }` attached.
+The Anthropic Messages API is stateless: every call begins with no knowledge of who Paul is, what voice he writes in, or what content rules he wants applied. To give Claude that context without paying for it on every call, every `ClaudeClient.InvokeReconciliationAsync` request (invoked via `ForecastReconciler`) opens with an author-persona prefix — the full contents of `AboutPaul.md` at the repo root — sent as the first element of the `system` content-block array, with `cache_control: { type: "ephemeral" }` attached.
 
 - **Source of truth.** `HarderWare/AboutPaul.md` (repo root, not under `WxServices/`). The file is curated to be public-safe by design — its top section codifies an explicit inclusion/exclusion rule so the doc can live in a public repo without leaking content unsuitable for customer-facing output. Future HarderWare services that generate voice-bearing output should consume the same file rather than fork their own copy.
 - **Deployment.** `WxReport.Svc.csproj` includes the file via `<Content Include="..\..\..\AboutPaul.md"><Link>AboutPaul.md</Link><CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory></Content>` so it is copied alongside the binary at build time. `Program.cs` reads the deployed copy once at startup via `File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "AboutPaul.md"))`, wraps it in a `PersonaPrefix` record, and registers that as a DI singleton consumed by `ReportWorker`.
@@ -914,8 +918,27 @@ erDiagram
         string RecipientId UK
         datetime LastScheduledSentUtc
         datetime LastUnscheduledSentUtc
-        string LastSnapshotFingerprint
+        string LastClaudeInputHash
         string LastMetarIcao
+    }
+
+    ForecastSnapshots {
+        int Id PK
+        string StationIcao
+        datetime GeneratedAtUtc
+        int SchemaVersion
+        string Body
+    }
+
+    CommittedSends {
+        int Id PK
+        int ForecastSnapshotId FK
+        string RecipientId
+        datetime CreatedAtUtc
+        datetime SentAtUtc "null until sent"
+        string EmailBody
+        string ReasoningTrace
+        int SchemaVersion
     }
 
     GfsModelRuns {
@@ -963,6 +986,7 @@ erDiagram
     TafChangePeriods ||--o{ TafChangePeriodSkyConditions : "has"
     TafChangePeriods ||--o{ TafChangePeriodWeatherPhenomena : "has"
     GfsModelRuns ||--o{ GfsGrid : "has"
+    ForecastSnapshots ||--o{ CommittedSends : "anchored by"
 ```
 
 ### Key indexes
@@ -1015,7 +1039,7 @@ This single file contains every non-secret setting for all services and applicat
 - **`Telemetry`** — `Enabled` flag and OTLP endpoint (disabled by default)
 - **`WxVis`** — Conda Python path, map extent, plot retention, zoom levels (default 3)
 - **`Monitor`** — Alert interval, email, severity threshold, watched services
-- **`Report`** — Report interval, language, schedule, thresholds, significant-change config
+- **`Report`** — Report interval, minimum send gap, language, scheduled-send hours, recipients
 - **`WxManager`** — Station lookup radius, AWC endpoint, display settings
 
 ### Recipients — database
@@ -1195,6 +1219,16 @@ Defaults: 12 attempts with delays 5 s, 10 s, 20 s, 30 s, 30 s, 30 s, 30 s, 30 s,
 Permanent errors (login failures, permissions, schema conflicts) are *not* retried — they propagate on the first attempt so real bugs fail fast.  `MigrateAsync` — which creates the `WeatherData` database itself on first run if absent — is inside the retry loop, so new-developer installs against a cold SQL Server still bootstrap cleanly.
 
 The complementary pieces of WX-28 (declarative `DependOnService=MSSQL$SQLEXPRESS` in the installer, full Windows service-configuration audit, and moving `WxParser.Svc` off the personal Windows account it currently runs under) are tracked as follow-up PRs.
+
+#### WX-47 schema cutover (reconciliation rearchitecture)
+
+The WX-47 rearchitecture of the update-decision logic (see [§4.2](#42-wxreportsvc--report-generator)) introduced new persistence, which lands through the normal EF Core migration path — there is no separate cutover procedure:
+
+- **Migrations apply on startup.** The WX-47 schema changes ship as EF Core migrations under `src/MetarParser.Data/Migrations/`, applied automatically by `DatabaseSetup.EnsureSchemaAsync` → `MigrateAsync` the first time any service starts after deploy (serialized by the `sp_getapplock` named lock described above).
+- **The additions are additive.** Two new tables — `ForecastSnapshots` and `CommittedSends` — plus a new `RecipientState.LastClaudeInputHash` column are added without altering existing data.
+- **First boot has no prior snapshot.** On the first cycle after deploy, a recipient has no prior `ForecastSnapshot`, so the reconciler takes its "no prior snapshot / first send" path: there is nothing to diff against, the cycle is treated as a first send, and a normal report goes out. No backfill is required.
+- **Vestigial column dropped last.** The former `RecipientState.LastSnapshotFingerprint` column (used by the retired C#-side change-detection logic) is dropped as the final cleanup migration. Nothing reads it after the cutover.
+- **Fail-forward only.** Deployment is fail-forward: there is no schema rollback. A bad deploy is corrected by rolling forward to a fixed build and a new migration, never by reverting the schema.
 
 ### Startup order
 Start `WxParserSvc` first and allow at least one fetch cycle to complete before starting `WxReportSvc`, so METAR data is available for station resolution. GFS data will begin accumulating on the first 60-minute GFS cycle; full temperature forecasts appear in reports once the first complete model run is ingested (up to ~4 hours after the run's nominal time).

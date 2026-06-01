@@ -4,6 +4,7 @@ using MetarParser.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace MetarParser.Data.Migrations
 {
     [DbContext(typeof(WeatherDataContext))]
-    partial class WeatherDataContextModelSnapshot : ModelSnapshot
+    [Migration("20260601210943_DropRecipientStateSnapshotFingerprint")]
+    partial class DropRecipientStateSnapshotFingerprint
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

@@ -325,7 +325,6 @@ public sealed class WeatherDataContext : DbContext
             e.HasKey(x => x.Id);
 
             e.Property(x => x.RecipientId).HasMaxLength(100).IsRequired();
-            e.Property(x => x.LastSnapshotFingerprint).HasMaxLength(200);
             e.Property(x => x.LastClaudeInputHash).HasMaxLength(200);
             e.Property(x => x.LastMetarIcao).HasMaxLength(4).IsFixedLength();
 

@@ -21,16 +21,6 @@ public class RecipientState
     public DateTime? LastUnscheduledSentUtc { get; set; }
 
     /// <summary>
-    /// Vestigial since WX-80.  Held the pre-WX-80 8-field
-    /// <c>SnapshotFingerprint</c> string used for observation-to-observation
-    /// change detection; that mechanism (and the fingerprint type) was removed
-    /// when triggers were unified behind the Claude invalidation gate.  The
-    /// column is left in place for WX-83 to drop as part of the migration plan;
-    /// nothing reads or writes it now.
-    /// </summary>
-    public string? LastSnapshotFingerprint { get; set; }
-
-    /// <summary>
     /// Serialised <c>InputIdentity</c> of the evidence handed to Claude at the
     /// last reconciliation call (METAR observation time, TAF issuance, GFS model
     /// run).  The WX-80 pre-filter compares the current cycle's identity against
