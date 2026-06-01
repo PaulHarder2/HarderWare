@@ -34,6 +34,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Non-bypassable backstop for the local pre-push hook: fail fast if
+      # Directory.Build.props and VERSIONS.md disagree on the current version
+      # (the WX-80 1.8.0/1.7.1 class of mistake). Runs before the .NET setup
+      # since it needs nothing but the checkout and git.
+      - name: Version consistency (props vs VERSIONS.md)
+        run: bash tools/check-version-consistency.sh
+
       - name: Setup .NET 8 SDK
         uses: actions/setup-dotnet@v4
         with:

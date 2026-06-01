@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+#
+# pre-push hook: block a push when Directory.Build.props and VERSIONS.md
+# disagree on the current version (the WX-80 1.8.0/1.7.1 class of mistake).
+#
+# Tracked under version control and activated per-clone with:
+#     git config core.hooksPath WxServices/tools/hooks
+# (see DEVELOPER-README.md). Bypassable in a pinch with `git push --no-verify`,
+# but CI runs the same check as a non-bypassable backstop.
+
+set -euo pipefail
+
+exec "$(git rev-parse --show-toplevel)/WxServices/tools/check-version-consistency.sh"
