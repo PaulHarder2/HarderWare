@@ -1,6 +1,6 @@
 # WxServices development workflow
 
-Last updated 2026-04-23.
+Last updated 2026-06-01.
 
 This document is the authoritative workflow for landing a change in WxServices. It is a snapshot of the rules Paul and Claude have agreed on over time; when something here conflicts with an ad-hoc direction, this document wins unless the conflict is flagged and the document updated.
 
