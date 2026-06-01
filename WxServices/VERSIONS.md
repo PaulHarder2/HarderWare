@@ -5,6 +5,7 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 
 | Version | Commit  | Date       | Summary |
 |---------|---------|------------|---------|
+| 1.9.1   | 8132338 | 2026-06-01 | Final WX-47 cleanup (WX-83): drop the vestigial `RecipientState.LastSnapshotFingerprint` column (unused since WX-80's trigger consolidation) via the `DropRecipientStateSnapshotFingerprint` EF migration, and bring DESIGN.md up to date with the rearchitected WxReport flow — the two-pass Claude reconciliation, the persistence model, and the unified input-identity pre-filter — plus a fail-forward migration/cutover note. Removes the last orphan references to the retired `SnapshotFingerprint`. PATCH: schema cleanup, no behaviour change |
 | 1.9.0   | a8f7e1f | 2026-06-01 | Significance-tier prompting for the WX-47 reconciliation pass (WX-81): the reconciler system prompt now calibrates "worth sending" across three tiers (safety-critical / plans-affecting / ambient-interest), encodes the directional-asymmetry rule and a 34 kt tropical-storm-force wind bright line, and carries eight worked examples mapping each tier to `submit_reconciled_report` / `skip_send`. Also adds a version-consistency guard (shared script + pre-push hook + CI step) and corrects a missed bump: 1.8.0 (WX-80) never bumped `Directory.Build.props`, so 1.8.0 binaries self-report 1.7.1 — 1.9.0 is the first build carrying a ≥1.8 version string |
 | 1.8.0   | c0ff6d6 | 2026-05-31 | Trigger consolidation (WX-47 epic): a unified input-identity pre-filter plus a Claude invalidation gate replace the observation-to-observation `SnapshotFingerprint` behind the 2026-04-21 KDWH double-send. All four trigger sources (METAR/TAF/GFS arrival, scheduled) flow through one path; Claude can now decline to send via a two-tool choice (`submit_reconciled_report` / `skip_send`). New additive `RecipientState.LastClaudeInputHash` column drives the pre-filter. New trigger/skip telemetry; dead `SignificantChangeConfig` removed (WX-80) |
 | 1.7.1   | 2064964 | 2026-05-29 | Fix WX-79 regression: the reconciliation Claude call inherited the 100s default `HttpClient.Timeout`, but the pass routinely generates for 60-100s, so ~1-in-3 reports were silently dropped (`TaskCanceledException`). Give Claude its own `HttpClient` with a tunable `Claude:TimeoutSeconds` ceiling (default 300s), kept off the shared geocoding/airport-lookup client so those still fail fast. A timeout fails the pass and recovers next cycle (not retried — retrying a multi-minute call would stall the cycle). Histogram boundaries for `wxreport.claude.duration.seconds` extended past the old 60s cap that hid the latency (WX-100) |
@@ -38,6 +39,13 @@ Patch releases are bug fixes, minor releases introduce new features, and major r
 | 1.0.0   | 7a2a268 | 2026-04-07 | Initial versioned release |
 
 ---
+
+## 1.9.1 — WX-47 finale: drop the vestigial fingerprint column + DESIGN.md refresh (2026-06-01)
+
+- **WX-83 (WX-47 epic), the last child** — closes the rearchitecture of WxReport's update-decision logic.
+- **Schema cleanup.** Drops `RecipientState.LastSnapshotFingerprint`, vestigial since WX-80 unified the triggers behind the Claude invalidation gate (nothing has read or written it since). EF migration `DropRecipientStateSnapshotFingerprint`; applied automatically on next startup via `MigrateAsync`. Fail-forward only (no rollback), consistent with the WX-47 deployment model.
+- **DESIGN.md refresh.** The §2.4/§4.2 data flow, the Key-classes table, the persona-prefix call path, and the §6 ER diagram now describe the shipped design: GFS-derived provisional snapshot → input-identity pre-filter → Claude two-pass reconciliation (`submit_reconciled_report` / `skip_send`) → persisted `CommittedSend` + `ForecastSnapshot` + reasoning trace. Significance is judged by Claude against the committed forecast (WX-81 tiers), not C# thresholds. Added a migration/cutover note (additive schema, graceful no-prior-snapshot first boot, fail-forward).
+- **PATCH.** Schema cleanup + docs; no behaviour change for recipients.
 
 ## 1.9.0 — Significance-tier prompting + version-consistency guard (2026-06-01)
 

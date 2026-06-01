@@ -187,10 +187,8 @@ public sealed class ForecastReconciler
 
     // ── per-recipient system prompt ──────────────────────────────────────────
 
-    // Ported verbatim from ClaudeClient.GenerateReportAsync's prompt
-    // construction; GenerateReportAsync is removed later in this same PR
-    // once ReportWorker switches to this path, so the duplication is
-    // intermediate-state only.
+    // Builds the per-recipient rendering rules (the third system block).
+    // Originally ported from the now-removed ClaudeClient.GenerateReportAsync.
     private static string BuildPerRecipientSystemPrompt(
         WeatherSnapshot snapshot, string language, UnitPreferences units,
         bool isFirstReport, int scheduledHour, ChangeSeverity changeSeverity, string? previousMetarIcao,
