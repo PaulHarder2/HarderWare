@@ -25,8 +25,11 @@ internal static class ReconcilerPrompts
     /// Stable, recipient-agnostic system block added to every reconciler call.
     /// Lays out the four inputs Claude receives, the three-step reconciliation
     /// procedure (TAF-vs-GFS by issuance time; observation-overrides-model for
-    /// hour X or X+1; prior-snapshot diff for the news judgment), and the
-    /// three artifacts the tool must return.
+    /// hour X or X+1; prior-snapshot diff for the news judgment), the
+    /// significance hierarchy that calibrates "worth sending" (safety-critical /
+    /// plans-affecting / ambient-interest tiers, the directional-asymmetry rule,
+    /// and worked examples — added in WX-81), and the three artifacts the tool
+    /// must return.
     /// </summary>
     internal const string ReconciliationGuidanceText = """
         You receive structured weather data for a single recipient cycle:
@@ -61,6 +64,83 @@ internal static class ReconcilerPrompts
              or trivially drifts from what the prior_snapshot already committed —
              e.g. observed weather the prior forecast already predicted — it is
              NOT news.
+
+        Significance hierarchy:
+
+        Not every invalidation is equally worth a recipient's attention. Weigh the
+        news against three tiers, and against how near the affected blocks are.
+
+          • Safety-critical — severe thunderstorms (damaging winds, large hail, or
+            tornadic potential), dense fog, ice or freezing precipitation, and newly
+            forecast sustained non-thunderstorm winds of 34 kt (tropical-storm force)
+            or greater. Any newly introduced or newly removed hazard at this tier is
+            news at ANY horizon and warrants a prompt send; when in doubt here, send.
+            An ordinary, non-severe thunderstorm is NOT automatically safety-critical:
+            a change to scattered thunderstorms reaches this tier only when the storm
+            energy points to strong-to-severe storms (the snapshot's severeFlag and
+            convective signals). Otherwise treat thunderstorms as plans-affecting.
+            When winds of 34 kt or greater qualify, the send is warranted regardless
+            of how you choose to describe those winds — let the per-recipient
+            rendering rules govern the wording.
+
+          • Plans-affecting — precipitation versus dry, notable but non-hazardous
+            winds, a meaningful temperature swing, ordinary non-severe thunderstorms.
+            Invalidations in the near horizon (today or tomorrow) are news worth an
+            unscheduled send. The same shift several days out is not urgent — let it
+            ride the next scheduled send rather than firing an update now.
+
+          • Ambient-interest — pleasant-day signals, light breezes, minor sky changes
+            with no bearing on plans or safety. These belong in scheduled sends only.
+            Never fire an unscheduled update for an ambient-interest change alone.
+
+        Directional asymmetry: the appearance of weather you did not promise is almost
+        always more newsworthy than the non-appearance of weather you did promise.
+
+          • "Rain or a storm arrived when the committed forecast said dry" — news,
+            promptly. The recipient was told to expect one thing and is getting another.
+          • "No rain yet, though the committed forecast said rainy" — NOT news at
+            first. A forecast of rain today is not invalidated the moment it isn't yet
+            raining. Treat the non-arrival as news only once the promised window has
+            clearly and substantially passed without the weather materializing.
+
+        Worked examples (tier — situation — decision):
+
+          • Safety-critical / send. The committed 18-00Z block was precipExpectation
+            likely, precipPhenomenon rain, severeFlag false. A new TAF plus convective
+            signals now point to severe storms (damaging gusts, large hail) — set
+            precipPhenomenon thunderstorm, severeFlag true, and submit_reconciled_report
+            at any horizon. The upgrade to severe is itself the news, even though rain
+            was already expected.
+          • Safety-critical / send. The committed forecast was clear and dry overnight;
+            the latest observation and TAF now show dense fog (visibilityExpectation
+            poor, obscuration fog). submit_reconciled_report — dense fog is safety-
+            critical regardless of how minor the numbers look.
+          • Safety-critical / send. Committed winds were 10-18 kt. New guidance brings a
+            non-thunderstorm wind event with sustained winds to 36 kt (at or above the
+            34 kt line). submit_reconciled_report at any horizon — it crosses tropical-
+            storm force.
+          • Plans-affecting / skip. The committed forecast already promised a wet day
+            (12-18Z block precipExpectation likely, precipPhenomenon rain). A new METAR
+            reports light rain in that window. skip_send — the observation merely
+            confirms what the recipient was already told; nothing has changed.
+          • Plans-affecting / send when near, skip when distant. The committed forecast
+            was dry through tomorrow afternoon. A new GFS and TAF bring precipExpectation
+            likely, precipPhenomenon rain into tomorrow's 18-00Z block —
+            submit_reconciled_report, because rain is newly appearing where dry was
+            promised inside the plans horizon. The identical dry-to-rain shift five days
+            out is not urgent — skip_send and let it ride the next scheduled send.
+          • Plans-affecting / skip. The committed forecast several days out was
+            precipPhenomenon rain. A new GFS shifts it to scattered, non-severe
+            thunderstorms (severeFlag false, modest energy) at that distant horizon.
+            skip_send — garden-variety storms days away are not urgent and can ride the
+            next scheduled send.
+          • Ambient-interest / skip. Committed winds were 5-10 kt; new data nudges them
+            to 8-12 kt, a pleasant breeze with no hazard and no plans impact. skip_send
+            — a few knots of non-hazardous drift is ambient and can wait.
+          • Ambient-interest / skip. The committed sky was partly_cloudy; new data
+            shifts an afternoon block to mostly_cloudy with no precipitation and no
+            other change. skip_send — a minor sky-cover change with no bearing on plans
+            or safety is ambient-interest only.
 
         You have two tools, and you must call exactly one of them:
 

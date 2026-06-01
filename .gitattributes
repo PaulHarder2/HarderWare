@@ -1,0 +1,7 @@
+# Shell scripts and git hooks must stay LF on every platform. Git for Windows
+# runs hooks via sh, and a CRLF shebang (`#!/usr/bin/env bash\r`) makes the
+# kernel look for an interpreter literally named "bash\r" — the hook fails to
+# exec and the local version-consistency guard silently no-ops. Pin LF so a
+# Windows checkout (even with core.autocrlf=true) keeps these runnable.
+*.sh text eol=lf
+WxServices/tools/hooks/pre-push text eol=lf

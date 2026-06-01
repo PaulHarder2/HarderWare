@@ -1,6 +1,6 @@
 # WxServices development workflow
 
-Last updated 2026-04-23.
+Last updated 2026-06-01.
 
 This document is the authoritative workflow for landing a change in WxServices. It is a snapshot of the rules Paul and Claude have agreed on over time; when something here conflicts with an ad-hoc direction, this document wins unless the conflict is flagged and the document updated.
 
@@ -59,9 +59,11 @@ This is cheap board hygiene — a 2-second API call — but it serves two purpos
 
 ## 4. Commit
 
-Write a full detailed multi-line commit message explaining the *why*, not just the *what*. Include a `Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>` trailer so attribution is consistent across the history.
+Write a full detailed multi-line commit message explaining the *why*, not just the *what*. Include a `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>` trailer so attribution is consistent across the history.
 
 Small unrelated tweaks (typo fixes, log-message cleanups, doc edits) may be bundled alongside the main ticket work rather than split into separate PRs. Use judgment: if the tweak would confuse a bisect or complicate a revert, split it.
+
+**Document off-scope fixes in the ticket.** *Added 2026-06-01.* When a bundled change goes beyond a trivial tweak — fixing an actual bug or defect unrelated to the ticket's scope — add a comment to the active Jira ticket naming the find, the fix, and that it was folded into this PR, and note it in the PR body. Inline cleanup is encouraged (it's cheaper than a follow-up PR), but it must leave a paper trail: otherwise the ticket's history lies about what shipped, the calibration data (what the ticket actually cost) is muddied, and a reviewer can't tell why the diff touched unrelated files. Prompted by WX-81, during which the WX-80 1.8.0 / `Directory.Build.props` version-bump miss was found and corrected inline.
 
 ## 5. VERSIONS.md
 

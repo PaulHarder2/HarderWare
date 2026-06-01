@@ -34,6 +34,21 @@ git clone <repo-url>
 cd HarderWare\WxServices
 ```
 
+### Activate the git hooks (one-time, per clone)
+
+The repo ships a tracked `pre-push` hook that blocks a push when
+`Directory.Build.props` and `VERSIONS.md` disagree on the current version. Point
+git at the tracked hooks directory once after cloning (from anywhere in the working tree — git resolves the relative path from the repo root):
+
+```bash
+git config core.hooksPath WxServices/tools/hooks
+```
+
+This guards against the class of mistake where a `VERSIONS.md` row is added but
+the `<Version>` bump is forgotten (or vice-versa). CI runs the same check as a
+non-bypassable backstop, so the hook is a fast local fail, not the only gate. In
+a genuine emergency you can skip it with `git push --no-verify`.
+
 ### Edit `appsettings.shared.json`
 
 This is the single source of truth for all runtime configuration.  It is
