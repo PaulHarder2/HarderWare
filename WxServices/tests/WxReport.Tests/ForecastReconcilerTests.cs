@@ -92,16 +92,19 @@ public class ForecastReconcilerTests
     [Fact]
     public async Task SkipSend_MissingReasoningTrace_ReturnsFailure()
     {
-        // skip_send with no reasoning_trace fails schema validation rather than
-        // silently suppressing a send with no recorded rationale.
+        // skip_send with no reasoning_trace fails — naming the missing field —
+        // rather than silently suppressing a send with no recorded rationale.
         var responseJson = BuildClaudeResponseJsonWithRawInput(
             """{ }""",
             toolName: "skip_send");
 
         var result = await RunReconciler(responseJson, allowSkip: true);
 
+        // WX-104: a missing key is reported by name, not mislabelled "schema validation failed".
         var failure = Assert.IsType<ReconcileResult.Failure>(result);
-        Assert.Contains("Schema validation failed", failure.Reason);
+        Assert.Contains("missing required field", failure.Reason);
+        Assert.Contains("reasoning_trace", failure.Reason);
+        Assert.DoesNotContain("Schema validation failed", failure.Reason);
     }
 
     // ── failure: transport ──────────────────────────────────────────────────
@@ -161,8 +164,11 @@ public class ForecastReconcilerTests
 
         var result = await RunReconciler(responseJson);
 
+        // WX-104: names the missing field; no KeyNotFoundException, no "schema validation failed".
         var failure = Assert.IsType<ReconcileResult.Failure>(result);
-        Assert.Contains("Schema validation failed", failure.Reason);
+        Assert.Contains("missing required field", failure.Reason);
+        Assert.Contains("email_body", failure.Reason);
+        Assert.DoesNotContain("Schema validation failed", failure.Reason);
     }
 
     // ── failure: tool input missing final_snapshot ──────────────────────────
@@ -179,8 +185,11 @@ public class ForecastReconcilerTests
 
         var result = await RunReconciler(responseJson);
 
+        // WX-104: names the missing field; no KeyNotFoundException, no "schema validation failed".
         var failure = Assert.IsType<ReconcileResult.Failure>(result);
-        Assert.Contains("Schema validation failed", failure.Reason);
+        Assert.Contains("missing required field", failure.Reason);
+        Assert.Contains("final_snapshot", failure.Reason);
+        Assert.DoesNotContain("Schema validation failed", failure.Reason);
     }
 
     // ── failure: tool input missing reasoning_trace ─────────────────────────
@@ -197,8 +206,34 @@ public class ForecastReconcilerTests
 
         var result = await RunReconciler(responseJson);
 
+        // WX-104: names the missing field; no KeyNotFoundException, no "schema validation failed".
         var failure = Assert.IsType<ReconcileResult.Failure>(result);
-        Assert.Contains("Schema validation failed", failure.Reason);
+        Assert.Contains("missing required field", failure.Reason);
+        Assert.Contains("reasoning_trace", failure.Reason);
+        Assert.DoesNotContain("Schema validation failed", failure.Reason);
+    }
+
+    // ── failure: tool input present-but-null field ─────────────────────────
+
+    [Fact]
+    public async Task ToolInputNullEmailBody_ReturnsFailure_NamingField()
+    {
+        // A present-but-null (or wrong-typed) required field is treated the same as
+        // an absent one (WX-104): reported by name, no KeyNotFoundException.
+        var responseJson = BuildClaudeResponseJsonWithRawInput("""
+            {
+              "email_body": null,
+              "final_snapshot": { "schemaVersion": 1, "blocks": [] },
+              "reasoning_trace": "trace"
+            }
+            """);
+
+        var result = await RunReconciler(responseJson);
+
+        var failure = Assert.IsType<ReconcileResult.Failure>(result);
+        Assert.Contains("missing required field", failure.Reason);
+        Assert.Contains("email_body", failure.Reason);
+        Assert.DoesNotContain("Schema validation failed", failure.Reason);
     }
 
     // ── failure: garbage final_snapshot JSON ────────────────────────────────
