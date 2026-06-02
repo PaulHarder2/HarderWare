@@ -165,27 +165,61 @@ public sealed class ForecastReconciler
                 if (!allowSkip)
                     return new ReconcileResult.Failure("Claude returned skip_send on a non-skippable (guaranteed) send.");
 
-                var skipTrace = input.GetProperty("reasoning_trace").GetString()
-                    ?? throw new JsonException("reasoning_trace is null");
+                var skipTrace = RequireString(input, "reasoning_trace");
                 return new ReconcileResult.NotNews(skipTrace, apiResult.Tokens);
             }
 
-            var emailBody = input.GetProperty("email_body").GetString()
-                ?? throw new JsonException("email_body is null");
+            var emailBody = RequireString(input, "email_body");
 
-            var finalSnapshotJson = input.GetProperty("final_snapshot").GetRawText();
+            var finalSnapshotJson = RequireProperty(input, "final_snapshot").GetRawText();
             var finalSnapshot = ForecastSnapshotBody.Deserialize(finalSnapshotJson);
 
-            var reasoningTrace = input.GetProperty("reasoning_trace").GetString()
-                ?? throw new JsonException("reasoning_trace is null");
+            var reasoningTrace = RequireString(input, "reasoning_trace");
 
             return new ReconcileResult.Success(emailBody, finalSnapshot, reasoningTrace, apiResult.Tokens);
         }
-        catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException)
+        catch (MissingToolUseFieldException ex)
+        {
+            // WX-104: a field Claude omitted (or returned null/non-string) is reported
+            // precisely by name — not as a raw KeyNotFoundException mislabelled
+            // "schema validation failed". The provisional CommittedSend is left in
+            // place by the caller as a failed-attempt audit row (SentAtUtc stays null,
+            // so it never becomes a prior snapshot and is never delivered); the next
+            // cycle reconciles a fresh provisional, which is how the system self-heals.
+            Logger.Error($"Reconciliation tool_use input is {ex.Message}.");
+            return new ReconcileResult.Failure($"Reconciliation response {ex.Message}.");
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
         {
             Logger.Error($"Reconciliation tool_use input failed validation: {ex.Message}");
             return new ReconcileResult.Failure($"Schema validation failed: {ex.Message}");
         }
+    }
+
+    // ── tool_use field accessors (WX-104) ─────────────────────────────────────
+
+    // Reads a required property from Claude's tool_use input, naming the field when
+    // absent. JsonElement.GetProperty throws a bare KeyNotFoundException on a missing
+    // key — which previously surfaced to the operator mislabelled "schema validation
+    // failed"; TryGetProperty + this typed throw report the exact field instead.
+    private static JsonElement RequireProperty(JsonElement input, string field)
+        => input.TryGetProperty(field, out var value)
+            ? value
+            : throw new MissingToolUseFieldException(field);
+
+    // As RequireProperty, but also requires a non-null string value; a present-but-null
+    // or wrong-typed value is treated as a missing field so the failure still names it.
+    private static string RequireString(JsonElement input, string field)
+        => RequireProperty(input, field) is { ValueKind: JsonValueKind.String } v && v.GetString() is { } s
+            ? s
+            : throw new MissingToolUseFieldException(field);
+
+    // Signals that Claude's tool_use input lacked a usable value for a required field.
+    // The message names the field so the operator-facing failure is precise (WX-104).
+    private sealed class MissingToolUseFieldException : Exception
+    {
+        public MissingToolUseFieldException(string field)
+            : base($"missing required field '{field}'") { }
     }
 
     // ── per-recipient system prompt ──────────────────────────────────────────
