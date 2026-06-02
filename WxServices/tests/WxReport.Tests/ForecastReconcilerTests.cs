@@ -236,6 +236,55 @@ public class ForecastReconcilerTests
         Assert.DoesNotContain("Schema validation failed", failure.Reason);
     }
 
+    // ── failure: response truncated at the output-token cap (WX-109) ─────────
+
+    [Fact]
+    public async Task ResponseTruncatedAtTokenCap_ReturnsTruncationFailure_NotMissingField()
+    {
+        // stop_reason "max_tokens" means generation was cut at the output-token
+        // cap, so the tool_use input is a truncated partial object with a trailing
+        // required field (here email_body) dropped. This is the real-world failure
+        // behind the WX-104 "missing required field 'email_body'" log lines: the
+        // field was generated-then-truncated, not omitted. The reconciler must
+        // report truncation, not mislabel it a missing field.
+        var responseJson = BuildClaudeResponseJsonWithRawInput("""
+            {
+              "final_snapshot": { "schemaVersion": 1, "blocks": [] },
+              "reasoning_trace": "trace"
+            }
+            """,
+            stopReason: "max_tokens");
+
+        var result = await RunReconciler(responseJson);
+
+        var failure = Assert.IsType<ReconcileResult.Failure>(result);
+        Assert.Contains("truncated", failure.Reason);
+        Assert.Contains("max_tokens", failure.Reason);
+        Assert.DoesNotContain("missing required field", failure.Reason);
+    }
+
+    [Fact]
+    public async Task ResponseTruncatedAtTokenCap_DetectedEvenWhenPartialInputLooksComplete()
+    {
+        // Defense-in-depth: a "max_tokens" stop_reason is authoritative. Even if the
+        // truncated partial input happens to still carry all three fields, we do not
+        // trust a capped generation — it keys on stop_reason, not on field presence,
+        // so the result is the truncation Failure rather than a (lucky) Success.
+        var responseJson = BuildClaudeResponseJsonWithRawInput("""
+            {
+              "email_body": "<p>body</p>",
+              "final_snapshot": { "schemaVersion": 1, "blocks": [] },
+              "reasoning_trace": "trace"
+            }
+            """,
+            stopReason: "max_tokens");
+
+        var result = await RunReconciler(responseJson);
+
+        var failure = Assert.IsType<ReconcileResult.Failure>(result);
+        Assert.Contains("truncated", failure.Reason);
+    }
+
     // ── failure: garbage final_snapshot JSON ────────────────────────────────
 
     [Fact]
@@ -357,7 +406,8 @@ public class ForecastReconcilerTests
         int outputTokens = 10,
         int cacheReadInputTokens = 0,
         int cacheCreationInputTokens = 0,
-        string toolName = "submit_reconciled_report")
+        string toolName = "submit_reconciled_report",
+        string stopReason = "tool_use")
     {
         return $$"""
             {
@@ -373,7 +423,7 @@ public class ForecastReconcilerTests
                 }
               ],
               "model": "claude-sonnet-4-6",
-              "stop_reason": "tool_use",
+              "stop_reason": "{{stopReason}}",
               "usage": {
                 "input_tokens": {{inputTokens}},
                 "output_tokens": {{outputTokens}},

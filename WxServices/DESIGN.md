@@ -453,6 +453,8 @@ The decision is split into a cheap deterministic gate followed by an LLM judgmen
   - `submit_reconciled_report` — an HTML `email_body`, a refined `final_snapshot`, and a `reasoning_trace`; the report is sent.
   - `skip_send` — a `reasoning_trace` only; no email is sent (the WX-80 invalidation gate).
 
+  Malformed, incomplete, or truncated tool output — a missing or null required field, a schema-invalid `final_snapshot`, or a response Claude could not finish within the output-token cap (`ClaudeClient` surfaces the response's `stop_reason`; a `max_tokens` truncation drops a trailing required field, often `email_body`, and is short-circuited before any field-presence check so the operator log names the truncation rather than a phantom missing field) — yields a typed `Failure`: no email is sent, the provisional `CommittedSend` is left in place (`SentAtUtc` stays null, so it never becomes a prior and is never delivered), and the next cycle reconciles a fresh provisional and self-heals. The reconciliation call is capped at 16384 output tokens (WX-109).
+
   Significance-tier guidance (WX-81) steers the "is this news?" judgment **in the prompt**, not in C#: the safety-critical / plans-affecting / ambient-interest tiers, the directional-asymmetry rule (a worsening trend is more newsworthy than the equivalent improvement), and the 34 kt line. Subject-line and opening phrasing follow from Claude's reconciliation rather than a C#-classified severity.
 
 **Significance judged against the committed forecast (not C# thresholds):**
