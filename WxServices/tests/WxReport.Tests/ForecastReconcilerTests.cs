@@ -287,7 +287,8 @@ public class ForecastReconcilerTests
             units: null,
             changeSeverity: ChangeSeverity.None,
             previousMetarIcao: null,
-            allowSkip: allowSkip);
+            allowSkip: allowSkip,
+            changedSinceLastSend: Array.Empty<TriggerSource>());
     }
 
     private static WeatherSnapshot BuildSnapshot() => new()

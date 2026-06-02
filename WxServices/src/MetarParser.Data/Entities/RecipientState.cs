@@ -31,6 +31,20 @@ public class RecipientState
     public string? LastClaudeInputHash { get; set; }
 
     /// <summary>
+    /// Serialised <c>InputIdentity</c> of the evidence behind the most recent
+    /// report actually <em>sent</em> to this recipient (METAR observation time,
+    /// TAF issuance, GFS model run).  Distinct from <see cref="LastClaudeInputHash"/>,
+    /// which advances on every Claude <em>call</em> (including not-news skips and
+    /// WX-108 suppressions): this advances only when an email actually went out.
+    /// WX-108 compares the current cycle's identity against this value to tell
+    /// Claude which inputs are genuinely fresh since the last delivered report,
+    /// and to gate the deterministic severe-flag hysteresis (a severe-only flip on
+    /// an observation-only advance, with no newer GFS run or TAF, is not trusted).
+    /// Null until the first send to the recipient.
+    /// </summary>
+    public string? LastSentInputHash { get; set; }
+
+    /// <summary>
     /// ICAO of the METAR station used for the most recent report sent to this recipient.
     /// Used to detect station switches caused by the primary station having no recent data,
     /// so Claude can include context explaining the change in observation source.

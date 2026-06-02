@@ -49,6 +49,8 @@ public sealed class ReportWorker : BackgroundService
     private readonly Counter<long> _triggers;
     private readonly Counter<long> _preFilterSkips;
     private readonly Counter<long> _claudeNotNews;
+    private readonly Counter<long> _redundantSuppressed;
+    private readonly Counter<long> _severeFlipSuppressed;
     private readonly Histogram<double> _cycleDuration;
     private readonly Histogram<double> _claudeDuration;
 
@@ -83,6 +85,8 @@ public sealed class ReportWorker : BackgroundService
         _triggers = _meter.CreateCounter<long>("wxreport.triggers.total", description: "Send triggers fired, tagged by trigger.type (first, scheduled, metar, taf, gfs, multiple).");
         _preFilterSkips = _meter.CreateCounter<long>("wxreport.prefilter.skips.total", description: "Cycles where no input advanced since the last Claude call, so the call was skipped (pre-filter no-op).");
         _claudeNotNews = _meter.CreateCounter<long>("wxreport.claude.not_news.total", description: "Reconciliation calls where Claude's invalidation gate judged the evidence not news and suppressed the send.");
+        _redundantSuppressed = _meter.CreateCounter<long>("wxreport.suppressed.redundant.total", description: "WX-108: unscheduled sends suppressed because the reconciled snapshot was materially identical to the last sent report.");
+        _severeFlipSuppressed = _meter.CreateCounter<long>("wxreport.suppressed.severe_flip.total", description: "WX-108: unscheduled sends suppressed because the only change was a severe-flag flip on an observation-only advance with no newer GFS run or TAF.");
         _cycleDuration = _meter.CreateHistogram<double>("wxreport.cycle.duration.seconds", unit: "s", description: "Duration of each report cycle.");
         _claudeDuration = _meter.CreateHistogram<double>("wxreport.claude.duration.seconds", unit: "s", description: "Duration of each Claude API call.");
     }
@@ -260,6 +264,7 @@ public sealed class ReportWorker : BackgroundService
             changeSeverity: ChangeSeverity.None,
             previousMetarIcao: null,
             allowSkip: false, // startup is an unconditional verification send — never skippable
+            changedSinceLastSend: Array.Empty<TriggerSource>(), // unused on a guaranteed send
             ct: ct);
 
         // Startup passes allowSkip:false, so ReconcileAsync never returns NotNews
@@ -345,7 +350,9 @@ public sealed class ReportWorker : BackgroundService
         }
 
         state.LastUnscheduledSentUtc = DateTime.UtcNow;
-        state.LastClaudeInputHash = InputIdentity.From(snapshot).Serialize();
+        var startupHash = InputIdentity.From(snapshot).Serialize();
+        state.LastClaudeInputHash = startupHash;
+        state.LastSentInputHash = startupHash; // startup actually delivered a report
         state.LastMetarIcao = snapshot.StationIcao;
 
         try { await ctx.SaveChangesAsync(ct); }
@@ -471,6 +478,14 @@ public sealed class ReportWorker : BackgroundService
                 // Claude about evidence it has already seen.
                 var inputIdentity = InputIdentity.From(snapshot);
                 var inputHash = inputIdentity.Serialize();
+
+                // WX-108: which inputs are newer than at the last DELIVERED report
+                // (distinct from the last Claude call). Drives the anti-reversal
+                // context handed to Claude and the severe-flag hysteresis backstop.
+                var changedSinceLastSend = inputIdentity.ChangedSourcesSince(state.LastSentInputHash);
+                bool freshGuidanceSinceLastSend =
+                    changedSinceLastSend.Contains(TriggerSource.Taf) || changedSinceLastSend.Contains(TriggerSource.Gfs);
+
                 var (shouldSend, reason, severity, allowSkip) = ShouldSend(recipient, state, inputIdentity, cfg, now);
 
                 if (!shouldSend)
@@ -562,6 +577,7 @@ public sealed class ReportWorker : BackgroundService
                     changeSeverity: severity,
                     previousMetarIcao: previousMetarIcao,
                     allowSkip: allowSkip,
+                    changedSinceLastSend: changedSinceLastSend,
                     ct: ct);
                 _claudeDuration.Record(claudeSw.Elapsed.TotalSeconds);
                 _claudeCalls.Add(1);
@@ -579,16 +595,7 @@ public sealed class ReportWorker : BackgroundService
                     _claudeCacheReadTokens.Add(notNews.Tokens.CacheReadInputTokens);
                     _claudeCacheCreationTokens.Add(notNews.Tokens.CacheCreationInputTokens);
 
-                    state.LastClaudeInputHash = inputHash;
-                    committedSend.ReasoningTrace = notNews.ReasoningTrace;
-                    try
-                    {
-                        await ctx.SaveChangesAsync(ct);
-                    }
-                    catch (Exception ex) when (ex is not OperationCanceledException)
-                    {
-                        Logger.Error($"{recipient.Id} {recipient.Email} ({recipient.Name}): failed to persist not-news state for CommittedSend Id={committedSend.Id}.", ex);
-                    }
+                    await PersistUnsentCycleAsync(ctx, recipient, committedSend, state, inputHash, notNews.ReasoningTrace, ct);
                     Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): Claude judged the {triggerType} arrival not news — no send. Provisional CommittedSend Id={committedSend.Id} left unsent.");
                     continue;
                 }
@@ -606,6 +613,35 @@ public sealed class ReportWorker : BackgroundService
                 _claudeOutputTokens.Add(success.Tokens.OutputTokens);
                 _claudeCacheReadTokens.Add(success.Tokens.CacheReadInputTokens);
                 _claudeCacheCreationTokens.Add(success.Tokens.CacheCreationInputTokens);
+
+                // WX-108 deterministic backstop (unscheduled cycles only). Two
+                // suppressions, both about idempotence/stability rather than weather
+                // significance — Claude still owns the "is it news?" judgment via the
+                // gate above; this only catches what stochastic re-derivation slips past:
+                //   1. Redundant re-send — the reconciled snapshot says materially what
+                //      the last sent report already told this recipient.
+                //   2. Severe-flag hysteresis — the only material change from the last
+                //      sent snapshot is a severeFlag flip, on an observation-only advance
+                //      with no newer GFS run or TAF to support it (the 06-02 348→363 case).
+                // On suppression: no send, no re-anchor (provisional keeps SentAtUtc null),
+                // advance LastClaudeInputHash so an identical next cycle pre-filter-skips.
+                if (allowSkip && priorSnapshot is not null)
+                {
+                    var priorBody = ForecastSnapshotBody.Deserialize(priorSnapshot.Body);
+                    var suppression = EvaluateUnscheduledSuppression(
+                        priorBody, success.FinalSnapshot, freshGuidanceSinceLastSend);
+                    if (suppression != UnscheduledSuppression.None)
+                    {
+                        if (suppression == UnscheduledSuppression.Redundant) _redundantSuppressed.Add(1);
+                        else _severeFlipSuppressed.Add(1);
+                        var why = suppression == UnscheduledSuppression.Redundant
+                            ? "reconciled snapshot is materially identical to the last sent report (redundant re-send)"
+                            : "severe-flag de-escalation on an observation-only advance with no newer GFS run or TAF (hysteresis)";
+                        await PersistUnsentCycleAsync(ctx, recipient, committedSend, state, inputHash, success.ReasoningTrace, ct);
+                        Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): WX-108 suppressed {triggerType} send — {why}. Provisional CommittedSend Id={committedSend.Id} left unsent.");
+                        continue;
+                    }
+                }
 
                 // WX-79: persist the reconciled snapshot row and re-anchor the
                 // CommittedSend.  EmailBody is the pre-meteogram wrapped HTML
@@ -671,7 +707,11 @@ public sealed class ReportWorker : BackgroundService
                 // Record the evidence identity behind this send so the next
                 // unchanged cycle pre-filter-skips. Set on every actual send,
                 // even observationless ones (TAF/GFS identity still advances).
+                // LastSentInputHash advances only here (an actual delivery), unlike
+                // LastClaudeInputHash which also advances on not-news / WX-108
+                // suppression — so "changed since last send" stays accurate.
                 state.LastClaudeInputHash = inputHash;
+                state.LastSentInputHash = inputHash;
 
                 // Only capture the station when we have real observation data;
                 // otherwise leave the last-known value so station-switch detection
@@ -705,6 +745,31 @@ public sealed class ReportWorker : BackgroundService
     }
 
     // ── persistence helpers ───────────────────────────────────────────────────
+
+    /// <summary>
+    /// Persists the "called Claude but not sending this cycle" state shared by the
+    /// WX-80 not-news gate and the WX-108 suppression backstop: records the input
+    /// hash so an identical next cycle pre-filter-skips, keeps the reasoning trace
+    /// on the provisional for diagnosability, and leaves the committed anchor and
+    /// last-sent state untouched (the provisional keeps <c>SentAtUtc = null</c>, so
+    /// it never becomes a prior snapshot). Persistence errors are logged, not
+    /// thrown — an unsent cycle must not crash the worker.
+    /// </summary>
+    private static async Task PersistUnsentCycleAsync(
+        WeatherDataContext ctx, RecipientConfig recipient, CommittedSend committedSend,
+        RecipientState state, string inputHash, string reasoningTrace, CancellationToken ct)
+    {
+        state.LastClaudeInputHash = inputHash;
+        committedSend.ReasoningTrace = reasoningTrace;
+        try
+        {
+            await ctx.SaveChangesAsync(ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Logger.Error($"{recipient.Id} {recipient.Email} ({recipient.Name}): failed to persist unsent-cycle state for CommittedSend Id={committedSend.Id}.", ex);
+        }
+    }
 
     /// <summary>
     /// Builds a per-recipient provisional <see cref="ForecastSnapshot"/> for
@@ -909,6 +974,54 @@ public sealed class ReportWorker : BackgroundService
             return (false, "prefilter-skip", ChangeSeverity.None, false);
 
         return (true, "change", ChangeSeverity.Update, true);
+    }
+
+    /// <summary>
+    /// Outcome of the WX-108 deterministic post-reconciliation backstop for an
+    /// unscheduled cycle.  Pure function of the snapshots and the data vintage —
+    /// no significance judgment, which remains Claude's job.
+    /// </summary>
+    internal enum UnscheduledSuppression
+    {
+        /// <summary>Send the report — it is materially new news.</summary>
+        None,
+
+        /// <summary>Suppress: the reconciled snapshot is materially identical to the last sent report.</summary>
+        Redundant,
+
+        /// <summary>Suppress: the only material change is a severe-flag *de-escalation* on an observation-only advance with no newer GFS run or TAF. A severe *escalation* is never suppressed — it is news.</summary>
+        SevereFlip,
+    }
+
+    /// <summary>
+    /// Decides whether an unscheduled, successfully-reconciled send should be
+    /// suppressed as a redundant re-send or an untrusted observation-driven
+    /// severe-flag flip (WX-108).  Extracted from <see cref="RunCycleAsync"/> so the
+    /// decision is unit-testable in isolation, like <see cref="ShouldSend"/>.
+    /// </summary>
+    /// <param name="priorBody">The last <em>sent</em> snapshot body for the recipient (the committed anchor).</param>
+    /// <param name="finalBody">The freshly reconciled snapshot body Claude returned this cycle.</param>
+    /// <param name="freshGuidanceSinceLastSend">True when a newer GFS run or TAF issuance has arrived since the last sent report; a severe-flag flip is trusted only then.</param>
+    /// <returns>
+    /// <see cref="UnscheduledSuppression.Redundant"/> when the bodies are materially
+    /// equal; <see cref="UnscheduledSuppression.SevereFlip"/> when they differ only by
+    /// severe flags, no fresh guidance supports the flip, and the flip is a
+    /// de-escalation (no new severe hazard appears); otherwise
+    /// <see cref="UnscheduledSuppression.None"/>.
+    /// </returns>
+    internal static UnscheduledSuppression EvaluateUnscheduledSuppression(
+        ForecastSnapshotBody priorBody, ForecastSnapshotBody finalBody, bool freshGuidanceSinceLastSend)
+    {
+        if (priorBody.MateriallyEquals(finalBody))
+            return UnscheduledSuppression.Redundant;
+        // Severe hysteresis is one-directional: suppress a de-escalation on an
+        // observation-only advance (the untrusted whipsaw), but never the arrival
+        // of a new severe hazard — that is always news (directional asymmetry).
+        if (!freshGuidanceSinceLastSend
+            && priorBody.MateriallyEqualsIgnoringSevere(finalBody)
+            && !finalBody.HasSevereEscalationOver(priorBody))
+            return UnscheduledSuppression.SevereFlip;
+        return UnscheduledSuppression.None;
     }
 
     /// <summary>

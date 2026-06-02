@@ -108,6 +108,7 @@ public sealed class ForecastReconciler
     /// <param name="changeSeverity">Severity of the trigger that caused this send (alert, update, or none).</param>
     /// <param name="previousMetarIcao">ICAO of the previous report's station, when it differs from the current snapshot's station; <see langword="null"/> when no station change occurred.</param>
     /// <param name="allowSkip">When <see langword="true"/> (unscheduled, arrival-triggered cycles), Claude may decline to send via the <c>skip_send</c> tool, yielding a <see cref="ReconcileResult.NotNews"/>.  When <see langword="false"/> (scheduled / first / startup), the send is guaranteed and skipping is not offered.</param>
+    /// <param name="changedSinceLastSend">Which inputs (METAR/TAF/GFS) are newer than they were at the last report actually delivered to this recipient (WX-108).  Surfaced to Claude as <c>changed_since_last_sent_report</c> so the anti-reversal rule can bind on observation-only cycles.  Empty list means nothing advanced since the last send; treated as a first send when no prior send exists.</param>
     /// <param name="ct">Cancellation token propagated to the underlying HTTP call.</param>
     /// <returns>A <see cref="ReconcileResult.Success"/> on a clean three-artifact return; a <see cref="ReconcileResult.NotNews"/> when Claude skips an arrival-triggered send; a <see cref="ReconcileResult.Failure"/> otherwise.</returns>
     /// <sideeffects>Makes one HTTP POST to the Anthropic Messages API via <see cref="ClaudeClient.InvokeReconciliationAsync"/>.  Writes error log entries on schema-validation failure.</sideeffects>
@@ -127,6 +128,7 @@ public sealed class ForecastReconciler
         ChangeSeverity changeSeverity,
         string? previousMetarIcao,
         bool allowSkip,
+        IReadOnlyList<TriggerSource> changedSinceLastSend,
         CancellationToken ct = default)
     {
         units ??= new UnitPreferences();
@@ -135,7 +137,8 @@ public sealed class ForecastReconciler
             snapshot, language, units, isFirstReport, scheduledHour, changeSeverity, previousMetarIcao, allowSkip);
 
         var userMessage = BuildUserMessage(
-            snapshot, provisional, gfsModelRunUtc, tafIssuanceUtc, tafValidToUtc, prior, recipientName, tz, units);
+            snapshot, provisional, gfsModelRunUtc, tafIssuanceUtc, tafValidToUtc, prior, recipientName, tz, units,
+            changedSinceLastSend);
 
         var apiResult = await _claude.InvokeReconciliationAsync(perRecipientPrompt, userMessage, allowSkip, ct);
         if (apiResult is null)
@@ -312,6 +315,13 @@ public sealed class ForecastReconciler
             + "experience (strong storms, possible damaging winds or hail). "
             + "When precipitation is forecast near freezing temperatures, consider whether "
             + "snow, sleet, or a wintry mix is possible and mention it if so. "
+            + "Never state weather as flatly certain — no forecast is ever 100% sure, and "
+            + "no forecaster speaks as if it were. Even when a block's precipExpectation is "
+            + "'certain' or its severeFlag is set — events as close to certain as makes no "
+            + "difference — render them as calibrated strong likelihood ('almost certain', "
+            + "'highly likely', 'expect', 'very likely'), never as a guarantee: avoid "
+            + "'will' used as a promise, 'certain', 'definitely', 'guaranteed', and "
+            + "'no chance'. Apply the same hedging to severe-weather and hazard wording. "
             + welcomeInstruction
             + stationChangeInstruction
             + changeAlertInstruction
@@ -328,11 +338,16 @@ public sealed class ForecastReconciler
     private static string BuildUserMessage(
         WeatherSnapshot snapshot, ForecastSnapshotBody provisional, DateTime? gfsModelRunUtc,
         DateTime? tafIssuanceUtc, DateTime? tafValidToUtc, ForecastSnapshot? prior,
-        string recipientName, TimeZoneInfo tz, UnitPreferences units)
+        string recipientName, TimeZoneInfo tz, UnitPreferences units,
+        IReadOnlyList<TriggerSource> changedSinceLastSend)
     {
         var sb = new StringBuilder();
         sb.Append("Reconcile the following inputs for ").Append(recipientName)
           .AppendLine(" and emit your three artifacts via the submit_reconciled_report tool.");
+        sb.AppendLine();
+
+        sb.Append("changed_since_last_sent_report: ")
+          .AppendLine(DescribeChangedSinceLastSend(prior, changedSinceLastSend));
         sb.AppendLine();
 
         sb.Append("provisional_snapshot.gfs_model_run_utc: ")
@@ -368,6 +383,31 @@ public sealed class ForecastReconciler
         }
 
         return sb.ToString();
+    }
+
+    // Renders the WX-108 changed_since_last_sent_report descriptor: which inputs
+    // are newer than at the last delivered report, phrased so the anti-reversal
+    // rule reads naturally. "observation only" is the case the rule keys on.
+    private static string DescribeChangedSinceLastSend(
+        ForecastSnapshot? prior, IReadOnlyList<TriggerSource> changedSinceLastSend)
+    {
+        if (prior is null)
+            return "first send to this recipient (no prior delivered report)";
+        if (changedSinceLastSend.Count == 0)
+            return "nothing — no input has advanced since the last sent report";
+
+        bool metar = changedSinceLastSend.Contains(TriggerSource.Metar);
+        bool taf = changedSinceLastSend.Contains(TriggerSource.Taf);
+        bool gfs = changedSinceLastSend.Contains(TriggerSource.Gfs);
+
+        if (metar && !taf && !gfs)
+            return "observation only — no new TAF or GFS run since the last sent report";
+
+        var parts = new List<string>(3);
+        if (metar) parts.Add("new observation");
+        if (taf) parts.Add("new TAF");
+        if (gfs) parts.Add("new GFS run");
+        return string.Join("; ", parts);
     }
 
     // ── subtitle helper ──────────────────────────────────────────────────────
