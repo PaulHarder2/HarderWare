@@ -147,6 +147,25 @@ public sealed class ForecastReconciler
                 "Claude API call failed or returned no submit_reconciled_report or skip_send tool_use block.");
         }
 
+        // WX-109: a "max_tokens" stop_reason means generation was cut at the
+        // output-token cap, so the tool_use input is a truncated partial object —
+        // a trailing required field (often email_body) is dropped. Detect that
+        // here, before reading any field, so the operator sees a truthful
+        // "response truncated" failure instead of WX-104's accurate-but-misleading
+        // "missing required field 'email_body'", which sends them hunting for a
+        // prompt/schema problem that does not exist. The caller leaves the
+        // provisional CommittedSend in place and the next cycle reconciles a fresh
+        // one (the same self-healing path as any other reconciliation Failure).
+        if (apiResult.StopReason == "max_tokens")
+        {
+            Logger.Error(
+                "Reconciliation response was truncated at the output-token cap "
+                + "(stop_reason=max_tokens); the tool_use input is incomplete.");
+            return new ReconcileResult.Failure(
+                "Reconciliation response was truncated at the output-token cap "
+                + "(stop_reason=max_tokens) before the tool_use input was complete.");
+        }
+
         try
         {
             var input = apiResult.ToolUseInput;

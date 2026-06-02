@@ -33,10 +33,19 @@ public sealed record TokenUsage(
 /// <param name="ToolName">Name of the tool Claude invoked — <c>"submit_reconciled_report"</c> to send, or <c>"skip_send"</c> for the WX-80 "not news" outcome.</param>
 /// <param name="ToolUseInput">JsonElement representing the tool_use block's <c>input</c> object.</param>
 /// <param name="Tokens">Token-usage metadata extracted from the response's <c>usage</c> block.</param>
+/// <param name="StopReason">
+/// The response's <c>stop_reason</c> (e.g. <c>"tool_use"</c>, <c>"end_turn"</c>,
+/// <c>"max_tokens"</c>).  <c>"max_tokens"</c> means generation was cut at the
+/// output-token cap, so <see cref="ToolUseInput"/> is a truncated partial object
+/// (a trailing required field is typically missing).  The caller checks this
+/// before reading fields so a truncation is reported as such rather than
+/// mislabelled a missing/omitted field (WX-109).
+/// </param>
 public sealed record ClaudeReconciliationResult(
     string ToolName,
     JsonElement ToolUseInput,
-    TokenUsage Tokens);
+    TokenUsage Tokens,
+    string? StopReason);
 
 /// <summary>
 /// Thin wrapper around the Anthropic Messages API.  Exposes the single
@@ -48,6 +57,17 @@ public sealed class ClaudeClient
 {
     private const string MessagesEndpoint = "https://api.anthropic.com/v1/messages";
     private const string AnthropicVersion = "2023-06-01";
+
+    // Output-token ceiling for the reconciliation call. The three artifacts
+    // (a full inline-CSS HTML email_body, a final_snapshot of up to 24 six-hour
+    // blocks for a six-day horizon, and a reasoning_trace) are emitted in one
+    // tool_use response; on a large day they can exceed the old 8192 cap, at
+    // which point Anthropic returns stop_reason "max_tokens" with a truncated
+    // partial tool_use input — a trailing required field (often email_body) is
+    // dropped and the pass fails. 16384 gives comfortable worst-case headroom
+    // on a Sonnet-class model (which supports far more), and billing is per
+    // token actually generated, not per ceiling (WX-109).
+    private const int MaxOutputTokens = 16384;
 
     private readonly HttpClient _http;
     private readonly string _apiKey;
@@ -130,7 +150,7 @@ public sealed class ClaudeClient
         var request = new
         {
             model = _model,
-            max_tokens = 8192,
+            max_tokens = MaxOutputTokens,
             system = new object[]
             {
                 new { type = "text", text = _personaPrefix },
@@ -232,7 +252,12 @@ public sealed class ClaudeClient
 
             if (toolUseBlocks is not { Count: 1 })
             {
-                Logger.Error($"Claude response had {toolUseBlocks?.Count ?? 0} tool_use block(s); expected exactly 1 (allowSkip={allowSkip}).");
+                // Include stop_reason: a "max_tokens" truncation can cut generation
+                // before any tool_use block is emitted, which would otherwise read as
+                // a baffling "0 tool_use blocks" rather than the token-cap hit it is
+                // (WX-109). The common truncation case — one block with a partial
+                // input — is handled downstream in ForecastReconciler via StopReason.
+                Logger.Error($"Claude response had {toolUseBlocks?.Count ?? 0} tool_use block(s); expected exactly 1 (allowSkip={allowSkip}, stop_reason={parsed?.StopReason ?? "null"}).");
                 return null;
             }
 
@@ -253,7 +278,7 @@ public sealed class ClaudeClient
                 CacheReadInputTokens: usage?.CacheReadInputTokens ?? 0,
                 CacheCreationInputTokens: usage?.CacheCreationInputTokens ?? 0);
 
-            return new ClaudeReconciliationResult(toolName, toolUse.Input, tokens);
+            return new ClaudeReconciliationResult(toolName, toolUse.Input, tokens, parsed?.StopReason);
         }
     }
 
@@ -266,6 +291,10 @@ public sealed class ClaudeClient
 
         [JsonPropertyName("usage")]
         public TokenUsageDto? Usage { get; set; }
+
+        /// <summary>Why generation stopped; <c>"max_tokens"</c> signals a truncated, incomplete tool_use input (WX-109).</summary>
+        [JsonPropertyName("stop_reason")]
+        public string? StopReason { get; set; }
     }
 
     private sealed class ContentBlock
