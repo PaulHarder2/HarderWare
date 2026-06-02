@@ -90,10 +90,19 @@ public sealed record ForecastSnapshotBody
         }
     }
 
-    /// <summary>Temperature drift (°C) below which two blocks are treated as materially the same.</summary>
+    /// <summary>
+    /// Temperature drift (°C) below which two blocks are treated as materially the
+    /// same. 2 °C absorbs ordinary model/observation wobble between hourly cycles —
+    /// below the threshold where a recipient would perceive the forecast band as
+    /// having changed — while still surfacing a real warm-up or cool-down.
+    /// </summary>
     private const double TempToleranceC = 2.0;
 
-    /// <summary>Wind drift (kt) below which two blocks are treated as materially the same.</summary>
+    /// <summary>
+    /// Wind drift (kt) below which two blocks are treated as materially the same.
+    /// 5 kt covers METAR wind rounding and minor model jitter (a non-actionable
+    /// breeze change) while still catching a shift to a genuinely windier regime.
+    /// </summary>
     private const int WindToleranceKt = 5;
 
     /// <summary>
