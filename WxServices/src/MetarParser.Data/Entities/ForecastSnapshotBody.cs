@@ -89,6 +89,106 @@ public sealed record ForecastSnapshotBody
             }
         }
     }
+
+    /// <summary>
+    /// Temperature drift (°C) below which two blocks are treated as materially the
+    /// same. 2 °C absorbs ordinary model/observation wobble between hourly cycles —
+    /// below the threshold where a recipient would perceive the forecast band as
+    /// having changed — while still surfacing a real warm-up or cool-down.
+    /// </summary>
+    private const double TempToleranceC = 2.0;
+
+    /// <summary>
+    /// Wind drift (kt) below which two blocks are treated as materially the same.
+    /// 5 kt covers METAR wind rounding and minor model jitter (a non-actionable
+    /// breeze change) while still catching a shift to a genuinely windier regime.
+    /// </summary>
+    private const int WindToleranceKt = 5;
+
+    /// <summary>
+    /// Reader-facing material equality used by the WX-108 redundancy backstop:
+    /// true when this body says the same thing a reader would act on as
+    /// <paramref name="other"/>.  Categorical fields (sky, obscuration, precip
+    /// expectation/phenomenon, gust, visibility, severeFlag) must match exactly;
+    /// temperature and wind bands may drift within
+    /// <see cref="TempToleranceC"/>/<see cref="WindToleranceKt"/>.  Blocks are
+    /// matched by <see cref="ForecastSnapshotBlock.StartUtc"/>; horizon-edge
+    /// blocks that rolled on or off with the passage of time are not, by
+    /// themselves, treated as news, so only the overlapping blocks are compared.
+    /// </summary>
+    public bool MateriallyEquals(ForecastSnapshotBody other) => MaterialMatch(other, ignoreSevere: false);
+
+    /// <summary>
+    /// As <see cref="MateriallyEquals"/>, but ignores <see cref="ForecastSnapshotBlock.SevereFlag"/>.
+    /// Used by the WX-108 severe-flag hysteresis: when the two bodies differ
+    /// <em>only</em> by severe flags and no newer GFS run or TAF has arrived since
+    /// the last sent report, the flip is observation-driven and not trusted as
+    /// send-worthy news (severe potential comes from model/TAF guidance, which an
+    /// hourly METAR cannot change).
+    /// </summary>
+    public bool MateriallyEqualsIgnoringSevere(ForecastSnapshotBody other) => MaterialMatch(other, ignoreSevere: true);
+
+    private bool MaterialMatch(ForecastSnapshotBody other, bool ignoreSevere)
+    {
+        ArgumentNullException.ThrowIfNull(other);
+
+        var theirs = new Dictionary<DateTime, ForecastSnapshotBlock>(other.Blocks.Count);
+        foreach (var b in other.Blocks)
+            theirs[b.StartUtc] = b;
+
+        bool anyShared = false;
+        foreach (var a in Blocks)
+        {
+            if (!theirs.TryGetValue(a.StartUtc, out var b))
+                continue;
+            anyShared = true;
+            if (!BlocksMateriallyEqual(a, b, ignoreSevere))
+                return false;
+        }
+
+        // No overlapping blocks: equal only when both bodies are empty. An
+        // empty-vs-populated pair (or two fully disjoint horizons) is a real
+        // change, not a redundant re-send.
+        if (!anyShared)
+            return Blocks.Count == 0 && other.Blocks.Count == 0;
+
+        return true;
+    }
+
+    /// <summary>
+    /// True when this body raises <see cref="ForecastSnapshotBlock.SevereFlag"/> on
+    /// any block that <paramref name="prior"/> did not flag (a matching block prior
+    /// left unflagged, or a block prior did not cover) — i.e. a severe *escalation*.
+    /// The WX-108 hysteresis uses this so it suppresses only severe *de-escalations*
+    /// on an observation-only advance (the untrusted whipsaw, e.g. the 06-02
+    /// 348→363 drop); the *arrival* of a new severe hazard is always news worth
+    /// sending, even on a bare observation (directional asymmetry).
+    /// </summary>
+    public bool HasSevereEscalationOver(ForecastSnapshotBody prior)
+    {
+        ArgumentNullException.ThrowIfNull(prior);
+        var priorBlocks = new Dictionary<DateTime, ForecastSnapshotBlock>(prior.Blocks.Count);
+        foreach (var b in prior.Blocks)
+            priorBlocks[b.StartUtc] = b;
+
+        foreach (var b in Blocks)
+            if (b.SevereFlag && (!priorBlocks.TryGetValue(b.StartUtc, out var p) || !p.SevereFlag))
+                return true;
+        return false;
+    }
+
+    private static bool BlocksMateriallyEqual(ForecastSnapshotBlock a, ForecastSnapshotBlock b, bool ignoreSevere) =>
+        a.SkyState == b.SkyState
+        && a.Obscuration == b.Obscuration
+        && a.PrecipExpectation == b.PrecipExpectation
+        && a.PrecipPhenomenon == b.PrecipPhenomenon
+        && a.GustOutlook == b.GustOutlook
+        && a.VisibilityExpectation == b.VisibilityExpectation
+        && (ignoreSevere || a.SevereFlag == b.SevereFlag)
+        && Math.Abs(a.TemperatureCelsius.Min - b.TemperatureCelsius.Min) <= TempToleranceC
+        && Math.Abs(a.TemperatureCelsius.Max - b.TemperatureCelsius.Max) <= TempToleranceC
+        && Math.Abs(a.WindKt.Min - b.WindKt.Min) <= WindToleranceKt
+        && Math.Abs(a.WindKt.Max - b.WindKt.Max) <= WindToleranceKt;
 }
 
 /// <summary>One uniform 6-hour block within a <see cref="ForecastSnapshotBody"/>.</summary>

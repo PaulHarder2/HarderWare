@@ -261,4 +261,71 @@ public class ForecastSnapshotBodyTests
         Assert.Equal(ForecastSnapshotBody.SchemaVersionCurrent, body.SchemaVersion);
         Assert.Empty(body.Blocks);
     }
+
+    // ── Material equality (WX-108 redundancy backstop) ─────────────────────────
+
+    private static ForecastSnapshotBody Body(params ForecastSnapshotBlock[] blocks) => new() { Blocks = blocks };
+
+    [Fact]
+    public void MateriallyEquals_IdenticalBodies_True()
+    {
+        Assert.True(Body(SampleBlock()).MateriallyEquals(Body(SampleBlock())));
+    }
+
+    [Fact]
+    public void MateriallyEquals_SmallTempAndWindDrift_True()
+    {
+        // +1.0/+1.3 °C and +2/+4 kt — inside the 2 °C / 5 kt tolerances.
+        var drifted = SampleBlock() with
+        {
+            TemperatureCelsius = new(9.2, 16.0),
+            WindKt = new(7, 16),
+        };
+        Assert.True(Body(SampleBlock()).MateriallyEquals(Body(drifted)));
+    }
+
+    [Fact]
+    public void MateriallyEquals_LargeTempSwing_False()
+    {
+        var hotter = SampleBlock() with { TemperatureCelsius = new(8.2, 20.0) }; // +5.3 °C max
+        Assert.False(Body(SampleBlock()).MateriallyEquals(Body(hotter)));
+    }
+
+    [Fact]
+    public void MateriallyEquals_PrecipTierChange_False()
+    {
+        var wetter = SampleBlock() with { PrecipExpectation = PrecipExpectation.Certain };
+        Assert.False(Body(SampleBlock()).MateriallyEquals(Body(wetter)));
+    }
+
+    [Fact]
+    public void MateriallyEquals_SevereFlagFlip_FalseButIgnoringSevereTrue()
+    {
+        var severe = SampleBlock() with { SevereFlag = true };
+        Assert.False(Body(SampleBlock()).MateriallyEquals(Body(severe)));
+        Assert.True(Body(SampleBlock()).MateriallyEqualsIgnoringSevere(Body(severe)));
+    }
+
+    [Fact]
+    public void MateriallyEquals_NonOverlappingHorizonEdge_ComparesOnlySharedBlocks()
+    {
+        var b0 = SampleBlock();
+        var b1 = SampleBlock() with { StartUtc = AnchorUtc.AddHours(6) };
+        var b2 = SampleBlock() with { StartUtc = AnchorUtc.AddHours(12) };
+        // prior covers {b0,b1}; new covers {b1,b2}. Overlap is b1 (equal); the
+        // rolled edge (b0 dropped, b2 added) is the passage of time, not news.
+        Assert.True(Body(b0, b1).MateriallyEquals(Body(b1, b2)));
+    }
+
+    [Fact]
+    public void MateriallyEquals_BothEmpty_True()
+    {
+        Assert.True(new ForecastSnapshotBody().MateriallyEquals(new ForecastSnapshotBody()));
+    }
+
+    [Fact]
+    public void MateriallyEquals_EmptyVsPopulated_False()
+    {
+        Assert.False(new ForecastSnapshotBody().MateriallyEquals(Body(SampleBlock())));
+    }
 }

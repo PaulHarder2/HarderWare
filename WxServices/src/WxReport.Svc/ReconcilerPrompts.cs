@@ -45,6 +45,11 @@ internal static class ReconcilerPrompts
           • prior_snapshot      — the most recent committed ForecastSnapshotBody
             for this station, with its generated_at_utc; may be null on a first
             send.
+          • changed_since_last_sent_report — which of the three inputs (METAR
+            observation, TAF, GFS run) are newer than they were at the last report
+            actually DELIVERED to this recipient. "observation only" means no new
+            TAF or GFS run has arrived since you last sent — the only fresh input is
+            a routine hourly observation.
 
         Reconciliation procedure:
 
@@ -103,6 +108,18 @@ internal static class ReconcilerPrompts
             raining. Treat the non-arrival as news only once the promised window has
             clearly and substantially passed without the weather materializing.
 
+        Stability and anti-reversal: severe potential and precipitation-likelihood
+        upgrades are driven by model and TAF guidance, not by a single new
+        observation. When changed_since_last_sent_report is "observation only" — no
+        newer GFS run or TAF since your last sent report — do NOT reverse, re-open,
+        or re-escalate a severeFlag or precip tier you already committed in
+        prior_snapshot; keep them consistent. A new observation can still be news
+        when it shows weather ARRIVING that the prior forecast did not promise (the
+        directional asymmetry above), but it is never a reason to flip a forecast
+        judgment the model has not changed, and it is never a reason to re-send what
+        prior_snapshot already told the recipient just because you re-derived it
+        slightly differently this cycle.
+
         Worked examples (tier — situation — decision):
 
           • Safety-critical / send. The committed 18-00Z block was precipExpectation
@@ -141,6 +158,18 @@ internal static class ReconcilerPrompts
             shifts an afternoon block to mostly_cloudy with no precipitation and no
             other change. skip_send — a minor sky-cover change with no bearing on plans
             or safety is ambient-interest only.
+          • Plans-affecting / skip (fresh TAF, no material change). A new TAF was just
+            issued, but reconciled against prior_snapshot it changes nothing a reader
+            would act on — same sky, same precipExpectation and precipPhenomenon, winds
+            within a few knots. skip_send — a fresh TAF issuance is not itself news;
+            only a material change to the committed forecast is.
+          • Safety-critical / skip (anti-reversal on observation only). The committed
+            18-00Z block was severeFlag true from the latest GFS and TAF.
+            changed_since_last_sent_report is "observation only" — no newer model run or
+            TAF. Re-reading the numbers you might now call the afternoon merely
+            "scattered storms," but nothing fresh supports lowering the hazard. Keep
+            severeFlag true and skip_send — do not whipsaw the recipient by reversing a
+            severe call on a routine observation alone.
 
         You have two tools, and you must call exactly one of them:
 
