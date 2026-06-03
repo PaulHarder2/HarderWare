@@ -204,6 +204,20 @@ public class InputIdentityTests
         Assert.DoesNotContain("fog", InputIdentity.WeatherSignature(b));
     }
 
+    [Fact]
+    public void WeatherSignature_HeavyIntensity_DiffersFromLightAndModerate()
+    {
+        var light = new List<SnapshotWeather> { new() { Intensity = WeatherIntensity.Light, Precipitation = new[] { PrecipitationType.Rain } } };
+        var moderate = new List<SnapshotWeather> { new() { Intensity = WeatherIntensity.Moderate, Precipitation = new[] { PrecipitationType.Rain } } };
+        var heavy = new List<SnapshotWeather> { new() { Intensity = WeatherIntensity.Heavy, Precipitation = new[] { PrecipitationType.Rain } } };
+
+        // Light and moderate fold together (ordinary); heavy is a material escalation
+        // a reader acts on, so it must change the signature and reach Claude's gate.
+        Assert.Equal(InputIdentity.WeatherSignature(light), InputIdentity.WeatherSignature(moderate));
+        Assert.NotEqual(InputIdentity.WeatherSignature(light), InputIdentity.WeatherSignature(heavy));
+        Assert.Contains("heavy", InputIdentity.WeatherSignature(heavy));
+    }
+
     private static WeatherSnapshot ObsSnap(
         string icao, DateTime obsUtc, int? windKt = null, double? tempF = null, double? visMiles = null) =>
         new()

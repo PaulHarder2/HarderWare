@@ -319,6 +319,38 @@ public class ForecastReconcilerTests
     }
 
     [Fact]
+    public async Task RetryableMalformed_ThenValid_SumsTokensAcrossAttempts()
+    {
+        // The failed attempt is real billable spend; the returned Tokens must include
+        // it so the cost dashboards don't undercount retried cycles.
+        var malformed = BuildClaudeResponseJsonWithRawInput("""
+            { "final_snapshot": { "schemaVersion": 1, "blocks": [] }, "reasoning_trace": "trace" }
+            """); // default tokens: 10 in / 10 out / 0 / 0
+        var valid = BuildClaudeResponseJson(
+            emailBody: "<p>ok</p>",
+            finalSnapshotJson: """{"schemaVersion":1,"blocks":[]}""",
+            reasoningTrace: "trace",
+            inputTokens: 100, outputTokens: 50, cacheReadInputTokens: 80, cacheCreationInputTokens: 10);
+
+        int calls = 0;
+        var result = await RunReconciler(_ =>
+        {
+            calls++;
+            var body = calls == 1 ? malformed : valid;
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json"),
+            };
+        });
+
+        var success = Assert.IsType<ReconcileResult.Success>(result);
+        Assert.Equal(110, success.Tokens.InputTokens);          // 10 + 100
+        Assert.Equal(60, success.Tokens.OutputTokens);           // 10 + 50
+        Assert.Equal(80, success.Tokens.CacheReadInputTokens);   // 0 + 80
+        Assert.Equal(10, success.Tokens.CacheCreationInputTokens); // 0 + 10
+    }
+
+    [Fact]
     public async Task RetryableMalformed_AllAttemptsFail_ReturnsFailureBoundedAtThreeCalls()
     {
         var malformed = BuildClaudeResponseJsonWithRawInput("""

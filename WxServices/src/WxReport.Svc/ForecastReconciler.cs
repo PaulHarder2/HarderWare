@@ -154,6 +154,7 @@ public sealed class ForecastReconciler
         // identical across attempts (so the cached system-prompt prefix keeps retries
         // cheap).
         const int maxAttempts = 3;
+        int accIn = 0, accOut = 0, accCacheRead = 0, accCacheWrite = 0;
         for (int attempt = 1; ; attempt++)
         {
             var apiResult = await _claude.InvokeReconciliationAsync(perRecipientPrompt, userMessage, allowSkip, ct);
@@ -181,6 +182,17 @@ public sealed class ForecastReconciler
                     + "(stop_reason=max_tokens) before the tool_use input was complete.");
             }
 
+            // WX-110: accumulate token usage across attempts so a retried-then-
+            // succeeded cycle reports its full billed cost — a failed malformed
+            // attempt is still real API spend, and the new cost dashboards would
+            // otherwise undercount it. On a single-attempt cycle this equals that
+            // attempt's tokens (unchanged behaviour).
+            accIn += apiResult.Tokens.InputTokens;
+            accOut += apiResult.Tokens.OutputTokens;
+            accCacheRead += apiResult.Tokens.CacheReadInputTokens;
+            accCacheWrite += apiResult.Tokens.CacheCreationInputTokens;
+            var tokens = new TokenUsage(accIn, accOut, accCacheRead, accCacheWrite);
+
             try
             {
                 var input = apiResult.ToolUseInput;
@@ -201,7 +213,7 @@ public sealed class ForecastReconciler
                         return new ReconcileResult.Failure("Claude returned skip_send on a non-skippable (guaranteed) send.");
 
                     var skipTrace = RequireString(input, "reasoning_trace");
-                    return new ReconcileResult.NotNews(skipTrace, apiResult.Tokens);
+                    return new ReconcileResult.NotNews(skipTrace, tokens);
                 }
 
                 var emailBody = RequireString(input, "email_body");
@@ -211,7 +223,7 @@ public sealed class ForecastReconciler
 
                 var reasoningTrace = RequireString(input, "reasoning_trace");
 
-                return new ReconcileResult.Success(emailBody, finalSnapshot, reasoningTrace, apiResult.Tokens);
+                return new ReconcileResult.Success(emailBody, finalSnapshot, reasoningTrace, tokens);
             }
             catch (Exception ex) when (ex is MissingToolUseFieldException or JsonException or InvalidOperationException)
             {
@@ -238,7 +250,7 @@ public sealed class ForecastReconciler
                     return new ReconcileResult.Failure($"Reconciliation response {ex.Message} (after {maxAttempts} attempts).");
                 }
                 Logger.Error($"Reconciliation tool_use input failed validation (after {maxAttempts} attempts): {ex.Message}");
-                return new ReconcileResult.Failure($"Schema validation failed: {ex.Message}");
+                return new ReconcileResult.Failure($"Schema validation failed (after {maxAttempts} attempts): {ex.Message}");
             }
         }
     }

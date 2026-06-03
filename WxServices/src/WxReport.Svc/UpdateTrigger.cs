@@ -75,8 +75,22 @@ public readonly record struct InputIdentity(string Metar, string Taf, string Gfs
         int sky = SkyBand(snap.SkyLayers);
         string temp = TemperatureBand(snap.TemperatureFahrenheit);
         string wx = WeatherSignature(snap.WeatherPhenomena);
-        return $"{snap.StationIcao};W{wind};V{vis};S{sky};T{temp};P{wx}";
+        var sig = $"{snap.StationIcao};W{wind};V{vis};S{sky};T{temp};P{wx}";
+
+        // Defensive bound: the serialized InputIdentity is stored in a 200-char column
+        // (RecipientState.LastClaudeInputHash); the two ISO timestamps consume ~62,
+        // leaving ample room for a realistic signature. A pathological many-phenomena
+        // observation could in theory overflow — and an overflow would throw on save,
+        // be swallowed by ReportWorker's catch, and silently re-open the cost leak (a
+        // never-persisted hash reads as "changed" every cycle). Truncating keeps the
+        // signature stable and '|'-free; a collision among 130+ char signatures only
+        // risks a rare missed trigger, never a crash or a runaway re-send.
+        return sig.Length <= MaxMetarSignatureLength ? sig : sig[..MaxMetarSignatureLength];
     }
+
+    // Caps MetarMaterialSignature so the serialized identity stays within the
+    // 200-char LastClaudeInputHash column (see MetarMaterialSignature).
+    private const int MaxMetarSignatureLength = 130;
 
     // Peak wind (greater of sustained and gust), binned via the shared public
     // wind scale (WxServices.Common.WindScale). Calm / unreported → 0.
@@ -90,7 +104,8 @@ public readonly record struct InputIdentity(string Metar, string Taf, string Gfs
     internal static int VisibilityBand(double? visMiles, bool cavok, bool lessThan)
     {
         if (cavok || visMiles is null) return 1;
-        bool below = visMiles.Value < 1.0 || (visMiles.Value <= 1.0 && lessThan);
+        // < 1 mi, or exactly "less than 1 mi" (the M1SM encoding).
+        bool below = visMiles.Value < 1.0 || (visMiles.Value == 1.0 && lessThan);
         return below ? 0 : 1;
     }
 
@@ -123,15 +138,19 @@ public readonly record struct InputIdentity(string Metar, string Taf, string Gfs
 
     // Stable, order-independent set of materially-relevant present-weather tokens:
     // precipitation types, the descriptor qualifiers (thunderstorm, freezing,
-    // showers, …), obscurations, and other phenomena (squalls, funnel clouds).
-    // Recent-weather (RE) groups are excluded — they describe what just ended, not
-    // current state. Empty string when nothing significant is occurring.
+    // showers, …), obscurations, and other phenomena (squalls, funnel clouds), plus
+    // a "heavy" marker when any group is heavy. Heavy precipitation is a material
+    // escalation a reader acts on (e.g. light rain → a downpour), so it must change
+    // the signature and reach Claude's gate; light/moderate are folded together as
+    // ordinary. Recent-weather (RE) groups are excluded — they describe what just
+    // ended, not current state. Empty string when nothing significant is occurring.
     internal static string WeatherSignature(IReadOnlyList<SnapshotWeather> phenomena)
     {
         var tokens = new SortedSet<string>(StringComparer.Ordinal);
         foreach (var wx in phenomena)
         {
             if (wx.IsRecent) continue;
+            if (wx.Intensity == WeatherIntensity.Heavy) tokens.Add("heavy");
             if (wx.Descriptor is { } d) tokens.Add(d.ToString().ToLowerInvariant());
             foreach (var p in wx.Precipitation) tokens.Add(p.ToString().ToLowerInvariant());
             if (wx.Obscuration is { } o) tokens.Add(o.ToString().ToLowerInvariant());

@@ -177,9 +177,9 @@ internal static class ReconcilerPrompts
 
           • a change in sky, precipitation, or visibility CATEGORY (not a small
             numeric wobble within the same category);
-          • a wind change that crosses into a higher impact band — ≤17, 17–34,
-            34–48, 48–64, 64+ kt (≤ half tropical-storm, TS/gale, storm, hurricane
-            force). Drift within one band (e.g. 7 kt to 15 kt) is NOT news;
+          • a wind change that crosses into a higher impact band — under 17, 17–33,
+            34–47, 48–63, or 64+ kt (≤ half tropical-storm, up to TS/gale, storm,
+            hurricane force). Drift within one band (e.g. 7 kt to 15 kt) is NOT news;
           • a temperature swing of more than a few degrees;
           • any hazard newly appearing or clearing (per the significance hierarchy).
 
