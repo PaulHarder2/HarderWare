@@ -305,6 +305,17 @@ public class ForecastSnapshotBodyTests
     }
 
     [Fact]
+    public void MateriallyEquals_LargeDriftWithinOpenTopBand_False()
+    {
+        // Both 70 and 150 kt are in the open-ended 64+ band, but an 80 kt jump is a
+        // genuine hurricane-force escalation, not redundant wobble — the in-band cap
+        // keeps it from being suppressed.
+        var prior = SampleBlock() with { WindKt = new(64, 70) };
+        var stronger = SampleBlock() with { WindKt = new(64, 150) };
+        Assert.False(Body(prior).MateriallyEquals(Body(stronger)));
+    }
+
+    [Fact]
     public void MateriallyEquals_SmallDriftAcrossBandBoundary_True()
     {
         // 16→18 kt crosses the 17 kt boundary but drifts only 2 kt; the absolute

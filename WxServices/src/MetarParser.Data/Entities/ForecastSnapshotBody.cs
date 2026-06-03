@@ -199,9 +199,19 @@ public sealed record ForecastSnapshotBody
     // (small drift, robust across a band boundary) OR in the same shared impact band
     // (WxServices.Common.WindScale — larger drift the public would still shrug at,
     // e.g. 6 kt vs 15 kt). WX-110: the band test is what suppresses the
-    // trivial-wobble redundant re-sends the 5 kt tolerance alone missed.
+    // trivial-wobble redundant re-sends the 5 kt tolerance alone missed. The same-
+    // band test is capped at MaxInBandDriftKt so the open-ended top band (64+ kt)
+    // can't equate, say, 65 kt and 150 kt and suppress a genuine hurricane-force
+    // escalation as redundant (CodeRabbit) — every bounded band spans ≤16 kt, so the
+    // cap never restricts a legitimate within-band match.
     private static bool WindEndpointEqual(int a, int b) =>
-        Math.Abs(a - b) <= WindToleranceKt || WindScale.Band(a) == WindScale.Band(b);
+        Math.Abs(a - b) <= WindToleranceKt
+        || (WindScale.Band(a) == WindScale.Band(b) && Math.Abs(a - b) <= MaxInBandDriftKt);
+
+    // Widest bounded WindScale band spans 16 kt (bands 0 = 0–16 and 1 = 17–33).
+    // Caps how much the same-band test absorbs, bounding the open-ended 64+ band
+    // without restricting any bounded band.
+    private const int MaxInBandDriftKt = 16;
 }
 
 /// <summary>One uniform 6-hour block within a <see cref="ForecastSnapshotBody"/>.</summary>

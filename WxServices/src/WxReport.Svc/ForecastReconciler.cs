@@ -67,12 +67,16 @@ public abstract record ReconcileResult
 /// <see cref="ReconcileResult.Failure"/>.
 ///
 /// <para>
-/// Malformed-output policy (decided at WX-79 grooming): schema-violation,
-/// missing field, or non-JSON tool input returns a typed Failure.  The
-/// caller (<see cref="ReportWorker"/>) does not send the email when Failure
-/// is returned, but does not un-commit any provisional rows that were
-/// written before the reconciler ran — the auditable shape of "we tried,
-/// Claude failed" stays in place.
+/// Malformed-output policy (WX-79, retry added WX-110): a schema-violation,
+/// missing field, or non-JSON tool input is retried up to a small bounded number
+/// of attempts within the cycle (the fault is usually transient — the Anthropic
+/// API treats a tool schema's <c>required</c> list as advisory, so a complete
+/// response can simply drop a field); only after the attempts are exhausted does
+/// it return a typed Failure.  A <c>max_tokens</c> truncation and a guaranteed-send
+/// <c>skip_send</c> are <em>not</em> retried.  When Failure is ultimately returned
+/// the caller (<see cref="ReportWorker"/>) does not send the email, but does not
+/// un-commit any provisional rows written before the reconciler ran — the
+/// auditable shape of "we tried, Claude failed" stays in place.
 /// </para>
 /// </summary>
 public sealed class ForecastReconciler
@@ -89,7 +93,10 @@ public sealed class ForecastReconciler
     /// <summary>
     /// Reconciles the GFS-derived provisional snapshot against the current
     /// observation, the active TAF (when present), and the prior committed
-    /// snapshot (when present), via a single Claude tool-use call.  Returns
+    /// snapshot (when present), via a Claude tool-use call (retried up to 3 attempts
+    /// on transient malformed output — missing field / schema violation — but never
+    /// on a <c>max_tokens</c> truncation or a guaranteed-send <c>skip_send</c>;
+    /// returned token usage is summed across attempts).  Returns
     /// the parsed three artifacts on success or a typed failure on transport
     /// or schema problems.
     /// </summary>
