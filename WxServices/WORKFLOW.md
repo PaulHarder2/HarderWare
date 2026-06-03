@@ -213,6 +213,26 @@ Do **not** add new `ExecuteSqlRawAsync` blocks to `DatabaseSetup.cs`. The single
 
 If a schema change requires data movement that EF's generated `Up`/`Down` cannot express (e.g. backfilling a NOT NULL column with computed values), supplement the generated migration body with custom `migrationBuilder.Sql(...)` calls inside the same migration — keep all the change's effects in one migration so it is atomic.
 
+### Heavy migrations — apply out-of-band
+
+**Added 2026-06-03** (WX-113).
+
+Step 6 above (auto-apply at startup) is fine for fast migrations, but a migration that **rewrites a large table** — a size-of-data change such as widening a column's type, adding a `NOT NULL` column with a default across millions of rows, or re-clustering — can take **longer than the Windows Service Control Manager's 30-second start-timeout**. Because `EnsureSchemaAsync` runs *before* `host.RunAsync()`, SCM never receives its "started" ack, kills the process mid-migration, and the transaction rolls back — for *every* service, repeatedly. (This is exactly what happened deploying WX-113's `GfsGrid` `int`→`bigint` widen — all four services failed to start with SCM event 7000/7009.)
+
+For any migration that rewrites a large table, apply it **out-of-band** rather than relying on startup auto-migrate:
+
+1. **Stop** the WxServices Windows services.
+2. Generate the migration SQL (PowerShell):
+
+   ```powershell
+   dotnet ef migrations script <PreviousMigration> <NewMigration> --project src/MetarParser.Data/MetarParser.Data.csproj --msbuildprojectextensionspath 'C:\HarderWare\BuildCache\WxServices\MetarParser.Data\obj'
+   ```
+
+   Run the output in SSMS against `WeatherData`. The EF script performs the DDL **and** inserts the `__EFMigrationsHistory` row in one transaction, so startup auto-migrate then treats it as already applied.
+3. **Start** the services. `EnsureSchemaAsync` sees the migration recorded → no-op → the service starts within the 30 s window.
+
+A uniform, tooling-based replacement for this manual step (a dedicated migrator off the startup path) is tracked in **WX-117**.
+
 ## Known friction
 
 ### Dropbox-induced git lock failures on push

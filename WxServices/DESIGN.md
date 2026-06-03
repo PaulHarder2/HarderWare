@@ -959,7 +959,7 @@ erDiagram
     }
 
     GfsGrid {
-        int Id PK
+        bigint Id PK "widened from int per WX-113; IDENTITY preserved"
         datetime ModelRunUtc FK
         int ForecastHour
         float Lat

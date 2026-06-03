@@ -13,8 +13,17 @@ namespace MetarParser.Data.Entities;
 /// </summary>
 public sealed class GfsGridPoint
 {
-    /// <summary>Primary key, auto-incremented by the database.</summary>
-    public int Id { get; set; }
+    /// <summary>
+    /// Primary key, auto-incremented by the database.
+    /// <para>
+    /// <c>bigint</c> (not <c>int</c>): the IDENTITY counter advances once per row ever
+    /// inserted — never reused on delete — so over the table's lifetime it crossed
+    /// <see cref="int.MaxValue"/> (WX-113) even though only ~2 runs are retained at a
+    /// time. <c>long</c> sizes the key to the lifetime issuance rate, not the live row
+    /// count.
+    /// </para>
+    /// </summary>
+    public long Id { get; set; }
 
     /// <summary>
     /// UTC date and time at which the GFS model run was initialised,
