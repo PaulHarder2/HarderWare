@@ -31,8 +31,6 @@ public static class GfsSnapshotBuilder
     private const float WetThresholdMmHr = 0.1f;
     /// <summary>Precip rate at or above which a forecast hour counts as "heavy" (mm/hr).</summary>
     private const float HeavyThresholdMmHr = 2.5f;
-    /// <summary>Precip rate at or above which a forecast hour triggers poor visibility (mm/hr).</summary>
-    private const float PoorVisibilityRateMmHr = 7.6f;
 
     /// <summary>CAPE at or above which a wet hour is considered convective (thunderstorm gate).</summary>
     private const float ThunderstormCapeJKg = 1000f;
@@ -40,10 +38,6 @@ public static class GfsSnapshotBuilder
     private const float SevereCapeJKg = 2500f;
     /// <summary>Sustained wind speed at or above which a forecast hour is severe regardless of CAPE (knots).</summary>
     private const float SevereWindKt = 50f;
-    /// <summary>Sustained wind speed at or above which gusts are at least "occasional" (knots).</summary>
-    private const float OccasionalGustWindKt = 15f;
-    /// <summary>Sustained wind speed at or above which gusts are "frequent" (knots).</summary>
-    private const float FrequentGustWindKt = 25f;
 
     /// <summary>Maximum cloud-cover percentage that still maps to "clear".</summary>
     private const float SkyClearMaxPct = 20f;
@@ -135,11 +129,9 @@ public static class GfsSnapshotBuilder
                 Math.Round(tempValues.Min(), 1),
                 Math.Round(tempValues.Max(), 1)),
             WindKt = new MinMax<int>(windMin, windMax),
-            GustOutlook = DeriveGustOutlook(windValues, capeValues, wetHours),
             PrecipExpectation = precipExpectation,
             PrecipPhenomenon = phenomenon,
             SevereFlag = DeriveSevereFlag(windValues, capeValues, wetHours),
-            VisibilityExpectation = DeriveVisibility(hours, phenomenon),
         };
     }
 
@@ -192,39 +184,12 @@ public static class GfsSnapshotBuilder
         return PrecipPhenomenon.Rain;
     }
 
-    private static GustOutlook DeriveGustOutlook(List<float> windValues, List<float> capeValues, int wetHours)
-    {
-        var maxWind = windValues.Count > 0 ? windValues.Max() : 0f;
-        var maxCape = capeValues.Count > 0 ? capeValues.Max() : 0f;
-
-        if (maxWind >= FrequentGustWindKt) return GustOutlook.Frequent;
-        if (maxCape >= SevereCapeJKg && wetHours > 0) return GustOutlook.Frequent;
-        if (maxWind >= OccasionalGustWindKt) return GustOutlook.Occasional;
-        if (maxCape >= ThunderstormCapeJKg && wetHours > 0) return GustOutlook.Occasional;
-        return GustOutlook.None;
-    }
-
     private static bool DeriveSevereFlag(List<float> windValues, List<float> capeValues, int wetHours)
     {
         var maxWind = windValues.Count > 0 ? windValues.Max() : 0f;
         var maxCape = capeValues.Count > 0 ? capeValues.Max() : 0f;
         return maxWind >= SevereWindKt
             || (maxCape >= SevereCapeJKg && wetHours > 0);
-    }
-
-    private static VisibilityExpectation DeriveVisibility(List<GfsHourlyPoint> hours, PrecipPhenomenon? phenomenon)
-    {
-        var anyHeavyOrSnow = phenomenon == PrecipPhenomenon.Snow
-            || hours.Any(h => h.PrecipMmHr.HasValue && h.PrecipMmHr.Value >= PoorVisibilityRateMmHr);
-        if (anyHeavyOrSnow) return VisibilityExpectation.Poor;
-
-        var anyWet = hours.Any(h => h.PrecipMmHr.HasValue && h.PrecipMmHr.Value >= WetThresholdMmHr);
-        if (anyWet
-            || phenomenon == PrecipPhenomenon.Mixed
-            || phenomenon == PrecipPhenomenon.FreezingPrecip)
-            return VisibilityExpectation.Reduced;
-
-        return VisibilityExpectation.Good;
     }
 
     // ── alignment ────────────────────────────────────────────────────────────

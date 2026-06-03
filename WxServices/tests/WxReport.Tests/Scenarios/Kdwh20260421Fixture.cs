@@ -254,20 +254,20 @@ internal static class Kdwh20260421Fixture
                 StartUtc = new DateTime(2026, 4, 21, 12, 0, 0, DateTimeKind.Utc),
                 SkyState = SkyState.Overcast, Obscuration = Obscuration.None,
                 TemperatureCelsius = new MinMax<double>(16.0, 20.0),
-                WindKt = new MinMax<int>(7, 12), GustOutlook = GustOutlook.None,
+                WindKt = new MinMax<int>(7, 12),
                 PrecipExpectation = PrecipExpectation.Likely, PrecipPhenomenon = PrecipPhenomenon.Rain,
-                SevereFlag = false, VisibilityExpectation = VisibilityExpectation.Reduced,
+                SevereFlag = false,
             },
             new ForecastSnapshotBlock
             {
                 StartUtc = new DateTime(2026, 4, 21, 18, 0, 0, DateTimeKind.Utc),
                 SkyState = SkyState.Overcast, Obscuration = Obscuration.None,
                 TemperatureCelsius = new MinMax<double>(17.0, 20.0),
-                WindKt = new MinMax<int>(6, 12), GustOutlook = GustOutlook.Occasional,
+                WindKt = new MinMax<int>(6, 12),
                 // Tuesday CAPE was 13 J/kg (low) — plain rain, not a thunderstorm.
                 // The convective threat was Wednesday onward (CAPE 1042+).
                 PrecipExpectation = PrecipExpectation.Likely, PrecipPhenomenon = PrecipPhenomenon.Rain,
-                SevereFlag = false, VisibilityExpectation = VisibilityExpectation.Reduced,
+                SevereFlag = false,
             },
         },
     };
@@ -295,18 +295,18 @@ internal static class Kdwh20260421Fixture
                 StartUtc = new DateTime(2026, 4, 21, 6, 0, 0, DateTimeKind.Utc),
                 SkyState = SkyState.Overcast, Obscuration = Obscuration.None,
                 TemperatureCelsius = new MinMax<double>(15.6, 18.0),
-                WindKt = new MinMax<int>(5, 8), GustOutlook = GustOutlook.None,
+                WindKt = new MinMax<int>(5, 8),
                 PrecipExpectation = PrecipExpectation.Likely, PrecipPhenomenon = PrecipPhenomenon.Rain,
-                SevereFlag = false, VisibilityExpectation = VisibilityExpectation.Reduced,
+                SevereFlag = false,
             },
             new ForecastSnapshotBlock
             {
                 StartUtc = new DateTime(2026, 4, 21, 12, 0, 0, DateTimeKind.Utc),
                 SkyState = SkyState.Overcast, Obscuration = Obscuration.None,
                 TemperatureCelsius = new MinMax<double>(16.0, 20.0),
-                WindKt = new MinMax<int>(7, 12), GustOutlook = GustOutlook.None,
+                WindKt = new MinMax<int>(7, 12),
                 PrecipExpectation = PrecipExpectation.Likely, PrecipPhenomenon = PrecipPhenomenon.Rain,
-                SevereFlag = false, VisibilityExpectation = VisibilityExpectation.Reduced,
+                SevereFlag = false,
             },
             new ForecastSnapshotBlock
             {
@@ -316,9 +316,9 @@ internal static class Kdwh20260421Fixture
                 StartUtc = new DateTime(2026, 4, 21, 18, 0, 0, DateTimeKind.Utc),
                 SkyState = SkyState.Overcast, Obscuration = Obscuration.None,
                 TemperatureCelsius = new MinMax<double>(17.0, 20.0),
-                WindKt = new MinMax<int>(6, 12), GustOutlook = GustOutlook.Occasional,
+                WindKt = new MinMax<int>(6, 12),
                 PrecipExpectation = PrecipExpectation.Likely, PrecipPhenomenon = PrecipPhenomenon.Rain,
-                SevereFlag = false, VisibilityExpectation = VisibilityExpectation.Reduced,
+                SevereFlag = false,
             },
         },
     };

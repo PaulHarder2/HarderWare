@@ -274,44 +274,6 @@ public class GfsSnapshotBuilderTests
         Assert.Equal(PrecipPhenomenon.Mixed, body.Blocks[0].PrecipPhenomenon);
     }
 
-    // ── gust outlook ─────────────────────────────────────────────────────────
-
-    [Fact]
-    public void GustOutlook_CalmDry_None()
-    {
-        var body = GfsSnapshotBuilder.Build(NeutralBlock());
-        Assert.Equal(GustOutlook.None, body.Blocks[0].GustOutlook);
-    }
-
-    [Fact]
-    public void GustOutlook_ModerateWind_Occasional()
-    {
-        var body = GfsSnapshotBuilder.Build(Forecast(
-            Hour(0, windKt: 18f), Hour(1, windKt: 16f), Hour(2, windKt: 17f),
-            Hour(3, windKt: 18f), Hour(4, windKt: 15f), Hour(5, windKt: 14f)));
-        Assert.Equal(GustOutlook.Occasional, body.Blocks[0].GustOutlook);
-    }
-
-    [Fact]
-    public void GustOutlook_StrongWind_Frequent()
-    {
-        var body = GfsSnapshotBuilder.Build(Forecast(
-            Hour(0, windKt: 26f), Hour(1, windKt: 28f), Hour(2, windKt: 25f),
-            Hour(3, windKt: 27f), Hour(4, windKt: 26f), Hour(5, windKt: 25f)));
-        Assert.Equal(GustOutlook.Frequent, body.Blocks[0].GustOutlook);
-    }
-
-    [Fact]
-    public void GustOutlook_HighCapeWithPrecip_Frequent()
-    {
-        // Light wind but severe-tier CAPE in a wet hour bumps to Frequent.
-        var body = GfsSnapshotBuilder.Build(Forecast(
-            Hour(0, windKt: 8f, precipMmHr: 0.5f, capeJKg: 2700f),
-            Hour(1, windKt: 8f), Hour(2, windKt: 8f), Hour(3, windKt: 8f),
-            Hour(4, windKt: 8f), Hour(5, windKt: 8f)));
-        Assert.Equal(GustOutlook.Frequent, body.Blocks[0].GustOutlook);
-    }
-
     // ── severe flag (provisional, per WX-77; WX-81 may refine) ───────────────
 
     [Fact]
@@ -347,44 +309,6 @@ public class GfsSnapshotBuilderTests
     {
         var body = GfsSnapshotBuilder.Build(NeutralBlock());
         Assert.False(body.Blocks[0].SevereFlag);
-    }
-
-    // ── visibility ───────────────────────────────────────────────────────────
-
-    [Fact]
-    public void Visibility_AllDry_Good()
-    {
-        var body = GfsSnapshotBuilder.Build(NeutralBlock());
-        Assert.Equal(VisibilityExpectation.Good, body.Blocks[0].VisibilityExpectation);
-    }
-
-    [Fact]
-    public void Visibility_LightPrecip_Reduced()
-    {
-        var body = GfsSnapshotBuilder.Build(Forecast(
-            Hour(0, precipMmHr: 0.5f), Hour(1, precipMmHr: 0.5f),
-            Hour(2), Hour(3), Hour(4), Hour(5)));
-        Assert.Equal(VisibilityExpectation.Reduced, body.Blocks[0].VisibilityExpectation);
-    }
-
-    [Fact]
-    public void Visibility_HeavyPrecip_Poor()
-    {
-        var body = GfsSnapshotBuilder.Build(Forecast(
-            Hour(0, precipMmHr: 8.0f), Hour(1, precipMmHr: 7.6f),
-            Hour(2), Hour(3), Hour(4), Hour(5)));
-        Assert.Equal(VisibilityExpectation.Poor, body.Blocks[0].VisibilityExpectation);
-    }
-
-    [Fact]
-    public void Visibility_SnowPhenomenon_Poor()
-    {
-        var body = GfsSnapshotBuilder.Build(Forecast(
-            Hour(0, precipMmHr: 0.5f, tmpC: -3f, dwpC: -5f),
-            Hour(1, precipMmHr: 0.5f, tmpC: -2f, dwpC: -4f),
-            Hour(2, tmpC: -2f, dwpC: -4f), Hour(3, tmpC: -1.5f, dwpC: -3f),
-            Hour(4, tmpC: -1f, dwpC: -3f), Hour(5, tmpC: -1f, dwpC: -3f)));
-        Assert.Equal(VisibilityExpectation.Poor, body.Blocks[0].VisibilityExpectation);
     }
 
     // ── obscuration ──────────────────────────────────────────────────────────

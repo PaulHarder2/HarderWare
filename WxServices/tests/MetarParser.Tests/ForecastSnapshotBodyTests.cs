@@ -26,11 +26,9 @@ public class ForecastSnapshotBodyTests
         Obscuration = Obscuration.None,
         TemperatureCelsius = new(8.2, 14.7),
         WindKt = new(5, 12),
-        GustOutlook = GustOutlook.Occasional,
         PrecipExpectation = PrecipExpectation.Likely,
         PrecipPhenomenon = PrecipPhenomenon.Rain,
         SevereFlag = false,
-        VisibilityExpectation = VisibilityExpectation.Good,
     };
 
     // ── Round-trip ───────────────────────────────────────────────────────────
@@ -97,10 +95,8 @@ public class ForecastSnapshotBodyTests
         Assert.Contains("\"obscuration\":", json);
         Assert.Contains("\"temperatureCelsius\":", json);
         Assert.Contains("\"windKt\":", json);
-        Assert.Contains("\"gustOutlook\":", json);
         Assert.Contains("\"precipExpectation\":", json);
         Assert.Contains("\"severeFlag\":", json);
-        Assert.Contains("\"visibilityExpectation\":", json);
     }
 
     [Fact]
@@ -114,7 +110,6 @@ public class ForecastSnapshotBodyTests
                 {
                     SkyState = SkyState.PartlyCloudy,
                     PrecipPhenomenon = PrecipPhenomenon.FreezingPrecip,
-                    GustOutlook = GustOutlook.Frequent,
                 },
             ],
         };
@@ -123,7 +118,6 @@ public class ForecastSnapshotBodyTests
 
         Assert.Contains("\"skyState\":\"partly_cloudy\"", json);
         Assert.Contains("\"precipPhenomenon\":\"freezing_precip\"", json);
-        Assert.Contains("\"gustOutlook\":\"frequent\"", json);
     }
 
     [Fact]
@@ -161,10 +155,8 @@ public class ForecastSnapshotBodyTests
                   "obscuration": "none",
                   "temperatureCelsius": { "min": 8.2, "max": 14.7 },
                   "windKt": { "min": 5, "max": 12 },
-                  "gustOutlook": "none",
                   "precipExpectation": "none",
-                  "severeFlag": false,
-                  "visibilityExpectation": "good"
+                  "severeFlag": false
                 }
               ]
             }
@@ -186,10 +178,8 @@ public class ForecastSnapshotBodyTests
                   "obscuration": "none",
                   "temperatureCelsius": { "min": 8.2, "max": 14.7 },
                   "windKt": { "min": 5, "max": 12 },
-                  "gustOutlook": "none",
                   "precipExpectation": "none",
-                  "severeFlag": false,
-                  "visibilityExpectation": "good"
+                  "severeFlag": false
                 }
               ]
             }
@@ -212,11 +202,9 @@ public class ForecastSnapshotBodyTests
                   "obscuration": "none",
                   "temperatureCelsius": { "min": 8.2, "max": 14.7 },
                   "windKt": { "min": 5, "max": 12 },
-                  "gustOutlook": "none",
                   "precipExpectation": "none",
                   "precipPhenomenon": "rain",
-                  "severeFlag": false,
-                  "visibilityExpectation": "good"
+                  "severeFlag": false
                 }
               ]
             }
@@ -239,10 +227,8 @@ public class ForecastSnapshotBodyTests
                   "obscuration": "none",
                   "temperatureCelsius": { "min": 8.2, "max": 14.7 },
                   "windKt": { "min": 5, "max": 12 },
-                  "gustOutlook": "occasional",
                   "precipExpectation": "likely",
-                  "severeFlag": false,
-                  "visibilityExpectation": "good"
+                  "severeFlag": false
                 }
               ]
             }

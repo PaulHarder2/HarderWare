@@ -28,11 +28,9 @@ public class UnscheduledSuppressionTests
             Obscuration = Obscuration.None,
             TemperatureCelsius = new(8.0, tMax),
             WindKt = new(5, wMax),
-            GustOutlook = GustOutlook.Occasional,
             PrecipExpectation = precip,
             PrecipPhenomenon = phenom,
             SevereFlag = severe,
-            VisibilityExpectation = VisibilityExpectation.Good,
         };
 
     private static ForecastSnapshotBody Body(params ForecastSnapshotBlock[] blocks) => new() { Blocks = blocks };

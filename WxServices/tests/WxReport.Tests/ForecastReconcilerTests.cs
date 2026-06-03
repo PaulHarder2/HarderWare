@@ -433,11 +433,9 @@ public class ForecastReconcilerTests
               "obscuration": "none",
               "temperatureCelsius": { "min": 10.0, "max": 20.0 },
               "windKt": { "min": 5, "max": 10 },
-              "gustOutlook": "none",
               "precipExpectation": "none",
               "precipPhenomenon": "rain",
-              "severeFlag": false,
-              "visibilityExpectation": "good"
+              "severeFlag": false
             }
             """;
         var responseJson = BuildClaudeResponseJsonWithRawInput($$"""

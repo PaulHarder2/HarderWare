@@ -19,7 +19,7 @@ namespace MetarParser.Data.Entities;
 public sealed record ForecastSnapshotBody
 {
     /// <summary>Current schema version produced by this build.  Bumped only when the body shape changes incompatibly.</summary>
-    public const int SchemaVersionCurrent = 1;
+    public const int SchemaVersionCurrent = 2;
 
     /// <summary>
     /// Schema version this body conforms to.  On write, defaults to
@@ -113,7 +113,7 @@ public sealed record ForecastSnapshotBody
     /// Reader-facing material equality used by the WX-108 redundancy backstop:
     /// true when this body says the same thing a reader would act on as
     /// <paramref name="other"/>.  Categorical fields (sky, obscuration, precip
-    /// expectation/phenomenon, gust, visibility, severeFlag) must match exactly;
+    /// expectation/phenomenon, severeFlag) must match exactly;
     /// temperature may drift within <see cref="TempToleranceC"/>, and wind within
     /// <see cref="WindToleranceKt"/> or while staying in the same
     /// <see cref="WxServices.Common.WindScale"/> impact band.  Blocks are
@@ -187,8 +187,6 @@ public sealed record ForecastSnapshotBody
         && a.Obscuration == b.Obscuration
         && a.PrecipExpectation == b.PrecipExpectation
         && a.PrecipPhenomenon == b.PrecipPhenomenon
-        && a.GustOutlook == b.GustOutlook
-        && a.VisibilityExpectation == b.VisibilityExpectation
         && (ignoreSevere || a.SevereFlag == b.SevereFlag)
         && Math.Abs(a.TemperatureCelsius.Min - b.TemperatureCelsius.Min) <= TempToleranceC
         && Math.Abs(a.TemperatureCelsius.Max - b.TemperatureCelsius.Max) <= TempToleranceC
@@ -237,10 +235,6 @@ public sealed record ForecastSnapshotBlock
     [JsonPropertyName("windKt")]
     public required MinMax<int> WindKt { get; init; }
 
-    /// <summary>Qualitative gust outlook for the block.  Categorical to fit the "Claude's working memory" framing of WX-47; specific gust numbers may surface in the email narrative when warranted.</summary>
-    [JsonPropertyName("gustOutlook")]
-    public required GustOutlook GustOutlook { get; init; }
-
     /// <summary>How likely precipitation is during the block.</summary>
     [JsonPropertyName("precipExpectation")]
     public required PrecipExpectation PrecipExpectation { get; init; }
@@ -252,10 +246,6 @@ public sealed record ForecastSnapshotBlock
     /// <summary>Safety-critical flag.  The population rules live in WX-81 (significance-tier prompting); WX-76 reserves the column.</summary>
     [JsonPropertyName("severeFlag")]
     public required bool SevereFlag { get; init; }
-
-    /// <summary>Qualitative visibility outlook.  Three tiers chosen for plans-affecting granularity at 6-hour resolution.</summary>
-    [JsonPropertyName("visibilityExpectation")]
-    public required VisibilityExpectation VisibilityExpectation { get; init; }
 }
 
 /// <summary>Inclusive min/max pair of a numeric block-level quantity.  Value-typed for low allocation overhead in 24-block snapshots.</summary>
@@ -281,14 +271,6 @@ public enum Obscuration
     Haze,
     Smoke,
     Dust,
-}
-
-/// <summary>Qualitative gust outlook for a block.</summary>
-public enum GustOutlook
-{
-    None,
-    Occasional,
-    Frequent,
 }
 
 /// <summary>How likely precipitation is in a block.</summary>
@@ -318,12 +300,4 @@ public enum PrecipPhenomenon
     Mixed,
     Snow,
     FreezingPrecip,
-}
-
-/// <summary>Qualitative visibility outlook for a block.  Three tiers chosen for plans-affecting granularity at 6-hour resolution.</summary>
-public enum VisibilityExpectation
-{
-    Poor,
-    Reduced,
-    Good,
 }
