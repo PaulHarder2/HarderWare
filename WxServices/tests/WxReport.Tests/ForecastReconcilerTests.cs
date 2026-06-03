@@ -285,6 +285,86 @@ public class ForecastReconcilerTests
         Assert.Contains("truncated", failure.Reason);
     }
 
+    // ── WX-110: bounded retry on a retryable-malformed (non-truncation) response ─
+
+    [Fact]
+    public async Task RetryableMalformed_ThenValid_RetriesAndSucceeds()
+    {
+        // First response omits email_body (a complete, non-truncated tool_use that
+        // simply dropped the advisory-required field); the second is complete. The
+        // reconciler retries within the cycle and lands on Success rather than
+        // leaving the recipient to self-heal on the next tick.
+        var malformed = BuildClaudeResponseJsonWithRawInput("""
+            { "final_snapshot": { "schemaVersion": 1, "blocks": [] }, "reasoning_trace": "trace" }
+            """);
+        var valid = BuildClaudeResponseJson(
+            emailBody: "<p>ok</p>",
+            finalSnapshotJson: """{"schemaVersion":1,"blocks":[]}""",
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0);
+
+        int calls = 0;
+        var result = await RunReconciler(_ =>
+        {
+            calls++;
+            var body = calls == 1 ? malformed : valid;
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json"),
+            };
+        });
+
+        Assert.IsType<ReconcileResult.Success>(result);
+        Assert.Equal(2, calls); // exactly one retry was needed
+    }
+
+    [Fact]
+    public async Task RetryableMalformed_AllAttemptsFail_ReturnsFailureBoundedAtThreeCalls()
+    {
+        var malformed = BuildClaudeResponseJsonWithRawInput("""
+            { "final_snapshot": { "schemaVersion": 1, "blocks": [] }, "reasoning_trace": "trace" }
+            """);
+
+        int calls = 0;
+        var result = await RunReconciler(_ =>
+        {
+            calls++;
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(malformed, Encoding.UTF8, "application/json"),
+            };
+        });
+
+        var failure = Assert.IsType<ReconcileResult.Failure>(result);
+        Assert.Contains("missing required field", failure.Reason);
+        Assert.Contains("email_body", failure.Reason);
+        Assert.Equal(3, calls); // bounded at maxAttempts — no runaway retry
+    }
+
+    [Fact]
+    public async Task MaxTokensTruncation_IsNotRetried()
+    {
+        // A max_tokens stop_reason is authoritative: re-calling at the same cap would
+        // just re-truncate, so the truncation Failure is returned on the first call.
+        var truncated = BuildClaudeResponseJsonWithRawInput("""
+            { "final_snapshot": { "schemaVersion": 1, "blocks": [] }, "reasoning_trace": "trace" }
+            """, stopReason: "max_tokens");
+
+        int calls = 0;
+        var result = await RunReconciler(_ =>
+        {
+            calls++;
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(truncated, Encoding.UTF8, "application/json"),
+            };
+        });
+
+        var failure = Assert.IsType<ReconcileResult.Failure>(result);
+        Assert.Contains("truncated", failure.Reason);
+        Assert.Equal(1, calls); // not retried
+    }
+
     // ── failure: garbage final_snapshot JSON ────────────────────────────────
 
     [Fact]
