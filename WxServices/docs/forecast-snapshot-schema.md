@@ -1,6 +1,6 @@
-# Forecast snapshot body schema (v1)
+# Forecast snapshot body schema (v2)
 
-**Schema version:** 1
+**Schema version:** 2
 **C# source of truth:** `MetarParser.Data.Entities.ForecastSnapshotBody`
 **Storage:** the `Body` column of the `ForecastSnapshots` table (`nvarchar(max)`)
 
@@ -12,14 +12,14 @@ A snapshot is the structured representation of what WxReport told a recipient at
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "blocks": [ /* one or more block objects */ ]
 }
 ```
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `schemaVersion` | `int` | Current value: 1. Bumps only when the body shape changes in a way that requires version-aware reads. |
+| `schemaVersion` | `int` | Current value: 2. Bumps only when the body shape changes in a way that requires version-aware reads. |
 | `blocks` | array of block | Ordered earliest first. Up to 24 blocks covering a six-day horizon. |
 
 ## Block shape
@@ -31,11 +31,9 @@ A snapshot is the structured representation of what WxReport told a recipient at
   "obscuration": "none",
   "temperatureCelsius": { "min": 8.2, "max": 14.7 },
   "windKt":            { "min": 5,   "max": 12  },
-  "gustOutlook": "occasional",
   "precipExpectation": "likely",
   "precipPhenomenon": "rain",
-  "severeFlag": false,
-  "visibilityExpectation": "good"
+  "severeFlag": false
 }
 ```
 
@@ -46,11 +44,9 @@ A snapshot is the structured representation of what WxReport told a recipient at
 | `obscuration` | enum | `none`, `fog`, `haze`, `smoke`, `dust`. Independent of `skyState`. |
 | `temperatureCelsius` | `{ min, max }` of `number` | Celsius. Recipient unit preferences are applied at email-render time. |
 | `windKt` | `{ min, max }` of `integer` | Knots. Matches the METAR/TAF native unit. |
-| `gustOutlook` | enum | `none`, `occasional`, `frequent`. Categorical to fit Claude's working-memory framing — specific gust values may surface in the email when warranted. |
 | `precipExpectation` | enum | `none`, `possible`, `likely`, `certain`. |
 | `precipPhenomenon` | enum or absent | `rain`, `thunderstorm`, `mixed`, `snow`, `freezing_precip`. Must be absent (omitted from JSON) exactly when `precipExpectation == "none"`. This invariant is enforced at serialize and deserialize time — bodies that violate it cannot be persisted or returned. `freezing_precip` covers freezing rain, freezing drizzle, and sleet — bucketed together because they are equally road-slickening and equally safety-critical. |
 | `severeFlag` | `bool` | Safety-critical flag. The rules that set it live in WX-81 (significance-tier prompting); WX-76 reserves the column. |
-| `visibilityExpectation` | enum | `poor`, `reduced`, `good`. Three tiers chosen for plans-affecting granularity at 6-hour resolution. |
 
 ## Why JSON in a single column (and not a relational decomposition)?
 
@@ -59,6 +55,8 @@ Discussed at WX-76 grooming and recorded in the ticket. No obvious query need fo
 ## Versioning
 
 `schemaVersion` appears on the entity row (the `SchemaVersion` column) and inside the body. Both are written together. The column is authoritative when scanning many rows without parsing; the body is authoritative for stand-alone diagnostics. Bump both together if the body shape ever changes incompatibly.
+
+- **v2** (WX-114): removed `gustOutlook` and `visibilityExpectation` from the block.
 
 ## Out of scope for WX-76
 

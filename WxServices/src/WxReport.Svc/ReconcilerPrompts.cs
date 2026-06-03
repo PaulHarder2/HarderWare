@@ -128,10 +128,6 @@ internal static class ReconcilerPrompts
             precipPhenomenon thunderstorm, severeFlag true, and submit_reconciled_report
             at any horizon. The upgrade to severe is itself the news, even though rain
             was already expected.
-          • Safety-critical / send. The committed forecast was clear and dry overnight;
-            the latest observation and TAF now show dense fog (visibilityExpectation
-            poor, obscuration fog). submit_reconciled_report — dense fog is safety-
-            critical regardless of how minor the numbers look.
           • Safety-critical / send. Committed winds were 10-18 kt. New guidance brings a
             non-thunderstorm wind event with sustained winds to 36 kt (at or above the
             34 kt line). submit_reconciled_report at any horizon — it crosses tropical-
@@ -175,7 +171,7 @@ internal static class ReconcilerPrompts
         default to skip_send. Call submit_reconciled_report ONLY when your reconciled
         final_snapshot differs from prior_snapshot in a way a reader would act on:
 
-          • a change in sky, precipitation, or visibility CATEGORY (not a small
+          • a change in sky or precipitation CATEGORY (not a small
             numeric wobble within the same category);
           • a wind change that crosses into a higher impact band — under 17, 17–33,
             34–47, 48–63, or 64+ kt (≤ half tropical-storm, up to TS/gale, storm,
@@ -205,7 +201,7 @@ internal static class ReconcilerPrompts
         When you DO send, return all three artifacts via the submit_reconciled_report tool:
 
           • final_snapshot — your refined ForecastSnapshotBody. Same schema as
-            provisional_snapshot: schemaVersion 1, ordered 6-hour blocks aligned
+            provisional_snapshot: schemaVersion 2, ordered 6-hour blocks aligned
             to 00/06/12/18Z, all required fields per block. Temperatures stay in
             Celsius; winds stay in knots; the per-recipient block converts units
             for the email_body.
@@ -249,7 +245,7 @@ internal static class ReconcilerPrompts
                     required = new[] { "schemaVersion", "blocks" },
                     properties = new
                     {
-                        schemaVersion = new { type = "integer", @const = 1 },
+                        schemaVersion = new { type = "integer", @const = 2 },
                         blocks = new
                         {
                             type = "array",
@@ -259,8 +255,8 @@ internal static class ReconcilerPrompts
                                 required = new[]
                                 {
                                     "startUtc", "skyState", "obscuration",
-                                    "temperatureCelsius", "windKt", "gustOutlook",
-                                    "precipExpectation", "severeFlag", "visibilityExpectation",
+                                    "temperatureCelsius", "windKt",
+                                    "precipExpectation", "severeFlag",
                                 },
                                 properties = new
                                 {
@@ -269,7 +265,6 @@ internal static class ReconcilerPrompts
                                     obscuration = new { type = "string", @enum = new[] { "none", "fog", "haze", "smoke", "dust" } },
                                     temperatureCelsius = new { type = "object", required = new[] { "min", "max" }, properties = new { min = new { type = "number" }, max = new { type = "number" } } },
                                     windKt = new { type = "object", required = new[] { "min", "max" }, properties = new { min = new { type = "integer" }, max = new { type = "integer" } } },
-                                    gustOutlook = new { type = "string", @enum = new[] { "none", "occasional", "frequent" } },
                                     precipExpectation = new { type = "string", @enum = new[] { "none", "possible", "likely", "certain" } },
                                     precipPhenomenon = new
                                     {
@@ -278,7 +273,6 @@ internal static class ReconcilerPrompts
                                         description = "Required when precipExpectation != 'none'; must be null or omitted when 'none'.",
                                     },
                                     severeFlag = new { type = "boolean" },
-                                    visibilityExpectation = new { type = "string", @enum = new[] { "poor", "reduced", "good" } },
                                 },
                             },
                         },
