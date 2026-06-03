@@ -1149,7 +1149,7 @@ Valid names: `WxParserSvc`, `WxReportSvc`, `WxMonitorSvc`, `WxVisSvc`, `WxViewer
 
 `all` copies WxVis Python scripts to `{InstallRoot}\WxVis\` first, then deploys the four Windows services, WxManager, and WxViewer.
 
-After restarting a service the script verifies it reaches **Running** before reporting success (and `all` runs a final consolidated check, exiting non-zero if any service is down).  Each deployed app appends one timestamped line to `{InstallRoot}\Logs\deploy-history.log` — UTC time, product version, and git short SHA, in the services' log4net format so the deploy timeline reads alongside the `wx*-svc.log` files.  A service is logged `OK` only once it verifies as Running, `FAIL` if it starts but does not stay up.
+After restarting a service the script verifies it reaches **Running** before reporting success (and `all` runs a final consolidated check, exiting non-zero if any service is down).  Each deployed app appends one timestamped line to `{InstallRoot}\Logs\deploy-history.log` — UTC time, product version, and git short SHA, in the services' log4net format so the deploy timeline reads alongside the `wx*-svc.log` files.  A service is logged `OK` only once it verifies as Running, `FAIL` if it starts but does not stay up.  The deploy-history logging is best-effort: a logging failure is reported as a warning but never aborts the deploy.
 
 ### First-time install (run as Administrator)
 ```

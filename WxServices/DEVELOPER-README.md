@@ -235,7 +235,7 @@ recording the UTC time, product version, and git short SHA — using the same
 timestamp format as the services' `wx*-svc.log` files, so the deploy timeline
 reads alongside them:
 
-```
+```text
 2026-06-03 19:50:00.000 INFO  [Deploy] WxReportSvc   1.12.0   75e04ca  OK
 ```
 
