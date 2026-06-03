@@ -24,9 +24,12 @@ public class KdwhScenarioReplayTests
     // ── pre-filter: the new METAR routes the cycle TO Claude (no early skip) ──
 
     // The original framing assumed the pre-filter would catch the duplicate. It
-    // does not: at 8:53 a genuinely new METAR has arrived, so the input identity
-    // advances and the WX-80 pre-filter passes the cycle through to Claude's gate.
-    // This asserts that mechanic — the METAR source is seen as changed.
+    // does not: at 8:53 the weather has materially changed — light rain has begun
+    // since the rain-free 4:53 baseline — so the WX-110 material signature advances
+    // and the pre-filter passes the cycle through to Claude's gate (which then
+    // judges the rain matches the committed rainy forecast → not news). This asserts
+    // that mechanic: a genuine material change still routes to Claude, even though
+    // an unchanged hourly re-observation now pre-filter-skips.
     [Fact]
     public void PreFilter_NewMetarArrival_RoutesToClaude()
     {
