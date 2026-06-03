@@ -7,17 +7,17 @@
     Produces a release\ directory with the product layout:
 
         release\
-        ├── appsettings.shared.json
-        ├── log4net.shared.config
-        ├── services\
-        │   ├── WxParser.Svc\
-        │   ├── WxReport.Svc\
-        │   ├── WxMonitor.Svc\
-        │   └── WxVis.Svc\
-        ├── WxManager\
-        ├── WxViewer\
-        ├── WxVis\
-        └── observability\
+        +-- appsettings.shared.json
+        +-- log4net.shared.config
+        +-- services\
+        |   +-- WxParser.Svc\
+        |   +-- WxReport.Svc\
+        |   +-- WxMonitor.Svc\
+        |   \-- WxVis.Svc\
+        +-- WxManager\
+        +-- WxViewer\
+        +-- WxVis\
+        \-- observability\
 
     Run this script from the solution root (the directory containing
     WxServices.sln).  The release\ directory is recreated on each run.
@@ -31,7 +31,7 @@ $ErrorActionPreference = 'Stop'
 $SolutionRoot = $PSScriptRoot
 $ReleaseDir   = "$SolutionRoot\release"
 
-# ── Clean ─────────────────────────────────────────────────────────────────────
+# -- Clean ---------------------------------------------------------------------
 
 if (Test-Path $ReleaseDir) {
     Write-Host "Cleaning previous release..."
@@ -40,7 +40,7 @@ if (Test-Path $ReleaseDir) {
 
 New-Item -ItemType Directory -Path $ReleaseDir | Out-Null
 
-# ── Publish services ──────────────────────────────────────────────────────────
+# -- Publish services ----------------------------------------------------------
 
 $services = @(
     @{ Name = 'WxParser.Svc';  Project = 'src\WxParser.Svc\WxParser.Svc.csproj' }
@@ -59,19 +59,19 @@ foreach ($svc in $services) {
     }
 }
 
-# ── Publish WxManager ─────────────────────────────────────────────────────────
+# -- Publish WxManager ---------------------------------------------------------
 
 Write-Host "Publishing WxManager..."
 dotnet publish "$SolutionRoot\src\WxManager\WxManager.csproj" -c Release -o "$ReleaseDir\WxManager" --nologo -v quiet
 if ($LASTEXITCODE -ne 0) { Write-Error "dotnet publish failed for WxManager."; exit 1 }
 
-# ── Publish WxViewer ──────────────────────────────────────────────────────────
+# -- Publish WxViewer ----------------------------------------------------------
 
 Write-Host "Publishing WxViewer..."
 dotnet publish "$SolutionRoot\src\WxViewer\WxViewer.csproj" -c Release -o "$ReleaseDir\WxViewer" --nologo -v quiet
 if ($LASTEXITCODE -ne 0) { Write-Error "dotnet publish failed for WxViewer."; exit 1 }
 
-# ── Copy Python scripts ──────────────────────────────────────────────────────
+# -- Copy Python scripts ------------------------------------------------------
 
 Write-Host "Copying WxVis Python scripts..."
 $wxVisTarget = "$ReleaseDir\WxVis"
@@ -80,13 +80,13 @@ foreach ($pattern in @('*.py', 'requirements.txt')) {
     Copy-Item "$SolutionRoot\src\WxVis\$pattern" $wxVisTarget -Force -ErrorAction SilentlyContinue
 }
 
-# ── Copy shared config files ─────────────────────────────────────────────────
+# -- Copy shared config files -------------------------------------------------
 
 Write-Host "Copying shared configuration files..."
 Copy-Item "$SolutionRoot\appsettings.shared.json" $ReleaseDir
 Copy-Item "$SolutionRoot\log4net.shared.config"   $ReleaseDir
 
-# ── Copy observability stack ──────────────────────────────────────────────────
+# -- Copy observability stack --------------------------------------------------
 
 Write-Host "Copying observability stack..."
 $obsSource = "$SolutionRoot\..\observability"
@@ -94,7 +94,7 @@ if (Test-Path $obsSource) {
     Copy-Item $obsSource "$ReleaseDir\observability" -Recurse
 }
 
-# ── Copy bundled tools (wgrib2) ──────────────────────────────────────────────
+# -- Copy bundled tools (wgrib2) ----------------------------------------------
 
 Write-Host "Copying bundled tools..."
 $toolsSource = "$SolutionRoot\tools"
@@ -102,7 +102,7 @@ if (Test-Path $toolsSource) {
     Copy-Item $toolsSource "$ReleaseDir\tools" -Recurse
 }
 
-# ── Copy documentation ───────────────────────────────────────────────────────
+# -- Copy documentation -------------------------------------------------------
 
 Write-Host "Copying documentation..."
 foreach ($doc in @('INSTALL.md', 'DESIGN.md', 'PRE-INSTALL.txt')) {
@@ -110,13 +110,13 @@ foreach ($doc in @('INSTALL.md', 'DESIGN.md', 'PRE-INSTALL.txt')) {
     if (Test-Path $src) { Copy-Item $src $ReleaseDir }
 }
 
-# ── Create empty directories ─────────────────────────────────────────────────
+# -- Create empty directories -------------------------------------------------
 
 foreach ($dir in @('Logs', 'plots', 'temp')) {
     New-Item -ItemType Directory -Path "$ReleaseDir\$dir" -Force | Out-Null
 }
 
-# ── Read product version from Directory.Build.props ──────────────────────────
+# -- Read product version from Directory.Build.props --------------------------
 
 $propsPath = "$SolutionRoot\Directory.Build.props"
 $productVersion = "0.0.0"
@@ -126,15 +126,15 @@ if (Test-Path $propsPath) {
     if ($v) { $productVersion = $v }
 }
 
-# ── Done ──────────────────────────────────────────────────────────────────────
+# -- Done ----------------------------------------------------------------------
 
 $itemCount = (Get-ChildItem $ReleaseDir -Recurse -File).Count
 Write-Host ""
-Write-Host "Release staged: $ReleaseDir ($itemCount files) — WxServices $productVersion" -ForegroundColor Green
+Write-Host "Release staged: $ReleaseDir ($itemCount files) - WxServices $productVersion" -ForegroundColor Green
 Write-Host "Next: compile the Inno Setup script to produce the installer:"
 Write-Host "  ISCC /DAppVer=$productVersion HarderWare_WxServices.iss" -ForegroundColor Cyan
 
-# ── Reminders ────────────────────────────────────────────────────────────────
+# -- Reminders ----------------------------------------------------------------
 
 $versionFile = "$SolutionRoot\tools\wgrib2-version.txt"
 if (Test-Path $versionFile) {
