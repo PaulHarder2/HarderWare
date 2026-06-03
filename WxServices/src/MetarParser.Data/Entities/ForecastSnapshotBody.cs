@@ -1,6 +1,8 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
+using WxServices.Common;
+
 namespace MetarParser.Data.Entities;
 
 /// <summary>
@@ -102,6 +104,8 @@ public sealed record ForecastSnapshotBody
     /// Wind drift (kt) below which two blocks are treated as materially the same.
     /// 5 kt covers METAR wind rounding and minor model jitter (a non-actionable
     /// breeze change) while still catching a shift to a genuinely windier regime.
+    /// Robust near a band boundary, where a 1–2 kt change would otherwise flip
+    /// <see cref="WindBand"/>.
     /// </summary>
     private const int WindToleranceKt = 5;
 
@@ -110,8 +114,9 @@ public sealed record ForecastSnapshotBody
     /// true when this body says the same thing a reader would act on as
     /// <paramref name="other"/>.  Categorical fields (sky, obscuration, precip
     /// expectation/phenomenon, gust, visibility, severeFlag) must match exactly;
-    /// temperature and wind bands may drift within
-    /// <see cref="TempToleranceC"/>/<see cref="WindToleranceKt"/>.  Blocks are
+    /// temperature may drift within <see cref="TempToleranceC"/>, and wind within
+    /// <see cref="WindToleranceKt"/> or while staying in the same
+    /// <see cref="WxServices.Common.WindScale"/> impact band.  Blocks are
     /// matched by <see cref="ForecastSnapshotBlock.StartUtc"/>; horizon-edge
     /// blocks that rolled on or off with the passage of time are not, by
     /// themselves, treated as news, so only the overlapping blocks are compared.
@@ -187,8 +192,26 @@ public sealed record ForecastSnapshotBody
         && (ignoreSevere || a.SevereFlag == b.SevereFlag)
         && Math.Abs(a.TemperatureCelsius.Min - b.TemperatureCelsius.Min) <= TempToleranceC
         && Math.Abs(a.TemperatureCelsius.Max - b.TemperatureCelsius.Max) <= TempToleranceC
-        && Math.Abs(a.WindKt.Min - b.WindKt.Min) <= WindToleranceKt
-        && Math.Abs(a.WindKt.Max - b.WindKt.Max) <= WindToleranceKt;
+        && WindEndpointEqual(a.WindKt.Min, b.WindKt.Min)
+        && WindEndpointEqual(a.WindKt.Max, b.WindKt.Max);
+
+    // Two wind endpoints are materially equal when within the absolute tolerance
+    // (small drift, robust across a band boundary) OR in the same shared impact band
+    // (WxServices.Common.WindScale — larger drift the public would still shrug at,
+    // e.g. 6 kt vs 15 kt). WX-110: the band test is what suppresses the
+    // trivial-wobble redundant re-sends the 5 kt tolerance alone missed. The same-
+    // band test is capped at MaxInBandDriftKt so the open-ended top band (64+ kt)
+    // can't equate, say, 65 kt and 150 kt and suppress a genuine hurricane-force
+    // escalation as redundant (CodeRabbit) — every bounded band spans ≤16 kt, so the
+    // cap never restricts a legitimate within-band match.
+    private static bool WindEndpointEqual(int a, int b) =>
+        Math.Abs(a - b) <= WindToleranceKt
+        || (WindScale.Band(a) == WindScale.Band(b) && Math.Abs(a - b) <= MaxInBandDriftKt);
+
+    // Widest bounded WindScale band spans 16 kt (bands 0 = 0–16 and 1 = 17–33).
+    // Caps how much the same-band test absorbs, bounding the open-ended 64+ band
+    // without restricting any bounded band.
+    private const int MaxInBandDriftKt = 16;
 }
 
 /// <summary>One uniform 6-hour block within a <see cref="ForecastSnapshotBody"/>.</summary>

@@ -1,5 +1,7 @@
 using WxInterp;
 
+using WxServices.Common;
+
 namespace WxReport.Svc;
 
 /// <summary>
@@ -28,13 +30,25 @@ public enum TriggerSource
 /// pre-filter: <em>has any input changed since the last Claude call?</em>
 ///
 /// <para>
-/// Deliberately raw <em>identity</em>, not thresholded conditions.  Every
-/// significance judgment ("is this change worth sending?") belongs to Claude's
-/// invalidation gate, not to a C# fingerprint — that judgment-in-C# was exactly
-/// what the deleted <c>SnapshotFingerprint</c> got wrong (it fired the
-/// 2026-04-21 KDWH double-send on an observation the forecast had predicted).
-/// The pre-filter's only job is to avoid paying tokens to ask Claude about
-/// evidence it has already seen.
+/// Still <em>identity</em>, not a send/no-send judgment.  Every significance
+/// judgment ("is this change worth sending?") belongs to Claude's invalidation
+/// gate, not to a C# fingerprint — that judgment-in-C# was exactly what the
+/// deleted <c>SnapshotFingerprint</c> got wrong (it fired the 2026-04-21 KDWH
+/// double-send on an observation the forecast had predicted).  The pre-filter's
+/// only job is to avoid paying tokens to ask Claude about evidence it has
+/// already seen.
+/// </para>
+///
+/// <para>
+/// WX-110: the METAR component is a coarse <em>material</em> signature (station +
+/// public-meaningful wind / visibility / sky / ~5°F temperature bands + present-
+/// weather tokens) rather than the raw observation timestamp.  Two consecutive
+/// observations a reader would describe the same way collapse to the same
+/// signature, so an unchanged hourly re-observation no longer churns Claude —
+/// the dominant WxReport cost leak.  This is the same principle (identity, not
+/// significance): it never decides whether to <em>send</em>, only whether the
+/// evidence is materially what Claude already evaluated.  TAF and GFS still key
+/// on issuance/run time, so genuinely new guidance always reaches the gate.
 /// </para>
 /// </summary>
 public readonly record struct InputIdentity(string Metar, string Taf, string Gfs)
@@ -45,11 +59,105 @@ public readonly record struct InputIdentity(string Metar, string Taf, string Gfs
     /// <param name="snap">The snapshot assembled for this cycle.</param>
     /// <returns>The input identity; absent inputs are recorded as <c>"none"</c>.</returns>
     public static InputIdentity From(WeatherSnapshot snap) => new(
-        Metar: snap.ObservationAvailable
-            ? $"{snap.StationIcao}@{snap.ObservationTimeUtc:O}"
-            : None,
+        Metar: snap.ObservationAvailable ? MetarMaterialSignature(snap) : None,
         Taf: snap.TafIssuanceUtc?.ToString("O") ?? None,
         Gfs: snap.GfsForecast?.ModelRunUtc.ToString("O") ?? None);
+
+    // ── WX-110 material METAR signature ───────────────────────────────────────
+
+    // Builds the coarse material signature for the METAR component: station plus
+    // public-meaningful bands. Contains no '|' (the InputIdentity field separator),
+    // so it round-trips through Serialize/Parse unchanged.
+    private static string MetarMaterialSignature(WeatherSnapshot snap)
+    {
+        int wind = WindBand(snap.WindSpeedKt, snap.WindGustKt);
+        int vis = VisibilityBand(snap.VisibilityStatuteMiles, snap.Cavok, snap.VisibilityLessThan);
+        int sky = SkyBand(snap.SkyLayers);
+        string temp = TemperatureBand(snap.TemperatureFahrenheit);
+        string wx = WeatherSignature(snap.WeatherPhenomena);
+        var sig = $"{snap.StationIcao};W{wind};V{vis};S{sky};T{temp};P{wx}";
+
+        // Defensive bound: the serialized InputIdentity is stored in a 200-char column
+        // (RecipientState.LastClaudeInputHash); the two ISO timestamps consume ~62,
+        // leaving ample room for a realistic signature. A pathological many-phenomena
+        // observation could in theory overflow — and an overflow would throw on save,
+        // be swallowed by ReportWorker's catch, and silently re-open the cost leak (a
+        // never-persisted hash reads as "changed" every cycle). Truncating keeps the
+        // signature stable and '|'-free; a collision among 130+ char signatures only
+        // risks a rare missed trigger, never a crash or a runaway re-send.
+        return sig.Length <= MaxMetarSignatureLength ? sig : sig[..MaxMetarSignatureLength];
+    }
+
+    // Caps MetarMaterialSignature so the serialized identity stays within the
+    // 200-char LastClaudeInputHash column (see MetarMaterialSignature).
+    private const int MaxMetarSignatureLength = 130;
+
+    // Peak wind (greater of sustained and gust), binned via the shared public
+    // wind scale (WxServices.Common.WindScale). Calm / unreported → 0.
+    internal static int WindBand(int? speedKt, int? gustKt) =>
+        WindScale.Band(Math.Max(speedKt ?? 0, gustKt ?? 0));
+
+    // Visibility matters to the public only below ~1 statute mile; above that it is
+    // largely irrelevant. Two classes: 0 = below 1 mi, 1 = 1 mi or better. CAVOK
+    // and an unreported value are the unremarkable case (1) — a missing reading
+    // stays stable rather than flipping the signature.
+    internal static int VisibilityBand(double? visMiles, bool cavok, bool lessThan)
+    {
+        if (cavok || visMiles is null) return 1;
+        // < 1 mi, or exactly "less than 1 mi" (the M1SM encoding).
+        bool below = visMiles.Value < 1.0 || (visMiles.Value == 1.0 && lessThan);
+        return below ? 0 : 1;
+    }
+
+    // Densest reported sky coverage, collapsed to four public classes:
+    // 0 = clear (CLR/SKC/FEW/NSC/NCD), 1 = partly cloudy (SCT), 2 = mostly cloudy
+    // (BKN), 3 = overcast (OVC) or obscured sky (VV).
+    internal static int SkyBand(IReadOnlyList<SkyLayer> layers)
+    {
+        int band = 0;
+        foreach (var layer in layers)
+        {
+            int rank = layer.Coverage switch
+            {
+                SkyCoverage.Scattered => 1,
+                SkyCoverage.Broken => 2,
+                SkyCoverage.Overcast or SkyCoverage.VerticalVisibility => 3,
+                _ => 0,
+            };
+            if (rank > band) band = rank;
+        }
+        return band;
+    }
+
+    // Temperature in ~5°F bands, so ordinary hourly wobble does not churn Claude
+    // while a genuine swing (front, rapid warming) still eventually crosses a band.
+    // "na" when unreported, so a missing reading is stable. (Forecaster-chosen 5°F
+    // width — revisit once the dashboard shows the resulting trigger rate.)
+    internal static string TemperatureBand(double? tempF) =>
+        tempF is { } f ? ((int)Math.Floor(f / 5.0)).ToString() : "na";
+
+    // Stable, order-independent set of materially-relevant present-weather tokens:
+    // precipitation types, the descriptor qualifiers (thunderstorm, freezing,
+    // showers, …), obscurations, and other phenomena (squalls, funnel clouds), plus
+    // a "heavy" marker when any group is heavy. Heavy precipitation is a material
+    // escalation a reader acts on (e.g. light rain → a downpour), so it must change
+    // the signature and reach Claude's gate; light/moderate are folded together as
+    // ordinary. Recent-weather (RE) groups are excluded — they describe what just
+    // ended, not current state. Empty string when nothing significant is occurring.
+    internal static string WeatherSignature(IReadOnlyList<SnapshotWeather> phenomena)
+    {
+        var tokens = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var wx in phenomena)
+        {
+            if (wx.IsRecent) continue;
+            if (wx.Intensity == WeatherIntensity.Heavy) tokens.Add("heavy");
+            if (wx.Descriptor is { } d) tokens.Add(d.ToString().ToLowerInvariant());
+            foreach (var p in wx.Precipitation) tokens.Add(p.ToString().ToLowerInvariant());
+            if (wx.Obscuration is { } o) tokens.Add(o.ToString().ToLowerInvariant());
+            if (wx.Other is { } other) tokens.Add(other.ToString().ToLowerInvariant());
+        }
+        return string.Join(",", tokens);
+    }
 
     /// <summary>
     /// Serialises to the compact, parseable form stored in

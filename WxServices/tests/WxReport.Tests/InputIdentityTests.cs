@@ -89,11 +89,12 @@ public class InputIdentityTests
     }
 
     [Fact]
-    public void From_WithObservation_EncodesStationAndTime()
+    public void From_WithObservation_EncodesStationAndMaterialSignature()
     {
         var snap = new WeatherSnapshot { ObservationAvailable = true, StationIcao = "KDWH", ObservationTimeUtc = T0 };
         var id = InputIdentity.From(snap);
-        Assert.StartsWith("KDWH@", id.Metar);
+        Assert.StartsWith("KDWH;", id.Metar);
+        Assert.DoesNotContain("@", id.Metar);   // WX-110: no longer keyed on the raw observation timestamp
         Assert.Equal("none", id.Taf);
         Assert.Equal("none", id.Gfs);
     }
@@ -113,14 +114,119 @@ public class InputIdentityTests
     }
 
     [Fact]
-    public void NewObservationTime_FlipsMetarComponentOnly()
+    public void SameMaterialObservation_LaterTime_DoesNotChangeMetar()
     {
-        // The 2026-04-21 KDWH double-send: a fresh METAR (later observation time)
-        // for the same station advances only the METAR component, so the cycle is
-        // routed to Claude's gate — which then judges whether it is news.
-        var prior = new WeatherSnapshot { ObservationAvailable = true, StationIcao = "KDWH", ObservationTimeUtc = T0 };
-        var later = new WeatherSnapshot { ObservationAvailable = true, StationIcao = "KDWH", ObservationTimeUtc = T0.AddHours(4) };
+        // WX-110: a fresh METAR with a later observation time but materially identical
+        // weather (same station / wind / visibility / sky / temperature band /
+        // phenomena) is evidence Claude has already evaluated, so the pre-filter must
+        // NOT route it to the gate again — this closes the hourly-re-observation cost
+        // leak. Under WX-80 the raw timestamp alone flipped the component; WX-110
+        // narrows the trigger to a *material* change.
+        var prior = ObsSnap("KDWH", T0, windKt: 8, tempF: 72, visMiles: 10);
+        var later = ObsSnap("KDWH", T0.AddHours(4), windKt: 8, tempF: 72, visMiles: 10);
+        var changed = InputIdentity.From(later).ChangedSourcesSince(InputIdentity.From(prior).Serialize());
+        Assert.Empty(changed);
+    }
+
+    [Fact]
+    public void MateriallyDifferentObservation_ChangesMetarOnly()
+    {
+        // A genuine change in the observed weather (here wind jumping from band 0 to
+        // band 2) still advances only the METAR component, routing the cycle to
+        // Claude's gate — which decides whether it is news.
+        var prior = ObsSnap("KDWH", T0, windKt: 8, tempF: 72, visMiles: 10);
+        var later = ObsSnap("KDWH", T0.AddHours(1), windKt: 40, tempF: 72, visMiles: 10);
         var changed = InputIdentity.From(later).ChangedSourcesSince(InputIdentity.From(prior).Serialize());
         Assert.Equal(new[] { TriggerSource.Metar }, changed);
     }
+
+    [Theory]
+    [InlineData(0, null, 0)]
+    [InlineData(16, null, 0)]
+    [InlineData(17, null, 1)]   // half tropical-storm force
+    [InlineData(33, null, 1)]
+    [InlineData(34, null, 2)]   // tropical-storm / gale force
+    [InlineData(47, null, 2)]
+    [InlineData(48, null, 3)]   // storm force
+    [InlineData(63, null, 3)]
+    [InlineData(64, null, 4)]   // hurricane force
+    [InlineData(10, 40, 2)]     // gust dominates sustained
+    public void WindBand_BinsAtForecasterThresholds(int? speed, int? gust, int expected)
+        => Assert.Equal(expected, InputIdentity.WindBand(speed, gust));
+
+    [Theory]
+    [InlineData(0.25, false, false, 0)]
+    [InlineData(0.99, false, false, 0)]
+    [InlineData(1.0, false, false, 1)]
+    [InlineData(1.0, false, true, 0)]    // reported as "<1 mi"
+    [InlineData(10.0, false, false, 1)]
+    [InlineData(null, false, false, 1)]  // unreported -> unremarkable
+    [InlineData(0.25, true, false, 1)]   // CAVOK overrides
+    public void VisibilityBand_SplitsAtOneMile(double? vis, bool cavok, bool lessThan, int expected)
+        => Assert.Equal(expected, InputIdentity.VisibilityBand(vis, cavok, lessThan));
+
+    [Theory]
+    [InlineData(null, "na")]
+    [InlineData(72.0, "14")]   // floor(72/5) = 14
+    [InlineData(74.9, "14")]
+    [InlineData(75.0, "15")]
+    [InlineData(-2.0, "-1")]   // floor(-0.4) = -1
+    public void TemperatureBand_FiveDegreeBins(double? tempF, string expected)
+        => Assert.Equal(expected, InputIdentity.TemperatureBand(tempF));
+
+    [Fact]
+    public void SkyBand_TakesDensestLayer()
+    {
+        var layers = new List<SkyLayer>
+        {
+            new() { Coverage = SkyCoverage.Few },
+            new() { Coverage = SkyCoverage.Broken },
+            new() { Coverage = SkyCoverage.Scattered },
+        };
+        Assert.Equal(2, InputIdentity.SkyBand(layers));            // BKN dominates
+        Assert.Equal(0, InputIdentity.SkyBand(new List<SkyLayer>())); // clear sky
+    }
+
+    [Fact]
+    public void WeatherSignature_OrderIndependentAndExcludesRecent()
+    {
+        var a = new List<SnapshotWeather>
+        {
+            new() { Descriptor = WeatherDescriptor.Thunderstorm, Precipitation = new[] { PrecipitationType.Rain } },
+        };
+        var b = new List<SnapshotWeather>
+        {
+            new() { Precipitation = new[] { PrecipitationType.Rain } },
+            new() { Descriptor = WeatherDescriptor.Thunderstorm },
+            new() { Obscuration = WeatherObscuration.Fog, IsRecent = true }, // recent: excluded
+        };
+        Assert.Equal(InputIdentity.WeatherSignature(a), InputIdentity.WeatherSignature(b));
+        Assert.DoesNotContain("fog", InputIdentity.WeatherSignature(b));
+    }
+
+    [Fact]
+    public void WeatherSignature_HeavyIntensity_DiffersFromLightAndModerate()
+    {
+        var light = new List<SnapshotWeather> { new() { Intensity = WeatherIntensity.Light, Precipitation = new[] { PrecipitationType.Rain } } };
+        var moderate = new List<SnapshotWeather> { new() { Intensity = WeatherIntensity.Moderate, Precipitation = new[] { PrecipitationType.Rain } } };
+        var heavy = new List<SnapshotWeather> { new() { Intensity = WeatherIntensity.Heavy, Precipitation = new[] { PrecipitationType.Rain } } };
+
+        // Light and moderate fold together (ordinary); heavy is a material escalation
+        // a reader acts on, so it must change the signature and reach Claude's gate.
+        Assert.Equal(InputIdentity.WeatherSignature(light), InputIdentity.WeatherSignature(moderate));
+        Assert.NotEqual(InputIdentity.WeatherSignature(light), InputIdentity.WeatherSignature(heavy));
+        Assert.Contains("heavy", InputIdentity.WeatherSignature(heavy));
+    }
+
+    private static WeatherSnapshot ObsSnap(
+        string icao, DateTime obsUtc, int? windKt = null, double? tempF = null, double? visMiles = null) =>
+        new()
+        {
+            ObservationAvailable = true,
+            StationIcao = icao,
+            ObservationTimeUtc = obsUtc,
+            WindSpeedKt = windKt,
+            TemperatureFahrenheit = tempF,
+            VisibilityStatuteMiles = visMiles,
+        };
 }

@@ -19,8 +19,15 @@ public class ReportConfig
     /// <summary>Hour(s) of day (0–23, in the recipient's local timezone) at which the daily scheduled report is sent.  Comma-separated when multiple hours are desired (e.g. "6, 12").</summary>
     public string DefaultScheduledSendHours { get; set; } = "7";
 
-    /// <summary>Minimum minutes that must elapse between any two reports sent to the same recipient.</summary>
-    public int MinGapMinutes { get; set; } = 60;
+    /// <summary>
+    /// Minimum minutes that must elapse between any two reports sent to the same
+    /// recipient.  Raised from 60 to 90 in WX-110: send-gap analysis showed 61% of
+    /// per-recipient gaps clustered at the 60-minute floor — the rate limit, not the
+    /// weather, was setting the cadence — so the gate was effectively sending hourly.
+    /// 90 caps that without materially delaying genuine updates (it does, however,
+    /// defer a rapid-onset hazard update by up to 90 min vs 60; revisit if that bites).
+    /// </summary>
+    public int MinGapMinutes { get; set; } = 90;
 
     /// <summary>Check interval; loaded from appsettings.json (service-specific).</summary>
     public int IntervalMinutes { get; set; } = 5;

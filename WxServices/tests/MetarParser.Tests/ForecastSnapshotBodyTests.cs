@@ -285,6 +285,47 @@ public class ForecastSnapshotBodyTests
     }
 
     [Fact]
+    public void MateriallyEquals_WindDriftWithinSameBand_True()
+    {
+        // WX-110: 3→14 and 9→16 kt both exceed the 5 kt tolerance but stay in the
+        // same ≤17 kt impact band — a breeze a reader would shrug at, not news.
+        var prior = SampleBlock() with { WindKt = new(3, 9) };
+        var drifted = SampleBlock() with { WindKt = new(14, 16) };
+        Assert.True(Body(prior).MateriallyEquals(Body(drifted)));
+    }
+
+    [Fact]
+    public void MateriallyEquals_WindCrossesIntoHigherBand_False()
+    {
+        // A genuine shift into a windier regime (15 kt, band 0 → 25 kt, band 1) is
+        // beyond both the tolerance and the band, so it is still treated as news.
+        var prior = SampleBlock() with { WindKt = new(10, 15) };
+        var windier = SampleBlock() with { WindKt = new(10, 25) };
+        Assert.False(Body(prior).MateriallyEquals(Body(windier)));
+    }
+
+    [Fact]
+    public void MateriallyEquals_LargeDriftWithinOpenTopBand_False()
+    {
+        // Both 70 and 150 kt are in the open-ended 64+ band, but an 80 kt jump is a
+        // genuine hurricane-force escalation, not redundant wobble — the in-band cap
+        // keeps it from being suppressed.
+        var prior = SampleBlock() with { WindKt = new(64, 70) };
+        var stronger = SampleBlock() with { WindKt = new(64, 150) };
+        Assert.False(Body(prior).MateriallyEquals(Body(stronger)));
+    }
+
+    [Fact]
+    public void MateriallyEquals_SmallDriftAcrossBandBoundary_True()
+    {
+        // 16→18 kt crosses the 17 kt boundary but drifts only 2 kt; the absolute
+        // tolerance keeps it equal so a band edge does not become a hair-trigger.
+        var prior = SampleBlock() with { WindKt = new(5, 16) };
+        var nudged = SampleBlock() with { WindKt = new(5, 18) };
+        Assert.True(Body(prior).MateriallyEquals(Body(nudged)));
+    }
+
+    [Fact]
     public void MateriallyEquals_LargeTempSwing_False()
     {
         var hotter = SampleBlock() with { TemperatureCelsius = new(8.2, 20.0) }; // +5.3 °C max

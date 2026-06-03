@@ -171,6 +171,25 @@ internal static class ReconcilerPrompts
             severeFlag true and skip_send — do not whipsaw the recipient by reversing a
             severe call on a routine observation alone.
 
+        Decision rule (arrival-triggered cycles, where skip_send is offered) —
+        default to skip_send. Call submit_reconciled_report ONLY when your reconciled
+        final_snapshot differs from prior_snapshot in a way a reader would act on:
+
+          • a change in sky, precipitation, or visibility CATEGORY (not a small
+            numeric wobble within the same category);
+          • a wind change that crosses into a higher impact band — under 17, 17–33,
+            34–47, 48–63, or 64+ kt (≤ half tropical-storm, up to TS/gale, storm,
+            hurricane force). Drift within one band (e.g. 7 kt to 15 kt) is NOT news;
+          • a temperature swing of more than a few degrees;
+          • any hazard newly appearing or clearing (per the significance hierarchy).
+
+        A newer TAF or GFS issuance is NOT itself news. If reconciling the fresher
+        guidance leaves the committed forecast materially unchanged — same categories,
+        same wind band, temperatures within a couple of degrees — call skip_send even
+        though the inputs advanced. An unscheduled email must earn its interruption;
+        when the only differences are sub-categorical wobble, skip. (Safety-critical
+        changes always clear this bar — when a genuine hazard appears, send.)
+
         You have two tools, and you must call exactly one of them:
 
           • submit_reconciled_report — when this cycle is worth sending. Return all

@@ -54,6 +54,35 @@ internal static class Kdwh20260421Fixture
 
     internal const int ScheduledHour = 4;
 
+    // ── 4:53 observation snapshot (the prior committed cycle) ────────────────
+
+    // 4:53 AM: overcast and light wind but NOT yet raining — the light rain begins
+    // later in the morning. Used only for its WX-110 material METAR signature (the
+    // pre-filter baseline the 8:53 cycle compares against): the rain onset by 8:53
+    // is a genuine material change, so the pre-filter still routes that cycle to
+    // Claude's gate rather than skipping it.
+    internal static WeatherSnapshot BuildSnapshot0453() => new()
+    {
+        ObservationAvailable = true,
+        StationIcao = StationIcao,
+        ObservationTimeUtc = Obs0453Utc,
+
+        WindDirectionDeg = 100,
+        WindSpeedKt = 6,
+
+        VisibilityStatuteMiles = 10,
+
+        SkyLayers = new[]
+        {
+            new SkyLayer { Coverage = SkyCoverage.Overcast, HeightFeet = 4600 },
+        },
+
+        // No WeatherPhenomena — not raining yet at 4:53.
+
+        TemperatureCelsius = 17.0,
+        TemperatureFahrenheit = 63,
+    };
+
     // ── 8:53 observation snapshot (the replay cycle) ─────────────────────────
 
     // KDWH 8:53 AM: wind 100° 7 kt, vis 10 SM, OVC 4600 ft, Light Rain, 63°F (17.2°C),
@@ -297,9 +326,11 @@ internal static class Kdwh20260421Fixture
     // ── WX-80 pre-filter identities ──────────────────────────────────────────
 
     // The serialized InputIdentity stored at the 4:53 Claude call (the baseline
-    // the 8:53 cycle's pre-filter compares against).
+    // the 8:53 cycle's pre-filter compares against). WX-110: the METAR component is
+    // the 4:53 observation's material signature (derived through the same binning as
+    // production), not the raw timestamp.
     internal static string PriorInputHash() => new InputIdentity(
-        Metar: $"{StationIcao}@{Obs0453Utc:O}",
+        Metar: InputIdentity.From(BuildSnapshot0453()).Metar,
         Taf: Taf0453IssuanceUtc.ToString("O"),
         Gfs: GfsModelRunUtc.ToString("O")).Serialize();
 

@@ -67,12 +67,16 @@ public abstract record ReconcileResult
 /// <see cref="ReconcileResult.Failure"/>.
 ///
 /// <para>
-/// Malformed-output policy (decided at WX-79 grooming): schema-violation,
-/// missing field, or non-JSON tool input returns a typed Failure.  The
-/// caller (<see cref="ReportWorker"/>) does not send the email when Failure
-/// is returned, but does not un-commit any provisional rows that were
-/// written before the reconciler ran — the auditable shape of "we tried,
-/// Claude failed" stays in place.
+/// Malformed-output policy (WX-79, retry added WX-110): a schema-violation,
+/// missing field, or non-JSON tool input is retried up to a small bounded number
+/// of attempts within the cycle (the fault is usually transient — the Anthropic
+/// API treats a tool schema's <c>required</c> list as advisory, so a complete
+/// response can simply drop a field); only after the attempts are exhausted does
+/// it return a typed Failure.  A <c>max_tokens</c> truncation and a guaranteed-send
+/// <c>skip_send</c> are <em>not</em> retried.  When Failure is ultimately returned
+/// the caller (<see cref="ReportWorker"/>) does not send the email, but does not
+/// un-commit any provisional rows written before the reconciler ran — the
+/// auditable shape of "we tried, Claude failed" stays in place.
 /// </para>
 /// </summary>
 public sealed class ForecastReconciler
@@ -89,7 +93,10 @@ public sealed class ForecastReconciler
     /// <summary>
     /// Reconciles the GFS-derived provisional snapshot against the current
     /// observation, the active TAF (when present), and the prior committed
-    /// snapshot (when present), via a single Claude tool-use call.  Returns
+    /// snapshot (when present), via a Claude tool-use call (retried up to 3 attempts
+    /// on transient malformed output — missing field / schema violation — but never
+    /// on a <c>max_tokens</c> truncation or a guaranteed-send <c>skip_send</c>;
+    /// returned token usage is summed across attempts).  Returns
     /// the parsed three artifacts on success or a typed failure on transport
     /// or schema problems.
     /// </summary>
@@ -140,78 +147,118 @@ public sealed class ForecastReconciler
             snapshot, provisional, gfsModelRunUtc, tafIssuanceUtc, tafValidToUtc, prior, recipientName, tz, units,
             changedSinceLastSend);
 
-        var apiResult = await _claude.InvokeReconciliationAsync(perRecipientPrompt, userMessage, allowSkip, ct);
-        if (apiResult is null)
+        // WX-110: Claude intermittently returns a complete (untruncated) tool_use
+        // that omits a required field or whose final_snapshot fails schema
+        // validation — the Anthropic API treats a tool schema's `required` list as
+        // advisory, so a field can simply be absent. The fault is transient (WX-109
+        // raised the cap and added max_tokens detection, yet the missing-field
+        // failures continued on the fixed binary with stop_reason != max_tokens), so
+        // an immediate re-call almost always succeeds. Retry up to maxAttempts within
+        // the cycle rather than leaving the recipient to self-heal on the next tick.
+        // NOT retried: a max_tokens truncation (re-calling at the same cap would just
+        // re-truncate — left to self-heal) and a guaranteed-send skip_send (a contract
+        // violation, not a transient fault). The prompts are built once above and are
+        // identical across attempts (so the cached system-prompt prefix keeps retries
+        // cheap).
+        const int maxAttempts = 3;
+        int accIn = 0, accOut = 0, accCacheRead = 0, accCacheWrite = 0;
+        for (int attempt = 1; ; attempt++)
         {
-            return new ReconcileResult.Failure(
-                "Claude API call failed or returned no submit_reconciled_report or skip_send tool_use block.");
-        }
-
-        // WX-109: a "max_tokens" stop_reason means generation was cut at the
-        // output-token cap, so the tool_use input is a truncated partial object —
-        // a trailing required field (often email_body) is dropped. Detect that
-        // here, before reading any field, so the operator sees a truthful
-        // "response truncated" failure instead of WX-104's accurate-but-misleading
-        // "missing required field 'email_body'", which sends them hunting for a
-        // prompt/schema problem that does not exist. The caller leaves the
-        // provisional CommittedSend in place and the next cycle reconciles a fresh
-        // one (the same self-healing path as any other reconciliation Failure).
-        if (apiResult.StopReason == "max_tokens")
-        {
-            Logger.Error(
-                "Reconciliation response was truncated at the output-token cap "
-                + "(stop_reason=max_tokens); the tool_use input is incomplete.");
-            return new ReconcileResult.Failure(
-                "Reconciliation response was truncated at the output-token cap "
-                + "(stop_reason=max_tokens) before the tool_use input was complete.");
-        }
-
-        try
-        {
-            var input = apiResult.ToolUseInput;
-
-            // Invalidation gate: Claude chose skip_send — not news worth sending.
-            // Defense in depth: ClaudeClient now rejects a skip_send returned on a
-            // non-skippable cycle at the API boundary, so the !allowSkip branch
-            // below is normally unreachable. We keep it deliberately — "a
-            // guaranteed send (scheduled / first / startup) must never be silently
-            // skipped" is a customer-facing invariant worth guarding twice. If the
-            // boundary check ever regresses, this still fails closed (Failure, so
-            // the provisional stays and the caller logs it) rather than suppressing
-            // a send that must always go out.
-            if (apiResult.ToolName == "skip_send")
+            var apiResult = await _claude.InvokeReconciliationAsync(perRecipientPrompt, userMessage, allowSkip, ct);
+            if (apiResult is null)
             {
-                if (!allowSkip)
-                    return new ReconcileResult.Failure("Claude returned skip_send on a non-skippable (guaranteed) send.");
-
-                var skipTrace = RequireString(input, "reasoning_trace");
-                return new ReconcileResult.NotNews(skipTrace, apiResult.Tokens);
+                return new ReconcileResult.Failure(
+                    "Claude API call failed or returned no submit_reconciled_report or skip_send tool_use block.");
             }
 
-            var emailBody = RequireString(input, "email_body");
+            // WX-109: a "max_tokens" stop_reason means generation was cut at the
+            // output-token cap, so the tool_use input is a truncated partial object —
+            // a trailing required field (often email_body) is dropped. Detect that
+            // here, before reading any field, so the operator sees a truthful
+            // "response truncated" failure instead of WX-104's accurate-but-misleading
+            // "missing required field 'email_body'". Not retried (see above): a re-call
+            // at the same cap would re-truncate; the caller leaves the provisional
+            // CommittedSend in place and the next cycle reconciles a fresh one.
+            if (apiResult.StopReason == "max_tokens")
+            {
+                Logger.Error(
+                    "Reconciliation response was truncated at the output-token cap "
+                    + "(stop_reason=max_tokens); the tool_use input is incomplete.");
+                return new ReconcileResult.Failure(
+                    "Reconciliation response was truncated at the output-token cap "
+                    + "(stop_reason=max_tokens) before the tool_use input was complete.");
+            }
 
-            var finalSnapshotJson = RequireProperty(input, "final_snapshot").GetRawText();
-            var finalSnapshot = ForecastSnapshotBody.Deserialize(finalSnapshotJson);
+            // WX-110: accumulate token usage across attempts so a retried-then-
+            // succeeded cycle reports its full billed cost — a failed malformed
+            // attempt is still real API spend, and the new cost dashboards would
+            // otherwise undercount it. On a single-attempt cycle this equals that
+            // attempt's tokens (unchanged behaviour).
+            accIn += apiResult.Tokens.InputTokens;
+            accOut += apiResult.Tokens.OutputTokens;
+            accCacheRead += apiResult.Tokens.CacheReadInputTokens;
+            accCacheWrite += apiResult.Tokens.CacheCreationInputTokens;
+            var tokens = new TokenUsage(accIn, accOut, accCacheRead, accCacheWrite);
 
-            var reasoningTrace = RequireString(input, "reasoning_trace");
+            try
+            {
+                var input = apiResult.ToolUseInput;
 
-            return new ReconcileResult.Success(emailBody, finalSnapshot, reasoningTrace, apiResult.Tokens);
-        }
-        catch (MissingToolUseFieldException ex)
-        {
-            // WX-104: a field Claude omitted (or returned null/non-string) is reported
-            // precisely by name — not as a raw KeyNotFoundException mislabelled
-            // "schema validation failed". The provisional CommittedSend is left in
-            // place by the caller as a failed-attempt audit row (SentAtUtc stays null,
-            // so it never becomes a prior snapshot and is never delivered); the next
-            // cycle reconciles a fresh provisional, which is how the system self-heals.
-            Logger.Error($"Reconciliation tool_use input is {ex.Message}.");
-            return new ReconcileResult.Failure($"Reconciliation response {ex.Message}.");
-        }
-        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
-        {
-            Logger.Error($"Reconciliation tool_use input failed validation: {ex.Message}");
-            return new ReconcileResult.Failure($"Schema validation failed: {ex.Message}");
+                // Invalidation gate: Claude chose skip_send — not news worth sending.
+                // Defense in depth: ClaudeClient now rejects a skip_send returned on a
+                // non-skippable cycle at the API boundary, so the !allowSkip branch
+                // below is normally unreachable. We keep it deliberately — "a
+                // guaranteed send (scheduled / first / startup) must never be silently
+                // skipped" is a customer-facing invariant worth guarding twice. If the
+                // boundary check ever regresses, this still fails closed (Failure, so
+                // the provisional stays and the caller logs it) rather than suppressing
+                // a send that must always go out. Not retried: a contract violation is
+                // not a transient fault.
+                if (apiResult.ToolName == "skip_send")
+                {
+                    if (!allowSkip)
+                        return new ReconcileResult.Failure("Claude returned skip_send on a non-skippable (guaranteed) send.");
+
+                    var skipTrace = RequireString(input, "reasoning_trace");
+                    return new ReconcileResult.NotNews(skipTrace, tokens);
+                }
+
+                var emailBody = RequireString(input, "email_body");
+
+                var finalSnapshotJson = RequireProperty(input, "final_snapshot").GetRawText();
+                var finalSnapshot = ForecastSnapshotBody.Deserialize(finalSnapshotJson);
+
+                var reasoningTrace = RequireString(input, "reasoning_trace");
+
+                return new ReconcileResult.Success(emailBody, finalSnapshot, reasoningTrace, tokens);
+            }
+            catch (Exception ex) when (ex is MissingToolUseFieldException or JsonException or InvalidOperationException)
+            {
+                // Retryable-malformed output: re-call unless attempts are exhausted.
+                if (attempt < maxAttempts)
+                {
+                    var what = ex is MissingToolUseFieldException
+                        ? $"is {ex.Message}"
+                        : $"failed validation: {ex.Message}";
+                    Logger.Warn($"Reconciliation tool_use input {what} (attempt {attempt}/{maxAttempts}); retrying.");
+                    continue;
+                }
+
+                // Exhausted. Report exactly as the pre-WX-110 single-shot path did —
+                // WX-104's precise by-name field message, or the schema-validation
+                // message — so the operator-facing failure is unchanged but for the
+                // attempt count. The caller leaves the provisional CommittedSend in
+                // place as a failed-attempt audit row (SentAtUtc stays null, so it
+                // never becomes a prior snapshot); the next cycle reconciles a fresh
+                // provisional, which is how the system self-heals.
+                if (ex is MissingToolUseFieldException)
+                {
+                    Logger.Error($"Reconciliation tool_use input is {ex.Message} (after {maxAttempts} attempts).");
+                    return new ReconcileResult.Failure($"Reconciliation response {ex.Message} (after {maxAttempts} attempts).");
+                }
+                Logger.Error($"Reconciliation tool_use input failed validation (after {maxAttempts} attempts): {ex.Message}");
+                return new ReconcileResult.Failure($"Schema validation failed (after {maxAttempts} attempts): {ex.Message}");
+            }
         }
     }
 
