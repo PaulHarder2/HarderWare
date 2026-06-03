@@ -3,7 +3,7 @@
   "timezone": "utc",
   "uid": "wxreport-v1",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "refresh": "1m",
   "time": { "from": "now-6h", "to": "now" },
   "timepicker": {},
@@ -196,6 +196,226 @@
       "fieldConfig": {
         "defaults": {
           "unit": "s",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        }
+      }
+    },
+    {
+      "id": 7,
+      "type": "row",
+      "title": "Claude Cost & Volume (WX-110)",
+      "collapsed": false,
+      "gridPos": { "x": 0, "y": 14, "w": 24, "h": 1 },
+      "panels": []
+    },
+    {
+      "id": 8,
+      "type": "stat",
+      "title": "Claude Cost (last 24h)",
+      "description": "Estimated Anthropic spend over the trailing 24h. Sonnet list pricing per Mtok: input $3, output $15, cache-write $3.75, cache-read $0.30. Edit the multipliers here if pricing changes.",
+      "gridPos": { "x": 0, "y": 15, "w": 8, "h": 4 },
+      "targets": [
+        {
+          "expr": "(increase(wxreport_claude_tokens_input_total[24h]) * 3 + increase(wxreport_claude_tokens_output_total[24h]) * 15 + increase(wxreport_claude_cache_write_total[24h]) * 3.75 + increase(wxreport_claude_cache_read_total[24h]) * 0.30) / 1e6",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "green", "value": null }]
+          }
+        }
+      }
+    },
+    {
+      "id": 9,
+      "type": "stat",
+      "title": "Claude Cost Rate ($/day, 1h window)",
+      "description": "Current burn rate, extrapolated from the trailing 1h token rates to a per-day figure. This is the gauge to watch fall as WX-110's pre-filter and gate-tightening land.",
+      "gridPos": { "x": 8, "y": 15, "w": 8, "h": 4 },
+      "targets": [
+        {
+          "expr": "(rate(wxreport_claude_tokens_input_total[1h]) * 3 + rate(wxreport_claude_tokens_output_total[1h]) * 15 + rate(wxreport_claude_cache_write_total[1h]) * 3.75 + rate(wxreport_claude_cache_read_total[1h]) * 0.30) * 86400 / 1e6",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "green", "value": null }]
+          }
+        }
+      }
+    },
+    {
+      "id": 10,
+      "type": "stat",
+      "title": "Pre-filter Skip Ratio (1h)",
+      "description": "Fraction of eligible cycles the WX-80 pre-filter skipped without calling Claude. Higher is cheaper. Expected to rise after WX-110 commit 2 (material-based identity).",
+      "gridPos": { "x": 16, "y": 15, "w": 8, "h": 4 },
+      "targets": [
+        {
+          "expr": "increase(wxreport_prefilter_skips_total[1h]) / clamp_min(increase(wxreport_prefilter_skips_total[1h]) + increase(wxreport_claude_calls_total[1h]), 1)",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 0,
+          "min": 0,
+          "max": 1,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 0.25 },
+              { "color": "green", "value": 0.5 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Claude Cost Rate ($/day)",
+      "description": "Per-day spend rate over time (trailing 1h token rates priced at Sonnet list rates).",
+      "gridPos": { "x": 0, "y": 19, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "(rate(wxreport_claude_tokens_input_total[1h]) * 3 + rate(wxreport_claude_tokens_output_total[1h]) * 15 + rate(wxreport_claude_cache_write_total[1h]) * 3.75 + rate(wxreport_claude_cache_read_total[1h]) * 0.30) * 86400 / 1e6",
+          "legendFormat": "$/day",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "none" },
+        "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["mean", "max"] }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2,
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        }
+      }
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Claude Tokens by Type (tokens/min)",
+      "description": "Token generation rate by billing bucket. Output (priced highest at $15/Mtok) is the dominant cost driver.",
+      "gridPos": { "x": 12, "y": 19, "w": 12, "h": 8 },
+      "targets": [
+        { "expr": "rate(wxreport_claude_tokens_input_total[1h]) * 60", "legendFormat": "Input", "refId": "A" },
+        { "expr": "rate(wxreport_claude_tokens_output_total[1h]) * 60", "legendFormat": "Output", "refId": "B" },
+        { "expr": "rate(wxreport_claude_cache_read_total[1h]) * 60", "legendFormat": "Cache read", "refId": "C" },
+        { "expr": "rate(wxreport_claude_cache_write_total[1h]) * 60", "legendFormat": "Cache write", "refId": "D" }
+      ],
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "none" },
+        "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["mean", "max"] }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        }
+      }
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Triggers by Type (per hour)",
+      "description": "What advanced since the last Claude call, per hour. metar dominance is the WX-110 over-send signature; it should shrink after the material pre-filter lands.",
+      "gridPos": { "x": 0, "y": 27, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum by (trigger_type) (increase(wxreport_triggers_total[1h]))",
+          "legendFormat": "{{trigger_type}}",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "none" },
+        "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["mean", "max"] }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "stacking": { "mode": "normal", "group": "A" }
+          }
+        }
+      }
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Gate Outcomes (per hour)",
+      "description": "Of the cycles that called Claude, how many sent vs. were skipped/suppressed/failed. Sent is the email volume; the rest are calls paid for but not delivered.",
+      "gridPos": { "x": 12, "y": 27, "w": 12, "h": 8 },
+      "targets": [
+        { "expr": "increase(wxreport_sends_total[1h])", "legendFormat": "Sent", "refId": "A" },
+        { "expr": "increase(wxreport_claude_not_news_total[1h])", "legendFormat": "Not news (skip)", "refId": "B" },
+        { "expr": "increase(wxreport_suppressed_redundant_total[1h])", "legendFormat": "Suppressed (redundant)", "refId": "C" },
+        { "expr": "increase(wxreport_claude_malformed_output_total[1h])", "legendFormat": "Malformed", "refId": "D" }
+      ],
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "none" },
+        "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["mean", "max"] }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
           "color": { "mode": "palette-classic" },
           "custom": {
             "lineWidth": 2,
