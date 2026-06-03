@@ -108,7 +108,11 @@ internal static class SignificanceGate
             if (pri.Lo >= FreezeDegF && cur.Lo < FreezeDegF)
                 fired.Add($"freeze-add({day:yyyy-MM-dd})");
 
-            // Thaw (rising out of a freeze): prior freezing, now strictly above 32 °F. Always significant.
+            // Thaw (rising out of a freeze): prior freezing, now strictly above 32 °F.
+            // Deliberately modeled as a threshold *crossing* — always significant at every
+            // tier — not as a lazy near-term cessation: a hard freeze breaking is
+            // planning-relevant (frost protection, pipes, travel) even days out, matching
+            // the agreed "frost/freeze threshold crossing = ALWAYS" row.
             if (pri.Lo < FreezeDegF && cur.Lo > FreezeDegF)
                 fired.Add($"thaw({day:yyyy-MM-dd})");
 
