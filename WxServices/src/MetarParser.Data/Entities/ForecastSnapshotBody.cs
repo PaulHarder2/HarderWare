@@ -1,6 +1,8 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
+using WxServices.Common;
+
 namespace MetarParser.Data.Entities;
 
 /// <summary>
@@ -113,8 +115,8 @@ public sealed record ForecastSnapshotBody
     /// <paramref name="other"/>.  Categorical fields (sky, obscuration, precip
     /// expectation/phenomenon, gust, visibility, severeFlag) must match exactly;
     /// temperature may drift within <see cref="TempToleranceC"/>, and wind within
-    /// <see cref="WindToleranceKt"/> or while staying in the same impact band
-    /// (<see cref="WindBand"/>).  Blocks are
+    /// <see cref="WindToleranceKt"/> or while staying in the same
+    /// <see cref="WxServices.Common.WindScale"/> impact band.  Blocks are
     /// matched by <see cref="ForecastSnapshotBlock.StartUtc"/>; horizon-edge
     /// blocks that rolled on or off with the passage of time are not, by
     /// themselves, treated as news, so only the overlapping blocks are compared.
@@ -193,20 +195,13 @@ public sealed record ForecastSnapshotBody
         && WindEndpointEqual(a.WindKt.Min, b.WindKt.Min)
         && WindEndpointEqual(a.WindKt.Max, b.WindKt.Max);
 
-    // Public-meaningful wind impact bands (kt). Mirrors WxReport's
-    // InputIdentity.WindBand (kept in sync by hand — the thresholds are stable
-    // meteorological constants: ≤ half tropical-storm, TS/gale, storm, hurricane
-    // force). WX-110: two winds in the same band are not a reader-actionable change
-    // even when their numeric drift exceeds WindToleranceKt (e.g. 6 kt vs 15 kt).
-    private static int WindBand(int kt) =>
-        kt < 17 ? 0 : kt < 34 ? 1 : kt < 48 ? 2 : kt < 64 ? 3 : 4;
-
     // Two wind endpoints are materially equal when within the absolute tolerance
-    // (small drift, robust across a band boundary) OR in the same impact band
-    // (larger drift the public would still shrug at). WX-110: the band test is what
-    // suppresses the trivial-wobble redundant re-sends the 5 kt tolerance missed.
+    // (small drift, robust across a band boundary) OR in the same shared impact band
+    // (WxServices.Common.WindScale — larger drift the public would still shrug at,
+    // e.g. 6 kt vs 15 kt). WX-110: the band test is what suppresses the
+    // trivial-wobble redundant re-sends the 5 kt tolerance alone missed.
     private static bool WindEndpointEqual(int a, int b) =>
-        Math.Abs(a - b) <= WindToleranceKt || WindBand(a) == WindBand(b);
+        Math.Abs(a - b) <= WindToleranceKt || WindScale.Band(a) == WindScale.Band(b);
 }
 
 /// <summary>One uniform 6-hour block within a <see cref="ForecastSnapshotBody"/>.</summary>

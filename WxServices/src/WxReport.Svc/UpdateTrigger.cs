@@ -1,5 +1,7 @@
 using WxInterp;
 
+using WxServices.Common;
+
 namespace WxReport.Svc;
 
 /// <summary>
@@ -76,19 +78,10 @@ public readonly record struct InputIdentity(string Metar, string Taf, string Gfs
         return $"{snap.StationIcao};W{wind};V{vis};S{sky};T{temp};P{wx}";
     }
 
-    // Peak wind (greater of sustained and gust) binned at the public-meaningful
-    // thresholds (per forecaster input): 0 = <17 kt (≤ half tropical-storm force,
-    // "another Tuesday"), 1 = 17–33 (up to TS force), 2 = 34–47 (gale),
-    // 3 = 48–63 (storm), 4 = 64+ (hurricane force). Calm / unreported → 0.
-    internal static int WindBand(int? speedKt, int? gustKt)
-    {
-        int peak = Math.Max(speedKt ?? 0, gustKt ?? 0);
-        if (peak < 17) return 0;
-        if (peak < 34) return 1;
-        if (peak < 48) return 2;
-        if (peak < 64) return 3;
-        return 4;
-    }
+    // Peak wind (greater of sustained and gust), binned via the shared public
+    // wind scale (WxServices.Common.WindScale). Calm / unreported → 0.
+    internal static int WindBand(int? speedKt, int? gustKt) =>
+        WindScale.Band(Math.Max(speedKt ?? 0, gustKt ?? 0));
 
     // Visibility matters to the public only below ~1 statute mile; above that it is
     // largely irrelevant. Two classes: 0 = below 1 mi, 1 = 1 mi or better. CAVOK
