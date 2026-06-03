@@ -219,11 +219,30 @@ prompt because it manages Windows services.
 
 This:
 1. Copies WxVis Python scripts to `{InstallRoot}\WxVis\`
-2. Publishes and restarts all four Windows services
+2. Publishes and restarts all four Windows services, verifying each reaches
+   **Running** before moving on
 3. Publishes WxManager and WxViewer
+4. Runs a final check that all four services are Running, and exits non-zero
+   if any are down
 
 The script reads `InstallRoot` from `appsettings.shared.json` and uses
 `$PSScriptRoot` as the solution root — no hardcoded paths to edit.
+
+### Deploy-history log
+
+Each deployed app appends one line to `{InstallRoot}\Logs\deploy-history.log`
+recording the UTC time, product version, and git short SHA — using the same
+timestamp format as the services' `wx*-svc.log` files, so the deploy timeline
+reads alongside them:
+
+```
+2026-06-03 19:50:00.000 INFO  [Deploy] WxReportSvc   1.12.0   75e04ca  OK
+```
+
+Console/GUI/Python apps are logged once their push settles; a service is logged
+`OK` only after it verifies as **Running**, and `FAIL` if it starts but does not
+stay up (so a crash-on-init never reads as a successful deploy). Logging is
+best-effort and never aborts a deploy.
 
 ### Individual targets
 
