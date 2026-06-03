@@ -51,6 +51,7 @@ public sealed class ReportWorker : BackgroundService
     private readonly Counter<long> _claudeNotNews;
     private readonly Counter<long> _redundantSuppressed;
     private readonly Counter<long> _severeFlipSuppressed;
+    private readonly Counter<long> _significanceGateSkips;
     private readonly Histogram<double> _cycleDuration;
     private readonly Histogram<double> _claudeDuration;
 
@@ -87,6 +88,7 @@ public sealed class ReportWorker : BackgroundService
         _claudeNotNews = _meter.CreateCounter<long>("wxreport.claude.not_news.total", description: "Reconciliation calls where Claude's invalidation gate judged the evidence not news and suppressed the send.");
         _redundantSuppressed = _meter.CreateCounter<long>("wxreport.suppressed.redundant.total", description: "WX-108: unscheduled sends suppressed because the reconciled snapshot was materially identical to the last sent report.");
         _severeFlipSuppressed = _meter.CreateCounter<long>("wxreport.suppressed.severe_flip.total", description: "WX-108: unscheduled sends suppressed because the only change was a severe-flag flip on an observation-only advance with no newer GFS run or TAF.");
+        _significanceGateSkips = _meter.CreateCounter<long>("wxreport.suppressed.significance_gate.total", description: "WX-114: cycles the deterministic significance gate found unchanged since the last sent report, tagged by mode (enforce = Claude call skipped; shadow = would-skip but Claude still called).");
         _cycleDuration = _meter.CreateHistogram<double>("wxreport.cycle.duration.seconds", unit: "s", description: "Duration of each report cycle.");
         _claudeDuration = _meter.CreateHistogram<double>("wxreport.claude.duration.seconds", unit: "s", description: "Duration of each Claude API call.");
     }
@@ -563,6 +565,45 @@ public sealed class ReportWorker : BackgroundService
                     .FirstOrDefaultAsync(ct);
 
                 var provisionalBody = ForecastSnapshotBody.Deserialize(anchorSnapshot.Body);
+
+                // WX-114 deterministic significance gate (cost pre-filter, unscheduled
+                // cycles only). When the deterministic forecast has not changed materially
+                // since the last sent report, skip the Claude call entirely — this is where
+                // the token savings come from. Conservative: suppresses only when no
+                // criterion trips, and any evaluation error falls through to calling Claude.
+                // Claude still owns the send/skip judgment whenever it is invoked.
+                var gateMode = cfg.SignificanceGate.Mode;
+                if (gateMode != SignificanceGateMode.Off && allowSkip && priorSnapshot is not null)
+                {
+                    SignificanceResult? gate = null;
+                    try
+                    {
+                        var priorBodyForGate = ForecastSnapshotBody.Deserialize(priorSnapshot.Body);
+                        gate = SignificanceGate.Evaluate(priorBodyForGate, provisionalBody, cfg.SignificanceGate, now, tz);
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        Logger.Error($"{recipient.Id} {recipient.Email} ({recipient.Name}): WX-114 significance gate evaluation failed — proceeding to Claude.", ex);
+                    }
+
+                    if (gate is { Significant: false })
+                    {
+                        bool enforce = gateMode == SignificanceGateMode.Enforce;
+                        _significanceGateSkips.Add(1, new KeyValuePair<string, object?>("mode", enforce ? "enforce" : "shadow"));
+                        if (enforce)
+                        {
+                            Logger.Debug($"{recipient.Id} {recipient.Email} ({recipient.Name}): WX-114 significance gate suppressed {triggerType} cycle — no material forecast change since last sent report; Claude not called. Provisional CommittedSend Id={committedSend.Id} left unsent.");
+                            await PersistUnsentCycleAsync(ctx, recipient, committedSend, state, inputHash, "WX-114 deterministic significance gate: no material change since last sent report; Claude not called.", ct);
+                            continue;
+                        }
+                        // Shadow: log what would have been suppressed, then fall through to Claude.
+                        Logger.Debug($"{recipient.Id} {recipient.Email} ({recipient.Name}): WX-114 significance gate (shadow) WOULD suppress {triggerType} cycle — no material forecast change since last sent report; calling Claude anyway.");
+                    }
+                    else if (gate is { Significant: true } passed)
+                    {
+                        Logger.Debug($"{recipient.Id} {recipient.Email} ({recipient.Name}): WX-114 significance gate passed ({gateMode}, {triggerType}) — fired: {string.Join(", ", passed.FiredCriteria)}.");
+                    }
+                }
 
                 var claudeSw = Stopwatch.StartNew();
                 var reconcileResult = await reconciler.ReconcileAsync(

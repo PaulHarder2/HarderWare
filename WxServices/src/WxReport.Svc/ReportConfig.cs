@@ -42,7 +42,58 @@ public class ReportConfig
     /// </summary>
     public float PrecipRateThresholdMmHr { get; set; } = 0.1f;
 
+    /// <summary>
+    /// WX-114 deterministic significance gate: a cost pre-filter that runs after
+    /// the WX-80 input-identity pre-filter and before the Claude reconciliation
+    /// call.  When the deterministic forecast has not changed materially since the
+    /// last <em>sent</em> report (no criterion in <see cref="SignificanceGateConfig"/>
+    /// trips), the Claude call is skipped entirely.  It can only <em>suppress</em> a
+    /// call, never force a send — Claude still owns the send/skip judgment and the
+    /// prose whenever it is invoked.
+    /// </summary>
+    public SignificanceGateConfig SignificanceGate { get; set; } = new();
+
     public List<RecipientConfig> Recipients { get; set; } = [];
+}
+
+/// <summary>
+/// Tunables for the WX-114 deterministic significance gate, bound from the
+/// <c>Report:SignificanceGate</c> section.  The per-horizon-tier arrays are indexed
+/// T1=0–24h, T2=24–48h, T3=48–72h, T4=72–120h (a four-element array; day 6 / beyond
+/// 120h is narrative-only and never gates).  Numeric thresholds are tunable so the
+/// gate can start loose and tighten using the DEBUG skip-vs-call data it logs;
+/// structural rules (which rows are safety-floor ADDs, the onset-eager/cessation-lazy
+/// asymmetry) live in <c>SignificanceGate.cs</c>.
+/// </summary>
+/// <summary>Operating mode for the WX-114 significance gate.</summary>
+public enum SignificanceGateMode
+{
+    /// <summary>Disabled — never evaluated; every cycle that clears the input-identity pre-filter reaches Claude (pre-WX-114 behaviour).</summary>
+    Off,
+
+    /// <summary>Evaluated and its decision logged, but never acted on — always falls through to Claude. A safe observation mode for validating skip-vs-call behaviour against real traffic before enforcing.</summary>
+    Shadow,
+
+    /// <summary>Enforced — a "not significant" result skips the Claude call (the cost saving).</summary>
+    Enforce,
+}
+
+public class SignificanceGateConfig
+{
+    /// <summary>Operating mode.  Defaults to <see cref="SignificanceGateMode.Enforce"/> so the cost saving is live and measurable; set <see cref="SignificanceGateMode.Shadow"/> to observe the gate's decisions without suppressing, or <see cref="SignificanceGateMode.Off"/> to disable it.</summary>
+    public SignificanceGateMode Mode { get; set; } = SignificanceGateMode.Enforce;
+
+    /// <summary>Per-tier daily high/low change (°F) at or above which a temperature move is significant.  Loosens with horizon: T1..T4.</summary>
+    public int[] TempDeltaDegF { get; set; } = [5, 7, 10, 12];
+
+    /// <summary>Per-tier sustained-wind change (kt) at or above which a wind move is significant.  Loosens with horizon: T1..T4.</summary>
+    public int[] WindDeltaKt { get; set; } = [12, 15, 18, 20];
+
+    /// <summary>Sustained-wind speed (kt) at or above which wind reaches advisory level; crossing it (ADD) is always significant.</summary>
+    public int WindAdvisoryKt { get; set; } = 25;
+
+    /// <summary>Daily-high temperature (°F) marking the heat-advisory line; crossing it is always significant.  Fixed nationally for v1 — regionalizing it is a deferred follow-up.</summary>
+    public int HeatAdvisoryDegF { get; set; } = 100;
 }
 
 /// <summary>
