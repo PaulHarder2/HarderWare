@@ -207,7 +207,9 @@ flowchart TD
     PROV --> GATE{"Pre-filter: input identity\nadvanced? (or scheduled / first)"}
     GATE -->|No| EACH
     GATE -->|Yes| WRITE["Persist provisional CommittedSend\n+ ForecastSnapshot (safety fallback)"]
-    WRITE --> RECON["ForecastReconciler → Claude\n(provisional + METAR + TAF + prior committed)"]
+    WRITE --> SIGGATE{"WX-114 significance gate\n(unscheduled): derived forecast\nunchanged since last sent?"}
+    SIGGATE -->|"Yes — Enforce: skip Claude"| EACH
+    SIGGATE -->|"No / first / scheduled / Shadow"| RECON["ForecastReconciler → Claude\n(provisional + METAR + TAF + prior committed)"]
     RECON --> CLAUDE
     CLAUDE -->|"tool-use result"| DECIDE{submit or skip?}
     DECIDE -->|skip_send| NOSEND["No email; committed snapshot\nleft unchanged"]
@@ -432,7 +434,9 @@ flowchart TD
     G2 --> H{Pre-filter: input identity advanced?\nor scheduled / first?}
     H -->|No| C
     H -->|Yes| W[Persist provisional CommittedSend + ForecastSnapshot]
-    W --> J[ForecastReconciler → Claude two-pass reconciliation]
+    W --> SG{WX-114 significance gate: derived forecast unchanged\nsince last sent? (unscheduled only)}
+    SG -->|Yes, Enforce - skip Claude| C
+    SG -->|No / first / scheduled / Shadow| J[ForecastReconciler → Claude two-pass reconciliation]
     J --> I{submit or skip?}
     I -->|skip_send| C
     I -->|submit_reconciled_report| K[Persist final snapshot + reasoning_trace + email_body]
