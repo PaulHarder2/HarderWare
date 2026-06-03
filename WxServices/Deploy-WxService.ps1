@@ -73,7 +73,11 @@ $DeployCommit = 'nogit'
 try {
     $sha = (& git -C $SolutionRoot rev-parse --short HEAD 2>$null)
     if ($LASTEXITCODE -eq 0 -and $sha) { $DeployCommit = "$sha".Trim() }
-} catch { }
+} catch {
+    # Non-fatal: a binaries-only host has no git. Leave $DeployCommit = 'nogit',
+    # but record why under -Verbose so deploy troubleshooting isn't guesswork.
+    Write-Verbose "git rev-parse failed in '$SolutionRoot' ($($_.Exception.Message)); deploy-history commit stays 'nogit'."
+}
 
 # Append one line per deployed app, matching the services' log4net pattern
 # (%utcdate{yyyy-MM-dd HH:mm:ss.fff} %-5level %message) so deploy-history.log
@@ -148,7 +152,11 @@ function Invoke-ServiceDeploy {
     # warning here, not a terminating error.
     if ($SvcName -eq 'WxParserSvc' -and $sharedConfig) {
         $homeIcao = $null
-        try { $homeIcao = $sharedConfig.Fetch.HomeIcao } catch { }
+        try { $homeIcao = $sharedConfig.Fetch.HomeIcao } catch {
+            # Non-fatal: shared config has no Fetch node. The "not configured"
+            # warning below still fires; note the detail under -Verbose.
+            Write-Verbose "Could not read Fetch.HomeIcao from shared config for ${SvcName} ($($_.Exception.Message))."
+        }
         if (-not $homeIcao) {
             Write-Warning "Fetch:HomeIcao is not configured in appsettings.shared.json. Services will not fetch data until a home location is set."
         }
