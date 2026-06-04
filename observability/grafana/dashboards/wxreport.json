@@ -407,7 +407,37 @@
         { "expr": "increase(wxreport_sends_total[1h])", "legendFormat": "Sent", "refId": "A" },
         { "expr": "increase(wxreport_claude_not_news_total[1h])", "legendFormat": "Not news (skip)", "refId": "B" },
         { "expr": "increase(wxreport_suppressed_redundant_total[1h])", "legendFormat": "Suppressed (redundant)", "refId": "C" },
+        { "expr": "increase(wxreport_suppressed_severe_flip_total[1h])", "legendFormat": "Suppressed (severe flip)", "refId": "E" },
         { "expr": "increase(wxreport_claude_malformed_output_total[1h])", "legendFormat": "Malformed", "refId": "D" }
+      ],
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "none" },
+        "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["mean", "max"] }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        }
+      }
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "Significance Gate Skips (per hour)",
+      "description": "Claude calls the WX-114 deterministic significance gate skipped because the derived forecast was unchanged since the last sent report. enforce = calls actually saved; shadow = calls that would have been saved (gate observed but did not suppress).",
+      "gridPos": { "x": 0, "y": 35, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum by (mode) (increase(wxreport_suppressed_significance_gate_total[1h]))",
+          "legendFormat": "{{mode}}",
+          "refId": "A"
+        }
       ],
       "options": {
         "tooltip": { "mode": "multi", "sort": "none" },
