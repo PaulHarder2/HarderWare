@@ -11,6 +11,11 @@
 // Claude) on every boundary case — a wrongly-suppressed send is the only failure
 // mode that loses a real update, so the gate is conservative by construction and
 // is tightened later using the DEBUG skip-vs-call data it emits.
+//
+// The provisional body is built from GFS only, so the gate is blind to TAF: a
+// new/amended TAF with flat GFS would otherwise be wrongly suppressed (it dropped
+// real short-term updates in the first enforce-mode data).  The caller passes a
+// freshTafSinceLastSend flag and the gate presumes such cycles significant.
 
 using MetarParser.Data.Entities;
 
@@ -46,14 +51,27 @@ internal static class SignificanceGate
     /// <param name="cfg">Tunable thresholds.</param>
     /// <param name="nowUtc">Cycle timestamp; tiers are measured from here.</param>
     /// <param name="tz">Recipient timezone, for grouping temperature into local calendar days.</param>
+    /// <param name="freshTafSinceLastSend">
+    /// True when a new/amended TAF arrived since the last sent report.  The provisional
+    /// body this gate evaluates is built from GFS only (no TAF), so a TAF change is a
+    /// signal the gate structurally cannot see; when set, the cycle is presumed
+    /// significant (routed to Claude) rather than risk suppressing a real short-term
+    /// update — consistent with the gate's err-toward-Claude design.  WX-114.
+    /// </param>
     internal static SignificanceResult Evaluate(
         ForecastSnapshotBody prior, ForecastSnapshotBody current,
-        SignificanceGateConfig cfg, DateTime nowUtc, TimeZoneInfo tz)
+        SignificanceGateConfig cfg, DateTime nowUtc, TimeZoneInfo tz,
+        bool freshTafSinceLastSend)
     {
         ArgumentNullException.ThrowIfNull(prior);
         ArgumentNullException.ThrowIfNull(current);
         ArgumentNullException.ThrowIfNull(cfg);
         ArgumentNullException.ThrowIfNull(tz);
+
+        // A fresh TAF is invisible to the GFS-only provisional body, so treat it as
+        // significant up front — the gate cannot judge a change it cannot see.
+        if (freshTafSinceLastSend)
+            return new SignificanceResult(true, ["taf-fresh"]);
 
         var fired = new List<string>();
         var horizonEnd = nowUtc.AddHours(TierUpperBoundHours[^1]);

@@ -486,8 +486,9 @@ public sealed class ReportWorker : BackgroundService
                 // (distinct from the last Claude call). Drives the anti-reversal
                 // context handed to Claude and the severe-flag hysteresis backstop.
                 var changedSinceLastSend = inputIdentity.ChangedSourcesSince(state.LastSentInputHash);
+                bool freshTafSinceLastSend = changedSinceLastSend.Contains(TriggerSource.Taf);
                 bool freshGuidanceSinceLastSend =
-                    changedSinceLastSend.Contains(TriggerSource.Taf) || changedSinceLastSend.Contains(TriggerSource.Gfs);
+                    freshTafSinceLastSend || changedSinceLastSend.Contains(TriggerSource.Gfs);
 
                 var (shouldSend, reason, severity, allowSkip) = ShouldSend(recipient, state, inputIdentity, cfg, now);
 
@@ -580,7 +581,7 @@ public sealed class ReportWorker : BackgroundService
                     try
                     {
                         var priorBodyForGate = ForecastSnapshotBody.Deserialize(priorSnapshot.Body);
-                        gate = SignificanceGate.Evaluate(priorBodyForGate, provisionalBody, cfg.SignificanceGate, now, tz);
+                        gate = SignificanceGate.Evaluate(priorBodyForGate, provisionalBody, cfg.SignificanceGate, now, tz, freshTafSinceLastSend);
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
