@@ -430,7 +430,7 @@
       "id": 15,
       "type": "timeseries",
       "title": "Significance Gate Skips (per hour)",
-      "description": "Claude calls the WX-114 deterministic significance gate skipped because the derived forecast was unchanged since the last sent report. enforce = calls actually saved; shadow = calls that would have been saved (gate observed but did not suppress).",
+      "description": "Claude calls the deterministic significance gate skipped because the derived forecast was unchanged since the last sent report. enforce = calls actually saved; shadow = calls that would have been saved (gate observed but did not suppress).",
       "gridPos": { "x": 0, "y": 35, "w": 12, "h": 8 },
       "targets": [
         {
