@@ -208,7 +208,7 @@
     {
       "id": 7,
       "type": "row",
-      "title": "Claude Cost & Volume (WX-110)",
+      "title": "Claude Cost & Volume",
       "collapsed": false,
       "gridPos": { "x": 0, "y": 14, "w": 24, "h": 1 },
       "panels": []
@@ -247,7 +247,7 @@
       "id": 9,
       "type": "stat",
       "title": "Claude Cost Rate ($/day, 1h window)",
-      "description": "Current burn rate, extrapolated from the trailing 1h token rates to a per-day figure. This is the gauge to watch fall as WX-110's pre-filter and gate-tightening land.",
+      "description": "Current burn rate, extrapolated from the trailing 1h token rates to a per-day figure. This is the gauge to watch fall as cost-reduction measures (the pre-filter and the significance gate) take effect.",
       "gridPos": { "x": 8, "y": 15, "w": 8, "h": 4 },
       "targets": [
         {
@@ -277,7 +277,7 @@
       "id": 10,
       "type": "stat",
       "title": "Pre-filter Skip Ratio (1h)",
-      "description": "Fraction of eligible cycles the WX-80 pre-filter skipped without calling Claude. Higher is cheaper. Expected to rise after WX-110 commit 2 (material-based identity).",
+      "description": "Fraction of eligible cycles the input-identity pre-filter skipped without calling Claude. Higher is cheaper. Rises as the material-based identity keeps meteorologically-identical re-observations from reaching Claude.",
       "gridPos": { "x": 16, "y": 15, "w": 8, "h": 4 },
       "targets": [
         {
@@ -371,7 +371,7 @@
       "id": 13,
       "type": "timeseries",
       "title": "Triggers by Type (per hour)",
-      "description": "What advanced since the last Claude call, per hour. metar dominance is the WX-110 over-send signature; it should shrink after the material pre-filter lands.",
+      "description": "What advanced since the last Claude call, per hour. metar dominance indicates over-send pressure; a healthy material pre-filter keeps it low.",
       "gridPos": { "x": 0, "y": 27, "w": 12, "h": 8 },
       "targets": [
         {

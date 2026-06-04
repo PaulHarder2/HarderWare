@@ -285,6 +285,7 @@ public sealed class ReportWorker : BackgroundService
         _claudeOutputTokens.Add(success.Tokens.OutputTokens);
         _claudeCacheReadTokens.Add(success.Tokens.CacheReadInputTokens);
         _claudeCacheCreationTokens.Add(success.Tokens.CacheCreationInputTokens);
+        LogClaudeTokens(recipient, success.Tokens, "startup");
 
         // WX-79: persist the reconciled snapshot row and re-anchor the
         // CommittedSend.  EmailBody is the pre-meteogram wrapped HTML
@@ -635,6 +636,7 @@ public sealed class ReportWorker : BackgroundService
                     _claudeOutputTokens.Add(notNews.Tokens.OutputTokens);
                     _claudeCacheReadTokens.Add(notNews.Tokens.CacheReadInputTokens);
                     _claudeCacheCreationTokens.Add(notNews.Tokens.CacheCreationInputTokens);
+                    LogClaudeTokens(recipient, notNews.Tokens, $"{triggerType}/not-news");
 
                     await PersistUnsentCycleAsync(ctx, recipient, committedSend, state, inputHash, notNews.ReasoningTrace, ct);
                     Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): Claude judged the {triggerType} arrival not news — no send. Provisional CommittedSend Id={committedSend.Id} left unsent.");
@@ -654,6 +656,7 @@ public sealed class ReportWorker : BackgroundService
                 _claudeOutputTokens.Add(success.Tokens.OutputTokens);
                 _claudeCacheReadTokens.Add(success.Tokens.CacheReadInputTokens);
                 _claudeCacheCreationTokens.Add(success.Tokens.CacheCreationInputTokens);
+                LogClaudeTokens(recipient, success.Tokens, $"{triggerType}/reconciled");
 
                 // WX-108 deterministic backstop (unscheduled cycles only). Two
                 // suppressions, both about idempotence/stability rather than weather
@@ -786,6 +789,10 @@ public sealed class ReportWorker : BackgroundService
     }
 
     // ── persistence helpers ───────────────────────────────────────────────────
+
+    /// <summary>WX-114: per-call token-usage DEBUG line — surfaces each Claude reconciliation's input/output/cache token split in the text log (the OTel counters carry the same totals for the dashboards, but not per call).</summary>
+    private static void LogClaudeTokens(RecipientConfig recipient, TokenUsage tokens, string context) =>
+        Logger.Debug($"{recipient.Id} {recipient.Email} ({recipient.Name}): Claude reconciliation tokens [{context}] — in={tokens.InputTokens} out={tokens.OutputTokens} cache-read={tokens.CacheReadInputTokens} cache-write={tokens.CacheCreationInputTokens}.");
 
     /// <summary>
     /// Persists the "called Claude but not sending this cycle" state shared by the
