@@ -44,12 +44,12 @@
     {
       "id": 2,
       "type": "stat",
-      "title": "Reports Sent (Last Hour)",
-      "description": "Reports successfully emailed in the last 60 minutes.",
+      "title": "Reports Sent",
+      "description": "Reports successfully emailed over the dashboard time range (the time picker; defaults to 6h, a full TAF/GFS cycle).",
       "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
       "targets": [
         {
-          "expr": "increase(wxreport_sends_total[1h])",
+          "expr": "increase(wxreport_sends_total[$__range])",
           "instant": true,
           "refId": "A"
         }
@@ -110,12 +110,12 @@
     {
       "id": 4,
       "type": "stat",
-      "title": "Claude API Calls (Last Hour)",
-      "description": "Number of Claude API calls in the last 60 minutes.",
+      "title": "Claude API Calls",
+      "description": "Number of Claude API calls over the dashboard time range (the time picker; defaults to 6h).",
       "gridPos": { "x": 18, "y": 0, "w": 6, "h": 4 },
       "targets": [
         {
-          "expr": "increase(wxreport_claude_calls_total[1h])",
+          "expr": "increase(wxreport_claude_calls_total[$__range])",
           "instant": true,
           "refId": "A"
         }
@@ -246,12 +246,12 @@
     {
       "id": 9,
       "type": "stat",
-      "title": "Claude Cost Rate ($/day, 1h window)",
-      "description": "Current burn rate, extrapolated from the trailing 1h token rates to a per-day figure. This is the gauge to watch fall as cost-reduction measures (the pre-filter and the significance gate) take effect.",
+      "title": "Claude Cost Rate ($/day)",
+      "description": "Current burn rate, extrapolated to a per-day figure from the token rates over the dashboard time range (defaults to 6h). A range spanning a full TAF/GFS cycle avoids the synoptic-hour aliasing a fixed 1h window showed. This is the gauge to watch fall as cost-reduction measures (the pre-filter and the significance gate) take effect.",
       "gridPos": { "x": 8, "y": 15, "w": 8, "h": 4 },
       "targets": [
         {
-          "expr": "(rate(wxreport_claude_tokens_input_total[1h]) * 3 + rate(wxreport_claude_tokens_output_total[1h]) * 15 + rate(wxreport_claude_cache_write_total[1h]) * 3.75 + rate(wxreport_claude_cache_read_total[1h]) * 0.30) * 86400 / 1e6",
+          "expr": "(rate(wxreport_claude_tokens_input_total[$__range]) * 3 + rate(wxreport_claude_tokens_output_total[$__range]) * 15 + rate(wxreport_claude_cache_write_total[$__range]) * 3.75 + rate(wxreport_claude_cache_read_total[$__range]) * 0.30) * 86400 / 1e6",
           "instant": true,
           "refId": "A"
         }
@@ -276,12 +276,12 @@
     {
       "id": 10,
       "type": "stat",
-      "title": "Pre-filter Skip Ratio (1h)",
-      "description": "Fraction of eligible cycles the input-identity pre-filter skipped without calling Claude. Higher is cheaper. Rises as the material-based identity keeps meteorologically-identical re-observations from reaching Claude.",
+      "title": "Pre-filter Skip Ratio",
+      "description": "Fraction of eligible cycles the input-identity pre-filter skipped without calling Claude, over the dashboard time range (defaults to 6h). Higher is cheaper. Rises as the material-based identity keeps meteorologically-identical re-observations from reaching Claude.",
       "gridPos": { "x": 16, "y": 15, "w": 8, "h": 4 },
       "targets": [
         {
-          "expr": "increase(wxreport_prefilter_skips_total[1h]) / clamp_min(increase(wxreport_prefilter_skips_total[1h]) + increase(wxreport_claude_calls_total[1h]), 1)",
+          "expr": "increase(wxreport_prefilter_skips_total[$__range]) / clamp_min(increase(wxreport_prefilter_skips_total[$__range]) + increase(wxreport_claude_calls_total[$__range]), 1)",
           "instant": true,
           "refId": "A"
         }
