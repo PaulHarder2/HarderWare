@@ -18,7 +18,7 @@
 
   <!-- Single version for the entire WxServices system. -->
   <PropertyGroup>
-    <Version>1.13.1</Version>
+    <Version>1.13.2</Version>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 
