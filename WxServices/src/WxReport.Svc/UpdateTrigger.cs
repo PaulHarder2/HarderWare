@@ -203,7 +203,7 @@ public readonly record struct InputIdentity(string Metar, string Taf, string Gfs
                 default: return new(None, None, None); // unknown or duplicate key
             }
         }
-        return new(m, t, g); // all three are non-null here: 3 parts, no dupes, no unknowns
+        return new(m!, t!, g!); // all three are non-null here: 3 parts, no dupes, no unknowns
     }
 
     /// <summary>
