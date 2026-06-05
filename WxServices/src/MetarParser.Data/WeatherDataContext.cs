@@ -305,6 +305,16 @@ public sealed class WeatherDataContext : DbContext
             e.HasIndex(x => x.RecipientId)
              .IsUnique()
              .HasDatabaseName("UX_Recipients_RecipientId");
+
+            // Membership FK to Locality (WX-125). No inverse collection on Locality —
+            // membership is the single fact stored in Recipients.LocalityId; members are
+            // retrieved by querying (matches the CommittedSend → ForecastSnapshot pattern).
+            // RESTRICT: a locality cannot be deleted while recipients still reference it —
+            // they must be reassigned first, so deletion never silently drops members.
+            e.HasOne(x => x.Locality)
+             .WithMany()
+             .HasForeignKey(x => x.LocalityId)
+             .OnDelete(DeleteBehavior.Restrict);
         });
 
         // ── Localities ───────────────────────────────────────────────────────

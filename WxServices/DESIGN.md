@@ -921,6 +921,7 @@ erDiagram
         string TempUnit
         string PressureUnit
         string WindSpeedUnit
+        bigint LocalityId FK
     }
 
     Localities {
@@ -1014,6 +1015,7 @@ erDiagram
     TafChangePeriods ||--o{ TafChangePeriodWeatherPhenomena : "has"
     GfsModelRuns ||--o{ GfsGrid : "has"
     ForecastSnapshots ||--o{ CommittedSends : "anchored by"
+    Localities ||--o{ Recipients : "groups"
 ```
 
 ### Key indexes
@@ -1025,6 +1027,7 @@ erDiagram
 | Tafs | StationIcao + IssuanceUtc + ReportType | Unique |
 | Tafs | StationIcao | Non-unique |
 | Recipients | RecipientId | Unique |
+| Recipients | LocalityId | Non-unique |
 | Localities | Name | Unique |
 | RecipientStates | RecipientId | Unique |
 | GfsGrid | ModelRunUtc + ForecastHour + Lat + Lon | Unique |
@@ -1085,7 +1088,7 @@ This single file contains every non-secret setting for all services and applicat
 
 ### Localities — database
 
-**Localities** (`Localities` table): a curated grouping of co-located recipients, managed via WxManager → Localities tab (WX-127). A locality owns the shared METAR/TAF stations and a centroid lat/lon used as the GFS forecast point for its members, so the expensive per-cycle Claude reconciliation runs once per locality and is then rendered per recipient (WX-123, the locality-batching story). Added in WX-124; membership (the `Recipient.LocalityId` foreign key) and centroid maintenance arrive in WX-125 / WX-126.
+**Localities** (`Localities` table): a curated grouping of co-located recipients, managed via WxManager → Localities tab (WX-127). A locality owns the shared METAR/TAF stations and a centroid lat/lon used as the GFS forecast point for its members, so the expensive per-cycle Claude reconciliation runs once per locality and is then rendered per recipient (WX-123, the locality-batching story). Added in WX-124. Membership is the `Recipient.LocalityId` foreign key (WX-125) — `ON DELETE RESTRICT`, so a locality cannot be deleted while recipients still reference it (they must be reassigned first). Assigning a recipient to a locality mirrors the locality's display name and stations onto the recipient **verbatim** (`LocalityName`, `MetarIcao`, `TafIcao`) — the locality is authoritative (`LocalityAssignment.Assign` / `SyncMembers`). Centroid maintenance arrives in WX-126; the per-locality generation loop (WX-130) will process only recipients that belong to a locality.
 
 **Notes on locality fields:**
 - `Name` is unique across localities and human-curated (e.g. `"Spring"`).
