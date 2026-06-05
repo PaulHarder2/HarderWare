@@ -58,4 +58,21 @@ public class LocalityCentroidTests
         Assert.Null(loc.CentroidLat);
         Assert.Null(loc.CentroidLon);
     }
+
+    // ── Guards ───────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Recompute_NullLocality_Throws() =>
+        Assert.Throws<ArgumentNullException>(
+            () => LocalityCentroid.Recompute(null!, Array.Empty<Recipient>()));
+
+    [Fact]
+    public void Recompute_NullMembers_Throws() =>
+        Assert.Throws<ArgumentNullException>(
+            () => LocalityCentroid.Recompute(new Locality { Id = 1, Name = "x" }, null!));
+
+    [Fact]
+    public void Recompute_NullMemberElement_Throws() =>
+        Assert.Throws<ArgumentNullException>(
+            () => LocalityCentroid.Recompute(new Locality { Id = 1, Name = "x" }, new Recipient[] { null! }));
 }
