@@ -57,6 +57,18 @@ public class Recipient
     /// </summary>
     public string? LocalityName { get; set; }
 
+    /// <summary>
+    /// Foreign key to the <see cref="Entities.Locality"/> this recipient belongs to,
+    /// or <see langword="null"/> when unassigned. Assigning a locality mirrors that
+    /// locality's display name and station hierarchy verbatim onto this recipient
+    /// (<see cref="LocalityName"/>, <see cref="MetarIcao"/>, <see cref="TafIcao"/>) —
+    /// the locality is authoritative (see <c>LocalityAssignment</c>).
+    /// </summary>
+    public long? LocalityId { get; set; }
+
+    /// <summary>Navigation to the recipient's locality; <see langword="null"/> when unassigned.</summary>
+    public Locality? Locality { get; set; }
+
     /// <summary>Cached latitude from address geocoding.</summary>
     public double? Latitude { get; set; }
 
