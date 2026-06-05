@@ -37,7 +37,10 @@ public static class LocalityAssignment
         ArgumentNullException.ThrowIfNull(members);
 
         foreach (var member in members)
+        {
+            ArgumentNullException.ThrowIfNull(member);
             MirrorFromLocality(member, locality);
+        }
     }
 
     /// <summary>
