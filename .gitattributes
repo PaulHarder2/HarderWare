@@ -5,3 +5,11 @@
 # Windows checkout (even with core.autocrlf=true) keeps these runnable.
 *.sh text eol=lf
 WxServices/tools/hooks/pre-push text eol=lf
+
+# C# sources are pinned LF to match WxServices/.editorconfig's `end_of_line = lf`
+# ([*.cs]). Without a canonical ending the repo accumulated mixed CRLF/LF .cs
+# files; once the .editorconfig rule enforces LF, every CRLF file fails the CI
+# `dotnet format --verify-no-changes` gate. Pinning here keeps git from
+# re-introducing CRLF on a Windows checkout and makes the convention explicit.
+# (WX-121)
+*.cs text eol=lf
