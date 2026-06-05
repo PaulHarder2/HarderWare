@@ -1,5 +1,7 @@
+using System.Net;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 using MetarParser.Data.Entities;
 
@@ -230,16 +232,28 @@ public sealed class ForecastReconciler
 
                 var reasoningTrace = RequireString(input, "reasoning_trace");
 
+                // WX-120: a present-but-content-less email_body — e.g. Claude called
+                // submit_reconciled_report when its own reasoning concluded skip_send,
+                // leaving only an HTML comment — is non-empty, so RequireString accepts
+                // it, but it must never be emailed. Treat it as malformed so it routes
+                // through the same retry; on exhaustion the caller-facing outcome is a
+                // skip (allowSkip) or Failure (guaranteed), not a blank report.
+                if (VisibleTextLength(emailBody) < MinVisibleBodyChars)
+                    throw new DegenerateEmailBodyException(reasoningTrace);
+
                 return new ReconcileResult.Success(emailBody, finalSnapshot, reasoningTrace, tokens);
             }
-            catch (Exception ex) when (ex is MissingToolUseFieldException or JsonException or InvalidOperationException)
+            catch (Exception ex) when (ex is MissingToolUseFieldException or JsonException or InvalidOperationException or DegenerateEmailBodyException)
             {
                 // Retryable-malformed output: re-call unless attempts are exhausted.
                 if (attempt < maxAttempts)
                 {
-                    var what = ex is MissingToolUseFieldException
-                        ? $"is {ex.Message}"
-                        : $"failed validation: {ex.Message}";
+                    var what = ex switch
+                    {
+                        DegenerateEmailBodyException => "returned a content-less email_body",
+                        MissingToolUseFieldException => $"is {ex.Message}",
+                        _ => $"failed validation: {ex.Message}",
+                    };
                     Logger.Warn($"Reconciliation tool_use input {what} (attempt {attempt}/{maxAttempts}); retrying.");
                     continue;
                 }
@@ -251,6 +265,20 @@ public sealed class ForecastReconciler
                 // place as a failed-attempt audit row (SentAtUtc stays null, so it
                 // never becomes a prior snapshot); the next cycle reconciles a fresh
                 // provisional, which is how the system self-heals.
+                if (ex is DegenerateEmailBodyException deg)
+                {
+                    // Claude returned a content-less body on every attempt. On a skippable
+                    // cycle that matches its own (typically skip-leaning) reasoning, so
+                    // treat it as a skip and keep its trace for the audit row; a guaranteed
+                    // send fails closed and self-heals on the next cycle.
+                    if (allowSkip)
+                    {
+                        Logger.Error($"Reconciliation returned a content-less email_body after {maxAttempts} attempts on a skippable cycle; treating as skip (not sent).");
+                        return new ReconcileResult.NotNews(deg.ReasoningTrace, tokens);
+                    }
+                    Logger.Error($"Reconciliation returned a content-less email_body after {maxAttempts} attempts on a guaranteed send.");
+                    return new ReconcileResult.Failure($"Reconciliation returned a content-less email_body after {maxAttempts} attempts.");
+                }
                 if (ex is MissingToolUseFieldException)
                 {
                     Logger.Error($"Reconciliation tool_use input is {ex.Message} (after {maxAttempts} attempts).");
@@ -286,6 +314,35 @@ public sealed class ForecastReconciler
     {
         public MissingToolUseFieldException(string field)
             : base($"missing required field '{field}'") { }
+    }
+
+    // WX-120: the smallest visible-text length (HTML comments + tags stripped,
+    // entities decoded, whitespace collapsed) a real report can have. Measured
+    // reports run ~1,700 visible chars; a degenerate body (Claude left only an
+    // HTML comment) strips to ~0. 200 sits an order of magnitude below real
+    // reports and far above any content-less body, so a present-but-empty
+    // email_body never reaches the recipient.
+    private const int MinVisibleBodyChars = 200;
+
+    // Visible-text length of an HTML fragment: drop comments, then tags, decode
+    // entities, collapse whitespace. Used only to reject a content-less email_body
+    // (WX-120) — not a general-purpose sanitiser.
+    private static int VisibleTextLength(string html)
+    {
+        var noComments = Regex.Replace(html, "<!--.*?-->", " ", RegexOptions.Singleline);
+        var noTags = Regex.Replace(noComments, "<[^>]+>", " ");
+        return Regex.Replace(WebUtility.HtmlDecode(noTags), @"\s+", " ").Trim().Length;
+    }
+
+    // Signals that Claude returned a non-empty but content-less email_body — it
+    // passed RequireString but carries no real forecast text (WX-120). Holds the
+    // reasoning_trace so a skippable-cycle skip can keep Claude's audit trail.
+    private sealed class DegenerateEmailBodyException : Exception
+    {
+        public DegenerateEmailBodyException(string reasoningTrace)
+            : base("content-less email_body") => ReasoningTrace = reasoningTrace;
+
+        public string ReasoningTrace { get; }
     }
 
     // ── per-recipient system prompt ──────────────────────────────────────────

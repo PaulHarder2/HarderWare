@@ -22,13 +22,26 @@ namespace WxReport.Tests;
 
 public class ForecastReconcilerTests
 {
+    // A realistic report body whose visible text clears the WX-120 content floor
+    // (MinVisibleBodyChars). Stub bodies must look like real reports now that an
+    // under-floor body is rejected as content-less.
+    private const string RealisticBody =
+        "<h2>Current Conditions in Test Locality</h2>"
+        + "<p>Skies are clear and the temperature is 75 degrees Fahrenheit with light winds "
+        + "from the east at 6 miles per hour. The air is humid at 94 percent.</p>"
+        + "<h2>Forecast</h2>"
+        + "<p>Showers are likely overnight and into Friday morning, with a chance of "
+        + "thunderstorms developing in the afternoon. Highs near 86, overnight lows in the "
+        + "low 70s. The unsettled, humid pattern continues through the weekend before drier "
+        + "air arrives early next week.</p>";
+
     // ── happy path ──────────────────────────────────────────────────────────
 
     [Fact]
     public async Task HappyPath_ReturnsSuccess_WithThreeArtifactsAndTokens()
     {
         var responseJson = BuildClaudeResponseJson(
-            emailBody: "<p>Test report</p>",
+            emailBody: RealisticBody,
             finalSnapshotJson: """{"schemaVersion":1,"blocks":[]}""",
             reasoningTrace: "All three steps clean.",
             inputTokens: 100, outputTokens: 50,
@@ -37,7 +50,7 @@ public class ForecastReconcilerTests
         var result = await RunReconciler(responseJson);
 
         var success = Assert.IsType<ReconcileResult.Success>(result);
-        Assert.Equal("<p>Test report</p>", success.EmailBody);
+        Assert.Equal(RealisticBody, success.EmailBody);
         Assert.Equal("All three steps clean.", success.ReasoningTrace);
         Assert.Empty(success.FinalSnapshot.Blocks);
         Assert.Equal(100, success.Tokens.InputTokens);
@@ -298,7 +311,7 @@ public class ForecastReconcilerTests
             { "final_snapshot": { "schemaVersion": 1, "blocks": [] }, "reasoning_trace": "trace" }
             """);
         var valid = BuildClaudeResponseJson(
-            emailBody: "<p>ok</p>",
+            emailBody: RealisticBody,
             finalSnapshotJson: """{"schemaVersion":1,"blocks":[]}""",
             reasoningTrace: "trace",
             inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0);
@@ -327,7 +340,7 @@ public class ForecastReconcilerTests
             { "final_snapshot": { "schemaVersion": 1, "blocks": [] }, "reasoning_trace": "trace" }
             """); // default tokens: 10 in / 10 out / 0 / 0
         var valid = BuildClaudeResponseJson(
-            emailBody: "<p>ok</p>",
+            emailBody: RealisticBody,
             finalSnapshotJson: """{"schemaVersion":1,"blocks":[]}""",
             reasoningTrace: "trace",
             inputTokens: 100, outputTokens: 50, cacheReadInputTokens: 80, cacheCreationInputTokens: 10);
@@ -348,6 +361,84 @@ public class ForecastReconcilerTests
         Assert.Equal(60, success.Tokens.OutputTokens);           // 10 + 50
         Assert.Equal(80, success.Tokens.CacheReadInputTokens);   // 0 + 80
         Assert.Equal(10, success.Tokens.CacheCreationInputTokens); // 0 + 10
+    }
+
+    // ── WX-120: a present-but-content-less email_body must never be emailed ───
+
+    [Fact]
+    public async Task DegenerateBody_WhenAllowSkip_RetriesThenSkips()
+    {
+        // Claude called submit_reconciled_report but left only an HTML comment as the
+        // email_body — its reasoning meant skip. After bounded retries the reconciler
+        // treats it as a skip on an allowSkip cycle and preserves Claude's trace.
+        var degenerate = BuildClaudeResponseJson(
+            emailBody: "<!-- placeholder: skip_send was the correct tool but submit_reconciled_report was called in error -->",
+            finalSnapshotJson: """{"schemaVersion":1,"blocks":[]}""",
+            reasoningTrace: "Confirms the prior forecast — not news. SKIP.",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0);
+
+        int calls = 0;
+        var result = await RunReconciler(_ =>
+        {
+            calls++;
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(degenerate, Encoding.UTF8, "application/json"),
+            };
+        }, allowSkip: true);
+
+        var notNews = Assert.IsType<ReconcileResult.NotNews>(result);
+        Assert.Equal("Confirms the prior forecast — not news. SKIP.", notNews.ReasoningTrace);
+        Assert.Equal(3, calls); // bounded at maxAttempts
+    }
+
+    [Fact]
+    public async Task DegenerateBody_WhenGuaranteedSend_ReturnsFailure()
+    {
+        // On a guaranteed send (allowSkip=false) a content-less body cannot become a
+        // skip — it fails closed so the provisional stays and the next cycle self-heals.
+        var degenerate = BuildClaudeResponseJson(
+            emailBody: "<!-- nothing to report -->",
+            finalSnapshotJson: """{"schemaVersion":1,"blocks":[]}""",
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0);
+
+        var result = await RunReconciler(degenerate, allowSkip: false);
+
+        var failure = Assert.IsType<ReconcileResult.Failure>(result);
+        Assert.Contains("content-less email_body", failure.Reason);
+    }
+
+    [Fact]
+    public async Task DegenerateBody_ThenValid_RetriesAndSucceeds()
+    {
+        // A content-less first response recovers on retry to a real report: Success,
+        // exactly one retry, body intact.
+        var degenerate = BuildClaudeResponseJson(
+            emailBody: "<!-- placeholder -->",
+            finalSnapshotJson: """{"schemaVersion":1,"blocks":[]}""",
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0);
+        var valid = BuildClaudeResponseJson(
+            emailBody: RealisticBody,
+            finalSnapshotJson: """{"schemaVersion":1,"blocks":[]}""",
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0);
+
+        int calls = 0;
+        var result = await RunReconciler(_ =>
+        {
+            calls++;
+            var body = calls == 1 ? degenerate : valid;
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json"),
+            };
+        });
+
+        var success = Assert.IsType<ReconcileResult.Success>(result);
+        Assert.Equal(RealisticBody, success.EmailBody);
+        Assert.Equal(2, calls); // one retry to recover
     }
 
     [Fact]
