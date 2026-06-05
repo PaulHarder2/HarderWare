@@ -64,6 +64,9 @@ public sealed class WeatherDataContext : DbContext
     /// <summary>The <c>Recipients</c> table — one row per weather report subscriber, holding profile, resolved location, and unit preferences.</summary>
     public DbSet<Recipient> Recipients => Set<Recipient>();
 
+    /// <summary>The <c>Localities</c> table — one row per curated locality grouping co-located recipients for batched report generation (WX-123).</summary>
+    public DbSet<Locality> Localities => Set<Locality>();
+
     /// <summary>The <c>GlobalSettings</c> table — single row (Id = 1) storing application-wide secrets (Claude API key, SMTP credentials).</summary>
     public DbSet<GlobalSettings> GlobalSettings => Set<GlobalSettings>();
 
@@ -302,6 +305,24 @@ public sealed class WeatherDataContext : DbContext
             e.HasIndex(x => x.RecipientId)
              .IsUnique()
              .HasDatabaseName("UX_Recipients_RecipientId");
+        });
+
+        // ── Localities ───────────────────────────────────────────────────────
+
+        modelBuilder.Entity<Locality>(e =>
+        {
+            e.ToTable("Localities");
+            e.HasKey(x => x.Id);
+
+            e.Property(x => x.Name).HasMaxLength(200).IsRequired();
+            e.Property(x => x.MetarIcao).HasMaxLength(100);
+            e.Property(x => x.TafIcao).HasMaxLength(10);
+            e.Property(x => x.CentroidLat);
+            e.Property(x => x.CentroidLon);
+
+            e.HasIndex(x => x.Name)
+             .IsUnique()
+             .HasDatabaseName("UX_Localities_Name");
         });
 
         // ── GlobalSettings ────────────────────────────────────────────────────────

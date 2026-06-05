@@ -923,6 +923,15 @@ erDiagram
         string WindSpeedUnit
     }
 
+    Localities {
+        bigint Id PK
+        string Name UK
+        string MetarIcao
+        string TafIcao
+        float CentroidLat
+        float CentroidLon
+    }
+
     GlobalSettings {
         int Id PK
         string ClaudeApiKey
@@ -1016,6 +1025,7 @@ erDiagram
 | Tafs | StationIcao + IssuanceUtc + ReportType | Unique |
 | Tafs | StationIcao | Non-unique |
 | Recipients | RecipientId | Unique |
+| Localities | Name | Unique |
 | RecipientStates | RecipientId | Unique |
 | GfsGrid | ModelRunUtc + ForecastHour + Lat + Lon | Unique |
 | GfsGrid | ModelRunUtc + ForecastHour | Non-unique |
@@ -1072,6 +1082,15 @@ This single file contains every non-secret setting for all services and applicat
 - `MetarIcao` accepts a comma-separated list in preference order (e.g. `"KDWH, KHOU"`). The first station with an observation within the last 3 hours is used; no DB update occurs when a fallback station is used.
 - `Latitude`, `Longitude`, `MetarIcao`, `TafIcao` are written back to the database automatically by the service on first resolution. To re-trigger resolution (e.g. after a move), set them to `NULL` in the `Recipients` table.
 - `TempUnit`, `PressureUnit`, `WindSpeedUnit` control how values are displayed. Each is independent. Supported values: `TempUnit`: `"F"` or `"C"`; `PressureUnit`: `"inHg"` or `"kPa"`; `WindSpeedUnit`: `"mph"` or `"kph"`. All default to US customary.
+
+### Localities — database
+
+**Localities** (`Localities` table): a curated grouping of co-located recipients, managed via WxManager → Localities tab (WX-127). A locality owns the shared METAR/TAF stations and a centroid lat/lon used as the GFS forecast point for its members, so the expensive per-cycle Claude reconciliation runs once per locality and is then rendered per recipient (WX-123, the locality-batching story). Added in WX-124; membership (the `Recipient.LocalityId` foreign key) and centroid maintenance arrive in WX-125 / WX-126.
+
+**Notes on locality fields:**
+- `Name` is unique across localities and human-curated (e.g. `"Spring"`).
+- `MetarIcao` is a comma-separated, priority-ordered station list with the same first-available fallback semantics as `Recipients.MetarIcao`; it is copied verbatim into each member's `Recipient.MetarIcao` (WX-125). `TafIcao` is a single station.
+- `CentroidLat` / `CentroidLon` are the mean of member recipients' coordinates, recomputed on membership change (WX-126); both are `NULL` until the locality has members.
 
 ### Secrets — database
 
