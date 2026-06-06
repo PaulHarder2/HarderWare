@@ -8,14 +8,15 @@ namespace WxManager;
 /// </summary>
 internal static class IanaTimeZones
 {
-    private static readonly Lazy<List<string>> _all = new(Build);
+    private static readonly Lazy<IReadOnlyList<string>> _all = new(() => Build().AsReadOnly());
     private static readonly Lazy<HashSet<string>> _set =
         new(() => new HashSet<string>(_all.Value, StringComparer.Ordinal));
 
     /// <summary>
     /// Sorted list of canonical IANA timezone IDs (each Windows timezone from
     /// <see cref="TimeZoneInfo.GetSystemTimeZones"/> converted to its IANA
-    /// equivalent; "UTC" always included). Cached — callers may bind it directly.
+    /// equivalent; "UTC" always included). Cached and read-only-wrapped —
+    /// callers may bind it directly but cannot mutate the shared instance.
     /// </summary>
     public static IReadOnlyList<string> All() => _all.Value;
 

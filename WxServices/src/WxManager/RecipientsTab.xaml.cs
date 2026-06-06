@@ -644,13 +644,11 @@ public partial class RecipientsTab : UserControl
             r.Address = NullIfEmpty(AddressBox.Text);
             r.Latitude = lat;
             r.Longitude = lon;
-            r.MetarIcao = NullIfEmpty(MetarIcaoBox.Text);
-            r.TafIcao = NullIfEmpty(TafIcaoBox.Text);
-            // The runtime's no-TAF sentinel comparison is case-sensitive — store
-            // the canonical spelling regardless of how it was typed (pre-existing
-            // gap here too; fixed inline during WX-127).
-            if (r.TafIcao?.Equals("NONE", StringComparison.OrdinalIgnoreCase) == true)
-                r.TafIcao = "NONE";
+            // Uppercase on store: validation is case-insensitive, but downstream
+            // comparisons (the no-TAF "NONE" sentinel, station matching) are not.
+            // Pre-existing gap fixed inline during WX-127.
+            r.MetarIcao = NullIfEmpty(MetarIcaoBox.Text)?.ToUpperInvariant();
+            r.TafIcao = NullIfEmpty(TafIcaoBox.Text)?.ToUpperInvariant();
             r.TempUnit = TempUnitBox.SelectedItem?.ToString() ?? "F";
             r.PressureUnit = PressureUnitBox.SelectedItem?.ToString() ?? "inHg";
             r.WindSpeedUnit = WindUnitBox.SelectedItem?.ToString() ?? "mph";

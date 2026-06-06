@@ -314,12 +314,11 @@ public partial class LocalitiesTab : UserControl
             var isNew = _currentLocalityDbId is null;
 
             loc.Name = name;
-            loc.MetarIcao = NullIfEmpty(MetarIcaoBox.Text);
-            loc.TafIcao = NullIfEmpty(TafIcaoBox.Text);
-            // The runtime's no-TAF sentinel comparison is case-sensitive — store
-            // the canonical spelling regardless of how it was typed.
-            if (loc.TafIcao?.Equals("NONE", StringComparison.OrdinalIgnoreCase) == true)
-                loc.TafIcao = "NONE";
+            // Uppercase on store: validation is case-insensitive, but downstream
+            // comparisons (the no-TAF "NONE" sentinel, station matching) are not —
+            // and the mirror fans these values out to every member.
+            loc.MetarIcao = NullIfEmpty(MetarIcaoBox.Text)?.ToUpperInvariant();
+            loc.TafIcao = NullIfEmpty(TafIcaoBox.Text)?.ToUpperInvariant();
             loc.Timezone = tzValue;
             loc.ScheduledSendHours = NullIfEmpty(ScheduledHoursBox.Text);
 
