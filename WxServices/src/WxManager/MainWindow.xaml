@@ -376,6 +376,9 @@
             <TabItem x:Name="RecipientsTabItem" Header="Recipients" IsEnabled="False">
                 <local:RecipientsTab/>
             </TabItem>
+            <TabItem x:Name="LocalitiesTabItem" Header="Localities" IsEnabled="False">
+                <local:LocalitiesTab/>
+            </TabItem>
             <TabItem x:Name="AnnouncementTabItem" Header="Announcement" IsEnabled="False">
                 <local:AnnouncementTab/>
             </TabItem>

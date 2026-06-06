@@ -166,10 +166,12 @@
                         <TextBox   Grid.Row="5"  Grid.Column="1" x:Name="ScheduledHoursBox" Margin="0,3"
                                    ToolTip="Hour(s) of day (0–23) in recipient's timezone, e.g. &quot;7&quot; or &quot;6, 18&quot;"/>
 
-                        <!-- Locality -->
+                        <!-- Locality (membership + display name, WX-127) -->
                         <TextBlock Grid.Row="6"  Grid.Column="0" Text="Locality" VerticalAlignment="Center" Margin="0,3"/>
-                        <TextBox   Grid.Row="6"  Grid.Column="1" x:Name="LocalityBox" Margin="0,3"
-                                   ToolTip="Human-readable place name used in report subjects, e.g. Spring, TX"/>
+                        <ComboBox  Grid.Row="6"  Grid.Column="1" x:Name="LocalityCombo" Margin="0,3"
+                                   IsEditable="True" IsTextSearchEnabled="True"
+                                   SelectionChanged="LocalityCombo_SelectionChanged"
+                                   ToolTip="Select an existing locality to assign this recipient (stations, timezone, and hours then come from the locality), type a new name to create one on Save, or clear to unassign."/>
 
                         <!-- Latitude (read-only) -->
                         <TextBlock Grid.Row="7"  Grid.Column="0" Text="Latitude" VerticalAlignment="Center" Margin="0,3"/>
