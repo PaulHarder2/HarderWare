@@ -1174,6 +1174,15 @@ public partial class RecipientsTab : UserControl
                 var loc = await ctx.Localities.FindAsync(sel.DbId);
                 if (loc is null) return;
 
+                // Re-check after the await (WX-134): a keystroke can clear or
+                // change the selection while the query runs — text-search
+                // auto-selects on prefix matches mid-typing, and the deselect
+                // handler may already have run. Applying now would be a zombie
+                // preview: fields locked with a stale locality's values while the
+                // combo shows unrelated typed text (and a later Save would persist
+                // those values onto the recipient).
+                if (!ReferenceEquals(LocalityCombo.SelectedItem, sel)) return;
+
                 // First preview for this recipient: remember their own values so
                 // clearing the selection can put them back.
                 _previewPristine ??= (MetarIcaoBox.Text, TafIcaoBox.Text, TzBox.Text, ScheduledHoursBox.Text);

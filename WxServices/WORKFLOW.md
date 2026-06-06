@@ -187,6 +187,14 @@ Skip this step for pure-tooling / pure-docs PRs that did not bump the version (s
 5. Transition the Jira ticket to **Done**.
 6. **Stop at Done — do not transition to Closed.** The Done→Closed transition is Paul's deliberate human-review checkpoint. Report back what was done and let Paul press the final button.
 
+### Reopening a Done ticket
+
+**Added 2026-06-06** (raised during WX-134).
+
+If a ticket already at **Done** must be reopened to rework its own scope, transition it **Done → In Review** — never jump it back to To Do or In Progress. Atlassian's cycle/lead-time statistics should record the truth: the work re-entered the reviewing phase, not the queue.
+
+Boundary: a defect discovered in *shipped* work normally gets its **own Bug ticket** (the WX-134 precedent — a race found minutes after WX-127's deploy was filed separately, and WX-127 stayed Done). The reopen rule governs only the case where the same ticket's scope is being reworked; which shape applies is a judgment call made when the defect surfaces.
+
 ## Schema changes
 
 **Added 2026-05-19** (WX-72).
