@@ -327,6 +327,8 @@ public sealed class WeatherDataContext : DbContext
             e.Property(x => x.Name).HasMaxLength(200).IsRequired();
             e.Property(x => x.MetarIcao).HasMaxLength(100);
             e.Property(x => x.TafIcao).HasMaxLength(10);
+            e.Property(x => x.Timezone).HasMaxLength(100).IsRequired();
+            e.Property(x => x.ScheduledSendHours).HasMaxLength(50);
             e.Property(x => x.CentroidLat);
             e.Property(x => x.CentroidLon);
 

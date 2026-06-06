@@ -34,6 +34,28 @@ public class Locality
     public string? TafIcao { get; set; }
 
     /// <summary>
+    /// IANA timezone shared by all members (e.g. <c>"America/Chicago"</c>); a
+    /// locality spans exactly one timezone by construction — its members are
+    /// co-located. Mirrored onto each member's <see cref="Recipient.Timezone"/>
+    /// (WX-133): together with <see cref="ScheduledSendHours"/> it determines the
+    /// shared send instants the locality's snapshot baseline depends on.
+    /// Defaults to UTC.
+    /// </summary>
+    public string Timezone { get; set; } = "UTC";
+
+    /// <summary>
+    /// Comma-separated hour(s) of day (0–23) for daily scheduled sends, shared by
+    /// all members and interpreted in the locality's <see cref="Timezone"/>
+    /// (e.g. <c>"7"</c> or <c>"6, 12"</c>). Mirrored verbatim onto each
+    /// member's <see cref="Recipient.ScheduledSendHours"/> (WX-133):
+    /// the per-locality Claude reconciliation is judged against the previous
+    /// locality snapshot, and that shared baseline is only coherent when every
+    /// member's reports go out at the same times. <see langword="null"/> falls
+    /// back to the service default.
+    /// </summary>
+    public string? ScheduledSendHours { get; set; }
+
+    /// <summary>
     /// Centroid latitude — the mean of member recipients' latitudes — used as the
     /// locality's GFS forecast point. Recomputed on membership change (WX-126);
     /// <see langword="null"/> until the locality has members.
