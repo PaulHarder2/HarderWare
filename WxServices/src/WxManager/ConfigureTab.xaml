@@ -213,7 +213,7 @@
             <TextBlock x:Name="StatusText" VerticalAlignment="Center"
                        FontSize="12" Foreground="#909090" Margin="0,0,16,0"/>
             <Button x:Name="SaveButton" Content="Save Configuration"
-                    Width="150" Click="SaveButton_Click"/>
+                    Width="150" IsEnabled="False" Click="SaveButton_Click"/>
         </StackPanel>
     </Grid>
 </UserControl>

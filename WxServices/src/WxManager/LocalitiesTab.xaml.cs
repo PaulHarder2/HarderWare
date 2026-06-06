@@ -94,6 +94,20 @@ public partial class LocalitiesTab : UserControl
     /// </summary>
     private long? _currentLocalityDbId;
 
+    /// <summary>
+    /// Suppresses dirty-tracking while load/clear/idle methods set fields
+    /// programmatically — only user edits enable Save (WX-134).
+    /// </summary>
+    private bool _suppressDirty;
+
+    /// <summary>
+    /// True after New is clicked, until a load/cancel/idle ends the new-locality
+    /// editing session. Dirty-tracking only counts edits made while a record
+    /// context is active (a loaded locality or New) — without this gate, stray
+    /// WPF initialization events could enable Save on an idle pane (WX-134).
+    /// </summary>
+    private bool _newMode;
+
     // ── Construction ──────────────────────────────────────────────────────────
 
     /// <summary>
@@ -110,7 +124,30 @@ public partial class LocalitiesTab : UserControl
         InitializeComponent();
         TzBox.ItemsSource = IanaTimeZones.All();
         SetIdlePane();
+
+        // Dirty-tracking (WX-134): Save enables only when a user edit occurs.
+        DirtyTracking.Attach(MarkDirty,
+            NameBox, MetarIcaoBox, TafIcaoBox, TzBox, ScheduledHoursBox);
+
         Loaded += async (_, _) => await LoadLocalityListAsync();
+        // Memberships and labels can change on the Recipients tab while this tab
+        // is hidden — on tab-return, refresh the list and reload the displayed
+        // locality (members + unassigned pool) from the database. Discards
+        // unsaved edits by design (ratified 2026-06-06, WX-134).
+        IsVisibleChanged += async (_, e) =>
+        {
+            if (e.NewValue is not true) return;
+            try
+            {
+                await LoadLocalityListAsync();
+                if (_currentLocalityDbId is long id)
+                    await LoadLocalityIntoFieldsAsync(id);
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"Tab-return reload failed: {ex.Message}");
+            }
+        };
     }
 
     // ── Left pane: list ───────────────────────────────────────────────────────
@@ -203,16 +240,25 @@ public partial class LocalitiesTab : UserControl
         LocalityList.SelectedItem = null;
         LocalityList.SelectionChanged += LocalityList_SelectionChanged;
 
-        NameBox.Clear();
-        MetarIcaoBox.Clear();
-        TafIcaoBox.Clear();
-        TzBox.SelectedItem = App.DefaultTimezone;
-        ScheduledHoursBox.Text = App.DefaultScheduledSendHour.ToString();
-        CentroidBox.Text = "—";
-        SetMembersSection(enabled: false, members: [], unassigned: []);
+        _suppressDirty = true;
+        try
+        {
+            NameBox.Clear();
+            MetarIcaoBox.Clear();
+            TafIcaoBox.Clear();
+            TzBox.SelectedItem = App.DefaultTimezone;
+            ScheduledHoursBox.Text = App.DefaultScheduledSendHour.ToString();
+            CentroidBox.Text = "—";
+            SetMembersSection(enabled: false, members: [], unassigned: []);
+        }
+        finally
+        {
+            _suppressDirty = false;
+        }
 
         HideMessages();
-        SaveBtn.IsEnabled = true;
+        _newMode = true;
+        SaveBtn.IsEnabled = false;  // enables on the first edit (WX-134)
         CancelBtn.IsEnabled = true;
         DeleteBtn.IsEnabled = false;
     }
@@ -361,13 +407,16 @@ public partial class LocalitiesTab : UserControl
     // ── Right pane: Delete ────────────────────────────────────────────────────
 
     /// <summary>
-    /// Deletes the loaded locality after confirmation — unless it still has
-    /// members, in which case deletion is blocked with an explanatory message
-    /// (mirroring the database's <c>ON DELETE RESTRICT</c> rule as words).
+    /// Deletes the loaded locality after a confirmation popup that always names
+    /// the consequence: members, if any, are unassigned (keeping their last-synced
+    /// values) and the locality is removed — both in one atomic save. The
+    /// database's <c>ON DELETE RESTRICT</c> rule still stands; the UI satisfies it
+    /// deliberately by unassigning first. (Redesigned in WX-134: the original
+    /// blocked-while-members-exist banner read as if Delete acted on a member.)
     /// </summary>
     /// <param name="sender">The Delete button.</param>
     /// <param name="e">Event arguments (unused).</param>
-    /// <sideeffects>May execute an EF Core DELETE; clears the right pane and refreshes the list.</sideeffects>
+    /// <sideeffects>May unassign member recipients and execute an EF Core DELETE; clears the right pane and refreshes the list.</sideeffects>
     private async void DeleteBtn_Click(object sender, RoutedEventArgs e)
     {
         if (_currentLocalityDbId is null) return;
@@ -378,26 +427,32 @@ public partial class LocalitiesTab : UserControl
             await using var ctx = new WeatherDataContext(_dbOptions);
 
             var memberCount = await ctx.Recipients.CountAsync(r => r.LocalityId == _currentLocalityDbId.Value);
-            if (memberCount > 0)
-            {
-                ShowMessage($"\"{name}\" still has {memberCount} member(s). Reassign or remove them first — " +
-                            "a locality cannot be deleted while recipients belong to it.");
-                return;
-            }
-
+            var memberNote = memberCount > 0
+                ? $"\n\nIts {memberCount} member(s) will be unassigned — they keep their stations, " +
+                  "timezone, and scheduled hours, but their Locality label is cleared."
+                : "";
             var result = MessageBox.Show(
-                $"Delete locality \"{name}\"?\n\nThis cannot be undone.",
+                $"Delete locality \"{name}\"?{memberNote}\n\nThis cannot be undone.",
                 "WxManager — Confirm Delete",
                 MessageBoxButton.YesNo, MessageBoxImage.Warning);
             if (result != MessageBoxResult.Yes) return;
 
-            Logger.Info($"Deleting locality '{name}'.");
+            Logger.Info($"Deleting locality '{name}' ({memberCount} member(s) to unassign).");
             var loc = await ctx.Localities.FindAsync(_currentLocalityDbId.Value);
             if (loc != null)
             {
+                // Unassign members, then delete — one SaveChanges, so the pair is
+                // atomic and the FK's RESTRICT is satisfied within the same commit.
+                var members = await ctx.Recipients.Where(r => r.LocalityId == loc.Id).ToListAsync();
+                foreach (var member in members)
+                {
+                    member.LocalityId = null;    // stations/timezone/hours stay as last synced
+                    member.LocalityName = null;  // a lingering label reads as still-assigned
+                }
+
                 ctx.Localities.Remove(loc);
                 await ctx.SaveChangesAsync();
-                Logger.Info($"Locality '{name}' deleted successfully.");
+                Logger.Info($"Locality '{name}' deleted; {members.Count} member(s) unassigned.");
             }
 
             _currentLocalityDbId = null;
@@ -442,7 +497,9 @@ public partial class LocalitiesTab : UserControl
     /// <sideeffects>Executes EF Core updates; mutates the recipient row and locality centroid; refreshes the pane.</sideeffects>
     private async void AddMemberBtn_Click(object sender, RoutedEventArgs e)
     {
-        if (_currentLocalityDbId is null) return;
+        Logger.Debug($"AddMemberBtn_Click fired (locality={_currentLocalityDbId?.ToString() ?? "none"}).");
+        if (_currentLocalityDbId is null)
+        { ShowMessage("Select (or save) a locality first."); return; }
         if (AddMemberCombo.SelectedItem is not UnassignedRecipientItem pick)
         { ShowMessage("Select a recipient to add."); return; }
 
@@ -485,8 +542,18 @@ public partial class LocalitiesTab : UserControl
     /// <sideeffects>Executes EF Core updates; mutates the recipient row and locality centroid; refreshes the pane.</sideeffects>
     private async void RemoveMemberBtn_Click(object sender, RoutedEventArgs e)
     {
-        if (_currentLocalityDbId is null) return;
-        if (sender is not Button { Tag: MemberRow row }) return;
+        // Entry + bail diagnostics (WX-134): a guard `return` with no banner and no
+        // log line is how a click dies invisibly — which made a field debugging
+        // session needlessly mysterious.
+        Logger.Debug($"RemoveMemberBtn_Click fired (locality={_currentLocalityDbId?.ToString() ?? "none"}).");
+        if (_currentLocalityDbId is null)
+        { ShowMessage("Select a locality first."); return; }
+        if (sender is not Button { Tag: MemberRow row })
+        {
+            Logger.Warn("Remove click carried no member-row context — ignored.");
+            ShowMessage("Could not identify the member to remove — reselect the locality and try again.");
+            return;
+        }
 
         try
         {
@@ -496,8 +563,11 @@ public partial class LocalitiesTab : UserControl
             var recipient = await ctx.Recipients.FindAsync(row.DbId);
             if (recipient is null) return;
 
-            // Unassign: membership ends; the mirrored values stay as last synced.
+            // Unassign: membership ends; the mirrored stations/timezone/hours stay
+            // as last synced, but the locality label is cleared — a lingering
+            // label reads as still-assigned (WX-134 field finding).
             recipient.LocalityId = null;
+            recipient.LocalityName = null;
 
             var remaining = await ctx.Recipients
                 .Where(r => r.LocalityId == loc.Id && r.Id != recipient.Id)
@@ -509,7 +579,7 @@ public partial class LocalitiesTab : UserControl
 
             await LoadLocalityListAsync();
             await LoadLocalityIntoFieldsAsync(loc.Id, keepMessages: true);
-            ShowSuccessMessage($"{recipient.Name} removed — they keep their current settings; centroid updated.");
+            ShowSuccessMessage($"{recipient.Name} removed — stations, timezone, and hours kept; locality label cleared; centroid updated.");
         }
         catch (Exception ex)
         {
@@ -531,7 +601,14 @@ public partial class LocalitiesTab : UserControl
     {
         await using var ctx = new WeatherDataContext(_dbOptions);
         var loc = await ctx.Localities.FindAsync(localityId);
-        if (loc == null) return;
+        if (loc == null)
+        {
+            // Deleted externally (or on another tab) — fall back to idle rather
+            // than leaving a stale pane.
+            _currentLocalityDbId = null;
+            SetIdlePane();
+            return;
+        }
 
         var members = await ctx.Recipients
             .Where(r => r.LocalityId == localityId)
@@ -546,22 +623,31 @@ public partial class LocalitiesTab : UserControl
             .ToListAsync();
 
         _currentLocalityDbId = loc.Id;
+        _newMode = false;
 
-        NameBox.Text = loc.Name;
-        MetarIcaoBox.Text = loc.MetarIcao ?? "";
-        TafIcaoBox.Text = loc.TafIcao ?? "";
-        TzBox.SelectedItem = null;  // null first: a coerced-away assignment would keep the prior selection
-        TzBox.SelectedItem = loc.Timezone;
-        if (TzBox.SelectedItem is null) TzBox.Text = loc.Timezone;  // preserve unknown values
-        ScheduledHoursBox.Text = loc.ScheduledSendHours ?? "";
-        CentroidBox.Text = loc.CentroidLat is double lat && loc.CentroidLon is double lon
-            ? $"{lat:F4}, {lon:F4}"
-            : "—";
+        _suppressDirty = true;
+        try
+        {
+            NameBox.Text = loc.Name;
+            MetarIcaoBox.Text = loc.MetarIcao ?? "";
+            TafIcaoBox.Text = loc.TafIcao ?? "";
+            TzBox.SelectedItem = null;  // null first: a coerced-away assignment would keep the prior selection
+            TzBox.SelectedItem = loc.Timezone;
+            if (TzBox.SelectedItem is null) TzBox.Text = loc.Timezone;  // preserve unknown values
+            ScheduledHoursBox.Text = loc.ScheduledSendHours ?? "";
+            CentroidBox.Text = loc.CentroidLat is double lat && loc.CentroidLon is double lon
+                ? $"{lat:F4}, {lon:F4}"
+                : "—";
 
-        SetMembersSection(enabled: true, members, unassigned);
+            SetMembersSection(enabled: true, members, unassigned);
+        }
+        finally
+        {
+            _suppressDirty = false;
+        }
 
         if (!keepMessages) HideMessages();
-        SaveBtn.IsEnabled = true;
+        SaveBtn.IsEnabled = false;  // clean state — enables on the first edit (WX-134)
         CancelBtn.IsEnabled = true;
         DeleteBtn.IsEnabled = true;
     }
@@ -594,20 +680,41 @@ public partial class LocalitiesTab : UserControl
     /// <sideeffects>Clears all fields and list sources; disables buttons; hides messages.</sideeffects>
     private void SetIdlePane()
     {
-        NameBox.Clear();
-        MetarIcaoBox.Clear();
-        TafIcaoBox.Clear();
-        TzBox.SelectedItem = null;
-        TzBox.Text = "";
-        ScheduledHoursBox.Clear();
-        CentroidBox.Clear();
-        SetMembersSection(enabled: false, members: [], unassigned: []);
-        MembersHintText.Visibility = Visibility.Collapsed;
+        _newMode = false;
+        _suppressDirty = true;
+        try
+        {
+            NameBox.Clear();
+            MetarIcaoBox.Clear();
+            TafIcaoBox.Clear();
+            TzBox.SelectedItem = null;
+            TzBox.Text = "";
+            ScheduledHoursBox.Clear();
+            CentroidBox.Clear();
+            SetMembersSection(enabled: false, members: [], unassigned: []);
+            MembersHintText.Visibility = Visibility.Collapsed;
+        }
+        finally
+        {
+            _suppressDirty = false;
+        }
 
         HideMessages();
         SaveBtn.IsEnabled = false;
         CancelBtn.IsEnabled = false;
         DeleteBtn.IsEnabled = false;
+    }
+
+    /// <summary>
+    /// Enables Save (and Cancel) on a user edit — no-op while a load/clear path
+    /// is setting fields programmatically (WX-134 dirty-tracking).
+    /// </summary>
+    private void MarkDirty()
+    {
+        if (_suppressDirty) return;
+        if (_currentLocalityDbId is null && !_newMode) return;  // no record context — not an edit
+        SaveBtn.IsEnabled = true;
+        CancelBtn.IsEnabled = true;
     }
 
     /// <summary>

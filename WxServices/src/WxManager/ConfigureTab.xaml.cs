@@ -29,10 +29,33 @@ public partial class ConfigureTab : UserControl
     /// <summary>Raised after a successful save so the parent can re-run prerequisite checks.</summary>
     public event Action? ConfigurationSaved;
 
+    /// <summary>
+    /// Suppresses dirty-tracking while <see cref="LoadCurrentValuesAsync"/> sets
+    /// fields programmatically — only user edits enable Save (WX-134).
+    /// </summary>
+    private bool _suppressDirty;
+
     public ConfigureTab()
     {
         InitializeComponent();
+
+        // Dirty-tracking (WX-134): Save Configuration enables only on a user edit.
+        DirtyTracking.Attach(MarkDirty,
+            TxtInstallRoot, TxtCondaPythonExe, TxtWgrib2Path,
+            TxtHomeIcao, TxtHomeLatitude, TxtHomeLongitude, TxtBoundingBoxDeg,
+            TxtRegionSouth, TxtRegionNorth, TxtRegionWest, TxtRegionEast,
+            TxtConnectionString,
+            TxtSmtpHost, TxtSmtpPort, TxtSmtpUsername, TxtSmtpPassword, TxtSmtpFromAddress,
+            TxtClaudeApiKey, TxtClaudeModel, TxtMapExtent, TxtAlertEmail);
+
         Loaded += async (_, _) => await LoadCurrentValuesAsync();
+    }
+
+    /// <summary>Enables Save on a user edit — no-op during programmatic loads (WX-134).</summary>
+    private void MarkDirty()
+    {
+        if (!_suppressDirty)
+            SaveButton.IsEnabled = true;
     }
 
     // ── Load ────────────────────────────────────────────────────────────────
@@ -42,6 +65,21 @@ public partial class ConfigureTab : UserControl
         var cfg = App.Configuration;
         if (cfg is null) return;
 
+        _suppressDirty = true;
+        try
+        {
+            await LoadCurrentValuesCoreAsync(cfg);
+        }
+        finally
+        {
+            _suppressDirty = false;
+        }
+        SaveButton.IsEnabled = false;  // clean state — enables on the first edit (WX-134)
+    }
+
+    /// <summary>Field-population body of <see cref="LoadCurrentValuesAsync"/> under the dirty-suppression wrapper.</summary>
+    private async Task LoadCurrentValuesCoreAsync(Microsoft.Extensions.Configuration.IConfiguration cfg)
+    {
         TxtInstallRoot.Text = cfg["InstallRoot"] ?? WxPaths.DefaultInstallRoot;
         TxtCondaPythonExe.Text = cfg["WxVis:CondaPythonExe"] ?? "";
         var configuredWgrib2 = cfg["Gfs:Wgrib2Path"];
@@ -169,6 +207,7 @@ public partial class ConfigureTab : UserControl
             Logger.Info("Secrets saved to GlobalSettings.");
 
             SetStatus("Configuration saved.", true);
+            SaveButton.IsEnabled = false;  // back to clean until the next edit (WX-134)
             ConfigurationSaved?.Invoke();
         }
         catch (Exception ex)

@@ -111,6 +111,12 @@ Before pushing, explicitly ask whether the change warrants:
 
 Some changes (installer scripts, raw config files, prose-only doc edits) cannot be meaningfully unit-tested. That's fine — say so and move on. The phrase *"when it is possible and makes sense"* governs.
 
+**Manual test procedures.** *Added 2026-06-06 (WX-134).* When a change's verification cannot be automated (the WPF apps have no UI test harness and are not even CI-built — see WX-135), the manual verification gets the same rigor as automated tests:
+
+1. Write a **formal test procedure** as a repo document at `WxServices/docs/test-procedures/WX-NN.md` — numbered steps with explicit *Expect:* outcomes. It rides the PR, so the second reviewer reviews the test procedure too, and it remains executable as a regression suite later.
+2. Record it in the ticket's two custom fields (both Short Text): **Test Proc** holds the document path (`docs/test-procedures/WX-NN.md`); **Test Result** holds the latest outcome (`PASS yyyy-mm-dd @ <version>` or `FAIL …`). Re-executions overwrite Test Result; history survives in Jira's field-change log.
+3. A ticket whose change needs manual verification does not pass §7c until the procedure exists and Test Result records a PASS. (JQL gap-detectors: `"Test Proc" is EMPTY` for missing procedures on UI-touching tickets; `"Test Result" ~ "FAIL"` for open failures.)
+
 ### 7b. Run the full test suite and format check
 
 `dotnet test WxServices.sln` must report zero failures before creating the PR. There are no pre-existing-failure exceptions: any failure must be resolved in this PR or split out into a blocking ticket first.
