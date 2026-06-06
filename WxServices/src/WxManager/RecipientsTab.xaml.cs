@@ -1292,6 +1292,12 @@ public partial class RecipientsTab : UserControl
     {
         if (_suppressLocalityComboEvents) return;
 
+        // Same record-context gate as MarkDirty: with no recipient loaded and
+        // New never clicked, a combo interaction on the idle pane is a no-op —
+        // otherwise the preview would write locality values into an empty pane
+        // and enable Save with nothing to save (review finding).
+        if (_currentRecipientDbId is null && !_newMode) return;
+
         _localityComboUserEdited = true;
 
         if (LocalityCombo.SelectedItem is LocalityComboItem sel)

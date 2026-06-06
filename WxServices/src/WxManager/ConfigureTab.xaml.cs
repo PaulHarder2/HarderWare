@@ -65,10 +65,25 @@ public partial class ConfigureTab : UserControl
         var cfg = App.Configuration;
         if (cfg is null) return;
 
+        // Fetch the secrets BEFORE entering the suppression window — holding
+        // the suppress flag across an await would swallow genuine user
+        // keystrokes arriving during a cold secrets query, and the trailing
+        // force-disable would then clobber a real edit (review finding).
+        GlobalSettings? gs = null;
+        try
+        {
+            await using var db = new WeatherDataContext(App.DbOptions);
+            gs = await db.GlobalSettings.FirstOrDefaultAsync(x => x.Id == 1);
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"Could not load secrets from database: {ex.Message}");
+        }
+
         _suppressDirty = true;
         try
         {
-            await LoadCurrentValuesCoreAsync(cfg);
+            ApplyLoadedValues(cfg, gs);  // fully synchronous
         }
         finally
         {
@@ -77,8 +92,8 @@ public partial class ConfigureTab : UserControl
         SaveButton.IsEnabled = false;  // clean state — enables on the first edit (WX-134)
     }
 
-    /// <summary>Field-population body of <see cref="LoadCurrentValuesAsync"/> under the dirty-suppression wrapper.</summary>
-    private async Task LoadCurrentValuesCoreAsync(Microsoft.Extensions.Configuration.IConfiguration cfg)
+    /// <summary>Synchronous field-population body of <see cref="LoadCurrentValuesAsync"/> under the dirty-suppression wrapper.</summary>
+    private void ApplyLoadedValues(Microsoft.Extensions.Configuration.IConfiguration cfg, GlobalSettings? gs)
     {
         TxtInstallRoot.Text = cfg["InstallRoot"] ?? WxPaths.DefaultInstallRoot;
         TxtCondaPythonExe.Text = cfg["WxVis:CondaPythonExe"] ?? "";
@@ -105,22 +120,14 @@ public partial class ConfigureTab : UserControl
         TxtMapExtent.Text = cfg["WxVis:MapExtent"] ?? "";
         TxtAlertEmail.Text = cfg["Monitor:AlertEmail"] ?? "";
 
-        // Secrets come from the database, not config files.
-        try
+        // Secrets come from the database, not config files (fetched by the
+        // caller before the suppression window opened).
+        if (gs is not null)
         {
-            await using var db = new WeatherDataContext(App.DbOptions);
-            var gs = await db.GlobalSettings.FirstOrDefaultAsync(x => x.Id == 1);
-            if (gs is not null)
-            {
-                TxtSmtpUsername.Text = gs.SmtpUsername ?? "";
-                TxtSmtpPassword.Password = gs.SmtpPassword ?? "";
-                TxtSmtpFromAddress.Text = gs.SmtpFromAddress ?? "";
-                TxtClaudeApiKey.Password = gs.ClaudeApiKey ?? "";
-            }
-        }
-        catch (Exception ex)
-        {
-            Logger.Warn($"Could not load secrets from database: {ex.Message}");
+            TxtSmtpUsername.Text = gs.SmtpUsername ?? "";
+            TxtSmtpPassword.Password = gs.SmtpPassword ?? "";
+            TxtSmtpFromAddress.Text = gs.SmtpFromAddress ?? "";
+            TxtClaudeApiKey.Password = gs.ClaudeApiKey ?? "";
         }
     }
 
