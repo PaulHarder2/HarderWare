@@ -234,6 +234,10 @@ public partial class RecipientsTab : UserControl
                 {
                     await using var ctx = new WeatherDataContext(_dbOptions);
                     var r = await ctx.Recipients.FindAsync(dbId);
+                    // The user may have selected a different recipient while the
+                    // query ran — never repaint stale state (same race shape as
+                    // the zombie preview).
+                    if (_currentRecipientDbId != dbId) return;
                     if (r is not null)
                     {
                         LoadRecipientIntoFields(r);
@@ -250,6 +254,12 @@ public partial class RecipientsTab : UserControl
                 {
                     Logger.Warn($"Tab-return reload failed: {ex.Message}");
                 }
+            }
+            else if (_newMode)
+            {
+                // Tab-return discards unsaved edits — a half-typed New draft
+                // included (CodeRabbit finding on the WX-134 rule).
+                SetIdlePane();
             }
         };
     }

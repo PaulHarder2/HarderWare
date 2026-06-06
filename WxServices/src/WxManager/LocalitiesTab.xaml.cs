@@ -139,9 +139,20 @@ public partial class LocalitiesTab : UserControl
             if (e.NewValue is not true) return;
             try
             {
+                var resumeId = _currentLocalityDbId;
                 await LoadLocalityListAsync();
-                if (_currentLocalityDbId is long id)
+                if (resumeId is long id && _currentLocalityDbId == resumeId)
+                {
+                    // Still the current locality after the list await — never
+                    // repaint stale state if the user moved on meanwhile.
                     await LoadLocalityIntoFieldsAsync(id);
+                }
+                else if (_currentLocalityDbId is null && _newMode)
+                {
+                    // Tab-return discards unsaved edits — a half-typed New draft
+                    // included (CodeRabbit finding on the WX-134 rule).
+                    SetIdlePane();
+                }
             }
             catch (Exception ex)
             {
