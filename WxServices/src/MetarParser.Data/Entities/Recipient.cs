@@ -38,13 +38,23 @@ public class Recipient
     /// </summary>
     public string? Language { get; set; }
 
-    /// <summary>IANA timezone name (e.g. <c>"America/Chicago"</c>). Defaults to UTC.</summary>
+    /// <summary>
+    /// IANA timezone name (e.g. <c>"America/Chicago"</c>). Defaults to UTC.
+    /// For locality members this is mirrored verbatim from
+    /// <see cref="Entities.Locality.Timezone"/> (WX-133) — a locality spans
+    /// exactly one timezone, so the locality is authoritative.
+    /// </summary>
     public string Timezone { get; set; } = "UTC";
 
     /// <summary>
     /// Comma-separated hour(s) of day (0–23) in the recipient's timezone for
     /// daily scheduled sends (e.g. <c>"7"</c> or <c>"6, 12"</c>).
     /// <see langword="null"/> falls back to the service default.
+    /// The runtime reads this column for every recipient; for locality members it
+    /// carries the locality's value, mirrored verbatim from
+    /// <see cref="Entities.Locality.ScheduledSendHours"/> (WX-133) — the locality
+    /// is authoritative, and only for recipients without a locality is this an
+    /// independent per-recipient setting.
     /// </summary>
     public string? ScheduledSendHours { get; set; }
 
@@ -60,9 +70,11 @@ public class Recipient
     /// <summary>
     /// Foreign key to the <see cref="Entities.Locality"/> this recipient belongs to,
     /// or <see langword="null"/> when unassigned. Assigning a locality mirrors that
-    /// locality's display name and station hierarchy verbatim onto this recipient
-    /// (<see cref="LocalityName"/>, <see cref="MetarIcao"/>, <see cref="TafIcao"/>) —
-    /// the locality is authoritative (see <c>LocalityAssignment</c>).
+    /// locality's display name, station hierarchy, timezone, and scheduled send
+    /// hours verbatim onto this recipient (<see cref="LocalityName"/>,
+    /// <see cref="MetarIcao"/>, <see cref="TafIcao"/>, <see cref="Timezone"/>,
+    /// <see cref="ScheduledSendHours"/>) — the locality is authoritative
+    /// (see <c>LocalityAssignment</c>).
     /// </summary>
     public long? LocalityId { get; set; }
 
