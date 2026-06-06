@@ -34,7 +34,7 @@
                 <Button Content="Cancel" Width="80" Margin="0,0,10,0"
                         Click="CancelBtn_Click"/>
                 <Button x:Name="SendBtn" Content="Send" Width="80"
-                        Click="SendBtn_Click"/>
+                        IsEnabled="False" Click="SendBtn_Click"/>
             </StackPanel>
             <TextBlock x:Name="ProgressText" VerticalAlignment="Center"
                        Foreground="#909090" FontStyle="Italic" TextTrimming="CharacterEllipsis"/>

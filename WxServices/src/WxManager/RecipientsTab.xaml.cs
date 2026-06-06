@@ -145,6 +145,30 @@ public partial class RecipientsTab : UserControl
     /// </summary>
     private string? _loadedLocalityLabel;
 
+    /// <summary>
+    /// True once the user has typed in or selected from the Locality combo since
+    /// the current record was loaded. The silent label-keep rule applies only when
+    /// this is false: a stored label passively riding through a save must not
+    /// prompt, but the same text actively typed IS creation/assignment intent
+    /// (WX-134 field finding — overtyping "Austin, TX" over the identical stored
+    /// label deserved the create prompt).
+    /// </summary>
+    private bool _localityComboUserEdited;
+
+    /// <summary>
+    /// Suppresses dirty-tracking while load/clear/idle methods set fields
+    /// programmatically — only user edits enable Save (WX-134).
+    /// </summary>
+    private bool _suppressDirty;
+
+    /// <summary>
+    /// True after New is clicked, until a load/cancel/idle ends the new-record
+    /// editing session. Dirty-tracking only counts edits made while a record
+    /// context is active (a loaded recipient or New) — without this gate, stray
+    /// WPF initialization events could enable Save on an idle pane (WX-134).
+    /// </summary>
+    private bool _newMode;
+
     // ── Construction ──────────────────────────────────────────────────────────
 
     /// <summary>
@@ -174,16 +198,69 @@ public partial class RecipientsTab : UserControl
 
         ClearRightPane();   // show defaults; buttons stay disabled (set in XAML)
 
+        // Dirty-tracking (WX-134): Save enables only when a user edit occurs.
+        // Attached after the initial ClearRightPane so defaults don't count.
+        DirtyTracking.Attach(MarkDirty,
+            RecipientIdBox, NameBox, EmailBox, LanguageBox, TzBox, ScheduledHoursBox,
+            AddressBox, LocalityCombo, MetarIcaoBox, TafIcaoBox,
+            TempUnitBox, PressureUnitBox, WindUnitBox);
+
+        // Track user typing in the Locality combo (selection changes are tracked
+        // in LocalityCombo_SelectionChanged) — see _localityComboUserEdited.
+        LocalityCombo.AddHandler(System.Windows.Controls.Primitives.TextBoxBase.TextChangedEvent,
+            new TextChangedEventHandler((_, _) =>
+            {
+                if (!_suppressLocalityComboEvents && !_suppressDirty)
+                    _localityComboUserEdited = true;
+            }));
+
         Loaded += async (_, _) =>
         {
             await LoadRecipientListAsync();
             await LoadLocalityComboAsync();
         };
-        // Localities can be created/renamed on the Localities tab while this tab
-        // is hidden — refresh the combo whenever the tab becomes visible again.
+        // Localities (and recipients' memberships) can change on the Localities
+        // tab while this tab is hidden — on tab-return, refresh the combo AND
+        // reload the displayed recipient from the database. The reload discards
+        // unsaved edits by design (ratified 2026-06-06, WX-134): a tab you left
+        // is not a draft that survives.
         IsVisibleChanged += async (_, e) =>
         {
-            if (e.NewValue is true) await LoadLocalityComboAsync();
+            if (e.NewValue is not true) return;
+            await LoadLocalityComboAsync();
+            if (_currentRecipientDbId is int dbId)
+            {
+                try
+                {
+                    await using var ctx = new WeatherDataContext(_dbOptions);
+                    var r = await ctx.Recipients.FindAsync(dbId);
+                    // The user may have selected a different recipient while the
+                    // query ran — never repaint stale state (same race shape as
+                    // the zombie preview).
+                    if (_currentRecipientDbId != dbId) return;
+                    if (r is not null)
+                    {
+                        LoadRecipientIntoFields(r);
+                    }
+                    else
+                    {
+                        // Deleted elsewhere while we were away.
+                        _currentRecipientDbId = null;
+                        SetIdlePane();
+                        await LoadRecipientListAsync();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.Warn($"Tab-return reload failed: {ex.Message}");
+                }
+            }
+            else if (_newMode)
+            {
+                // Tab-return discards unsaved edits — a half-typed New draft
+                // included (CodeRabbit finding on the WX-134 rule).
+                SetIdlePane();
+            }
         };
     }
 
@@ -244,7 +321,9 @@ public partial class RecipientsTab : UserControl
         RecipientList.SelectionChanged += RecipientList_SelectionChanged;
 
         ClearRightPane();
-        SaveBtn.IsEnabled = true;
+        _newMode = true;
+        _localityComboUserEdited = false;
+        SaveBtn.IsEnabled = false;  // enables on the first edit (WX-134)
         CancelBtn.IsEnabled = true;
         DeleteBtn.IsEnabled = false;
     }
@@ -682,12 +761,14 @@ public partial class RecipientsTab : UserControl
                     return;
                 }
             }
-            else if (localityText.Length > 0 && previousLocalityId is null &&
+            else if (localityText.Length > 0 && previousLocalityId is null && !_localityComboUserEdited &&
                      string.Equals(localityText, _loadedLocalityLabel ?? "", StringComparison.Ordinal))
             {
-                // Unchanged stored display label rendered back into the combo — not
-                // a membership request. Without this, every save of a legacy
-                // unassigned recipient would re-trigger the create prompt below.
+                // Stored display label rendered back into the combo, untouched by
+                // the user this session — not a membership request. Without this,
+                // every save of a legacy unassigned recipient would re-trigger the
+                // create prompt below. The same text ACTIVELY typed falls through:
+                // that's creation/assignment intent (WX-134 field finding).
                 keepStoredLabel = true;
             }
             else if (localityText.Length > 0)
@@ -765,7 +846,11 @@ public partial class RecipientsTab : UserControl
                 }
                 else if (previousLocalityId is not null)
                 {
-                    localityNote = " Removed from its locality — current settings kept.";
+                    // Unassign keeps the mirrored stations/timezone/hours but clears
+                    // the locality label — a lingering label reads as still-assigned
+                    // (WX-134 field finding).
+                    r.LocalityName = null;
+                    localityNote = " Removed from its locality — settings kept, locality label cleared.";
                 }
                 else
                 {
@@ -915,7 +1000,31 @@ public partial class RecipientsTab : UserControl
     private void LoadRecipientIntoFields(Recipient r, bool keepMessages = false)
     {
         _currentRecipientDbId = r.Id;
+        _newMode = false;
+        _localityComboUserEdited = false;
 
+        _suppressDirty = true;
+        try
+        {
+            LoadRecipientFieldsCore(r);
+        }
+        finally
+        {
+            _suppressDirty = false;
+        }
+
+        if (!keepMessages) HideMessages();
+        StationsGroup.Visibility = Visibility.Collapsed;
+        StationsGrid.ItemsSource = null;
+        BboxStatusText.Visibility = Visibility.Collapsed;
+        SaveBtn.IsEnabled = false;  // clean state — enables on the first edit (WX-134)
+        CancelBtn.IsEnabled = true;
+        DeleteBtn.IsEnabled = true;
+    }
+
+    /// <summary>Field-population body of <see cref="LoadRecipientIntoFields"/>, split out so the dirty-suppression wrapper stays obviously balanced.</summary>
+    private void LoadRecipientFieldsCore(Recipient r)
+    {
         RecipientIdBox.Text = r.RecipientId;
         NameBox.Text = r.Name;
         EmailBox.Text = r.Email;
@@ -936,14 +1045,6 @@ public partial class RecipientsTab : UserControl
         TempUnitBox.SelectedItem = r.TempUnit;
         PressureUnitBox.SelectedItem = r.PressureUnit;
         WindUnitBox.SelectedItem = r.WindSpeedUnit;
-
-        if (!keepMessages) HideMessages();
-        StationsGroup.Visibility = Visibility.Collapsed;
-        StationsGrid.ItemsSource = null;
-        BboxStatusText.Visibility = Visibility.Collapsed;
-        SaveBtn.IsEnabled = true;
-        CancelBtn.IsEnabled = true;
-        DeleteBtn.IsEnabled = true;
     }
 
     /// <summary>
@@ -951,6 +1052,20 @@ public partial class RecipientsTab : UserControl
     /// </summary>
     /// <sideeffects>Clears all TextBoxes; sets default ComboBox selections; hides Messages and Stations sections.</sideeffects>
     private void ClearRightPane()
+    {
+        _suppressDirty = true;
+        try
+        {
+            ClearRightPaneCore();
+        }
+        finally
+        {
+            _suppressDirty = false;
+        }
+    }
+
+    /// <summary>Body of <see cref="ClearRightPane"/> under the dirty-suppression wrapper.</summary>
+    private void ClearRightPaneCore()
     {
         RecipientIdBox.Clear();
         NameBox.Clear();
@@ -983,6 +1098,22 @@ public partial class RecipientsTab : UserControl
     /// </summary>
     /// <sideeffects>Clears all TextBoxes and ComboBox selections; hides Messages and Stations sections; disables Save, Cancel, and Delete.</sideeffects>
     private void SetIdlePane()
+    {
+        _newMode = false;
+        _localityComboUserEdited = false;
+        _suppressDirty = true;
+        try
+        {
+            SetIdlePaneCore();
+        }
+        finally
+        {
+            _suppressDirty = false;
+        }
+    }
+
+    /// <summary>Body of <see cref="SetIdlePane"/> under the dirty-suppression wrapper.</summary>
+    private void SetIdlePaneCore()
     {
         RecipientIdBox.Clear();
         NameBox.Clear();
@@ -1081,6 +1212,7 @@ public partial class RecipientsTab : UserControl
                 .ToListAsync();
 
             _suppressLocalityComboEvents = true;
+            _suppressDirty = true;  // programmatic refresh — not a user edit (WX-134)
             try
             {
                 var priorText = LocalityCombo.Text;
@@ -1094,6 +1226,7 @@ public partial class RecipientsTab : UserControl
             finally
             {
                 _suppressLocalityComboEvents = false;
+                _suppressDirty = false;
             }
         }
         catch (Exception ex)
@@ -1115,6 +1248,8 @@ public partial class RecipientsTab : UserControl
     private void SetLocalityComboSelection(long? localityId, string? localityName)
     {
         _suppressLocalityComboEvents = true;
+        var priorSuppressDirty = _suppressDirty;
+        _suppressDirty = true;  // programmatic — not a user edit (WX-134)
         try
         {
             LocalityCombo.SelectedItem = localityId is long id
@@ -1126,6 +1261,7 @@ public partial class RecipientsTab : UserControl
         finally
         {
             _suppressLocalityComboEvents = false;
+            _suppressDirty = priorSuppressDirty;  // may be called inside an already-suppressed load
         }
     }
 
@@ -1166,6 +1302,14 @@ public partial class RecipientsTab : UserControl
     {
         if (_suppressLocalityComboEvents) return;
 
+        // Same record-context gate as MarkDirty: with no recipient loaded and
+        // New never clicked, a combo interaction on the idle pane is a no-op —
+        // otherwise the preview would write locality values into an empty pane
+        // and enable Save with nothing to save (review finding).
+        if (_currentRecipientDbId is null && !_newMode) return;
+
+        _localityComboUserEdited = true;
+
         if (LocalityCombo.SelectedItem is LocalityComboItem sel)
         {
             try
@@ -1173,6 +1317,15 @@ public partial class RecipientsTab : UserControl
                 await using var ctx = new WeatherDataContext(_dbOptions);
                 var loc = await ctx.Localities.FindAsync(sel.DbId);
                 if (loc is null) return;
+
+                // Re-check after the await (WX-134): a keystroke can clear or
+                // change the selection while the query runs — text-search
+                // auto-selects on prefix matches mid-typing, and the deselect
+                // handler may already have run. Applying now would be a zombie
+                // preview: fields locked with a stale locality's values while the
+                // combo shows unrelated typed text (and a later Save would persist
+                // those values onto the recipient).
+                if (!ReferenceEquals(LocalityCombo.SelectedItem, sel)) return;
 
                 // First preview for this recipient: remember their own values so
                 // clearing the selection can put them back.
@@ -1189,6 +1342,13 @@ public partial class RecipientsTab : UserControl
                 ApplyLocalityLockState(locked: true);
 
                 ShowMessage($"Will assign to \"{loc.Name}\" on Save — stations, timezone, and scheduled hours come from the locality.");
+
+                // A user-driven locality selection is unambiguously a pending edit —
+                // enable Save directly rather than relying on the generic
+                // dirty-tracking path (WX-134 field finding: the preview banner
+                // appeared but Save stayed disabled).
+                SaveBtn.IsEnabled = true;
+                CancelBtn.IsEnabled = true;
             }
             catch (Exception ex)
             {
@@ -1213,7 +1373,28 @@ public partial class RecipientsTab : UserControl
                 _previewPristine = null;
             }
             ApplyLocalityLockState(locked: false);
+            // Clear the stale "Will assign to ..." banner — the selection it
+            // described no longer exists (WX-134 field finding).
+            HideMessages();
         }
+    }
+
+    /// <summary>
+    /// Enables Save (and Cancel) on a user edit — no-op while a load/clear path
+    /// is setting fields programmatically (WX-134 dirty-tracking).
+    /// </summary>
+    private void MarkDirty()
+    {
+        if (_suppressDirty) return;
+        if (_currentRecipientDbId is null && !_newMode)
+        {
+            // No record context — not an edit. Logged for field diagnosability
+            // (only fires when a change event arrives on an idle pane).
+            Logger.Debug("RecipientsTab.MarkDirty ignored — no record context.");
+            return;
+        }
+        SaveBtn.IsEnabled = true;
+        CancelBtn.IsEnabled = true;
     }
 
     /// <summary>

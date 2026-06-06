@@ -111,6 +111,12 @@ Before pushing, explicitly ask whether the change warrants:
 
 Some changes (installer scripts, raw config files, prose-only doc edits) cannot be meaningfully unit-tested. That's fine — say so and move on. The phrase *"when it is possible and makes sense"* governs.
 
+**Manual test procedures.** *Added 2026-06-06 (WX-134).* When a change's verification cannot be automated (the WPF apps have no UI test harness and are not even CI-built — see WX-135), the manual verification gets the same rigor as automated tests:
+
+1. Write a **formal test procedure** as a repo document at `WxServices/docs/test-procedures/WX-NN.md` — numbered steps with explicit *Expect:* outcomes. It rides the PR, so the second reviewer reviews the test procedure too, and it remains executable as a regression suite later.
+2. Record it in the ticket's two custom fields (both Short Text): **Test Proc** holds the document path (`docs/test-procedures/WX-NN.md`); **Test Result** holds the latest outcome (`PASS yyyy-mm-dd @ <version>` or `FAIL …`). Re-executions overwrite Test Result; history survives in Jira's field-change log.
+3. A ticket whose change needs manual verification does not pass §7c until the procedure exists and Test Result records a PASS. (JQL gap-detectors: `"Test Proc" is EMPTY` for missing procedures on UI-touching tickets; `"Test Result" ~ "FAIL"` for open failures.)
+
 ### 7b. Run the full test suite and format check
 
 `dotnet test WxServices.sln` must report zero failures before creating the PR. There are no pre-existing-failure exceptions: any failure must be resolved in this PR or split out into a blocking ticket first.
@@ -186,6 +192,14 @@ Skip this step for pure-tooling / pure-docs PRs that did not bump the version (s
 4. **Log time spent.** Add a Jira worklog entry recording combined pair-effort from grooming through merge (e.g. `45m`, to 15-minute granularity). This closes the calibration loop with the Original estimate set at grooming time. *Added 2026-04-23.*
 5. Transition the Jira ticket to **Done**.
 6. **Stop at Done — do not transition to Closed.** The Done→Closed transition is Paul's deliberate human-review checkpoint. Report back what was done and let Paul press the final button.
+
+### Reopening a Done ticket
+
+**Added 2026-06-06** (raised during WX-134).
+
+If a ticket already at **Done** must be reopened to rework its own scope, transition it **Done → In Review** — never jump it back to To Do or In Progress. Atlassian's cycle/lead-time statistics should record the truth: the work re-entered the reviewing phase, not the queue.
+
+Boundary: a defect discovered in *shipped* work normally gets its **own Bug ticket** (the WX-134 precedent — a race found minutes after WX-127's deploy was filed separately, and WX-127 stayed Done). The reopen rule governs only the case where the same ticket's scope is being reworked; which shape applies is a judgment call made when the defect surfaces.
 
 ## Schema changes
 

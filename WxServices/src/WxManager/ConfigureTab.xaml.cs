@@ -29,10 +29,33 @@ public partial class ConfigureTab : UserControl
     /// <summary>Raised after a successful save so the parent can re-run prerequisite checks.</summary>
     public event Action? ConfigurationSaved;
 
+    /// <summary>
+    /// Suppresses dirty-tracking while <see cref="LoadCurrentValuesAsync"/> sets
+    /// fields programmatically — only user edits enable Save (WX-134).
+    /// </summary>
+    private bool _suppressDirty;
+
     public ConfigureTab()
     {
         InitializeComponent();
+
+        // Dirty-tracking (WX-134): Save Configuration enables only on a user edit.
+        DirtyTracking.Attach(MarkDirty,
+            TxtInstallRoot, TxtCondaPythonExe, TxtWgrib2Path,
+            TxtHomeIcao, TxtHomeLatitude, TxtHomeLongitude, TxtBoundingBoxDeg,
+            TxtRegionSouth, TxtRegionNorth, TxtRegionWest, TxtRegionEast,
+            TxtConnectionString,
+            TxtSmtpHost, TxtSmtpPort, TxtSmtpUsername, TxtSmtpPassword, TxtSmtpFromAddress,
+            TxtClaudeApiKey, TxtClaudeModel, TxtMapExtent, TxtAlertEmail);
+
         Loaded += async (_, _) => await LoadCurrentValuesAsync();
+    }
+
+    /// <summary>Enables Save on a user edit — no-op during programmatic loads (WX-134).</summary>
+    private void MarkDirty()
+    {
+        if (!_suppressDirty)
+            SaveButton.IsEnabled = true;
     }
 
     // ── Load ────────────────────────────────────────────────────────────────
@@ -42,6 +65,36 @@ public partial class ConfigureTab : UserControl
         var cfg = App.Configuration;
         if (cfg is null) return;
 
+        // Fetch the secrets BEFORE entering the suppression window — holding
+        // the suppress flag across an await would swallow genuine user
+        // keystrokes arriving during a cold secrets query, and the trailing
+        // force-disable would then clobber a real edit (review finding).
+        GlobalSettings? gs = null;
+        try
+        {
+            await using var db = new WeatherDataContext(App.DbOptions);
+            gs = await db.GlobalSettings.FirstOrDefaultAsync(x => x.Id == 1);
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"Could not load secrets from database: {ex.Message}");
+        }
+
+        _suppressDirty = true;
+        try
+        {
+            ApplyLoadedValues(cfg, gs);  // fully synchronous
+        }
+        finally
+        {
+            _suppressDirty = false;
+        }
+        SaveButton.IsEnabled = false;  // clean state — enables on the first edit (WX-134)
+    }
+
+    /// <summary>Synchronous field-population body of <see cref="LoadCurrentValuesAsync"/> under the dirty-suppression wrapper.</summary>
+    private void ApplyLoadedValues(Microsoft.Extensions.Configuration.IConfiguration cfg, GlobalSettings? gs)
+    {
         TxtInstallRoot.Text = cfg["InstallRoot"] ?? WxPaths.DefaultInstallRoot;
         TxtCondaPythonExe.Text = cfg["WxVis:CondaPythonExe"] ?? "";
         var configuredWgrib2 = cfg["Gfs:Wgrib2Path"];
@@ -67,22 +120,14 @@ public partial class ConfigureTab : UserControl
         TxtMapExtent.Text = cfg["WxVis:MapExtent"] ?? "";
         TxtAlertEmail.Text = cfg["Monitor:AlertEmail"] ?? "";
 
-        // Secrets come from the database, not config files.
-        try
+        // Secrets come from the database, not config files (fetched by the
+        // caller before the suppression window opened).
+        if (gs is not null)
         {
-            await using var db = new WeatherDataContext(App.DbOptions);
-            var gs = await db.GlobalSettings.FirstOrDefaultAsync(x => x.Id == 1);
-            if (gs is not null)
-            {
-                TxtSmtpUsername.Text = gs.SmtpUsername ?? "";
-                TxtSmtpPassword.Password = gs.SmtpPassword ?? "";
-                TxtSmtpFromAddress.Text = gs.SmtpFromAddress ?? "";
-                TxtClaudeApiKey.Password = gs.ClaudeApiKey ?? "";
-            }
-        }
-        catch (Exception ex)
-        {
-            Logger.Warn($"Could not load secrets from database: {ex.Message}");
+            TxtSmtpUsername.Text = gs.SmtpUsername ?? "";
+            TxtSmtpPassword.Password = gs.SmtpPassword ?? "";
+            TxtSmtpFromAddress.Text = gs.SmtpFromAddress ?? "";
+            TxtClaudeApiKey.Password = gs.ClaudeApiKey ?? "";
         }
     }
 
@@ -169,6 +214,7 @@ public partial class ConfigureTab : UserControl
             Logger.Info("Secrets saved to GlobalSettings.");
 
             SetStatus("Configuration saved.", true);
+            SaveButton.IsEnabled = false;  // back to clean until the next edit (WX-134)
             ConfigurationSaved?.Invoke();
         }
         catch (Exception ex)

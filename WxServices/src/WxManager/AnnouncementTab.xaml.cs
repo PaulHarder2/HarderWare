@@ -18,11 +18,28 @@ namespace WxManager;
 /// </summary>
 public partial class AnnouncementTab : UserControl
 {
+    /// <summary>
+    /// True while a send is in flight, so eligibility re-evaluation can't
+    /// re-enable the Send button mid-send (WX-134).
+    /// </summary>
+    private bool _sending;
+
     /// <summary>Initialises the AnnouncementTab and its child controls.</summary>
-    /// <sideeffects>Calls <see cref="InitializeComponent"/>.</sideeffects>
+    /// <sideeffects>Calls <see cref="InitializeComponent"/>; wires Send-eligibility tracking.</sideeffects>
     public AnnouncementTab()
     {
         InitializeComponent();
+
+        // Dirty-tracking (WX-134): Send enables only when there is announcement
+        // text to send, and returns to disabled after a fully successful send
+        // (which clears the text).
+        AnnouncementBox.TextChanged += (_, _) => UpdateSendEligibility();
+    }
+
+    /// <summary>Send is eligible when there is text and no send is in flight (WX-134).</summary>
+    private void UpdateSendEligibility()
+    {
+        SendBtn.IsEnabled = !_sending && !string.IsNullOrWhiteSpace(AnnouncementBox.Text);
     }
 
     // ── Event handlers ────────────────────────────────────────────────────────
@@ -126,7 +143,8 @@ public partial class AnnouncementTab : UserControl
 
         // ── Send ──────────────────────────────────────────────────────────────
 
-        SendBtn.IsEnabled = false;
+        _sending = true;
+        UpdateSendEligibility();
         HideMessages();
 
         using var http = new HttpClient();
@@ -203,13 +221,16 @@ public partial class AnnouncementTab : UserControl
 
         Logger.Info($"Announcement send complete: {sent} sent, {failed} failed.");
 
-        SendBtn.IsEnabled = true;
+        _sending = false;
         SetProgress("");
 
         if (errors.Count > 0)
             ShowMessages($"Sent: {sent}  Failed: {failed}\n\n{string.Join("\n", errors)}");
         else
-            AnnouncementBox.Text = "";
+            AnnouncementBox.Text = "";  // clearing the text disables Send via eligibility tracking
+
+        // Failure path keeps the text, so Send re-enables for a retry.
+        UpdateSendEligibility();
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
