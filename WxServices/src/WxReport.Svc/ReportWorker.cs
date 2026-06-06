@@ -182,17 +182,23 @@ public sealed class ReportWorker : BackgroundService
             return;
         }
 
-        var recipient = cfg.Recipients.FirstOrDefault(r =>
-            !string.IsNullOrWhiteSpace(r.Email) && !string.IsNullOrWhiteSpace(r.Id));
+        // Try candidates in order until one resolves — a persistent resolve
+        // failure on the first recipient (e.g. a locality member whose locality
+        // has no stations yet, WX-127) must not silence the startup report for
+        // every deployment.
+        var resolver = new RecipientResolver(_dbOptions, _httpClient, _config["What3Words:ApiKey"]);
+        RecipientConfig? recipient = null;
+        foreach (var candidate in cfg.Recipients.Where(r =>
+                     !string.IsNullOrWhiteSpace(r.Email) && !string.IsNullOrWhiteSpace(r.Id)))
+        {
+            if (await resolver.EnsureResolvedAsync(candidate)) { recipient = candidate; break; }
+        }
 
         if (recipient is null)
         {
-            Logger.Debug("No valid recipient found for startup report.");
+            Logger.Debug("No resolvable recipient found for startup report.");
             return;
         }
-
-        var resolver = new RecipientResolver(_dbOptions, _httpClient, _config["What3Words:ApiKey"]);
-        if (!await resolver.EnsureResolvedAsync(recipient)) return;
 
         var preferredIcaos = ParseIcaoList(recipient.MetarIcao);
         var localityName = recipient.LocalityName ?? (preferredIcaos.Count > 0 ? preferredIcaos[0] : recipient.Email);
@@ -1211,17 +1217,11 @@ public sealed class ReportWorker : BackgroundService
     /// <summary>
     /// Parses a comma-separated string of scheduled send hours into a sorted list of valid hour values (0–23).
     /// Entries that cannot be parsed or are out of range are silently ignored.
+    /// Delegates to the shared <see cref="ScheduledSendHoursFormat"/> (WX-127) so the
+    /// runtime and the WxManager editors share one format contract.
     /// </summary>
-    private static IReadOnlyList<int> ParseHourList(string? raw)
-    {
-        if (string.IsNullOrWhiteSpace(raw)) return [];
-        return raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                  .Select(s => int.TryParse(s, out var h) ? (int?)h : null)
-                  .Where(h => h is >= 0 and <= 23)
-                  .Select(h => h!.Value)
-                  .OrderBy(h => h)
-                  .ToList();
-    }
+    private static IReadOnlyList<int> ParseHourList(string? raw) =>
+        ScheduledSendHoursFormat.Parse(raw);
 
     /// <summary>
     /// Loads and returns the current configuration.  Recipients are loaded from the
@@ -1359,6 +1359,7 @@ public sealed class ReportWorker : BackgroundService
         ScheduledSendHours = r.ScheduledSendHours,
         Address = r.Address,
         LocalityName = r.LocalityName,
+        LocalityId = r.LocalityId,
         Latitude = r.Latitude,
         Longitude = r.Longitude,
         MetarIcao = r.MetarIcao,

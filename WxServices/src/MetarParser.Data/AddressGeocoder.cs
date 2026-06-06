@@ -90,7 +90,8 @@ public static class AddressGeocoder
                 Logger.Error($"AddressGeocoder: lat/lon out of range in '{trimmed}' (lat must be -90..90, lon -180..180) — returning null.");
                 return null;
             }
-            // Direct-entry path supplies no locality; caller fills LocalityBox manually.
+            // Direct-entry path supplies no locality; the caller (WxManager) leaves
+            // its Locality control untouched for the user to fill.
             result = (lat, lon, "");
         }
         else

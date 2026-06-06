@@ -35,6 +35,19 @@ internal sealed class RecipientListItem
     public override string ToString() => $"{RecipientId} — {Name}";
 }
 
+/// <summary>One entry in the Locality ComboBox: an existing locality the recipient can be assigned to (WX-127).</summary>
+internal sealed class LocalityComboItem
+{
+    /// <summary>Surrogate primary key from the <c>Localities</c> table.</summary>
+    public long DbId { get; set; }
+
+    /// <summary>Locality name.</summary>
+    public string Name { get; set; } = "";
+
+    /// <summary>Returns the locality name shown in the ComboBox.</summary>
+    public override string ToString() => Name;
+}
+
 /// <summary>One row in the Nearby Stations DataGrid, representing a single METAR station candidate.</summary>
 internal sealed class StationRow
 {
@@ -98,11 +111,39 @@ public partial class RecipientsTab : UserControl
     private readonly DbContextOptions<WeatherDataContext> _dbOptions;
     private readonly HttpClient _http = new();
 
+    // Original tooltips of the locality-mirrored fields, captured the first time
+    // the lock is applied so unlocking can restore them (see ApplyLocalityLockState).
+    private object? _metarIcaoTip, _tafIcaoTip, _hoursTip, _tzTip;
+
     /// <summary>
     /// Surrogate DB Id of the recipient currently loaded into the right pane,
     /// or <see langword="null"/> when creating a new recipient.
     /// </summary>
     private int? _currentRecipientDbId;
+
+    /// <summary>
+    /// Guards <see cref="LocalityCombo_SelectionChanged"/> against programmatic
+    /// changes (loading a recipient, clearing the pane) so only user-driven
+    /// selections trigger the mirrored-field preview.
+    /// </summary>
+    private bool _suppressLocalityComboEvents;
+
+    /// <summary>
+    /// The four mirrored field values as they stood before a locality-selection
+    /// preview overwrote them, captured on the first preview and restored when
+    /// the selection is cleared — so browsing localities in the combo can never
+    /// destroy a recipient's own stations/timezone/hours.
+    /// </summary>
+    private (string Metar, string Taf, string Tz, string Hours)? _previewPristine;
+
+    /// <summary>
+    /// The recipient's stored <c>LocalityName</c> at load time. A combo text that
+    /// still equals this label on Save is a pre-existing display label rendered
+    /// back into the combo, not a membership request — without this, every save
+    /// of a legacy unassigned recipient would re-trigger the create-locality
+    /// prompt.
+    /// </summary>
+    private string? _loadedLocalityLabel;
 
     // ── Construction ──────────────────────────────────────────────────────────
 
@@ -122,11 +163,28 @@ public partial class RecipientsTab : UserControl
         TempUnitBox.ItemsSource = new[] { "F", "C" };
         PressureUnitBox.ItemsSource = new[] { "inHg", "kPa" };
         WindUnitBox.ItemsSource = new[] { "mph", "kph" };
-        TzBox.ItemsSource = BuildIanaTimeZoneList();
+        TzBox.ItemsSource = IanaTimeZones.All();
+
+        // Capture the mirrored fields' XAML tooltips once, so the locality lock
+        // can swap in its hint and restore the originals reliably.
+        _metarIcaoTip = MetarIcaoBox.ToolTip;
+        _tafIcaoTip = TafIcaoBox.ToolTip;
+        _hoursTip = ScheduledHoursBox.ToolTip;
+        _tzTip = TzBox.ToolTip;
 
         ClearRightPane();   // show defaults; buttons stay disabled (set in XAML)
 
-        Loaded += async (_, _) => await LoadRecipientListAsync();
+        Loaded += async (_, _) =>
+        {
+            await LoadRecipientListAsync();
+            await LoadLocalityComboAsync();
+        };
+        // Localities can be created/renamed on the Localities tab while this tab
+        // is hidden — refresh the combo whenever the tab becomes visible again.
+        IsVisibleChanged += async (_, e) =>
+        {
+            if (e.NewValue is true) await LoadLocalityComboAsync();
+        };
     }
 
     // ── Left pane: recipient list ─────────────────────────────────────────────
@@ -230,7 +288,7 @@ public partial class RecipientsTab : UserControl
     /// <sideeffects>
     /// Makes HTTP requests to Nominatim and aviationweather.gov.
     /// Executes EF Core queries for METAR/TAF counts and station names.
-    /// Updates <c>LatBox</c>, <c>LonBox</c>, <c>LocalityBox</c>, <c>MetarIcaoBox</c>,
+    /// Updates <c>LatBox</c>, <c>LonBox</c>, <c>LocalityCombo</c>, <c>MetarIcaoBox</c>,
     /// <c>StationsGrid</c>, <c>StationsGroup</c>, <c>BboxStatusText</c>,
     /// <c>MessagesBorder</c>, and <c>LookUpBtn</c>.
     /// </sideeffects>
@@ -264,9 +322,13 @@ public partial class RecipientsTab : UserControl
             var (lat, lon, locality) = geo.Value;
             LatBox.Text = lat.ToString("F7");
             LonBox.Text = lon.ToString("F7");
-            // Lat,lon direct entry returns an empty locality — preserve any value the user already typed.
-            if (!string.IsNullOrWhiteSpace(locality))
-                LocalityBox.Text = locality;
+            // Lat,lon direct entry returns an empty locality — preserve any value the user
+            // already typed. A locality *member*'s combo selection is never overridden;
+            // for unassigned recipients the geocoded name becomes the combo's typed text
+            // (matching an existing locality assigns on Save; an unmatched name offers to
+            // create one — WX-127).
+            if (!string.IsNullOrWhiteSpace(locality) && LocalityCombo.SelectedItem is null)
+                LocalityCombo.Text = locality;
 
             // A successful geocode implicitly begins editing; enable Save/Cancel.
             SaveBtn.IsEnabled = true;
@@ -491,19 +553,11 @@ public partial class RecipientsTab : UserControl
         catch { ShowMessage("Email address is not valid."); return; }
 
         var tzValue = TzBox.Text.Trim().Length > 0 ? TzBox.Text.Trim() : "UTC";
-        if (!BuildIanaTimeZoneList().Contains(tzValue))
+        if (!IanaTimeZones.IsValid(tzValue))
         { ShowMessage($"\"{tzValue}\" is not a recognized IANA timezone ID."); return; }
 
-        var scheduledHoursRaw = ScheduledHoursBox.Text.Trim();
-        if (!string.IsNullOrWhiteSpace(scheduledHoursRaw))
-        {
-            foreach (var token in scheduledHoursRaw.Split(','))
-            {
-                var t = token.Trim();
-                if (!int.TryParse(t, out var h) || h < 0 || h > 23)
-                { ShowMessage($"Scheduled hours must be integers 0\u201323, comma-separated (got \"{t}\")."); return; }
-            }
-        }
+        if (!ScheduledSendHoursFormat.TryValidate(ScheduledHoursBox.Text, out var badHourToken))
+        { ShowMessage($"Scheduled hours must be integers 0\u201323, comma-separated (got \"{badHourToken}\")."); return; }
 
         var metarRaw = MetarIcaoBox.Text.Trim();
         if (!string.IsNullOrWhiteSpace(metarRaw))
@@ -588,31 +642,179 @@ public partial class RecipientsTab : UserControl
             r.Timezone = TzBox.Text.Trim().Length > 0 ? TzBox.Text.Trim() : "UTC";
             r.ScheduledSendHours = NullIfEmpty(ScheduledHoursBox.Text);
             r.Address = NullIfEmpty(AddressBox.Text);
-            r.LocalityName = NullIfEmpty(LocalityBox.Text);
             r.Latitude = lat;
             r.Longitude = lon;
             r.MetarIcao = NullIfEmpty(MetarIcaoBox.Text);
             r.TafIcao = NullIfEmpty(TafIcaoBox.Text);
+            // The runtime's no-TAF sentinel comparison is case-sensitive — store
+            // the canonical spelling regardless of how it was typed (pre-existing
+            // gap here too; fixed inline during WX-127).
+            if (r.TafIcao?.Equals("NONE", StringComparison.OrdinalIgnoreCase) == true)
+                r.TafIcao = "NONE";
             r.TempUnit = TempUnitBox.SelectedItem?.ToString() ?? "F";
             r.PressureUnit = PressureUnitBox.SelectedItem?.ToString() ?? "inHg";
             r.WindSpeedUnit = WindUnitBox.SelectedItem?.ToString() ?? "mph";
 
+            // ── Locality membership (WX-127) ──────────────────────────────────
+            // The Locality combo is the single control for both membership and the
+            // display label: selecting an existing locality assigns (the locality's
+            // shared fields overwrite the recipient's on Save), typing an unmatched
+            // name offers to create that locality seeded from this recipient, and a
+            // blank combo means unassigned (an existing member is unassigned but
+            // keeps its last-synced values; LocalityName stays for fallback display).
+            // Resolve the target — queries and the create prompt only, no writes yet.
+            var localityText = LocalityCombo.Text.Trim();
+            var previousLocalityId = r.LocalityId;
+            Locality? targetLocality = null;
+            var keepStoredLabel = false;
+            var saveAsLabel = false;
+
+            if (LocalityCombo.SelectedItem is LocalityComboItem sel &&
+                string.Equals(sel.Name, localityText, StringComparison.OrdinalIgnoreCase))
+            {
+                // The text cross-check matters: WPF text-search can auto-select a
+                // prefix match ("Houston" → "Houston Heights") while the user is
+                // typing a NEW name — honor the selection only while the visible
+                // text still agrees with it.
+                targetLocality = await ctx.Localities.FindAsync(sel.DbId);
+                if (targetLocality is null)
+                {
+                    ShowMessage($"Locality \"{sel.Name}\" no longer exists — it may have been deleted " +
+                                "on the Localities tab. Reselect or clear the Locality field, then save again.");
+                    return;
+                }
+            }
+            else if (localityText.Length > 0 && previousLocalityId is null &&
+                     string.Equals(localityText, _loadedLocalityLabel ?? "", StringComparison.Ordinal))
+            {
+                // Unchanged stored display label rendered back into the combo — not
+                // a membership request. Without this, every save of a legacy
+                // unassigned recipient would re-trigger the create prompt below.
+                keepStoredLabel = true;
+            }
+            else if (localityText.Length > 0)
+            {
+                targetLocality = await ctx.Localities.FirstOrDefaultAsync(l => l.Name == localityText);
+                if (targetLocality is null)
+                {
+                    var create = MessageBox.Show(
+                        $"Create new locality \"{localityText}\" with {name} as its first member?\n\n" +
+                        $"Yes — create the locality; it inherits this recipient's stations, timezone, " +
+                        "and scheduled hours, and its centroid starts at their coordinates.\n" +
+                        $"No — keep \"{localityText}\" as a display label only; no locality is created.\n" +
+                        "Cancel — go back without saving.",
+                        "WxManager — Create Locality",
+                        MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
+                    if (create == MessageBoxResult.Cancel)
+                    { ShowMessage("Save cancelled — adjust the Locality field and save again."); return; }
+
+                    if (create == MessageBoxResult.No)
+                    {
+                        saveAsLabel = true;  // display label only — no membership
+                    }
+                    else
+                    {
+                        // Seed the founding member's current values upward (WX-127).
+                        targetLocality = new Locality
+                        {
+                            Name = localityText,
+                            MetarIcao = r.MetarIcao,
+                            TafIcao = r.TafIcao,
+                            Timezone = r.Timezone,
+                            ScheduledSendHours = r.ScheduledSendHours,
+                        };
+                        ctx.Localities.Add(targetLocality);
+                        Logger.Info($"Creating locality '{localityText}' seeded from recipient '{recipientId}'.");
+                    }
+                }
+            }
+
+            // ── Apply — atomically. The assign path needs two SaveChanges calls
+            // (identities must exist before the FK is wired and centroids
+            // recomputed), so a transaction keeps a failure in the second from
+            // leaving an orphan locality or a recipient whose mirrored fields
+            // contradict its FK. The create prompt above runs BEFORE this so no
+            // DB transaction is held open across a modal dialog.
+            await using var tx = await ctx.Database.BeginTransactionAsync();
+
+            string localityNote;
+            if (targetLocality is not null)
+            {
+                // Persist first so a newly created locality (and a new recipient) have
+                // real identities before the FK is wired and centroids recomputed.
+                await ctx.SaveChangesAsync();
+
+                LocalityAssignment.Assign(r, targetLocality);
+
+                var members = await ctx.Recipients
+                    .Where(x => x.LocalityId == targetLocality.Id && x.Id != r.Id)
+                    .ToListAsync();
+                members.Add(r);  // r's FK is set in memory, not yet saved
+                LocalityCentroid.Recompute(targetLocality, members);
+
+                localityNote = $" Assigned to locality \"{targetLocality.Name}\".";
+            }
+            else
+            {
+                if (saveAsLabel)
+                {
+                    // Display-label-only path (the prompt's "No"): the typed text
+                    // becomes LocalityName, and any prior membership ends.
+                    r.LocalityName = localityText;
+                    localityNote = previousLocalityId is not null
+                        ? $" Removed from its locality; \"{localityText}\" saved as its display label."
+                        : $" \"{localityText}\" saved as a display label (no locality).";
+                }
+                else if (previousLocalityId is not null)
+                {
+                    localityNote = " Removed from its locality — current settings kept.";
+                }
+                else
+                {
+                    // Blanking the combo on an unassigned recipient clears the stored
+                    // display label — otherwise the old label silently resurrects on
+                    // the next load. An unchanged label (keepStoredLabel) is left alone.
+                    if (!keepStoredLabel && localityText.Length == 0)
+                        r.LocalityName = null;
+                    localityNote = "";
+                }
+                r.LocalityId = null;
+            }
+
+            // A move or unassign shrinks the previous locality — recompute its centroid.
+            if (previousLocalityId is long prevId && prevId != targetLocality?.Id)
+            {
+                var prevLoc = await ctx.Localities.FindAsync(prevId);
+                if (prevLoc is not null)
+                {
+                    var prevMembers = await ctx.Recipients
+                        .Where(x => x.LocalityId == prevId && x.Id != r.Id)
+                        .ToListAsync();
+                    LocalityCentroid.Recompute(prevLoc, prevMembers);
+                }
+            }
+
             Logger.Info($"{(isNew ? "Inserting" : "Updating")} recipient '{recipientId}' ({name}, {email}).");
             await ctx.SaveChangesAsync();
+            await tx.CommitAsync();
             _currentRecipientDbId = r.Id;
             DeleteBtn.IsEnabled = true;
             if (bboxWarnings.Count > 0)
             {
                 Logger.Warn($"Recipient '{recipientId}' saved with bbox warnings: {string.Join("; ", bboxWarnings)}.");
-                ShowMessage($"Saved. Note: {string.Join("; ", bboxWarnings)} — data may not be fetched for these stations.");
+                ShowMessage($"Saved.{localityNote} Note: {string.Join("; ", bboxWarnings)} — data may not be fetched for these stations.");
             }
             else
             {
                 Logger.Info($"Recipient '{recipientId}' saved successfully.");
-                ShowSuccessMessage("Saved successfully.");
+                ShowSuccessMessage($"Saved successfully.{localityNote}");
             }
 
             await LoadRecipientListAsync();
+            await LoadLocalityComboAsync();
+            // Re-render through the same path initial display uses, so the
+            // mirrored fields' read-only state falls out automatically (WX-127).
+            LoadRecipientIntoFields(r, keepMessages: true);
         }
         catch (Exception ex)
         {
@@ -652,6 +854,20 @@ public partial class RecipientsTab : UserControl
             var r = await ctx.Recipients.FindAsync(_currentRecipientDbId.Value);
             if (r != null)
             {
+                // A member leaving shrinks its locality — recompute the centroid
+                // over the remaining members (WX-127).
+                if (r.LocalityId is long localityId)
+                {
+                    var loc = await ctx.Localities.FindAsync(localityId);
+                    if (loc is not null)
+                    {
+                        var remaining = await ctx.Recipients
+                            .Where(x => x.LocalityId == localityId && x.Id != r.Id)
+                            .ToListAsync();
+                        LocalityCentroid.Recompute(loc, remaining);
+                    }
+                }
+
                 ctx.Recipients.Remove(r);
                 await ctx.SaveChangesAsync();
                 Logger.Info($"Recipient '{displayName}' deleted successfully.");
@@ -698,7 +914,7 @@ public partial class RecipientsTab : UserControl
     /// Hides the Messages border and Nearby Stations group.
     /// Enables <c>DeleteBtn</c>.
     /// </sideeffects>
-    private void LoadRecipientIntoFields(Recipient r)
+    private void LoadRecipientIntoFields(Recipient r, bool keepMessages = false)
     {
         _currentRecipientDbId = r.Id;
 
@@ -706,11 +922,15 @@ public partial class RecipientsTab : UserControl
         NameBox.Text = r.Name;
         EmailBox.Text = r.Email;
         LanguageBox.Text = r.Language ?? "";
+        TzBox.SelectedItem = null;  // null first: a coerced-away assignment would keep the prior selection
         TzBox.SelectedItem = r.Timezone;
         if (TzBox.SelectedItem is null) TzBox.Text = r.Timezone;  // preserve unknown values
         ScheduledHoursBox.Text = r.ScheduledSendHours ?? "";
         AddressBox.Text = r.Address ?? "";
-        LocalityBox.Text = r.LocalityName ?? "";
+        _loadedLocalityLabel = r.LocalityName;
+        _previewPristine = null;
+        SetLocalityComboSelection(r.LocalityId, r.LocalityName);
+        ApplyLocalityLockState(r.LocalityId is not null);
         LatBox.Text = r.Latitude?.ToString("F7") ?? "";
         LonBox.Text = r.Longitude?.ToString("F7") ?? "";
         MetarIcaoBox.Text = r.MetarIcao ?? "";
@@ -719,7 +939,7 @@ public partial class RecipientsTab : UserControl
         PressureUnitBox.SelectedItem = r.PressureUnit;
         WindUnitBox.SelectedItem = r.WindSpeedUnit;
 
-        HideMessages();
+        if (!keepMessages) HideMessages();
         StationsGroup.Visibility = Visibility.Collapsed;
         StationsGrid.ItemsSource = null;
         BboxStatusText.Visibility = Visibility.Collapsed;
@@ -741,7 +961,10 @@ public partial class RecipientsTab : UserControl
         TzBox.SelectedItem = App.DefaultTimezone;
         ScheduledHoursBox.Text = App.DefaultScheduledSendHour.ToString();
         AddressBox.Clear();
-        LocalityBox.Clear();
+        _loadedLocalityLabel = null;
+        _previewPristine = null;
+        SetLocalityComboSelection(null, null);
+        ApplyLocalityLockState(locked: false);
         LatBox.Clear();
         LonBox.Clear();
         MetarIcaoBox.Clear();
@@ -771,7 +994,10 @@ public partial class RecipientsTab : UserControl
         TzBox.Text = "";
         ScheduledHoursBox.Clear();
         AddressBox.Clear();
-        LocalityBox.Clear();
+        _loadedLocalityLabel = null;
+        _previewPristine = null;
+        SetLocalityComboSelection(null, null);
+        ApplyLocalityLockState(locked: false);
         LatBox.Clear();
         LonBox.Clear();
         MetarIcaoBox.Clear();
@@ -842,19 +1068,154 @@ public partial class RecipientsTab : UserControl
     }
 
     /// <summary>
-    /// Builds a sorted list of canonical IANA timezone IDs by converting each
-    /// Windows timezone (from <see cref="TimeZoneInfo.GetSystemTimeZones"/>) to
-    /// its IANA equivalent.  "UTC" is always included.
+    /// Loads (or reloads) the Locality ComboBox's items from the <c>Localities</c>
+    /// table, preserving the current selection or typed text across the refresh.
     /// </summary>
-    private static List<string> BuildIanaTimeZoneList()
+    /// <sideeffects>Executes an EF Core query; replaces <c>LocalityCombo.ItemsSource</c>.</sideeffects>
+    private async Task LoadLocalityComboAsync()
     {
-        var ids = new HashSet<string>(StringComparer.Ordinal) { "UTC" };
-        foreach (var tz in TimeZoneInfo.GetSystemTimeZones())
+        try
         {
-            if (TimeZoneInfo.TryConvertWindowsIdToIanaId(tz.Id, out var ianaId) && ianaId is not null)
-                ids.Add(ianaId);
+            await using var ctx = new WeatherDataContext(_dbOptions);
+            var items = await ctx.Localities
+                .OrderBy(l => l.Name)
+                .Select(l => new LocalityComboItem { DbId = l.Id, Name = l.Name })
+                .ToListAsync();
+
+            _suppressLocalityComboEvents = true;
+            try
+            {
+                var priorText = LocalityCombo.Text;
+                var priorId = (LocalityCombo.SelectedItem as LocalityComboItem)?.DbId;
+                LocalityCombo.ItemsSource = items;
+                if (priorId is long id)
+                    LocalityCombo.SelectedItem = items.FirstOrDefault(i => i.DbId == id);
+                if (LocalityCombo.SelectedItem is null)
+                    LocalityCombo.Text = priorText;
+            }
+            finally
+            {
+                _suppressLocalityComboEvents = false;
+            }
         }
-        return ids.OrderBy(id => id, StringComparer.Ordinal).ToList();
+        catch (Exception ex)
+        {
+            // Non-fatal: the combo just stays stale; the next refresh retries.
+            Logger.Warn($"Failed to load localities for the Locality combo: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Sets the Locality ComboBox to reflect a recipient's membership without
+    /// triggering the user-driven preview handler: selects the matching item for
+    /// members, or shows the stored display label as plain text for unassigned
+    /// recipients.
+    /// </summary>
+    /// <param name="localityId">The recipient's locality FK, or <see langword="null"/>.</param>
+    /// <param name="localityName">The recipient's stored display label (fallback text).</param>
+    /// <sideeffects>Sets <c>LocalityCombo.SelectedItem</c>/<c>.Text</c> under the suppression flag.</sideeffects>
+    private void SetLocalityComboSelection(long? localityId, string? localityName)
+    {
+        _suppressLocalityComboEvents = true;
+        try
+        {
+            LocalityCombo.SelectedItem = localityId is long id
+                ? (LocalityCombo.ItemsSource as IEnumerable<LocalityComboItem>)?.FirstOrDefault(i => i.DbId == id)
+                : null;
+            if (LocalityCombo.SelectedItem is null)
+                LocalityCombo.Text = localityName ?? "";
+        }
+        finally
+        {
+            _suppressLocalityComboEvents = false;
+        }
+    }
+
+    /// <summary>
+    /// Locks or unlocks the locality-mirrored fields (METAR/TAF stations, timezone,
+    /// scheduled hours). For locality members the locality is authoritative
+    /// (WX-125/WX-133), so these fields are read-only here and edited on the
+    /// Localities tab; the lock is a preview when a not-yet-saved selection is
+    /// pending and becomes the steady state after Save.
+    /// </summary>
+    /// <param name="locked"><see langword="true"/> to make the mirrored fields read-only.</param>
+    /// <sideeffects>Sets IsReadOnly/IsEnabled and tooltips on the four mirrored controls.</sideeffects>
+    private void ApplyLocalityLockState(bool locked)
+    {
+        const string hint = "Managed by the recipient's locality — edit on the Localities tab.";
+
+        MetarIcaoBox.IsReadOnly = locked;
+        TafIcaoBox.IsReadOnly = locked;
+        ScheduledHoursBox.IsReadOnly = locked;
+        TzBox.IsEnabled = !locked;  // an editable ComboBox's dropdown ignores IsReadOnly
+
+        MetarIcaoBox.ToolTip = locked ? hint : _metarIcaoTip;
+        TafIcaoBox.ToolTip = locked ? hint : _tafIcaoTip;
+        ScheduledHoursBox.ToolTip = locked ? hint : _hoursTip;
+        TzBox.ToolTip = locked ? hint : _tzTip;
+    }
+
+    /// <summary>
+    /// Previews a user-driven Locality selection: an existing locality's shared
+    /// values fill the mirrored fields (locked) so the user sees exactly what Save
+    /// will commit; clearing or typing over the selection unlocks the fields again
+    /// (typed new names seed the locality FROM these fields on Save).
+    /// </summary>
+    /// <param name="sender">The Locality ComboBox.</param>
+    /// <param name="e">Event arguments (unused).</param>
+    /// <sideeffects>May query the database and rewrite the mirrored fields; toggles the lock state; shows a banner.</sideeffects>
+    private async void LocalityCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressLocalityComboEvents) return;
+
+        if (LocalityCombo.SelectedItem is LocalityComboItem sel)
+        {
+            try
+            {
+                await using var ctx = new WeatherDataContext(_dbOptions);
+                var loc = await ctx.Localities.FindAsync(sel.DbId);
+                if (loc is null) return;
+
+                // First preview for this recipient: remember their own values so
+                // clearing the selection can put them back.
+                _previewPristine ??= (MetarIcaoBox.Text, TafIcaoBox.Text, TzBox.Text, ScheduledHoursBox.Text);
+
+                MetarIcaoBox.Text = loc.MetarIcao ?? "";
+                TafIcaoBox.Text = loc.TafIcao ?? "";
+                // Null first: assigning an item the ComboBox doesn't contain is
+                // coerced away, which would silently keep the previous selection.
+                TzBox.SelectedItem = null;
+                TzBox.SelectedItem = loc.Timezone;
+                if (TzBox.SelectedItem is null) TzBox.Text = loc.Timezone;
+                ScheduledHoursBox.Text = loc.ScheduledSendHours ?? "";
+                ApplyLocalityLockState(locked: true);
+
+                ShowMessage($"Will assign to \"{loc.Name}\" on Save — stations, timezone, and scheduled hours come from the locality.");
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"Failed to preview locality: {ex.Message}");
+            }
+        }
+        else
+        {
+            // Selection cleared (or typed over): undo the preview so the
+            // recipient's own values — not the browsed locality's — are what an
+            // unassigned Save (or a new-locality seed) sees.
+            if (_previewPristine is { } pristine)
+            {
+                MetarIcaoBox.Text = pristine.Metar;
+                TafIcaoBox.Text = pristine.Taf;
+                // Null first — see the preview path: a coerced-away assignment
+                // would silently keep the browsed locality's timezone selected.
+                TzBox.SelectedItem = null;
+                TzBox.SelectedItem = pristine.Tz;
+                if (TzBox.SelectedItem is null) TzBox.Text = pristine.Tz;
+                ScheduledHoursBox.Text = pristine.Hours;
+                _previewPristine = null;
+            }
+            ApplyLocalityLockState(locked: false);
+        }
     }
 
     /// <summary>

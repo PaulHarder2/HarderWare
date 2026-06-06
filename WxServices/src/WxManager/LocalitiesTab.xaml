@@ -1,0 +1,143 @@
+<UserControl x:Class="WxManager.LocalitiesTab"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="280" MinWidth="180"/>
+            <ColumnDefinition Width="4"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- ── LEFT: Locality list ────────────────────────────────────────── -->
+        <DockPanel Grid.Column="0" Margin="8">
+            <TextBlock DockPanel.Dock="Top" Text="Localities"
+                       FontWeight="SemiBold" Margin="0,0,0,6"/>
+            <Button DockPanel.Dock="Bottom" Content="New"
+                    HorizontalAlignment="Left" Width="80" Margin="0,6,0,0"
+                    Click="NewBtn_Click"/>
+            <ListBox x:Name="LocalityList"
+                     SelectionChanged="LocalityList_SelectionChanged"
+                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"/>
+        </DockPanel>
+
+        <!-- ── SPLITTER ───────────────────────────────────────────────────── -->
+        <GridSplitter Grid.Column="1" HorizontalAlignment="Stretch"
+                      Background="#444444" ResizeBehavior="PreviousAndNext"/>
+
+        <!-- ── RIGHT: Editor pane ─────────────────────────────────────────── -->
+        <Grid Grid.Column="2">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>   <!-- Messages -->
+                <RowDefinition Height="Auto"/>   <!-- Locality fields -->
+                <RowDefinition Height="*"/>      <!-- Members -->
+                <RowDefinition Height="Auto"/>   <!-- Buttons -->
+            </Grid.RowDefinitions>
+
+            <!-- Row 0: Messages ────────────────────────────────────────── -->
+            <Border x:Name="MessagesBorder" Grid.Row="0" Visibility="Collapsed"
+                    Background="#FFF3CD" BorderBrush="#FFC107" BorderThickness="1"
+                    CornerRadius="3" Margin="8,8,8,4" Padding="10,8">
+                <TextBlock x:Name="MessagesText" TextWrapping="Wrap"
+                           Foreground="#856404" VerticalAlignment="Center"/>
+            </Border>
+
+            <!-- Row 1: Locality fields ─────────────────────────────────── -->
+            <GroupBox Grid.Row="1" Header="Locality" Margin="8,8,8,4">
+                <Grid Margin="6,6,6,6">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="140"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- Name -->
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Name" VerticalAlignment="Center" Margin="0,3"/>
+                    <TextBox   Grid.Row="0" Grid.Column="1" x:Name="NameBox" Margin="0,3"
+                               ToolTip="Human-curated locality name, unique across localities (e.g. &quot;Spring&quot;). Used in report subjects and headings."/>
+
+                    <!-- METAR ICAO(s) -->
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="METAR ICAO(s)" VerticalAlignment="Center" Margin="0,3"/>
+                    <TextBox   Grid.Row="1" Grid.Column="1" x:Name="MetarIcaoBox" Margin="0,3"
+                               ToolTip="Comma-separated METAR stations in priority order, e.g. &quot;KDWH, KIAH&quot;. Propagates to every member on Save."/>
+
+                    <!-- TAF ICAO -->
+                    <TextBlock Grid.Row="2" Grid.Column="0" Text="TAF ICAO" VerticalAlignment="Center" Margin="0,3"/>
+                    <TextBox   Grid.Row="2" Grid.Column="1" x:Name="TafIcaoBox" Margin="0,3"
+                               ToolTip="Single TAF station ICAO, or blank if the locality has none. Propagates to every member on Save."/>
+
+                    <!-- Timezone -->
+                    <TextBlock Grid.Row="3" Grid.Column="0" Text="Timezone" VerticalAlignment="Center" Margin="0,3"/>
+                    <ComboBox  Grid.Row="3" Grid.Column="1" x:Name="TzBox" Margin="0,3"
+                               IsEditable="True" IsTextSearchEnabled="True"
+                               ToolTip="IANA timezone shared by all members — a locality spans exactly one timezone. Propagates to every member on Save."/>
+
+                    <!-- Scheduled Hours -->
+                    <TextBlock Grid.Row="4" Grid.Column="0" Text="Scheduled Hours" VerticalAlignment="Center" Margin="0,3"/>
+                    <TextBox   Grid.Row="4" Grid.Column="1" x:Name="ScheduledHoursBox" Margin="0,3"
+                               ToolTip="Hour(s) of day (0–23) in the locality's timezone, e.g. &quot;7&quot; or &quot;6, 18&quot;. Shared by all members so reports share one snapshot baseline. Propagates on Save."/>
+
+                    <!-- Centroid (read-only) -->
+                    <TextBlock Grid.Row="5" Grid.Column="0" Text="Centroid" VerticalAlignment="Center" Margin="0,3"/>
+                    <TextBox   Grid.Row="5" Grid.Column="1" x:Name="CentroidBox" Margin="0,3"
+                               IsReadOnly="True"
+                               ToolTip="Mean of member coordinates — the locality's GFS forecast point. Recomputed automatically when membership changes."/>
+                </Grid>
+            </GroupBox>
+
+            <!-- Row 2: Members ──────────────────────────────────────────── -->
+            <GroupBox x:Name="MembersGroup" Grid.Row="2" Header="Members" Margin="8,0,8,4">
+                <DockPanel Margin="6,6,6,6">
+                    <Grid DockPanel.Dock="Bottom" Margin="0,8,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="Add member" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <ComboBox  Grid.Column="1" x:Name="AddMemberCombo" Margin="0,0,8,0"
+                                   ToolTip="Recipients not yet assigned to any locality"/>
+                        <Button    Grid.Column="2" x:Name="AddMemberBtn" Content="Add" Width="80"
+                                   Click="AddMemberBtn_Click"/>
+                    </Grid>
+                    <TextBlock DockPanel.Dock="Top" x:Name="MembersHintText"
+                               Text="Save the locality first to add members."
+                               FontStyle="Italic" Margin="0,0,0,6" Visibility="Collapsed"/>
+                    <ListBox x:Name="MembersList"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <DockPanel LastChildFill="True">
+                                    <Button DockPanel.Dock="Right" Content="Remove" Width="70"
+                                            Margin="8,0,0,0" Tag="{Binding}"
+                                            Click="RemoveMemberBtn_Click"/>
+                                    <TextBlock Text="{Binding Display}" VerticalAlignment="Center"/>
+                                </DockPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </DockPanel>
+            </GroupBox>
+
+            <!-- Row 3: Action buttons ───────────────────────────────────── -->
+            <DockPanel Grid.Row="3" Margin="8,4,8,8" LastChildFill="False">
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                    <Button x:Name="SaveBtn" Content="Save" Width="80"
+                            IsEnabled="False"
+                            Margin="0,0,10,0" Click="SaveBtn_Click"/>
+                    <Button x:Name="CancelBtn" Content="Cancel" Width="80"
+                            IsEnabled="False"
+                            Margin="0,0,10,0" Click="CancelBtn_Click"/>
+                    <Button x:Name="DeleteBtn" Content="Delete" Width="80"
+                            IsEnabled="False" Click="DeleteBtn_Click"/>
+                </StackPanel>
+            </DockPanel>
+        </Grid>
+    </Grid>
+</UserControl>

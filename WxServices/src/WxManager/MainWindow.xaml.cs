@@ -26,6 +26,7 @@ public partial class MainWindow : Window
     {
         ConfigureTabItem.IsEnabled = true;
         RecipientsTabItem.IsEnabled = true;
+        LocalitiesTabItem.IsEnabled = true;
         AnnouncementTabItem.IsEnabled = true;
     }
 
@@ -34,6 +35,7 @@ public partial class MainWindow : Window
         // Re-run prerequisite checks after saving configuration,
         // in case the user changed paths or connection strings.
         RecipientsTabItem.IsEnabled = false;
+        LocalitiesTabItem.IsEnabled = false;
         AnnouncementTabItem.IsEnabled = false;
         ConfigureTabItem.IsEnabled = false;
         MainTabs.SelectedIndex = 0; // switch to Setup tab

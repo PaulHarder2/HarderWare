@@ -177,6 +177,14 @@ public class RecipientConfig
     /// </summary>
     public string? LocalityName { get; set; }
 
+    /// <summary>
+    /// Database key of the <c>Localities</c> row this recipient belongs to, or
+    /// <see langword="null"/> when unassigned. For members, stations/timezone/hours
+    /// are mirrored from the locality (WX-125/WX-133) and the resolver must not
+    /// write competing station values (WX-127).
+    /// </summary>
+    public long? LocalityId { get; set; }
+
     /// <summary>Cached latitude from address geocoding.</summary>
     public double? Latitude { get; set; }
 

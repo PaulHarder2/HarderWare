@@ -101,6 +101,32 @@ public sealed class RecipientResolver
             changed = true;
         }
 
+        // Locality members are station-resolved by their locality, not per
+        // recipient (WX-127): stations mirror Locality.MetarIcao/TafIcao verbatim
+        // (WX-125), so auto-resolving here would write competing per-recipient
+        // values and members of one locality could drift onto different stations.
+        // Coordinates ARE still resolved above — they are per-recipient facts that
+        // feed the locality centroid. No METAR on a member means the locality has
+        // none yet — surface that and skip rather than self-resolve. A null
+        // TafIcao is acceptable for members (locality has no TAF station; handled
+        // downstream identically to the "NONE" sentinel).
+        if (recipient.LocalityId is not null)
+        {
+            // Persist freshly geocoded coordinates (and the centroid update) even
+            // when the member is about to be skipped — otherwise every cycle
+            // re-geocodes the same address and throws the result away.
+            if (changed)
+                await SaveRecipientAsync(recipient);
+
+            if (recipient.MetarIcao is null)
+            {
+                Logger.Warn($"{label}: locality member with no METAR station — " +
+                            "set the locality's stations in WxManager; skipping.");
+                return false;
+            }
+            return true;
+        }
+
         if (recipient.MetarIcao is null)
         {
             Logger.Info($"{label}: finding nearest METAR station...");
@@ -235,11 +261,31 @@ public sealed class RecipientResolver
 
         row.Latitude = recipient.Latitude;
         row.Longitude = recipient.Longitude;
-        row.MetarIcao = recipient.MetarIcao;
-        row.TafIcao = recipient.TafIcao;
+
+        // Station fields belong to the locality for members (WX-127) — never
+        // write competing per-recipient values for them.
+        if (row.LocalityId is null)
+        {
+            row.MetarIcao = recipient.MetarIcao;
+            row.TafIcao = recipient.TafIcao;
+        }
 
         if (!string.IsNullOrWhiteSpace(recipient.LocalityName))
             row.LocalityName = recipient.LocalityName;
+
+        // A member acquiring coordinates moves its locality's centroid (WX-127).
+        if (row.LocalityId is long localityId)
+        {
+            var loc = await ctx.Localities.FindAsync(localityId);
+            if (loc is not null)
+            {
+                var members = await ctx.Recipients
+                    .Where(r => r.LocalityId == localityId && r.Id != row.Id)
+                    .ToListAsync();
+                members.Add(row);
+                LocalityCentroid.Recompute(loc, members);
+            }
+        }
 
         await ctx.SaveChangesAsync();
         Logger.Info($"{label}: resolved data cached to database.");
