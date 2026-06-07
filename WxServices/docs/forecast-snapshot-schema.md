@@ -1,6 +1,6 @@
-# Forecast snapshot body schema (v2)
+# Forecast snapshot body schema (v3)
 
-**Schema version:** 2
+**Schema version:** 3
 **C# source of truth:** `MetarParser.Data.Entities.ForecastSnapshotBody`
 **Storage:** the `Body` column of the `ForecastSnapshots` table (`nvarchar(max)`)
 
@@ -12,14 +12,14 @@ A snapshot is the structured representation of what WxReport told a recipient at
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "blocks": [ /* one or more block objects */ ]
 }
 ```
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `schemaVersion` | `int` | Current value: 2. Bumps only when the body shape changes in a way that requires version-aware reads. |
+| `schemaVersion` | `int` | Current value: 3. Bumps when this body's shape changes in a way that requires version-aware reads, **or** in lockstep with `StructuredReportBody` (WX-128) — the two bodies travel in the same tool_use envelope and version together, so a bump does not by itself imply this body's shape changed (v3 is exactly such a bump). |
 | `blocks` | array of block | Ordered earliest first. Up to 24 blocks covering a six-day horizon. |
 
 ## Block shape
@@ -54,9 +54,10 @@ Discussed at WX-76 grooming and recorded in the ticket. No obvious query need fo
 
 ## Versioning
 
-`schemaVersion` appears on the entity row (the `SchemaVersion` column) and inside the body. Both are written together. The column is authoritative when scanning many rows without parsing; the body is authoritative for stand-alone diagnostics. Bump both together if the body shape ever changes incompatibly.
+`schemaVersion` appears on the entity row (the `SchemaVersion` column) and inside the body. Both are written together. The column is authoritative when scanning many rows without parsing; the body is authoritative for stand-alone diagnostics. Bump both together whenever the version advances — whether driven by this body's own shape or by the WX-128 lockstep rule with `StructuredReportBody` (see `structured-report-schema.md` § Versioning). Consult the version-history list below for which bumps changed this body's shape and which were lockstep-only.
 
 - **v2** (WX-114): removed `gustOutlook` and `visibilityExpectation` from the block.
+- **v3** (WX-128): no change to this body's shape. The bump marks the tool_use envelope gaining the sibling `structured_report` body (`StructuredReportBody`, documented in `structured-report-schema.md`); the two bodies version in lockstep.
 
 ## Out of scope for WX-76
 

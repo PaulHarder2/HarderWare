@@ -19,6 +19,7 @@ public class CommittedSendTests
         Assert.Equal(CommittedSend.SchemaVersionCurrent, cs.SchemaVersion);
         Assert.Null(cs.ReasoningTrace);
         Assert.Null(cs.EmailBody);
+        Assert.Null(cs.StructuredReport);
         Assert.Null(cs.SentAtUtc);
         Assert.Equal("", cs.RecipientId);
         Assert.Equal(default, cs.CreatedAtUtc);
@@ -26,9 +27,10 @@ public class CommittedSendTests
     }
 
     [Fact]
-    public void Schema_version_constant_is_one()
+    public void Schema_version_constant_is_two()
     {
-        Assert.Equal(1, CommittedSend.SchemaVersionCurrent);
+        // v2 added the StructuredReport column (WX-128).
+        Assert.Equal(2, CommittedSend.SchemaVersionCurrent);
     }
 
     [Fact]

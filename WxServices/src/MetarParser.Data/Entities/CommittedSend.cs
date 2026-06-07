@@ -16,8 +16,8 @@ namespace MetarParser.Data.Entities;
 /// </summary>
 public sealed class CommittedSend
 {
-    /// <summary>Current schema version for the column shape on this row.</summary>
-    public const int SchemaVersionCurrent = 1;
+    /// <summary>Current schema version for the column shape on this row.  v2 added <see cref="StructuredReport"/> (WX-128).</summary>
+    public const int SchemaVersionCurrent = 2;
 
     /// <summary>Primary key, auto-incremented by the database.</summary>
     public int Id { get; set; }
@@ -48,6 +48,17 @@ public sealed class CommittedSend
     /// in the provisional row and when Claude failed.  Filled on Claude success.
     /// </summary>
     public string? EmailBody { get; set; }
+
+    /// <summary>
+    /// Canonical JSON of the unit-neutral <see cref="StructuredReportBody"/>
+    /// returned by Claude alongside the email body (WX-128), or
+    /// <see langword="null"/> in the provisional row, when Claude failed, and on
+    /// all rows written before WX-128 deployed.  This is the artifact the
+    /// WX-129 deterministic renderer consumes; during the additive transition
+    /// it is persisted-but-unread while <see cref="EmailBody"/> remains the
+    /// sent artifact.
+    /// </summary>
+    public string? StructuredReport { get; set; }
 
     /// <summary>UTC time the provisional row was first written, before Claude was invoked.</summary>
     public DateTime CreatedAtUtc { get; set; }

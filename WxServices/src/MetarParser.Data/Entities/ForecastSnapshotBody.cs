@@ -6,6 +6,25 @@ using WxServices.Common;
 namespace MetarParser.Data.Entities;
 
 /// <summary>
+/// Single serialization policy for the canonical body JSON persisted by both
+/// <see cref="ForecastSnapshotBody"/> and <see cref="StructuredReportBody"/>.
+/// The two bodies travel in the same tool_use envelope and version in lockstep
+/// (WX-128), so their wire conventions are owned in one place: camelCase
+/// properties, snake_case enum strings (integer enum values rejected — a
+/// numeric tier/phenomenon from Claude must fail, not cast blindly), nulls
+/// omitted.
+/// </summary>
+internal static class CanonicalBodyJson
+{
+    internal static readonly JsonSerializerOptions Options = new()
+    {
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower, allowIntegerValues: false) },
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        WriteIndented = false,
+    };
+}
+
+/// <summary>
 /// Strongly-typed in-memory representation of the JSON persisted in the
 /// <see cref="ForecastSnapshot.Body"/> column.  A body is a complete forecast
 /// snapshot for one station at one moment: a schema-versioned envelope around
@@ -18,8 +37,15 @@ namespace MetarParser.Data.Entities;
 /// </summary>
 public sealed record ForecastSnapshotBody
 {
-    /// <summary>Current schema version produced by this build.  Bumped only when the body shape changes incompatibly.</summary>
-    public const int SchemaVersionCurrent = 2;
+    /// <summary>
+    /// Current schema version produced by this build.  Bumped only when the
+    /// body shape changes incompatibly — and kept in lockstep with
+    /// <see cref="StructuredReportBody.SchemaVersionCurrent"/> since WX-128:
+    /// the two bodies travel in the same tool_use envelope, so a change to
+    /// either bumps both ("suspenders and belt").  v3 left this body's shape
+    /// unchanged; the bump marks the envelope gaining structured_report.
+    /// </summary>
+    public const int SchemaVersionCurrent = 3;
 
     /// <summary>
     /// Schema version this body conforms to.  On write, defaults to
@@ -37,18 +63,11 @@ public sealed record ForecastSnapshotBody
     [JsonPropertyName("blocks")]
     public IReadOnlyList<ForecastSnapshotBlock> Blocks { get; init; } = [];
 
-    private static readonly JsonSerializerOptions SerializerOptions = new()
-    {
-        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower) },
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-        WriteIndented = false,
-    };
-
     /// <summary>Serialize to the canonical JSON form persisted in the DB column.  Calls <see cref="Validate"/> first so malformed bodies cannot be persisted.</summary>
     public string Serialize()
     {
         Validate();
-        return JsonSerializer.Serialize(this, SerializerOptions);
+        return JsonSerializer.Serialize(this, CanonicalBodyJson.Options);
     }
 
     /// <summary>
@@ -59,7 +78,7 @@ public sealed record ForecastSnapshotBody
     /// </summary>
     public static ForecastSnapshotBody Deserialize(string json)
     {
-        var body = JsonSerializer.Deserialize<ForecastSnapshotBody>(json, SerializerOptions)
+        var body = JsonSerializer.Deserialize<ForecastSnapshotBody>(json, CanonicalBodyJson.Options)
             ?? throw new JsonException("Deserialized snapshot body was null.");
         body.Validate();
         return body;
