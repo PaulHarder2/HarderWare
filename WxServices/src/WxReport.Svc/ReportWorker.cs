@@ -265,7 +265,10 @@ public sealed class ReportWorker : BackgroundService
             snapshot.GfsForecast?.ModelRunUtc,
             snapshot.TafIssuanceUtc, snapshot.TafValidToUtc,
             priorSnapshot,
-            language, recipient.Name, tz,
+            language,
+            // WX-128 additive transition: single-recipient language; see RunCycleAsync.
+            narrativeLanguages: new[] { LanguageHelper.ToIetfTag(language) },
+            recipient.Name, tz,
             isFirstReport: false,
             scheduledHour: scheduledHour,
             units: recipient.Units,
@@ -309,6 +312,9 @@ public sealed class ReportWorker : BackgroundService
         var report = WrapAsEmailHtml(success.EmailBody, language, snapshot, tz);
         committedSend.EmailBody = report;
         committedSend.ReasoningTrace = success.ReasoningTrace;
+        // WX-128: persist the unit-neutral structured report alongside the email
+        // body. Unread in the additive transition; WX-129's renderer consumes it.
+        committedSend.StructuredReport = success.StructuredReport.Serialize();
         await ctx.SaveChangesAsync(ct);
         Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): reconciled CommittedSend Id={committedSend.Id} → ForecastSnapshot Id={reconciledSnapshot.Id}.");
 
@@ -619,7 +625,12 @@ public sealed class ReportWorker : BackgroundService
                     snapshot.GfsForecast?.ModelRunUtc,
                     snapshot.TafIssuanceUtc, snapshot.TafValidToUtc,
                     priorSnapshot,
-                    language, recipient.Name, tz,
+                    language,
+                    // WX-128 additive transition: the structured report carries the
+                    // recipient's own language only; WX-130's per-locality loop
+                    // widens this to the locality's distinct language set.
+                    narrativeLanguages: new[] { LanguageHelper.ToIetfTag(language) },
+                    recipient.Name, tz,
                     isFirstReport: reason == "first",
                     scheduledHour: scheduledHour,
                     units: recipient.Units,
@@ -710,6 +721,9 @@ public sealed class ReportWorker : BackgroundService
                 var report = WrapAsEmailHtml(success.EmailBody, language, snapshot, tz);
                 committedSend.EmailBody = report;
                 committedSend.ReasoningTrace = success.ReasoningTrace;
+                // WX-128: persist the unit-neutral structured report alongside the
+                // email body. Unread in the additive transition; WX-129 consumes it.
+                committedSend.StructuredReport = success.StructuredReport.Serialize();
                 await ctx.SaveChangesAsync(ct);
                 Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): reconciled CommittedSend Id={committedSend.Id} → ForecastSnapshot Id={reconciledSnapshot.Id}.");
 

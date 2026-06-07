@@ -15,7 +15,7 @@ namespace WxReport.Tests;
 // Drives ForecastReconciler against a stubbed Anthropic Messages API endpoint.
 // Each test wires a StubHandler that returns predetermined JSON; the reconciler
 // posts, parses, validates, and either lands in ReconcileResult.Success with
-// the parsed three artifacts or in ReconcileResult.Failure with a reason.
+// the parsed four artifacts or in ReconcileResult.Failure with a reason.
 // The HTTP-failure test deliberately returns a 400-class status so the
 // ClaudeClient retry loop (which retries only 429/529/5xx) exits immediately,
 // keeping the test fast.
@@ -35,14 +35,32 @@ public class ForecastReconcilerTests
         + "low 70s. The unsettled, humid pattern continues through the weekend before drier "
         + "air arrives early next week.</p>";
 
+    // A valid WX-128 structured_report whose 'en' narrative clears the
+    // per-language degeneracy floor (MinVisibleNarrativeChars). Quantities are
+    // tokens per the ReportTokens grammar; no change band on this fixture.
+    private const string ValidStructuredReportJson = """
+        {
+          "schemaVersion": 3,
+          "changes": [],
+          "narrative": {
+            "en": {
+              "changeSummary": null,
+              "currentConditions": "Skies are clear with a temperature near {q:temp:24.0} and light winds around {q:wind:6} from the east. The air is humid.",
+              "extendedForecast": "Showers are likely overnight into Friday morning, with thunderstorms possible in the afternoon. Highs near {q:temp:30.0} with overnight lows near {q:temp:22.0}. The unsettled, humid pattern continues through the weekend before drier air arrives early next week.",
+              "closing": "A wet stretch ahead — keep an umbrella handy through the weekend."
+            }
+          }
+        }
+        """;
+
     // ── happy path ──────────────────────────────────────────────────────────
 
     [Fact]
-    public async Task HappyPath_ReturnsSuccess_WithThreeArtifactsAndTokens()
+    public async Task HappyPath_ReturnsSuccess_WithFourArtifactsAndTokens()
     {
         var responseJson = BuildClaudeResponseJson(
             emailBody: RealisticBody,
-            finalSnapshotJson: """{"schemaVersion":1,"blocks":[]}""",
+            finalSnapshotJson: """{"schemaVersion":3,"blocks":[]}""",
             reasoningTrace: "All three steps clean.",
             inputTokens: 100, outputTokens: 50,
             cacheReadInputTokens: 80, cacheCreationInputTokens: 10);
@@ -53,10 +71,132 @@ public class ForecastReconcilerTests
         Assert.Equal(RealisticBody, success.EmailBody);
         Assert.Equal("All three steps clean.", success.ReasoningTrace);
         Assert.Empty(success.FinalSnapshot.Blocks);
+        Assert.True(success.StructuredReport.Narrative.ContainsKey("en")); // WX-128 fourth artifact parsed
+        Assert.Empty(success.StructuredReport.Changes);
         Assert.Equal(100, success.Tokens.InputTokens);
         Assert.Equal(50, success.Tokens.OutputTokens);
         Assert.Equal(80, success.Tokens.CacheReadInputTokens);
         Assert.Equal(10, success.Tokens.CacheCreationInputTokens);
+    }
+
+    // ── WX-128: structured_report contract ────────────────────────────────────
+
+    [Fact]
+    public async Task StructuredReportMissing_ReturnsFailure_NamingField()
+    {
+        // email_body must clear the WX-120 floor (checked first since the WX-128
+        // review reorder) so the failure isolates the missing structured_report.
+        var responseJson = BuildClaudeResponseJsonWithRawInput($$"""
+            {
+              "email_body": "{{RealisticBody}}",
+              "final_snapshot": { "schemaVersion": 3, "blocks": [] },
+              "reasoning_trace": "trace"
+            }
+            """);
+
+        var result = await RunReconciler(responseJson);
+
+        var failure = Assert.IsType<ReconcileResult.Failure>(result);
+        Assert.Contains("missing required field", failure.Reason);
+        Assert.Contains("structured_report", failure.Reason);
+    }
+
+    [Fact]
+    public async Task StructuredReportMissingRequestedLanguage_FailsClosed()
+    {
+        // The cycle requests en AND es; the narrative is internally valid but
+        // carries en only — the per-call contract fails closed through the
+        // same retry-then-Failure path as a schema violation (WX-128).
+        var responseJson = BuildClaudeResponseJson(
+            emailBody: RealisticBody,
+            finalSnapshotJson: """{"schemaVersion":3,"blocks":[]}""",
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0);
+
+        int calls = 0;
+        var result = await RunReconciler(_ =>
+        {
+            calls++;
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(responseJson, Encoding.UTF8, "application/json"),
+            };
+        }, narrativeLanguages: new[] { "en", "es" });
+
+        var failure = Assert.IsType<ReconcileResult.Failure>(result);
+        Assert.Contains("missing requested language 'es'", failure.Reason);
+        Assert.Equal(3, calls); // retried like any other malformed output, then failed closed
+    }
+
+    [Fact]
+    public async Task StructuredReportDegenerateNarrative_FailsClosed()
+    {
+        // Sections present but near-empty: the WX-120-style per-language floor
+        // must reject it so a tokens-only narrative never persists as renderable.
+        var degenerate = """
+            {
+              "schemaVersion": 3,
+              "changes": [],
+              "narrative": {
+                "en": {
+                  "changeSummary": null,
+                  "currentConditions": "{q:temp:24.0}",
+                  "extendedForecast": "ok",
+                  "closing": "ok"
+                }
+              }
+            }
+            """;
+        var responseJson = BuildClaudeResponseJson(
+            emailBody: RealisticBody,
+            finalSnapshotJson: """{"schemaVersion":3,"blocks":[]}""",
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: degenerate);
+
+        var result = await RunReconciler(responseJson);
+
+        var failure = Assert.IsType<ReconcileResult.Failure>(result);
+        Assert.Contains("degenerate", failure.Reason);
+    }
+
+    [Fact]
+    public async Task StructuredReportWithExtraLanguage_FailsClosed()
+    {
+        // Exact-set contract: an unrequested language is unvalidated-floor
+        // content persisting for no recipient — rejected (WX-128 review).
+        var withExtra = ValidStructuredReportJson.Replace(
+            "\"narrative\": {",
+            "\"narrative\": { \"es\": { \"changeSummary\": null, \"currentConditions\": \"Texto suficientemente largo para parecer real y pasar cualquier suelo de longitud visible en este idioma adicional no solicitado por nadie.\", \"extendedForecast\": \"Más texto de pronóstico extendido con suficiente contenido visible para no parecer degenerado en absoluto.\", \"closing\": \"Un cierre razonable.\" },");
+        var responseJson = BuildClaudeResponseJson(
+            emailBody: RealisticBody,
+            finalSnapshotJson: """{"schemaVersion":3,"blocks":[]}""",
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: withExtra);
+
+        var result = await RunReconciler(responseJson);
+
+        var failure = Assert.IsType<ReconcileResult.Failure>(result);
+        Assert.Contains("unrequested language 'es'", failure.Reason);
+    }
+
+    [Fact]
+    public async Task FreshFinalSnapshotWithStaleVersion_FailsClosed()
+    {
+        // Deserialize stays lenient for old persisted priors, but a FRESH
+        // reconciled snapshot must carry the current version — Claude copying
+        // the prior's older digit fails closed (WX-128 review).
+        var responseJson = BuildClaudeResponseJson(
+            emailBody: RealisticBody,
+            finalSnapshotJson: """{"schemaVersion":2,"blocks":[]}""",
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0);
+
+        var result = await RunReconciler(responseJson);
+
+        var failure = Assert.IsType<ReconcileResult.Failure>(result);
+        Assert.Contains("not the current version", failure.Reason);
     }
 
     // ── invalidation gate: skip_send ────────────────────────────────────────
@@ -170,7 +310,7 @@ public class ForecastReconcilerTests
     {
         var responseJson = BuildClaudeResponseJsonWithRawInput("""
             {
-              "final_snapshot": { "schemaVersion": 1, "blocks": [] },
+              "final_snapshot": { "schemaVersion": 3, "blocks": [] },
               "reasoning_trace": "trace"
             }
             """);
@@ -210,10 +350,13 @@ public class ForecastReconcilerTests
     [Fact]
     public async Task ToolInputMissingReasoningTrace_ReturnsFailure()
     {
-        var responseJson = BuildClaudeResponseJsonWithRawInput("""
+        // structured_report is present and valid so the failure isolates the
+        // missing reasoning_trace (the reconciler checks structured_report first).
+        var responseJson = BuildClaudeResponseJsonWithRawInput($$"""
             {
               "email_body": "<p>body</p>",
-              "final_snapshot": { "schemaVersion": 1, "blocks": [] }
+              "final_snapshot": { "schemaVersion": 3, "blocks": [] },
+              "structured_report": {{ValidStructuredReportJson}}
             }
             """);
 
@@ -236,7 +379,7 @@ public class ForecastReconcilerTests
         var responseJson = BuildClaudeResponseJsonWithRawInput("""
             {
               "email_body": null,
-              "final_snapshot": { "schemaVersion": 1, "blocks": [] },
+              "final_snapshot": { "schemaVersion": 3, "blocks": [] },
               "reasoning_trace": "trace"
             }
             """);
@@ -262,7 +405,7 @@ public class ForecastReconcilerTests
         // report truncation, not mislabel it a missing field.
         var responseJson = BuildClaudeResponseJsonWithRawInput("""
             {
-              "final_snapshot": { "schemaVersion": 1, "blocks": [] },
+              "final_snapshot": { "schemaVersion": 3, "blocks": [] },
               "reasoning_trace": "trace"
             }
             """,
@@ -286,7 +429,7 @@ public class ForecastReconcilerTests
         var responseJson = BuildClaudeResponseJsonWithRawInput("""
             {
               "email_body": "<p>body</p>",
-              "final_snapshot": { "schemaVersion": 1, "blocks": [] },
+              "final_snapshot": { "schemaVersion": 3, "blocks": [] },
               "reasoning_trace": "trace"
             }
             """,
@@ -308,11 +451,11 @@ public class ForecastReconcilerTests
         // reconciler retries within the cycle and lands on Success rather than
         // leaving the recipient to self-heal on the next tick.
         var malformed = BuildClaudeResponseJsonWithRawInput("""
-            { "final_snapshot": { "schemaVersion": 1, "blocks": [] }, "reasoning_trace": "trace" }
+            { "final_snapshot": { "schemaVersion": 3, "blocks": [] }, "reasoning_trace": "trace" }
             """);
         var valid = BuildClaudeResponseJson(
             emailBody: RealisticBody,
-            finalSnapshotJson: """{"schemaVersion":1,"blocks":[]}""",
+            finalSnapshotJson: """{"schemaVersion":3,"blocks":[]}""",
             reasoningTrace: "trace",
             inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0);
 
@@ -337,11 +480,11 @@ public class ForecastReconcilerTests
         // The failed attempt is real billable spend; the returned Tokens must include
         // it so the cost dashboards don't undercount retried cycles.
         var malformed = BuildClaudeResponseJsonWithRawInput("""
-            { "final_snapshot": { "schemaVersion": 1, "blocks": [] }, "reasoning_trace": "trace" }
+            { "final_snapshot": { "schemaVersion": 3, "blocks": [] }, "reasoning_trace": "trace" }
             """); // default tokens: 10 in / 10 out / 0 / 0
         var valid = BuildClaudeResponseJson(
             emailBody: RealisticBody,
-            finalSnapshotJson: """{"schemaVersion":1,"blocks":[]}""",
+            finalSnapshotJson: """{"schemaVersion":3,"blocks":[]}""",
             reasoningTrace: "trace",
             inputTokens: 100, outputTokens: 50, cacheReadInputTokens: 80, cacheCreationInputTokens: 10);
 
@@ -373,7 +516,7 @@ public class ForecastReconcilerTests
         // treats it as a skip on an allowSkip cycle and preserves Claude's trace.
         var degenerate = BuildClaudeResponseJson(
             emailBody: "<!-- placeholder: skip_send was the correct tool but submit_reconciled_report was called in error -->",
-            finalSnapshotJson: """{"schemaVersion":1,"blocks":[]}""",
+            finalSnapshotJson: """{"schemaVersion":3,"blocks":[]}""",
             reasoningTrace: "Confirms the prior forecast — not news. SKIP.",
             inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0);
 
@@ -399,7 +542,7 @@ public class ForecastReconcilerTests
         // skip — it fails closed so the provisional stays and the next cycle self-heals.
         var degenerate = BuildClaudeResponseJson(
             emailBody: "<!-- nothing to report -->",
-            finalSnapshotJson: """{"schemaVersion":1,"blocks":[]}""",
+            finalSnapshotJson: """{"schemaVersion":3,"blocks":[]}""",
             reasoningTrace: "trace",
             inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0);
 
@@ -416,12 +559,12 @@ public class ForecastReconcilerTests
         // exactly one retry, body intact.
         var degenerate = BuildClaudeResponseJson(
             emailBody: "<!-- placeholder -->",
-            finalSnapshotJson: """{"schemaVersion":1,"blocks":[]}""",
+            finalSnapshotJson: """{"schemaVersion":3,"blocks":[]}""",
             reasoningTrace: "trace",
             inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0);
         var valid = BuildClaudeResponseJson(
             emailBody: RealisticBody,
-            finalSnapshotJson: """{"schemaVersion":1,"blocks":[]}""",
+            finalSnapshotJson: """{"schemaVersion":3,"blocks":[]}""",
             reasoningTrace: "trace",
             inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0);
 
@@ -445,7 +588,7 @@ public class ForecastReconcilerTests
     public async Task RetryableMalformed_AllAttemptsFail_ReturnsFailureBoundedAtThreeCalls()
     {
         var malformed = BuildClaudeResponseJsonWithRawInput("""
-            { "final_snapshot": { "schemaVersion": 1, "blocks": [] }, "reasoning_trace": "trace" }
+            { "final_snapshot": { "schemaVersion": 3, "blocks": [] }, "reasoning_trace": "trace" }
             """);
 
         int calls = 0;
@@ -470,7 +613,7 @@ public class ForecastReconcilerTests
         // A max_tokens stop_reason is authoritative: re-calling at the same cap would
         // just re-truncate, so the truncation Failure is returned on the first call.
         var truncated = BuildClaudeResponseJsonWithRawInput("""
-            { "final_snapshot": { "schemaVersion": 1, "blocks": [] }, "reasoning_trace": "trace" }
+            { "final_snapshot": { "schemaVersion": 3, "blocks": [] }, "reasoning_trace": "trace" }
             """, stopReason: "max_tokens");
 
         int calls = 0;
@@ -532,7 +675,7 @@ public class ForecastReconcilerTests
         var responseJson = BuildClaudeResponseJsonWithRawInput($$"""
             {
               "email_body": "<p>body</p>",
-              "final_snapshot": { "schemaVersion": 1, "blocks": [{{blockJson}}] },
+              "final_snapshot": { "schemaVersion": 3, "blocks": [{{blockJson}}] },
               "reasoning_trace": "trace"
             }
             """);
@@ -551,7 +694,7 @@ public class ForecastReconcilerTests
             Content = new StringContent(anthropicResponseJson, Encoding.UTF8, "application/json"),
         }, allowSkip);
 
-    private static async Task<ReconcileResult> RunReconciler(Func<HttpRequestMessage, HttpResponseMessage> respond, bool allowSkip = false)
+    private static async Task<ReconcileResult> RunReconciler(Func<HttpRequestMessage, HttpResponseMessage> respond, bool allowSkip = false, string[]? narrativeLanguages = null)
     {
         var http = new HttpClient(new StubHandler(respond));
         var claude = new ClaudeClient(http, apiKey: "test-key", model: "claude-sonnet-4-6", personaPrefix: "Persona text.");
@@ -565,6 +708,7 @@ public class ForecastReconcilerTests
             tafValidToUtc: null,
             prior: null,
             language: "English",
+            narrativeLanguages: narrativeLanguages ?? new[] { "en" },
             recipientName: "Test User",
             tz: TimeZoneInfo.Utc,
             isFirstReport: false,
@@ -589,12 +733,14 @@ public class ForecastReconcilerTests
         string finalSnapshotJson,
         string reasoningTrace,
         int inputTokens, int outputTokens,
-        int cacheReadInputTokens, int cacheCreationInputTokens)
+        int cacheReadInputTokens, int cacheCreationInputTokens,
+        string structuredReportJson = ValidStructuredReportJson)
     {
         var input = new
         {
             email_body = emailBody,
             final_snapshot = JsonDocument.Parse(finalSnapshotJson).RootElement,
+            structured_report = JsonDocument.Parse(structuredReportJson).RootElement,
             reasoning_trace = reasoningTrace,
         };
         var inputJson = JsonSerializer.Serialize(input);

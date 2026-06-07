@@ -62,7 +62,7 @@ public class ClaudeClientRetryTests
             }));
         var client = new ClaudeClient(new HttpClient(handler), apiKey: "k", model: "claude-sonnet-4-6", personaPrefix: "persona");
 
-        var result = await client.InvokeReconciliationAsync("rules", "payload", allowSkip: false, CancellationToken.None);
+        var result = await client.InvokeReconciliationAsync("rules", "payload", allowSkip: false, narrativeLanguages: new[] { "en" }, CancellationToken.None);
 
         Assert.Null(result); // un-offered tool rejected at the boundary
     }
@@ -79,7 +79,7 @@ public class ClaudeClientRetryTests
             }));
         var client = new ClaudeClient(new HttpClient(handler), apiKey: "k", model: "claude-sonnet-4-6", personaPrefix: "persona");
 
-        var result = await client.InvokeReconciliationAsync("rules", "payload", allowSkip: true, CancellationToken.None);
+        var result = await client.InvokeReconciliationAsync("rules", "payload", allowSkip: true, narrativeLanguages: new[] { "en" }, CancellationToken.None);
 
         Assert.NotNull(result);
         Assert.Equal("skip_send", result!.ToolName);
@@ -115,7 +115,7 @@ public class ClaudeClientRetryTests
             }));
         var client = new ClaudeClient(new HttpClient(handler), apiKey: "k", model: "claude-sonnet-4-6", personaPrefix: "persona");
 
-        var result = await client.InvokeReconciliationAsync("rules", "payload", allowSkip: true, CancellationToken.None);
+        var result = await client.InvokeReconciliationAsync("rules", "payload", allowSkip: true, narrativeLanguages: new[] { "en" }, CancellationToken.None);
 
         Assert.Null(result); // ambiguous multi-block response rejected at the boundary
     }
@@ -139,7 +139,7 @@ public class ClaudeClientRetryTests
         var http = new HttpClient(handler) { Timeout = TimeSpan.FromMilliseconds(100) };
         var client = new ClaudeClient(http, apiKey: "k", model: "claude-sonnet-4-6", personaPrefix: "persona");
 
-        var result = await client.InvokeReconciliationAsync("rules", "payload", allowSkip: false, CancellationToken.None);
+        var result = await client.InvokeReconciliationAsync("rules", "payload", allowSkip: false, narrativeLanguages: new[] { "en" }, CancellationToken.None);
 
         Assert.Null(result); // timeout fails the reconciliation
         Assert.Equal(1, calls); // not retried — a single attempt
@@ -163,7 +163,7 @@ public class ClaudeClientRetryTests
         });
         var client = new ClaudeClient(new HttpClient(handler), apiKey: "k", model: "claude-sonnet-4-6", personaPrefix: "persona");
 
-        var result = await client.InvokeReconciliationAsync("rules", "payload", allowSkip: false, CancellationToken.None);
+        var result = await client.InvokeReconciliationAsync("rules", "payload", allowSkip: false, narrativeLanguages: new[] { "en" }, CancellationToken.None);
 
         Assert.NotNull(result); // recovered on retry
         Assert.Equal(2, calls); // first attempt failed, second succeeded
@@ -186,7 +186,7 @@ public class ClaudeClientRetryTests
         });
         var client = new ClaudeClient(new HttpClient(handler), apiKey: "k", model: "claude-sonnet-4-6", personaPrefix: "persona");
 
-        var call = client.InvokeReconciliationAsync("rules", "payload", allowSkip: false, cts.Token);
+        var call = client.InvokeReconciliationAsync("rules", "payload", allowSkip: false, narrativeLanguages: new[] { "en" }, cts.Token);
         await started.Task;
         cts.Cancel();
         var result = await call;

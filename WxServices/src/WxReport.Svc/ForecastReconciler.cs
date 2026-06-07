@@ -14,8 +14,9 @@ namespace WxReport.Svc;
 
 /// <summary>
 /// Outcome of a single reconciliation pass.  A <see cref="Success"/>
-/// carries the three artifacts Claude returned (HTML email body, parsed
-/// final snapshot, plain-English reasoning trace) plus token-usage
+/// carries the four artifacts Claude returned (HTML email body, parsed
+/// final snapshot, unit-neutral structured report, plain-English reasoning
+/// trace) plus token-usage
 /// metadata.  A <see cref="Failure"/> carries a short reason string; the
 /// caller is expected to log it, skip the SMTP send, and leave any
 /// already-committed audit rows in place (never un-commit state).
@@ -24,14 +25,16 @@ public abstract record ReconcileResult
 {
     private ReconcileResult() { }
 
-    /// <summary>Reconciliation succeeded; the three artifacts parsed cleanly.</summary>
+    /// <summary>Reconciliation succeeded; the four artifacts parsed cleanly.</summary>
     /// <param name="EmailBody">HTML email body for the recipient (inner content of the <c>&lt;body&gt;</c> tag).</param>
     /// <param name="FinalSnapshot">Refined <see cref="ForecastSnapshotBody"/> after Claude reconciled provisional + TAF + observation + prior.</param>
+    /// <param name="StructuredReport">Unit-neutral structured report (WX-128): language-free changes plus the language-keyed tokenized narrative the WX-129 renderer consumes.</param>
     /// <param name="ReasoningTrace">Brief plain-English audit log of what changed at each of the three reconciliation steps.</param>
     /// <param name="Tokens">Token-usage metadata extracted from the Anthropic API response.</param>
     public sealed record Success(
         string EmailBody,
         ForecastSnapshotBody FinalSnapshot,
+        StructuredReportBody StructuredReport,
         string ReasoningTrace,
         TokenUsage Tokens) : ReconcileResult;
 
@@ -65,7 +68,7 @@ public abstract record ReconcileResult
 /// any; calls <see cref="ClaudeClient.InvokeReconciliationAsync"/>;
 /// validates the response (<c>final_snapshot</c> via
 /// <see cref="ForecastSnapshotBody.Deserialize"/>); and returns either a
-/// parsed three-artifact <see cref="ReconcileResult.Success"/> or a typed
+/// parsed four-artifact <see cref="ReconcileResult.Success"/> or a typed
 /// <see cref="ReconcileResult.Failure"/>.
 ///
 /// <para>
@@ -99,7 +102,7 @@ public sealed class ForecastReconciler
     /// on transient malformed output — missing field / schema violation — but never
     /// on a <c>max_tokens</c> truncation or a guaranteed-send <c>skip_send</c>;
     /// returned token usage is summed across attempts).  Returns
-    /// the parsed three artifacts on success or a typed failure on transport
+    /// the parsed four artifacts on success or a typed failure on transport
     /// or schema problems.
     /// </summary>
     /// <param name="snapshot">Recipient's <see cref="WeatherSnapshot"/>; supplies METAR, TAF periods, GFS daily summary, and per-station metadata used in the rendering rules.</param>
@@ -109,6 +112,7 @@ public sealed class ForecastReconciler
     /// <param name="tafValidToUtc">UTC end of the TAF's validity window, or <see langword="null"/> when no TAF is available.  Helps Claude scope step 1 to in-window blocks.</param>
     /// <param name="prior">Most recently committed <see cref="ForecastSnapshot"/> for this station, or <see langword="null"/> on a first send.  Drives the news judgment in reconciliation step 3.</param>
     /// <param name="language">Natural-language name for the desired email language (e.g. <c>"English"</c>, <c>"Spanish"</c>).</param>
+    /// <param name="narrativeLanguages">ISO 639-1 codes the structured report's narrative must carry (WX-128).  In the additive transition this is the single recipient's normalized language; WX-130's per-locality loop passes the locality's distinct set.  A returned narrative missing any of these fails closed.</param>
     /// <param name="recipientName">Recipient's display name, surfaced in the user-message header.</param>
     /// <param name="tz">Recipient's timezone, used by <see cref="SnapshotDescriber"/> when emitting the structured observation/forecast text.</param>
     /// <param name="isFirstReport">When <see langword="true"/>, the system prompt asks Claude to open with a welcome note.</param>
@@ -129,6 +133,7 @@ public sealed class ForecastReconciler
         DateTime? tafValidToUtc,
         ForecastSnapshot? prior,
         string language,
+        IReadOnlyList<string> narrativeLanguages,
         string recipientName,
         TimeZoneInfo tz,
         bool isFirstReport,
@@ -143,7 +148,7 @@ public sealed class ForecastReconciler
         units ??= new UnitPreferences();
 
         var perRecipientPrompt = BuildPerRecipientSystemPrompt(
-            snapshot, language, units, isFirstReport, scheduledHour, changeSeverity, previousMetarIcao, allowSkip);
+            snapshot, language, narrativeLanguages, units, isFirstReport, scheduledHour, changeSeverity, previousMetarIcao, allowSkip);
 
         var userMessage = BuildUserMessage(
             snapshot, provisional, gfsModelRunUtc, tafIssuanceUtc, tafValidToUtc, prior, recipientName, tz, units,
@@ -166,7 +171,7 @@ public sealed class ForecastReconciler
         int accIn = 0, accOut = 0, accCacheRead = 0, accCacheWrite = 0;
         for (int attempt = 1; ; attempt++)
         {
-            var apiResult = await _claude.InvokeReconciliationAsync(perRecipientPrompt, userMessage, allowSkip, ct);
+            var apiResult = await _claude.InvokeReconciliationAsync(perRecipientPrompt, userMessage, allowSkip, narrativeLanguages, ct);
             if (apiResult is null)
             {
                 return new ReconcileResult.Failure(
@@ -230,6 +235,17 @@ public sealed class ForecastReconciler
                 var finalSnapshotJson = RequireProperty(input, "final_snapshot").GetRawText();
                 var finalSnapshot = ForecastSnapshotBody.Deserialize(finalSnapshotJson);
 
+                // A *fresh* reconciled snapshot must carry the current schema
+                // version. ForecastSnapshotBody.Deserialize stays version-lenient
+                // (old persisted rows must keep loading as priors), so the
+                // freshness pin lives here: Claude copying the older version
+                // digit it saw in prior_snapshot fails closed through the retry
+                // rather than persisting a row whose column says v3 while its
+                // body JSON says v2 (WX-128 review finding).
+                if (finalSnapshot.SchemaVersion != ForecastSnapshotBody.SchemaVersionCurrent)
+                    throw new JsonException(
+                        $"final_snapshot.schemaVersion {finalSnapshot.SchemaVersion} is not the current version {ForecastSnapshotBody.SchemaVersionCurrent}.");
+
                 var reasoningTrace = RequireString(input, "reasoning_trace");
 
                 // WX-120: a present-but-content-less email_body — e.g. Claude called
@@ -238,10 +254,19 @@ public sealed class ForecastReconciler
                 // it, but it must never be emailed. Treat it as malformed so it routes
                 // through the same retry; on exhaustion the caller-facing outcome is a
                 // skip (allowSkip) or Failure (guaranteed), not a blank report.
+                // Checked BEFORE the structured report so a content-less response
+                // (whose narrative typically degenerates too) keeps the WX-120
+                // fall-safe semantics on exhaustion — skip-with-trace on an
+                // allowSkip cycle — instead of surfacing as a narrative schema
+                // Failure (WX-128 review finding).
                 if (VisibleTextLength(emailBody) < MinVisibleBodyChars)
                     throw new DegenerateEmailBodyException(reasoningTrace);
 
-                return new ReconcileResult.Success(emailBody, finalSnapshot, reasoningTrace, tokens);
+                var structuredReportJson = RequireProperty(input, "structured_report").GetRawText();
+                var structuredReport = StructuredReportBody.Deserialize(structuredReportJson);
+                ValidateNarrativeContract(structuredReport, narrativeLanguages);
+
+                return new ReconcileResult.Success(emailBody, finalSnapshot, structuredReport, reasoningTrace, tokens);
             }
             catch (Exception ex) when (ex is MissingToolUseFieldException or JsonException or InvalidOperationException or DegenerateEmailBodyException)
             {
@@ -316,6 +341,49 @@ public sealed class ForecastReconciler
             : base($"missing required field '{field}'") { }
     }
 
+    // WX-128: per-call contract checks the body's intrinsic Validate() cannot
+    // perform because they depend on what THIS cycle requested. Every requested
+    // language must be present (StructuredReportBody.Deserialize already proved
+    // the languages that ARE present are internally valid), and each requested
+    // language's narrative must clear the WX-120-style degeneracy floor — a
+    // tokens-only or near-blank narrative must never persist as renderable
+    // content. Throws JsonException so failures route through the existing
+    // retryable-malformed path (retry → skip/Failure), exactly like a
+    // final_snapshot schema violation.
+    private static void ValidateNarrativeContract(
+        StructuredReportBody report, IReadOnlyList<string> requestedLanguages)
+    {
+        // Exact-set match, both directions: a missing requested language is an
+        // unrenderable report for someone; an EXTRA unrequested language is
+        // unvalidated-floor content persisting for no recipient — and a trap
+        // for a renderer that iterates narrative keys (WX-128 review finding).
+        foreach (var lang in report.Narrative.Keys)
+            if (!requestedLanguages.Contains(lang, StringComparer.Ordinal))
+                throw new JsonException($"structured_report.narrative contains unrequested language '{lang}'.");
+
+        foreach (var lang in requestedLanguages)
+        {
+            if (!report.Narrative.TryGetValue(lang, out var sections))
+                throw new JsonException($"structured_report.narrative is missing requested language '{lang}'.");
+
+            int visible = ReportTokens.VisibleLength(sections.CurrentConditions)
+                + ReportTokens.VisibleLength(sections.ExtendedForecast)
+                + ReportTokens.VisibleLength(sections.Closing)
+                + ReportTokens.VisibleLength(sections.ChangeSummary ?? "");
+            if (visible < MinVisibleNarrativeChars)
+                throw new JsonException(
+                    $"structured_report.narrative.{lang} is degenerate: {visible} visible chars (< {MinVisibleNarrativeChars}).");
+        }
+    }
+
+    // WX-128: smallest combined visible narrative length a real report can
+    // carry per language. Defined AS the WX-120 floor, not merely sized like
+    // it — the two artifacts express the same degeneracy policy, so a future
+    // recalibration moves both together by construction. Narrative prose is
+    // the email's text minus table headings, so a genuine report clears the
+    // floor comfortably in every language.
+    private const int MinVisibleNarrativeChars = MinVisibleBodyChars;
+
     // WX-120: the smallest visible-text length (HTML comments + tags stripped,
     // entities decoded, whitespace collapsed) a real report can have. Measured
     // reports run ~1,700 visible chars; a degenerate body (Claude left only an
@@ -350,7 +418,7 @@ public sealed class ForecastReconciler
     // Builds the per-recipient rendering rules (the third system block).
     // Originally ported from the now-removed ClaudeClient.GenerateReportAsync.
     private static string BuildPerRecipientSystemPrompt(
-        WeatherSnapshot snapshot, string language, UnitPreferences units,
+        WeatherSnapshot snapshot, string language, IReadOnlyList<string> narrativeLanguages, UnitPreferences units,
         bool isFirstReport, int scheduledHour, ChangeSeverity changeSeverity, string? previousMetarIcao,
         bool allowSkip)
     {
@@ -401,6 +469,15 @@ public sealed class ForecastReconciler
                 + "what has changed (e.g. a forecast risk that has appeared, or a significant temperature shift). ",
             _ => "",
         };
+
+        // WX-128: the languages the structured report's narrative must carry.
+        // The reconciliation guidance (cached block) defines the structured-
+        // report rules language-agnostically; this per-recipient line supplies
+        // the actual set, matching the required keys in the tool schema.
+        var narrativeLanguageInstruction =
+            "The structured_report narrative must contain exactly these language keys: "
+            + string.Join(", ", narrativeLanguages.Select(l => $"'{l}'"))
+            + ". ";
 
         var skipInstruction = allowSkip
             ? "This is an unscheduled, arrival-triggered cycle. Apply the invalidation gate: if the "
@@ -489,6 +566,7 @@ public sealed class ForecastReconciler
             + welcomeInstruction
             + stationChangeInstruction
             + changeAlertInstruction
+            + narrativeLanguageInstruction
             + skipInstruction;
     }
 
@@ -507,7 +585,7 @@ public sealed class ForecastReconciler
     {
         var sb = new StringBuilder();
         sb.Append("Reconcile the following inputs for ").Append(recipientName)
-          .AppendLine(" and emit your three artifacts via the submit_reconciled_report tool.");
+          .AppendLine(" and emit your four artifacts via the submit_reconciled_report tool.");
         sb.AppendLine();
 
         sb.Append("changed_since_last_sent_report: ")

@@ -1,3 +1,7 @@
+using System.Text.Json;
+
+using MetarParser.Data.Entities;
+
 namespace WxReport.Svc;
 
 /// <summary>
@@ -28,7 +32,7 @@ internal static class ReconcilerPrompts
     /// hour X or X+1; prior-snapshot diff for the news judgment), the
     /// significance hierarchy that calibrates "worth sending" (safety-critical /
     /// plans-affecting / ambient-interest tiers, the directional-asymmetry rule,
-    /// and worked examples — added in WX-81), and the three artifacts the tool
+    /// and worked examples — added in WX-81), and the four artifacts the tool
     /// must return.
     /// </summary>
     internal const string ReconciliationGuidanceText = """
@@ -189,7 +193,7 @@ internal static class ReconcilerPrompts
         You have two tools, and you must call exactly one of them:
 
           • submit_reconciled_report — when this cycle is worth sending. Return all
-            three artifacts (below).
+            four artifacts (below).
           • skip_send — when this cycle is NOT news worth sending: return only a
             reasoning_trace explaining why no email is warranted. No email is sent
             and the committed forecast is left unchanged.
@@ -198,17 +202,75 @@ internal static class ReconcilerPrompts
         this cycle. Scheduled and first sends are always worth sending — never
         skip them. Only unscheduled, arrival-triggered cycles may be skipped.
 
-        When you DO send, return all three artifacts via the submit_reconciled_report tool:
+        When you DO send, return all four artifacts via the submit_reconciled_report tool:
 
           • final_snapshot — your refined ForecastSnapshotBody. Same schema as
-            provisional_snapshot: schemaVersion 2, ordered 6-hour blocks aligned
+            provisional_snapshot: schemaVersion 3, ordered 6-hour blocks aligned
             to 00/06/12/18Z, all required fields per block. Temperatures stay in
             Celsius; winds stay in knots; the per-recipient block converts units
             for the email_body.
+          • structured_report — the unit-neutral structured report (WX-128): the
+            language-free changes array plus the language-keyed narrative. Rules
+            below.
           • email_body      — HTML matching the rendering rules in the per-recipient
             system block.
           • reasoning_trace — brief audit log naming what changed at each of the
             three reconciliation steps above. Plain English.
+
+        structured_report rules:
+
+          The structured report is rendered to each recipient's email by a
+          deterministic program with NO further LLM involvement, so it must be
+          unit-neutral and language-complete by construction.
+
+          • changes — every reader-relevant difference versus prior_snapshot,
+            most important first (the same significance hierarchy above governs
+            tier). Each change carries tier, phenomenon, direction, the UTC
+            window affected, typed quantities, and a summaryToken ("ch1", "ch2",
+            … in array order). Empty when nothing changed (e.g. a steady-forecast
+            scheduled send).
+          • narrative — one entry per language code listed in the per-recipient
+            block, each with the prose for the report sections: changeSummary
+            (null when there is no change band), currentConditions,
+            extendedForecast, closing. Write each language natively and
+            idiomatically — never translate word-for-word — but keep the
+            meteorological content identical across languages.
+          • Quantity tokens: inside narrative prose, NEVER write a number with a
+            unit. Write a token the renderer substitutes in the recipient's own
+            units and locale:
+              {q:temp:33.5}    temperature, degrees Celsius
+              {q:wind:22}      sustained wind, knots
+              {q:gust:30}      gust, knots
+              {q:pressure:1013.2}  pressure, hPa
+              {q:precip_mm:12} liquid-equivalent accumulation, millimetres
+              {q:time:2026-06-08T21:00:00Z}  an instant, ISO-8601 UTC; rendered
+                               in the locality's local time
+            Values use a period decimal separator regardless of language.
+          • The renderer appends the unit when it substitutes a token. NEVER
+            write a unit name or symbol next to a token, in any language — not
+            "gusts to {q:gust:30} kt", not "{q:temp:33.5} degrees", not
+            "ráfagas de {q:gust:30} nudos". Write "gusts to {q:gust:30}" and
+            the recipient sees "gusts to 35 mph" or "ráfagas de 56 km/h" per
+            their preferences.
+          • The same rule for quantities WITHOUT a token kind (visibility,
+            distance): never write a bare number with a unit ("visibility is
+            1.5 miles") — the renderer cannot convert plain prose. Use
+            unit-free wording instead ("visibility is sharply reduced",
+            "dense fog nearby"). Unitless figures like a humidity percentage
+            ("88%") are fine.
+          • Unit-neutral phrasing: never use phrasing that only works in one
+            unit system — no "in the low 90s", no "below freezing point of 32".
+            Say "highs near {q:temp:33.5}", "gusts to {q:gust:30}". Relative or
+            unit-free phrasing ("a sharp warm-up", "near freezing") is fine.
+          • Change anchors: begin each changeSummary sentence that narrates a
+            change with that change's anchor token, e.g. "{ch1}Thunderstorms are
+            now expected after {q:time:...}." The anchor renders to nothing; it
+            ties the sentence to the change. Every change must be narrated in
+            EVERY language's changeSummary, and anchors appear only in
+            changeSummary.
+          • The hedged-certainty rule in the per-recipient block applies to the
+            narrative exactly as it does to email_body: never state weather as
+            flatly certain, in any language.
 
         Always act via one of the two tools. Never return free text outside a tool call.
         """;
@@ -216,76 +278,166 @@ internal static class ReconcilerPrompts
     /// <summary>
     /// Builds the Anthropic tool definition for the single tool the reconciler
     /// calls.  Required-fields list and enum string values mirror
-    /// <see cref="MetarParser.Data.Entities.ForecastSnapshotBlock"/>; the
+    /// <see cref="MetarParser.Data.Entities.ForecastSnapshotBlock"/> and
+    /// <see cref="MetarParser.Data.Entities.StructuredReportBody"/>; the
     /// returned anonymous object serialises directly into the request's
     /// <c>tools</c> array via <see cref="System.Net.Http.Json.JsonContent.Create"/>.
     /// Factory rather than a static field so the anonymous-type instance is
     /// created at the call site (anonymous-type properties carry through to
     /// JSON as written, which is what Anthropic's <c>input_schema</c> needs).
     /// </summary>
+    /// <param name="narrativeLanguages">
+    /// ISO 639-1 codes of the languages the structured report's narrative must
+    /// carry — the distinct languages of the locality's recipients (WX-128).
+    /// Each becomes a required key of the <c>narrative</c> schema object, so a
+    /// missing language fails Anthropic-side schema pressure as well as our own
+    /// fail-closed validation.  Stable per recipient/locality, so the tool
+    /// definition — part of the cached prompt prefix — stays byte-identical
+    /// across that recipient's cycles and retries.
+    /// </param>
     /// <returns>The serialisable tool definition for the reconciler's single tool.</returns>
-    internal static object BuildSubmitReconciledReportTool() => new
+    internal static object BuildSubmitReconciledReportTool(IReadOnlyList<string> narrativeLanguages)
     {
-        name = "submit_reconciled_report",
-        description = "Submit the reconciled forecast snapshot, the rendered HTML email body, and the reasoning trace.",
-        input_schema = new
+        var narrativeSectionSchema = new
         {
             type = "object",
-            required = new[] { "email_body", "final_snapshot", "reasoning_trace" },
+            required = new[] { "currentConditions", "extendedForecast", "closing" },
             properties = new
             {
-                email_body = new
+                changeSummary = new
                 {
-                    type = "string",
-                    description = "HTML for the email <body> inner content, rendered per the per-recipient system block.",
+                    type = new[] { "string", "null" },
+                    description = "Prose for the change band; null when no change band. The only section where {chN} anchors appear — every change's anchor, in every language.",
                 },
-                final_snapshot = new
+                currentConditions = new { type = "string" },
+                extendedForecast = new { type = "string" },
+                closing = new { type = "string" },
+            },
+        };
+        // Normalized: distinct + ordinal-sorted, so the serialized tool JSON —
+        // part of the cached prompt prefix, which renders ahead of the system
+        // blocks — is byte-identical for a given language SET regardless of
+        // caller ordering. An unordered set from a future WX-130 DB query must
+        // not silently split the Anthropic prompt cache (WX-128 review finding).
+        var languages = narrativeLanguages
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        var narrativeProperties = languages.ToDictionary(
+            lang => lang, _ => (object)narrativeSectionSchema);
+
+        return new
+        {
+            name = "submit_reconciled_report",
+            description = "Submit the reconciled forecast snapshot, the unit-neutral structured report, the rendered HTML email body, and the reasoning trace.",
+            input_schema = new
+            {
+                type = "object",
+                required = new[] { "email_body", "final_snapshot", "structured_report", "reasoning_trace" },
+                properties = new
                 {
-                    type = "object",
-                    required = new[] { "schemaVersion", "blocks" },
-                    properties = new
+                    email_body = new
                     {
-                        schemaVersion = new { type = "integer", @const = 2 },
-                        blocks = new
+                        type = "string",
+                        description = "HTML for the email <body> inner content, rendered per the per-recipient system block.",
+                    },
+                    structured_report = new
+                    {
+                        type = "object",
+                        required = new[] { "schemaVersion", "changes", "narrative" },
+                        properties = new
                         {
-                            type = "array",
-                            items = new
+                            schemaVersion = new { type = "integer", @const = StructuredReportBody.SchemaVersionCurrent },
+                            changes = new
+                            {
+                                type = "array",
+                                description = "Reader-relevant differences versus prior_snapshot, most important first; empty when nothing changed.",
+                                items = new
+                                {
+                                    type = "object",
+                                    required = new[] { "tier", "phenomenon", "direction", "window", "quantities", "summaryToken" },
+                                    properties = new
+                                    {
+                                        tier = new { type = "string", @enum = SnakeCaseNames<ChangeTier>() },
+                                        phenomenon = new { type = "string", @enum = SnakeCaseNames<ChangePhenomenon>() },
+                                        direction = new { type = "string", @enum = SnakeCaseNames<ChangeDirection>() },
+                                        window = new { type = "object", required = new[] { "startUtc", "endUtc" }, properties = new { startUtc = new { type = "string", format = "date-time" }, endUtc = new { type = "string", format = "date-time" } } },
+                                        quantities = new
+                                        {
+                                            type = "array",
+                                            items = new
+                                            {
+                                                type = "object",
+                                                required = new[] { "kind", "value" },
+                                                properties = new
+                                                {
+                                                    kind = new { type = "string", @enum = SnakeCaseNames<QuantityKind>() },
+                                                    value = new { type = "number", description = "Canonical unit for the kind: temp °C, wind/gust kt, pressure hPa, precip_mm mm." },
+                                                },
+                                            },
+                                        },
+                                        summaryToken = new { type = "string", pattern = "^" + ReportTokens.AnchorNameRegexText + "$", description = "Anchor name: ch1, ch2, … in array order; unique." },
+                                    },
+                                },
+                            },
+                            narrative = new
                             {
                                 type = "object",
-                                required = new[]
+                                description = "Narrative prose per ISO 639-1 language code; every listed language is required and no other key is permitted. Quantities appear only as {q:...} tokens.",
+                                required = languages,
+                                properties = narrativeProperties,
+                                additionalProperties = false,
+                            },
+                        },
+                    },
+                    final_snapshot = new
+                    {
+                        type = "object",
+                        required = new[] { "schemaVersion", "blocks" },
+                        properties = new
+                        {
+                            schemaVersion = new { type = "integer", @const = ForecastSnapshotBody.SchemaVersionCurrent },
+                            blocks = new
+                            {
+                                type = "array",
+                                items = new
                                 {
-                                    "startUtc", "skyState", "obscuration",
-                                    "temperatureCelsius", "windKt",
-                                    "precipExpectation", "severeFlag",
-                                },
-                                properties = new
-                                {
-                                    startUtc = new { type = "string", format = "date-time" },
-                                    skyState = new { type = "string", @enum = new[] { "clear", "partly_cloudy", "mostly_cloudy", "overcast" } },
-                                    obscuration = new { type = "string", @enum = new[] { "none", "fog", "haze", "smoke", "dust" } },
-                                    temperatureCelsius = new { type = "object", required = new[] { "min", "max" }, properties = new { min = new { type = "number" }, max = new { type = "number" } } },
-                                    windKt = new { type = "object", required = new[] { "min", "max" }, properties = new { min = new { type = "integer" }, max = new { type = "integer" } } },
-                                    precipExpectation = new { type = "string", @enum = new[] { "none", "possible", "likely", "certain" } },
-                                    precipPhenomenon = new
+                                    type = "object",
+                                    required = new[]
                                     {
-                                        type = new[] { "string", "null" },
-                                        @enum = new object?[] { null, "rain", "thunderstorm", "mixed", "snow", "freezing_precip" },
-                                        description = "Required when precipExpectation != 'none'; must be null or omitted when 'none'.",
+                                        "startUtc", "skyState", "obscuration",
+                                        "temperatureCelsius", "windKt",
+                                        "precipExpectation", "severeFlag",
                                     },
-                                    severeFlag = new { type = "boolean" },
+                                    properties = new
+                                    {
+                                        startUtc = new { type = "string", format = "date-time" },
+                                        skyState = new { type = "string", @enum = new[] { "clear", "partly_cloudy", "mostly_cloudy", "overcast" } },
+                                        obscuration = new { type = "string", @enum = new[] { "none", "fog", "haze", "smoke", "dust" } },
+                                        temperatureCelsius = new { type = "object", required = new[] { "min", "max" }, properties = new { min = new { type = "number" }, max = new { type = "number" } } },
+                                        windKt = new { type = "object", required = new[] { "min", "max" }, properties = new { min = new { type = "integer" }, max = new { type = "integer" } } },
+                                        precipExpectation = new { type = "string", @enum = new[] { "none", "possible", "likely", "certain" } },
+                                        precipPhenomenon = new
+                                        {
+                                            type = new[] { "string", "null" },
+                                            @enum = new object?[] { null, "rain", "thunderstorm", "mixed", "snow", "freezing_precip" },
+                                            description = "Required when precipExpectation != 'none'; must be null or omitted when 'none'.",
+                                        },
+                                        severeFlag = new { type = "boolean" },
+                                    },
                                 },
                             },
                         },
                     },
-                },
-                reasoning_trace = new
-                {
-                    type = "string",
-                    description = "Brief audit log naming what changed at each of the three reconciliation steps.",
+                    reasoning_trace = new
+                    {
+                        type = "string",
+                        description = "Brief audit log naming what changed at each of the three reconciliation steps.",
+                    },
                 },
             },
-        },
-    };
+        };
+    }
 
     /// <summary>
     /// Builds the Anthropic tool definition for the WX-80 invalidation gate's
@@ -296,6 +448,16 @@ internal static class ReconcilerPrompts
     /// reasoning_trace — no email, no snapshot — and the caller suppresses the
     /// send while leaving the committed forecast unchanged.
     /// </summary>
+    /// <summary>
+    /// snake_case_lower string names of <typeparamref name="T"/>'s members via
+    /// the same naming policy <c>CanonicalBodyJson</c> serializes with — the
+    /// C# enums are the single source for every <c>@enum</c> array in the
+    /// structured-report schema, so the vocabulary Claude is offered and the
+    /// vocabulary the deserializer accepts cannot drift apart.
+    /// </summary>
+    private static string[] SnakeCaseNames<T>() where T : struct, Enum
+        => Enum.GetNames<T>().Select(JsonNamingPolicy.SnakeCaseLower.ConvertName).ToArray();
+
     /// <returns>The serialisable tool definition for the skip-send decision.</returns>
     internal static object BuildSkipSendTool() => new
     {

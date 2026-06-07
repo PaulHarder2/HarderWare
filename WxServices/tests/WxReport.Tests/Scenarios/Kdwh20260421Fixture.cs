@@ -355,6 +355,7 @@ internal static class Kdwh20260421Fixture
             tafValidToUtc: Taf0853ValidToUtc,
             prior: BuildPriorCommittedSnapshot(),
             language: "English",
+            narrativeLanguages: new[] { "en" },
             recipientName: RecipientName,
             tz: CentralTz,
             isFirstReport: false,

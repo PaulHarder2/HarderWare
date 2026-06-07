@@ -58,16 +58,22 @@ public sealed class ClaudeClient
     private const string MessagesEndpoint = "https://api.anthropic.com/v1/messages";
     private const string AnthropicVersion = "2023-06-01";
 
-    // Output-token ceiling for the reconciliation call. The three artifacts
+    // Output-token ceiling for the reconciliation call. The four artifacts
     // (a full inline-CSS HTML email_body, a final_snapshot of up to 24 six-hour
-    // blocks for a six-day horizon, and a reasoning_trace) are emitted in one
-    // tool_use response; on a large day they can exceed the old 8192 cap, at
-    // which point Anthropic returns stop_reason "max_tokens" with a truncated
-    // partial tool_use input — a trailing required field (often email_body) is
-    // dropped and the pass fails. 16384 gives comfortable worst-case headroom
-    // on a Sonnet-class model (which supports far more), and billing is per
-    // token actually generated, not per ceiling (WX-109).
-    private const int MaxOutputTokens = 16384;
+    // blocks for a six-day horizon, the WX-128 structured_report with its
+    // per-language narratives, and a reasoning_trace) are emitted in one
+    // tool_use response; a truncation returns stop_reason "max_tokens" with a
+    // partial tool_use input — a trailing required field is dropped and the
+    // pass fails (WX-109 raised 8192→16384 for the three-artifact shape).
+    // WX-128 adds the structured report — roughly an email_body's worth of
+    // prose per narrative language — so the ceiling scales with the language
+    // count instead of doubling unconditionally: a single-language cycle keeps
+    // near the old worst-case failure cost and OTPM admission weight, and the
+    // headroom grows only when WX-130's multi-language locality sets actually
+    // need it. Billing is per token actually generated, not per ceiling.
+    // (Streaming, WX-101, is the eventual fix for the cap-vs-timeout tension.)
+    private const int BaseOutputTokens = 16384;
+    private const int PerLanguageOutputTokens = 8192;
 
     private readonly HttpClient _http;
     private readonly string _apiKey;
@@ -128,6 +134,12 @@ public sealed class ClaudeClient
     /// <c>submit_reconciled_report</c> is offered and forced — those cycles are
     /// always worth sending and must never be skipped.
     /// </param>
+    /// <param name="narrativeLanguages">
+    /// ISO 639-1 codes the structured report's narrative must carry (WX-128);
+    /// becomes the required-keys set of the tool schema's <c>narrative</c>
+    /// object.  Stable per recipient/locality so the tool definition — part of
+    /// the cached prompt prefix — stays byte-identical across cycles.
+    /// </param>
     /// <param name="ct">Cancellation token propagated to the HTTP request so that host shutdown aborts an in-flight API call.</param>
     /// <returns>The chosen tool's name and input plus token usage on success; <see langword="null"/> on transport, schema, or parse failure.</returns>
     /// <sideeffects>Makes an HTTP POST request to the Anthropic Messages API. Writes error log entries on failure.</sideeffects>
@@ -135,14 +147,15 @@ public sealed class ClaudeClient
         string perRecipientSystemPrompt,
         string userMessageText,
         bool allowSkip,
+        IReadOnlyList<string> narrativeLanguages,
         CancellationToken ct = default)
     {
         // Arrival-triggered cycles offer Claude the invalidation gate (submit OR
         // skip, tool_choice "any"); scheduled/first/startup cycles force the
         // submit tool so a guaranteed send can never be skipped.
         var tools = allowSkip
-            ? new[] { ReconcilerPrompts.BuildSubmitReconciledReportTool(), ReconcilerPrompts.BuildSkipSendTool() }
-            : new[] { ReconcilerPrompts.BuildSubmitReconciledReportTool() };
+            ? new[] { ReconcilerPrompts.BuildSubmitReconciledReportTool(narrativeLanguages), ReconcilerPrompts.BuildSkipSendTool() }
+            : new[] { ReconcilerPrompts.BuildSubmitReconciledReportTool(narrativeLanguages) };
         object toolChoice = allowSkip
             ? new { type = "any" }
             : new { type = "tool", name = "submit_reconciled_report" };
@@ -150,7 +163,7 @@ public sealed class ClaudeClient
         var request = new
         {
             model = _model,
-            max_tokens = MaxOutputTokens,
+            max_tokens = BaseOutputTokens + PerLanguageOutputTokens * narrativeLanguages.Count,
             system = new object[]
             {
                 new { type = "text", text = _personaPrefix },
