@@ -314,7 +314,7 @@ public sealed class ReportWorker : BackgroundService
         committedSend.ReasoningTrace = success.ReasoningTrace;
         // WX-128: persist the unit-neutral structured report alongside the email
         // body. Unread in the additive transition; WX-129's renderer consumes it.
-        committedSend.StructuredReport = success.StructuredReport.Serialize();
+        committedSend.StructuredReport = success.StructuredReport?.Serialize();
         await ctx.SaveChangesAsync(ct);
         Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): reconciled CommittedSend Id={committedSend.Id} → ForecastSnapshot Id={reconciledSnapshot.Id}.");
 
@@ -723,7 +723,7 @@ public sealed class ReportWorker : BackgroundService
                 committedSend.ReasoningTrace = success.ReasoningTrace;
                 // WX-128: persist the unit-neutral structured report alongside the
                 // email body. Unread in the additive transition; WX-129 consumes it.
-                committedSend.StructuredReport = success.StructuredReport.Serialize();
+                committedSend.StructuredReport = success.StructuredReport?.Serialize();
                 await ctx.SaveChangesAsync(ct);
                 Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): reconciled CommittedSend Id={committedSend.Id} → ForecastSnapshot Id={reconciledSnapshot.Id}.");
 

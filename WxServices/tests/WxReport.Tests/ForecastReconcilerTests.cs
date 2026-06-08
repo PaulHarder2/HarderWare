@@ -71,21 +71,26 @@ public class ForecastReconcilerTests
         Assert.Equal(RealisticBody, success.EmailBody);
         Assert.Equal("All three steps clean.", success.ReasoningTrace);
         Assert.Empty(success.FinalSnapshot.Blocks);
-        Assert.True(success.StructuredReport.Narrative.ContainsKey("en")); // WX-128 fourth artifact parsed
-        Assert.Empty(success.StructuredReport.Changes);
+        Assert.NotNull(success.StructuredReport); // WX-128 fourth artifact parsed (nullable since WX-144)
+        Assert.True(success.StructuredReport!.Narrative.ContainsKey("en"));
+        Assert.Empty(success.StructuredReport!.Changes);
         Assert.Equal(100, success.Tokens.InputTokens);
         Assert.Equal(50, success.Tokens.OutputTokens);
         Assert.Equal(80, success.Tokens.CacheReadInputTokens);
         Assert.Equal(10, success.Tokens.CacheCreationInputTokens);
     }
 
-    // ── WX-128: structured_report contract ────────────────────────────────────
+    // ── WX-128 structured_report contract — non-fatal while dormant (WX-144) ───
+    // The structured report is persisted-but-unread during the additive transition,
+    // so a validation failure on it must NOT abort the live email_body send: the
+    // reconciler logs it, returns Success with a null StructuredReport, and does not
+    // retry. (StructuredReportBody.Validate itself is still tested directly in
+    // MetarParser.Tests; WX-130 re-couples this once the report becomes the live
+    // rendering source.)
 
     [Fact]
-    public async Task StructuredReportMissing_ReturnsFailure_NamingField()
+    public async Task StructuredReportMissing_IsNonFatal_StillSendsWithNullReport()
     {
-        // email_body must clear the WX-120 floor (checked first since the WX-128
-        // review reorder) so the failure isolates the missing structured_report.
         var responseJson = BuildClaudeResponseJsonWithRawInput($$"""
             {
               "email_body": "{{RealisticBody}}",
@@ -96,17 +101,17 @@ public class ForecastReconcilerTests
 
         var result = await RunReconciler(responseJson);
 
-        var failure = Assert.IsType<ReconcileResult.Failure>(result);
-        Assert.Contains("missing required field", failure.Reason);
-        Assert.Contains("structured_report", failure.Reason);
+        var success = Assert.IsType<ReconcileResult.Success>(result);
+        Assert.Null(success.StructuredReport);          // WX-144: absent dormant artifact is non-fatal
+        Assert.Equal(RealisticBody, success.EmailBody); // the live artifact still sends
     }
 
     [Fact]
-    public async Task StructuredReportMissingRequestedLanguage_FailsClosed()
+    public async Task StructuredReportMissingRequestedLanguage_IsNonFatal_NotRetried()
     {
         // The cycle requests en AND es; the narrative is internally valid but
-        // carries en only — the per-call contract fails closed through the
-        // same retry-then-Failure path as a schema violation (WX-128).
+        // carries en only. The per-call contract failure is non-fatal (WX-144) and
+        // — unlike a final_snapshot/email_body failure — is NOT retried.
         var responseJson = BuildClaudeResponseJson(
             emailBody: RealisticBody,
             finalSnapshotJson: """{"schemaVersion":3,"blocks":[]}""",
@@ -123,16 +128,16 @@ public class ForecastReconcilerTests
             };
         }, narrativeLanguages: new[] { "en", "es" });
 
-        var failure = Assert.IsType<ReconcileResult.Failure>(result);
-        Assert.Contains("missing requested language 'es'", failure.Reason);
-        Assert.Equal(3, calls); // retried like any other malformed output, then failed closed
+        var success = Assert.IsType<ReconcileResult.Success>(result);
+        Assert.Null(success.StructuredReport);
+        Assert.Equal(1, calls); // dormant-artifact failure does not waste a retry of a good email_body
     }
 
     [Fact]
-    public async Task StructuredReportDegenerateNarrative_FailsClosed()
+    public async Task StructuredReportDegenerateNarrative_IsNonFatal_StillSends()
     {
-        // Sections present but near-empty: the WX-120-style per-language floor
-        // must reject it so a tokens-only narrative never persists as renderable.
+        // Sections present but near-empty (below the per-language floor): non-fatal
+        // on the dormant artifact — the email_body still sends with a null report.
         var degenerate = """
             {
               "schemaVersion": 3,
@@ -156,15 +161,15 @@ public class ForecastReconcilerTests
 
         var result = await RunReconciler(responseJson);
 
-        var failure = Assert.IsType<ReconcileResult.Failure>(result);
-        Assert.Contains("degenerate", failure.Reason);
+        var success = Assert.IsType<ReconcileResult.Success>(result);
+        Assert.Null(success.StructuredReport);
     }
 
     [Fact]
-    public async Task StructuredReportWithExtraLanguage_FailsClosed()
+    public async Task StructuredReportWithExtraLanguage_IsNonFatal_StillSends()
     {
-        // Exact-set contract: an unrequested language is unvalidated-floor
-        // content persisting for no recipient — rejected (WX-128 review).
+        // Exact-set contract: an unrequested language is unvalidated-floor content
+        // for no recipient. Non-fatal on the dormant artifact (WX-144) — still sends.
         var withExtra = ValidStructuredReportJson.Replace(
             "\"narrative\": {",
             "\"narrative\": { \"es\": { \"changeSummary\": null, \"currentConditions\": \"Texto suficientemente largo para parecer real y pasar cualquier suelo de longitud visible en este idioma adicional no solicitado por nadie.\", \"extendedForecast\": \"Más texto de pronóstico extendido con suficiente contenido visible para no parecer degenerado en absoluto.\", \"closing\": \"Un cierre razonable.\" },");
@@ -177,8 +182,8 @@ public class ForecastReconcilerTests
 
         var result = await RunReconciler(responseJson);
 
-        var failure = Assert.IsType<ReconcileResult.Failure>(result);
-        Assert.Contains("unrequested language 'es'", failure.Reason);
+        var success = Assert.IsType<ReconcileResult.Success>(result);
+        Assert.Null(success.StructuredReport);
     }
 
     [Fact]
