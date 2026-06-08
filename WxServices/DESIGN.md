@@ -1306,7 +1306,7 @@ All logs are written to `{InstallRoot}\Logs\` (default `C:\HarderWare\Logs\`). L
 
 | Item | Notes |
 |---|---|
-| Single bounding box | All METAR, TAF, and GFS data is fetched for one geographic region. Supporting recipients in widely separated locations would require per-region fetch configuration. |
+| GFS single region | GFS forecast data is fetched for one configured region (the CONUS maps' extent). METAR/TAF observation fetching no longer shares this limit — WX-140's adaptive splitting plus per-locality boxes and station gap fill cover widely separated recipients automatically — but the GFS grid is still one region, so a recipient outside it gets observations without a local GFS forecast. |
 | GFS requires native `wgrib2.exe` | As of WX-33, `wgrib2` runs as a native Windows process, not via WSL. If `wgrib2.exe` is missing from the configured path (default `{InstallRoot}\wgrib2\wgrib2.exe`), the GFS cycle logs errors and skips ingestion; METAR/TAF reports continue normally without forecast data. |
 | GFS forecast delay | A complete model run takes up to ~4 hours after the nominal run time to appear on NOMADS. During this window the previous run's data is used. |
 | WxMonitor does not watch itself | WxMonitor has no watchdog. A Windows Task Scheduler task could serve this purpose if needed. |
