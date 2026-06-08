@@ -5,6 +5,8 @@ using MetarParser.Data.Entities;
 
 using Microsoft.EntityFrameworkCore;
 
+using WxServices.Common;
+
 namespace WxInterp;
 
 /// <summary>
@@ -18,7 +20,8 @@ public static class WxInterpreter
     /// coordinates for a station to be considered when falling back to the
     /// nearest-neighbour observation.  Roughly 30 statute miles.
     /// </summary>
-    public const double MaxFallbackDistanceKm = 50.0;
+    /// <remarks>Defined by <see cref="StationCoverage.MaxFallbackDistanceKm"/> so the WX-140 fetch-side gap fill sweeps the same radius this fallback roams.</remarks>
+    public const double MaxFallbackDistanceKm = StationCoverage.MaxFallbackDistanceKm;
 
     /// <summary>
     /// Builds a <see cref="WeatherSnapshot"/> from the most recent METAR and
@@ -92,7 +95,7 @@ public static class WxInterpreter
         // Tier 1: try each configured station in preference order, accepting only
         // observations within the last 3 hours.  A stale primary station causes
         // fallthrough to the next candidate rather than surfacing old data.
-        var recentCutoff = DateTime.UtcNow.AddHours(-3);
+        var recentCutoff = DateTime.UtcNow - StationCoverage.FreshObservationWindow;
         MetarRecord? metar = null;
         foreach (var icao in metarIcaos)
         {
@@ -194,7 +197,7 @@ public static class WxInterpreter
         var nearestKm = double.MaxValue;
         foreach (var c in candidates)
         {
-            var km = HaversineKm(homeLat, homeLon, c.Lat, c.Lon);
+            var km = GeoMath.HaversineKm(homeLat, homeLon, c.Lat, c.Lon);
             if (km < nearestKm) { nearestKm = km; nearestIcao = c.IcaoId; }
         }
 
@@ -208,21 +211,6 @@ public static class WxInterpreter
             .FirstOrDefaultAsync(ct);
 
         return metar is null ? (null, null) : (metar, nearestKm);
-    }
-
-    /// <summary>
-    /// Great-circle distance in kilometres between two points on Earth, using the
-    /// haversine formula with a mean radius of 6371.0 km.
-    /// </summary>
-    private static double HaversineKm(double lat1, double lon1, double lat2, double lon2)
-    {
-        const double R = 6371.0;
-        var dLat = (lat2 - lat1) * Math.PI / 180.0;
-        var dLon = (lon2 - lon1) * Math.PI / 180.0;
-        var a = Math.Sin(dLat / 2) * Math.Sin(dLat / 2)
-              + Math.Cos(lat1 * Math.PI / 180.0) * Math.Cos(lat2 * Math.PI / 180.0)
-              * Math.Sin(dLon / 2) * Math.Sin(dLon / 2);
-        return R * 2 * Math.Atan2(Math.Sqrt(a), Math.Sqrt(1 - a));
     }
 
     // ── nearest-station resolution ────────────────────────────────────────────
