@@ -31,7 +31,6 @@ public sealed class ReportWorker : BackgroundService
 {
     private readonly IConfiguration _config;
     private readonly DbContextOptions<WeatherDataContext> _dbOptions;
-    private readonly HttpClient _httpClient;
     private readonly HttpClient _claudeHttpClient;
     private readonly PersonaPrefix _persona;
 
@@ -58,7 +57,7 @@ public sealed class ReportWorker : BackgroundService
     /// <summary>Initializes a new instance of <see cref="ReportWorker"/> with the given dependencies.</summary>
     /// <param name="config">Application configuration used to load the <c>Report</c> config section each cycle.</param>
     /// <param name="dbOptions">EF Core options for opening a <see cref="WeatherDataContext"/> to read/write recipient state.</param>
-    /// <param name="httpClientFactory">Factory for the named <c>WxReport</c> client (geocoding/airport lookups, 100s default timeout) and the <c>Claude</c> client (reconciliation, long timeout per WX-100).</param>
+    /// <param name="httpClientFactory">Factory for the named <c>Claude</c> client (reconciliation, long timeout per WX-100).  Address geocoding / airport lookup now happens at locality-setup time in WxManager (WX-126/127), so the runtime worker no longer needs the <c>WxReport</c> client.</param>
     /// <param name="persona">Author-persona prefix loaded once at startup and threaded into every Claude call.</param>
     public ReportWorker(
         IConfiguration config,
@@ -68,9 +67,8 @@ public sealed class ReportWorker : BackgroundService
     {
         _config = config;
         _dbOptions = dbOptions;
-        _httpClient = httpClientFactory.CreateClient("WxReport");
-        // Separate client for Claude: its long reconciliation timeout (WX-100)
-        // must not bleed into the fast-fail geocoding/airport calls on _httpClient.
+        // The Claude client carries a long reconciliation timeout (WX-100); it is
+        // the only outbound HTTP the per-locality worker makes (WX-130).
         _claudeHttpClient = httpClientFactory.CreateClient("Claude");
         _persona = persona;
         _reportCycles = _meter.CreateCounter<long>("wxreport.cycles.total", description: "Number of completed report cycles.");
@@ -155,21 +153,25 @@ public sealed class ReportWorker : BackgroundService
     // ── startup report ────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Sends an immediate out-of-cycle weather report to the first valid recipient
-    /// in the configuration.  Called once at service startup so that a deployment
-    /// can be verified without waiting for the scheduled send hour.
-    /// All send-decision logic is bypassed; the report is sent unconditionally
-    /// as long as METAR data is available.  Recipient state is updated with an
-    /// unscheduled timestamp so the minimum inter-send gap applies to the next
-    /// normal cycle, preventing an immediate duplicate.
+    /// Sends an immediate out-of-cycle DIAGNOSTIC report to the FIRST valid
+    /// recipient only (the operator — Paul), not to the locality's other members.
+    /// Called once at service startup so a deployment can be verified without
+    /// waiting for the scheduled send hour.  All send-decision logic is bypassed;
+    /// the recipient's locality is reconciled unconditionally (<c>allowSkip: false</c>)
+    /// as long as weather data is available, then rendered for that one recipient.
+    /// The resulting <see cref="CommittedSend"/> row is flagged
+    /// <see cref="CommittedSend.IsDiagnostic"/>, so it is excluded from the
+    /// prior-snapshot baseline and the locality's last-sent state is NOT advanced —
+    /// a deploy-time test report can't shift the shared baseline the next real
+    /// cycle reconciles against, nor seed a subsequent unscheduled update
+    /// (WX-130/WX-133).
     /// </summary>
     /// <param name="ct">Cancellation token propagated to database and HTTP operations.</param>
     /// <sideeffects>
-    /// Sends one email via SMTP.
-    /// Makes HTTP calls to the Claude API and, if the recipient is not yet
-    /// resolved, to geocoding and airport-lookup APIs.
-    /// Reads and writes <see cref="RecipientState"/> in the database.
-    /// Writes log entries for each significant step.
+    /// Sends one email (to the first valid recipient) via SMTP.
+    /// Makes one HTTP call to the Claude API.
+    /// Writes <see cref="ForecastSnapshot"/> and one diagnostic <see cref="CommittedSend"/>
+    /// row; does NOT touch <see cref="LocalityState"/>.  Writes log entries for each step.
     /// </sideeffects>
     private async Task SendStartupReportAsync(CancellationToken ct)
     {
@@ -182,124 +184,109 @@ public sealed class ReportWorker : BackgroundService
             return;
         }
 
-        // Try candidates in order until one resolves — a persistent resolve
-        // failure on the first recipient (e.g. a locality member whose locality
-        // has no stations yet, WX-127) must not silence the startup report for
-        // every deployment.
-        var resolver = new RecipientResolver(_dbOptions, _httpClient, _config["What3Words:ApiKey"]);
-        RecipientConfig? recipient = null;
-        foreach (var candidate in cfg.Recipients.Where(r =>
-                     !string.IsNullOrWhiteSpace(r.Email) && !string.IsNullOrWhiteSpace(r.Id)))
-        {
-            if (await resolver.EnsureResolvedAsync(candidate)) { recipient = candidate; break; }
-        }
+        // The startup report is a deploy verification that goes ONLY to the first
+        // valid, locality-assigned recipient (the operator), never fanned out to a
+        // locality's other members. It is reconciled through the real per-locality
+        // path but delivered to just that one recipient, and flagged IsDiagnostic so
+        // its snapshot is excluded from the baseline and can't seed a later update.
+        var recipients = await ctx.Recipients.OrderBy(r => r.Id).ToListAsync(ct);
+        var duplicateIds = recipients
+            .GroupBy(r => r.RecipientId, StringComparer.Ordinal)
+            .Where(g => g.Count() > 1)
+            .Select(g => g.Key)
+            .ToHashSet(StringComparer.Ordinal);
 
-        if (recipient is null)
+        var startup = recipients.FirstOrDefault(r =>
+            !string.IsNullOrWhiteSpace(r.Email)
+            && !string.IsNullOrWhiteSpace(r.RecipientId)
+            && !duplicateIds.Contains(r.RecipientId)
+            && r.LocalityId is not null);
+        if (startup is null)
         {
-            Logger.Debug("No resolvable recipient found for startup report.");
+            Logger.Debug("No valid locality-assigned recipient found for startup report.");
             return;
         }
 
-        var preferredIcaos = ParseIcaoList(recipient.MetarIcao);
-        var localityName = recipient.LocalityName ?? (preferredIcaos.Count > 0 ? preferredIcaos[0] : recipient.Email);
+        var locality = await ctx.Localities.FirstOrDefaultAsync(l => l.Id == startup.LocalityId!.Value, ct);
+        if (locality is null)
+        {
+            Logger.Warn($"Startup report: recipient {startup.RecipientId}'s locality Id={startup.LocalityId} has no Localities row — skipping.");
+            return;
+        }
+        var members = new List<Recipient> { startup };
+        var label = $"locality '{locality.Name}' (Id={locality.Id})";
+
+        var tz = ResolveTimezone(locality.Timezone);
+        var scheduledHours = ParseHourList(locality.ScheduledSendHours ?? cfg.DefaultScheduledSendHours);
+        var preferredIcaos = ParseIcaoList(locality.MetarIcao);
         var snapshot = await WxInterpreter.GetSnapshotAsync(
-            preferredIcaos, recipient.TafIcao == "NONE" ? null : recipient.TafIcao, localityName, _dbOptions,
-            homeLat: recipient.Latitude, homeLon: recipient.Longitude,
+            preferredIcaos, locality.TafIcao == "NONE" ? null : locality.TafIcao, locality.Name, _dbOptions,
+            homeLat: locality.CentroidLat, homeLon: locality.CentroidLon,
             precipThresholdMmHr: cfg.PrecipRateThresholdMmHr,
             ct: ct);
 
         if (snapshot is null)
         {
-            Logger.Warn($"{recipient.Id} {recipient.Email} ({recipient.Name}): no METAR data for startup report ({recipient.MetarIcao}) — skipping.");
+            Logger.Warn($"{label}: no METAR, TAF, or GFS data for startup report — skipping.");
             return;
         }
 
-        Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): sending startup report.");
+        Logger.Info($"{label}: sending startup (diagnostic) report to {startup.RecipientId} {startup.Email} ({startup.Name}) only.");
 
-        var language = recipient.Language ?? cfg.DefaultLanguage;
-        var scheduledHours = ParseHourList(recipient.ScheduledSendHours ?? cfg.DefaultScheduledSendHours);
-        var scheduledHour = scheduledHours.Count > 0 ? scheduledHours[0] : 7;
-        var tz = ResolveTimezone(recipient.Timezone);
-
-        // WX-86: write the provisional CommittedSend before invoking Claude,
-        // mirroring RunCycleAsync.  A Claude failure still leaves an audit
-        // row showing what we were about to send for the startup path.
-        // Anchor key falls back to the TAF station when the METAR station is
-        // empty (observationless-snapshot path), so anchor rows never carry an
-        // empty key (WX-79 CR finding).
+        // Pre-Claude audit anchor (matches the cycle path); the diagnostic prior
+        // lookup deliberately excludes diagnostic rows so a prior real send is the
+        // baseline, never an earlier startup test.
         var snapshotKey = !string.IsNullOrWhiteSpace(snapshot.StationIcao)
             ? snapshot.StationIcao
             : (snapshot.TafStationIcao ?? "");
         var anchorSnapshot = await BuildProvisionalForecastSnapshotAsync(
-            snapshotKey, recipient.Latitude, recipient.Longitude, DateTime.UtcNow, ct);
+            snapshotKey, locality.CentroidLat, locality.CentroidLon, DateTime.UtcNow, ct);
         ctx.ForecastSnapshots.Add(anchorSnapshot);
-        var committedSend = new CommittedSend
-        {
-            ForecastSnapshot = anchorSnapshot,
-            RecipientId = recipient.Id!,
-            CreatedAtUtc = DateTime.UtcNow,
-        };
-        ctx.CommittedSends.Add(committedSend);
         await ctx.SaveChangesAsync(ct);
-        Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): wrote provisional CommittedSend Id={committedSend.Id}.");
 
-        var reconciler = new ForecastReconciler(
-            new ClaudeClient(_claudeHttpClient, claude_cfg.ApiKey, claude_cfg.Model, _persona.Text));
-
-        // Prior-snapshot lookup is recipient-keyed via CommittedSends so two
-        // recipients sharing a station don't cross-contaminate each other's
-        // reconciliation context.  SentAtUtc.HasValue restricts to snapshots
-        // we actually delivered — Claude-failed audit rows don't count as
-        // priors (WX-79 CR finding).
+        var memberIds = members.Select(m => m.RecipientId).ToList();
         var priorSnapshot = await ctx.CommittedSends
-            .Where(cs => cs.RecipientId == recipient.Id && cs.SentAtUtc.HasValue)
+            .Where(cs => memberIds.Contains(cs.RecipientId) && cs.SentAtUtc.HasValue && !cs.IsDiagnostic)
             .Select(cs => cs.ForecastSnapshot)
             .Where(s => s.Id != anchorSnapshot.Id)
             .OrderByDescending(s => s.GeneratedAtUtc)
             .FirstOrDefaultAsync(ct);
 
         var provisionalBody = ForecastSnapshotBody.Deserialize(anchorSnapshot.Body);
+        var narrativeLanguages = members
+            .Select(m => LanguageHelper.ToIetfTag(m.Language ?? cfg.DefaultLanguage))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        var reconciler = new ForecastReconciler(
+            new ClaudeClient(_claudeHttpClient, claude_cfg.ApiKey, claude_cfg.Model, _persona.Text));
 
         var reconcileResult = await reconciler.ReconcileAsync(
             snapshot, provisionalBody,
             snapshot.GfsForecast?.ModelRunUtc,
             snapshot.TafIssuanceUtc, snapshot.TafValidToUtc,
             priorSnapshot,
-            language,
-            // WX-128 additive transition: single-recipient language; see RunCycleAsync.
-            narrativeLanguages: new[] { LanguageHelper.ToIetfTag(language) },
-            recipient.Name, tz,
-            isFirstReport: false,
-            scheduledHour: scheduledHour,
-            units: recipient.Units,
+            narrativeLanguages, tz,
             changeSeverity: ChangeSeverity.None,
             previousMetarIcao: null,
             allowSkip: false, // startup is an unconditional verification send — never skippable
             changedSinceLastSend: Array.Empty<TriggerSource>(), // unused on a guaranteed send
             ct: ct);
 
-        // Startup passes allowSkip:false, so ReconcileAsync never returns NotNews
-        // here — a stray skip_send is converted to Failure at the reconciler and
-        // handled by this branch (logged, provisional left in place).
+        // allowSkip:false, so ReconcileAsync never returns NotNews — a stray
+        // skip_send is converted to Failure at the reconciler and handled here.
         if (reconcileResult is not ReconcileResult.Success success)
         {
             _claudeMalformedOutput.Add(1);
             var reason = ((ReconcileResult.Failure)reconcileResult).Reason;
-            Logger.Error($"{recipient.Id} {recipient.Email} ({recipient.Name}): Reconciliation failed for startup send: {reason}.  Provisional CommittedSend Id={committedSend.Id} left in place.");
+            Logger.Error($"{label}: reconciliation failed for startup send: {reason}. Provisional ForecastSnapshot Id={anchorSnapshot.Id} left as audit.");
             return;
         }
 
         _claudeToolUseSuccess.Add(1);
-        _claudeInputTokens.Add(success.Tokens.InputTokens);
-        _claudeOutputTokens.Add(success.Tokens.OutputTokens);
-        _claudeCacheReadTokens.Add(success.Tokens.CacheReadInputTokens);
-        _claudeCacheCreationTokens.Add(success.Tokens.CacheCreationInputTokens);
-        LogClaudeTokens(recipient, success.Tokens, "startup");
+        AddClaudeTokens(success.Tokens);
+        LogClaudeTokens(label, success.Tokens, "startup");
 
-        // WX-79: persist the reconciled snapshot row and re-anchor the
-        // CommittedSend.  EmailBody is the pre-meteogram wrapped HTML
-        // (matches the CommittedSend.EmailBody = Claude artifact convention);
-        // ReasoningTrace is the audit log Claude produced.
         var reconciledSnapshot = new ForecastSnapshot
         {
             StationIcao = snapshot.StationIcao,
@@ -308,86 +295,87 @@ public sealed class ReportWorker : BackgroundService
             Body = success.FinalSnapshot.Serialize(),
         };
         ctx.ForecastSnapshots.Add(reconciledSnapshot);
-        committedSend.ForecastSnapshot = reconciledSnapshot;
-        var report = WrapAsEmailHtml(success.EmailBody, language, snapshot, tz);
-        committedSend.EmailBody = report;
-        committedSend.ReasoningTrace = success.ReasoningTrace;
-        // WX-128: persist the unit-neutral structured report alongside the email
-        // body. Unread in the additive transition; WX-129's renderer consumes it.
-        committedSend.StructuredReport = success.StructuredReport?.Serialize();
         await ctx.SaveChangesAsync(ct);
-        Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): reconciled CommittedSend Id={committedSend.Id} → ForecastSnapshot Id={reconciledSnapshot.Id}.");
 
-        var subject = BuildSubject(snapshot, language, tz, recipientName: recipient.Name);
-        var plainFallback = SnapshotDescriber.Describe(snapshot, tz, recipient.Units);
-
-        var plotsDir = new WxPaths(_config["InstallRoot"]).PlotsDir;
-        var meteogramPath = FindMeteogramAbbrevPath(preferredIcaos.Count > 0 ? preferredIcaos[0] : "", recipient.Units.Temperature, recipient.Timezone, plotsDir);
-        report = meteogramPath is not null
-            ? InsertMeteogramImage(report)
-            : report.Replace("<!--meteogram-->", "", StringComparison.Ordinal);
-        IReadOnlyDictionary<string, string>? inlineImages = meteogramPath is not null
-            ? new Dictionary<string, string> { ["meteogramAbbrev"] = meteogramPath }
-            : null;
-
+        var structuredReportJson = success.StructuredReport.Serialize();
         var emailer = new SmtpSender(smtp, "WxReport");
-        var sent = await emailer.SendAsync(
-            recipient.Email, subject, plainFallback,
-            htmlBody: report, inlineImages: inlineImages,
-            toName: recipient.Name, ct: ct);
+        var plotsDir = new WxPaths(_config["InstallRoot"]).PlotsDir;
 
-        if (!sent) return;
-
-        Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): startup report sent.");
-
-        // WX-86: stamp and persist SentAtUtc independently of the RecipientState
-        // save below, so a RecipientState failure doesn't leave a successfully
-        // delivered startup report audited as SentAtUtc = null.
-        committedSend.SentAtUtc = DateTime.UtcNow;
-        try
+        // Render + send a diagnostic email for each member. No LocalityState update
+        // (IsDiagnostic rows never advance the baseline). Welcome is suppressed —
+        // a deploy verification is not a recipient's genuine first report.
+        foreach (var member in members)
         {
-            await ctx.SaveChangesAsync(ct);
+            try
+            {
+                var memberLang = member.Language ?? cfg.DefaultLanguage;
+                var innerBody = StructuredReportRenderer.Render(
+                    success.StructuredReport, success.FinalSnapshot, snapshot, member, tz,
+                    isUnscheduled: false, isFirstReport: false, scheduledHours: scheduledHours);
+                var report = WrapAsEmailHtml(innerBody, memberLang, snapshot, tz);
+
+                var committedSend = new CommittedSend
+                {
+                    ForecastSnapshot = reconciledSnapshot,
+                    RecipientId = member.RecipientId,
+                    ReasoningTrace = success.ReasoningTrace,
+                    StructuredReport = structuredReportJson,
+                    EmailBody = report,
+                    CreatedAtUtc = DateTime.UtcNow,
+                    IsDiagnostic = true,
+                };
+                ctx.CommittedSends.Add(committedSend);
+                await ctx.SaveChangesAsync(ct);
+
+                var subject = BuildSubject(snapshot, memberLang, tz, recipientName: member.Name);
+                var plainFallback = SnapshotDescriber.Describe(snapshot, tz, ToUnitPreferences(member));
+
+                var meteogramPath = FindMeteogramAbbrevPath(
+                    preferredIcaos.Count > 0 ? preferredIcaos[0] : "", member.TempUnit, locality.Timezone, plotsDir);
+                report = meteogramPath is not null
+                    ? InsertMeteogramImage(report)
+                    : report.Replace("<!--meteogram-->", "", StringComparison.Ordinal);
+                IReadOnlyDictionary<string, string>? inlineImages = meteogramPath is not null
+                    ? new Dictionary<string, string> { ["meteogramAbbrev"] = meteogramPath }
+                    : null;
+
+                var sent = await emailer.SendAsync(
+                    member.Email, subject, plainFallback,
+                    htmlBody: report, inlineImages: inlineImages,
+                    toName: member.Name, ct: ct);
+
+                if (!sent) { _sendFailures.Add(1); continue; }
+
+                _reportsSent.Add(1);
+                committedSend.SentAtUtc = DateTime.UtcNow;
+                try { await ctx.SaveChangesAsync(ct); }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    Logger.Error($"{member.RecipientId} {member.Email} ({member.Name}): failed to persist CommittedSend.SentAtUtc Id={committedSend.Id} after a successful startup send.", ex);
+                }
+                Logger.Info($"{member.RecipientId} {member.Email} ({member.Name}): startup (diagnostic) report sent ({label}).");
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Logger.Error($"{member.RecipientId} {member.Email} ({member.Name}): failed to render or send startup report for {label}.", ex);
+            }
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            Logger.Error($"{recipient.Id} {recipient.Email} ({recipient.Name}): failed to persist CommittedSend.SentAtUtc Id={committedSend.Id} after successful startup-report send.", ex);
-        }
-
-        // Update state so the MinGap check prevents an immediate duplicate
-        // from the first normal cycle.
-        var state = await ctx.RecipientStates
-            .FirstOrDefaultAsync(r => r.RecipientId == recipient.Id, ct);
-
-        if (state is null)
-        {
-            state = new RecipientState { RecipientId = recipient.Id! };
-            ctx.RecipientStates.Add(state);
-        }
-
-        state.LastUnscheduledSentUtc = DateTime.UtcNow;
-        var startupHash = InputIdentity.From(snapshot).Serialize();
-        state.LastClaudeInputHash = startupHash;
-        state.LastSentInputHash = startupHash; // startup actually delivered a report
-        state.LastMetarIcao = snapshot.StationIcao;
-
-        try { await ctx.SaveChangesAsync(ct); }
-        catch (Exception ex) when (ex is not OperationCanceledException) { Logger.Error($"{recipient.Id} {recipient.Email} ({recipient.Name}): failed to save state after startup report.", ex); }
     }
 
     // ── cycle ─────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Executes one full report cycle: resolves each recipient's location, builds
-    /// a weather snapshot, evaluates send conditions, generates a Claude report,
-    /// and sends it by email.  Recipients that fail validation or resolution are
-    /// skipped for this cycle only.
+    /// Executes one full report cycle: groups recipients by locality, and for each
+    /// locality builds one weather snapshot, evaluates send conditions, makes at most
+    /// one Claude reconciliation call, and renders + emails it per member (WX-123/WX-130).
+    /// Localities or members that fail validation are skipped for this cycle only.
     /// </summary>
     /// <param name="ct">Cancellation token propagated to database and delay operations.</param>
     /// <sideeffects>
-    /// Reads and writes <see cref="RecipientState"/> rows in the database.
-    /// Sends email via SMTP for each qualifying recipient.
-    /// Makes HTTP calls to the Claude API and address geocoding / airport lookup APIs (via <see cref="RecipientResolver"/>).
-    /// Writes log entries for each recipient decision.
+    /// Reads and writes <see cref="LocalityState"/> + <see cref="CommittedSend"/> rows in the database.
+    /// Sends email via SMTP for each qualifying member.
+    /// Makes one HTTP call to the Claude API per due locality.
+    /// Writes log entries for each locality decision.
     /// </sideeffects>
     private async Task RunCycleAsync(CancellationToken ct)
     {
@@ -398,401 +386,61 @@ public sealed class ReportWorker : BackgroundService
 
         try
         {
-
             if (string.IsNullOrWhiteSpace(claude_cfg.ApiKey))
             {
                 Logger.Warn("Claude.ApiKey is not set — skipping report cycle.");
                 return;
             }
 
-            if (cfg.Recipients.Count == 0)
+            // WX-123/WX-130: the expensive Claude reconciliation runs once per
+            // LOCALITY, then renders per recipient. Membership is read straight from
+            // the Recipients table (RecipientId, LocalityId, units, language); the
+            // locality owns the shared stations, timezone, send hours, and GFS
+            // centroid. A recipient with no locality gets no report and a logged
+            // ERROR (Paul's firm rule, WX-130) — WxMonitor surfaces it by email.
+            var recipients = await ctx.Recipients.OrderBy(r => r.Id).ToListAsync(ct);
+            if (recipients.Count == 0)
             {
                 Logger.Debug("No recipients configured.");
+                _reportCycles.Add(1);
                 return;
             }
 
-            var duplicateIds = cfg.Recipients
-                .Where(r => r.Id is not null)
-                .GroupBy(r => r.Id)
+            var duplicateIds = recipients
+                .GroupBy(r => r.RecipientId, StringComparer.Ordinal)
                 .Where(g => g.Count() > 1)
-                .Select(g => g.Key!)
-                .ToHashSet();
-
+                .Select(g => g.Key)
+                .ToHashSet(StringComparer.Ordinal);
             foreach (var id in duplicateIds)
                 Logger.Error($"Duplicate recipient Id '{id}' — all entries with this Id will be skipped.");
+
+            var membersByLocality = GroupMembersByLocality(recipients, duplicateIds);
+            if (membersByLocality.Count == 0)
+            {
+                Logger.Debug("No locality-assigned recipients to process.");
+                _reportCycles.Add(1);
+                return;
+            }
+
+            var localities = await ctx.Localities
+                .Where(l => membersByLocality.Keys.Contains(l.Id))
+                .ToDictionaryAsync(l => l.Id, ct);
 
             var reconciler = new ForecastReconciler(
                 new ClaudeClient(_claudeHttpClient, claude_cfg.ApiKey, claude_cfg.Model, _persona.Text));
             var emailer = new SmtpSender(smtp, "WxReport");
-            var resolver = new RecipientResolver(_dbOptions, _httpClient, _config["What3Words:ApiKey"]);
             var now = DateTime.UtcNow;
             var reportsSent = 0;
 
-            foreach (var recipient in cfg.Recipients)
+            foreach (var (localityId, members) in membersByLocality)
             {
-                if (string.IsNullOrWhiteSpace(recipient.Email)) continue;
-                if (string.IsNullOrWhiteSpace(recipient.Id))
+                if (!localities.TryGetValue(localityId, out var locality))
                 {
-                    Logger.Warn($"{recipient.Email} ({recipient.Name}): no Id configured — skipping. Add a unique Id via WxManager → Recipients.");
-                    continue;
-                }
-                if (duplicateIds.Contains(recipient.Id)) continue;
-
-                // Ensure the recipient's address has been resolved to station ICAOs.
-                if (!await resolver.EnsureResolvedAsync(recipient)) continue;
-
-                var state = await ctx.RecipientStates
-                    .FirstOrDefaultAsync(r => r.RecipientId == recipient.Id, ct);
-
-                if (state is null)
-                {
-                    state = new RecipientState { RecipientId = recipient.Id! };
-                    ctx.RecipientStates.Add(state);
-                }
-
-                // Build a snapshot specific to this recipient's nearest stations.
-                var preferredIcaos = ParseIcaoList(recipient.MetarIcao);
-                var localityName = recipient.LocalityName ?? (preferredIcaos.Count > 0 ? preferredIcaos[0] : recipient.Email);
-                var snapshot = await WxInterpreter.GetSnapshotAsync(
-                    preferredIcaos, recipient.TafIcao == "NONE" ? null : recipient.TafIcao, localityName, _dbOptions,
-                    homeLat: recipient.Latitude, homeLon: recipient.Longitude,
-                    precipThresholdMmHr: cfg.PrecipRateThresholdMmHr,
-                    ct: ct);
-
-                if (snapshot is null)
-                {
-                    Logger.Warn($"{recipient.Id} {recipient.Email} ({recipient.Name}): no METAR, TAF, or GFS data available — skipping.");
+                    Logger.Error($"Locality Id={localityId} referenced by {members.Count} recipient(s) has no Localities row — skipping. (Membership FK integrity issue; check WxManager → Localities.)");
                     continue;
                 }
 
-                if (!snapshot.ObservationAvailable)
-                {
-                    Logger.Warn($"{recipient.Id} {recipient.Email} ({recipient.Name}): preferred station(s) [{string.Join(", ", preferredIcaos)}] had no data and no station within 30 mi reported in the last 3 hours — sending forecast-only report.");
-                }
-                else if (preferredIcaos.Count > 0 && !preferredIcaos.Contains(snapshot.StationIcao))
-                {
-                    var distStr = snapshot.ObservationDistanceKm is double km
-                        ? $" ({km * 0.621371:F0} mi away)"
-                        : "";
-                    Logger.Warn($"{recipient.Id} {recipient.Email} ({recipient.Name}): preferred station(s) [{string.Join(", ", preferredIcaos)}] had no data — fell back to {snapshot.StationIcao}{distStr}.");
-                }
-
-                var useC = recipient.Units.Temperature.Equals("C", StringComparison.OrdinalIgnoreCase);
-                if (snapshot.GfsForecast is { } gfs)
-                    Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): GFS run {gfs.ModelRunUtc:yyyy-MM-dd HH}Z — {gfs.Days.Count} day(s); " +
-                        string.Join(", ", gfs.Days.Select(d => useC
-                            ? $"{d.Date:MM/dd} {d.HighTempC:F0}°/{d.LowTempC:F0}°C"
-                            : $"{d.Date:MM/dd} {d.HighTempF:F0}°/{d.LowTempF:F0}°F")));
-                else
-                    Logger.Warn($"{recipient.Id} {recipient.Email} ({recipient.Name}): no GFS forecast available.");
-
-                // WX-80: the cheap pre-filter compares this cycle's raw input
-                // identity (observation time, TAF issuance, GFS run) against the
-                // identity at the last Claude call.  Significance is Claude's job,
-                // not a C# fingerprint's — this only avoids paying tokens to ask
-                // Claude about evidence it has already seen.
-                var inputIdentity = InputIdentity.From(snapshot);
-                var inputHash = inputIdentity.Serialize();
-
-                // WX-108: which inputs are newer than at the last DELIVERED report
-                // (distinct from the last Claude call). Drives the anti-reversal
-                // context handed to Claude and the severe-flag hysteresis backstop.
-                var changedSinceLastSend = inputIdentity.ChangedSourcesSince(state.LastSentInputHash);
-                bool freshTafSinceLastSend = changedSinceLastSend.Contains(TriggerSource.Taf);
-                bool freshGuidanceSinceLastSend =
-                    freshTafSinceLastSend || changedSinceLastSend.Contains(TriggerSource.Gfs);
-
-                var (shouldSend, reason, severity, allowSkip) = ShouldSend(recipient, state, inputIdentity, cfg, now);
-
-                if (!shouldSend)
-                {
-                    if (reason == "prefilter-skip")
-                    {
-                        _preFilterSkips.Add(1);
-                        Logger.Debug($"{recipient.Id} {recipient.Email} ({recipient.Name}): no input changed since last Claude call — pre-filter skip.");
-                    }
-                    continue;
-                }
-
-                // Label the trigger for telemetry: scheduled/first by reason, an
-                // arrival by which input(s) advanced since the last Claude call.
-                var triggerType = reason == "change"
-                    ? ArrivalLabel(inputIdentity.ChangedSourcesSince(state.LastClaudeInputHash))
-                    : reason;
-                _triggers.Add(1, new KeyValuePair<string, object?>("trigger.type", triggerType));
-
-                Logger.Info(reason == "change"
-                    ? $"{recipient.Id} {recipient.Email} ({recipient.Name}): {triggerType} arrival — invoking Claude invalidation gate."
-                    : $"{recipient.Id} {recipient.Email} ({recipient.Name}): generating {reason} report.");
-
-                // Detect station switch: if the METAR source changed from what was used in
-                // the last report, pass the previous ICAO to Claude so it can note the change.
-                // Skip when the current snapshot has no observation — the "empty" StationIcao
-                // would otherwise look like a spurious station switch.
-                var previousMetarIcao = snapshot.ObservationAvailable
-                    && state.LastMetarIcao is not null
-                    && state.LastMetarIcao != snapshot.StationIcao
-                        ? state.LastMetarIcao
-                        : null;
-                if (previousMetarIcao is not null)
-                    Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): METAR station changed {previousMetarIcao} → {snapshot.StationIcao} — noting in report.");
-
-                var language = recipient.Language ?? cfg.DefaultLanguage;
-                var scheduledHours = ParseHourList(recipient.ScheduledSendHours ?? cfg.DefaultScheduledSendHours);
-                var scheduledHour = scheduledHours.Count > 0 ? scheduledHours[0] : 7;
-                var tz = ResolveTimezone(recipient.Timezone);
-
-                // WX-78: write the provisional CommittedSend before invoking Claude.
-                // Anchored to a per-recipient provisional ForecastSnapshot built
-                // from the recipient's lat/lon via GfsSnapshotBuilder (WX-77).
-                // Persisted now so that a Claude failure still leaves an audit row.
-                // Anchor key falls back to the TAF station when the METAR station
-                // is empty; GeneratedAtUtc is per-insert (not the cycle-scoped
-                // `now`) so two recipients sharing a station don't collide on the
-                // unique index (StationIcao, GeneratedAtUtc) — WX-79 CR findings.
-                var snapshotKey = !string.IsNullOrWhiteSpace(snapshot.StationIcao)
-                    ? snapshot.StationIcao
-                    : (snapshot.TafStationIcao ?? "");
-                var anchorSnapshot = await BuildProvisionalForecastSnapshotAsync(
-                    snapshotKey, recipient.Latitude, recipient.Longitude, DateTime.UtcNow, ct);
-                ctx.ForecastSnapshots.Add(anchorSnapshot);
-                var committedSend = new CommittedSend
-                {
-                    ForecastSnapshot = anchorSnapshot,
-                    RecipientId = recipient.Id!,
-                    CreatedAtUtc = DateTime.UtcNow,
-                };
-                ctx.CommittedSends.Add(committedSend);
-                await ctx.SaveChangesAsync(ct);
-                Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): wrote provisional CommittedSend Id={committedSend.Id}.");
-
-                // Prior-snapshot lookup is recipient-keyed via CommittedSends so
-                // two recipients sharing a station don't cross-contaminate each
-                // other's reconciliation context.  SentAtUtc.HasValue restricts
-                // to snapshots we actually delivered — Claude-failed audit rows
-                // don't count as priors (WX-79 CR finding).
-                var priorSnapshot = await ctx.CommittedSends
-                    .Where(cs => cs.RecipientId == recipient.Id && cs.SentAtUtc.HasValue)
-                    .Select(cs => cs.ForecastSnapshot)
-                    .Where(s => s.Id != anchorSnapshot.Id)
-                    .OrderByDescending(s => s.GeneratedAtUtc)
-                    .FirstOrDefaultAsync(ct);
-
-                var provisionalBody = ForecastSnapshotBody.Deserialize(anchorSnapshot.Body);
-
-                // WX-114 deterministic significance gate (cost pre-filter, unscheduled
-                // cycles only). When the deterministic forecast has not changed materially
-                // since the last sent report, skip the Claude call entirely — this is where
-                // the token savings come from. Conservative: suppresses only when no
-                // criterion trips, and any evaluation error falls through to calling Claude.
-                // Claude still owns the send/skip judgment whenever it is invoked.
-                var gateMode = cfg.SignificanceGate.Mode;
-                if (gateMode != SignificanceGateMode.Off && allowSkip && priorSnapshot is not null)
-                {
-                    SignificanceResult? gate = null;
-                    try
-                    {
-                        var priorBodyForGate = ForecastSnapshotBody.Deserialize(priorSnapshot.Body);
-                        gate = SignificanceGate.Evaluate(priorBodyForGate, provisionalBody, cfg.SignificanceGate, now, tz, freshTafSinceLastSend);
-                    }
-                    catch (Exception ex) when (ex is not OperationCanceledException)
-                    {
-                        Logger.Error($"{recipient.Id} {recipient.Email} ({recipient.Name}): WX-114 significance gate evaluation failed — proceeding to Claude.", ex);
-                    }
-
-                    if (gate is { Significant: false })
-                    {
-                        bool enforce = gateMode == SignificanceGateMode.Enforce;
-                        _significanceGateSkips.Add(1, new KeyValuePair<string, object?>("mode", enforce ? "enforce" : "shadow"));
-                        if (enforce)
-                        {
-                            Logger.Debug($"{recipient.Id} {recipient.Email} ({recipient.Name}): WX-114 significance gate suppressed {triggerType} cycle — no material forecast change since last sent report; Claude not called. Provisional CommittedSend Id={committedSend.Id} left unsent.");
-                            await PersistUnsentCycleAsync(ctx, recipient, committedSend, state, inputHash, "WX-114 deterministic significance gate: no material change since last sent report; Claude not called.", ct);
-                            continue;
-                        }
-                        // Shadow: log what would have been suppressed, then fall through to Claude.
-                        Logger.Debug($"{recipient.Id} {recipient.Email} ({recipient.Name}): WX-114 significance gate (shadow) WOULD suppress {triggerType} cycle — no material forecast change since last sent report; calling Claude anyway.");
-                    }
-                    else if (gate is { Significant: true } passed)
-                    {
-                        Logger.Debug($"{recipient.Id} {recipient.Email} ({recipient.Name}): WX-114 significance gate passed ({gateMode}, {triggerType}) — fired: {string.Join(", ", passed.FiredCriteria)}.");
-                    }
-                }
-
-                var claudeSw = Stopwatch.StartNew();
-                var reconcileResult = await reconciler.ReconcileAsync(
-                    snapshot, provisionalBody,
-                    snapshot.GfsForecast?.ModelRunUtc,
-                    snapshot.TafIssuanceUtc, snapshot.TafValidToUtc,
-                    priorSnapshot,
-                    language,
-                    // WX-128 additive transition: the structured report carries the
-                    // recipient's own language only; WX-130's per-locality loop
-                    // widens this to the locality's distinct language set.
-                    narrativeLanguages: new[] { LanguageHelper.ToIetfTag(language) },
-                    recipient.Name, tz,
-                    isFirstReport: reason == "first",
-                    scheduledHour: scheduledHour,
-                    units: recipient.Units,
-                    changeSeverity: severity,
-                    previousMetarIcao: previousMetarIcao,
-                    allowSkip: allowSkip,
-                    changedSinceLastSend: changedSinceLastSend,
-                    ct: ct);
-                _claudeDuration.Record(claudeSw.Elapsed.TotalSeconds);
-                _claudeCalls.Add(1);
-
-                // WX-80 invalidation gate: Claude judged the arrival not news.
-                // Record the input hash so the next identical cycle pre-filter-skips,
-                // persist the reasoning trace for diagnosability, but do NOT send and
-                // do NOT advance last-sent or the committed anchor — the provisional
-                // keeps SentAtUtc = null, so it never becomes a prior snapshot.
-                if (reconcileResult is ReconcileResult.NotNews notNews)
-                {
-                    _claudeNotNews.Add(1);
-                    _claudeInputTokens.Add(notNews.Tokens.InputTokens);
-                    _claudeOutputTokens.Add(notNews.Tokens.OutputTokens);
-                    _claudeCacheReadTokens.Add(notNews.Tokens.CacheReadInputTokens);
-                    _claudeCacheCreationTokens.Add(notNews.Tokens.CacheCreationInputTokens);
-                    LogClaudeTokens(recipient, notNews.Tokens, $"{triggerType}/not-news");
-
-                    await PersistUnsentCycleAsync(ctx, recipient, committedSend, state, inputHash, notNews.ReasoningTrace, ct);
-                    Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): Claude judged the {triggerType} arrival not news — no send. Provisional CommittedSend Id={committedSend.Id} left unsent.");
-                    continue;
-                }
-
-                if (reconcileResult is not ReconcileResult.Success success)
-                {
-                    _claudeMalformedOutput.Add(1);
-                    var failureReason = ((ReconcileResult.Failure)reconcileResult).Reason;
-                    Logger.Error($"{recipient.Id} {recipient.Email} ({recipient.Name}): Reconciliation failed: {failureReason}.  Provisional CommittedSend Id={committedSend.Id} left in place.");
-                    continue;
-                }
-
-                _claudeToolUseSuccess.Add(1);
-                _claudeInputTokens.Add(success.Tokens.InputTokens);
-                _claudeOutputTokens.Add(success.Tokens.OutputTokens);
-                _claudeCacheReadTokens.Add(success.Tokens.CacheReadInputTokens);
-                _claudeCacheCreationTokens.Add(success.Tokens.CacheCreationInputTokens);
-                LogClaudeTokens(recipient, success.Tokens, $"{triggerType}/reconciled");
-
-                // WX-108 deterministic backstop (unscheduled cycles only). Two
-                // suppressions, both about idempotence/stability rather than weather
-                // significance — Claude still owns the "is it news?" judgment via the
-                // gate above; this only catches what stochastic re-derivation slips past:
-                //   1. Redundant re-send — the reconciled snapshot says materially what
-                //      the last sent report already told this recipient.
-                //   2. Severe-flag hysteresis — the only material change from the last
-                //      sent snapshot is a severeFlag flip, on an observation-only advance
-                //      with no newer GFS run or TAF to support it (the 06-02 348→363 case).
-                // On suppression: no send, no re-anchor (provisional keeps SentAtUtc null),
-                // advance LastClaudeInputHash so an identical next cycle pre-filter-skips.
-                if (allowSkip && priorSnapshot is not null)
-                {
-                    var priorBody = ForecastSnapshotBody.Deserialize(priorSnapshot.Body);
-                    var suppression = EvaluateUnscheduledSuppression(
-                        priorBody, success.FinalSnapshot, freshGuidanceSinceLastSend);
-                    if (suppression != UnscheduledSuppression.None)
-                    {
-                        if (suppression == UnscheduledSuppression.Redundant) _redundantSuppressed.Add(1);
-                        else _severeFlipSuppressed.Add(1);
-                        var why = suppression == UnscheduledSuppression.Redundant
-                            ? "reconciled snapshot is materially identical to the last sent report (redundant re-send)"
-                            : "severe-flag de-escalation on an observation-only advance with no newer GFS run or TAF (hysteresis)";
-                        await PersistUnsentCycleAsync(ctx, recipient, committedSend, state, inputHash, success.ReasoningTrace, ct);
-                        Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): WX-108 suppressed {triggerType} send — {why}. Provisional CommittedSend Id={committedSend.Id} left unsent.");
-                        continue;
-                    }
-                }
-
-                // WX-79: persist the reconciled snapshot row and re-anchor the
-                // CommittedSend.  EmailBody is the pre-meteogram wrapped HTML
-                // (matches the CommittedSend.EmailBody = Claude artifact
-                // convention); ReasoningTrace is the audit log Claude produced.
-                var reconciledSnapshot = new ForecastSnapshot
-                {
-                    StationIcao = snapshot.StationIcao,
-                    GeneratedAtUtc = DateTime.UtcNow,
-                    SchemaVersion = ForecastSnapshotBody.SchemaVersionCurrent,
-                    Body = success.FinalSnapshot.Serialize(),
-                };
-                ctx.ForecastSnapshots.Add(reconciledSnapshot);
-                committedSend.ForecastSnapshot = reconciledSnapshot;
-                var report = WrapAsEmailHtml(success.EmailBody, language, snapshot, tz);
-                committedSend.EmailBody = report;
-                committedSend.ReasoningTrace = success.ReasoningTrace;
-                // WX-128: persist the unit-neutral structured report alongside the
-                // email body. Unread in the additive transition; WX-129 consumes it.
-                committedSend.StructuredReport = success.StructuredReport?.Serialize();
-                await ctx.SaveChangesAsync(ct);
-                Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): reconciled CommittedSend Id={committedSend.Id} → ForecastSnapshot Id={reconciledSnapshot.Id}.");
-
-                var subject = BuildSubject(snapshot, language, tz, severity, recipientName: recipient.Name);
-                var plainFallback = SnapshotDescriber.Describe(snapshot, tz, recipient.Units);
-
-                var plotsDir2 = new WxPaths(_config["InstallRoot"]).PlotsDir;
-                var meteogramPath = FindMeteogramAbbrevPath(preferredIcaos.Count > 0 ? preferredIcaos[0] : "", recipient.Units.Temperature, recipient.Timezone, plotsDir2);
-                report = meteogramPath is not null
-                    ? InsertMeteogramImage(report)
-                    : report.Replace("<!--meteogram-->", "", StringComparison.Ordinal);
-                IReadOnlyDictionary<string, string>? inlineImages = meteogramPath is not null
-                    ? new Dictionary<string, string> { ["meteogramAbbrev"] = meteogramPath }
-                    : null;
-
-                var sent = await emailer.SendAsync(
-                    recipient.Email, subject, plainFallback,
-                    htmlBody: report, inlineImages: inlineImages,
-                    toName: recipient.Name, ct: ct);
-
-                if (!sent) { _sendFailures.Add(1); continue; }
-
-                _reportsSent.Add(1);
-                Logger.Info($"{recipient.Id} {recipient.Email} ({recipient.Name}): report sent.");
-
-                // WX-78: stamp and persist the actual-sent time on the CommittedSend row
-                // independently of the RecipientState save below.  A failure in the
-                // RecipientState save would otherwise leave a successfully delivered
-                // message audited as SentAtUtc = null, violating the lifecycle invariant
-                // that null means "didn't actually send."
-                committedSend.SentAtUtc = DateTime.UtcNow;
-                try
-                {
-                    await ctx.SaveChangesAsync(ct);
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                {
-                    Logger.Error($"{recipient.Id} {recipient.Email} ({recipient.Name}): failed to persist CommittedSend.SentAtUtc Id={committedSend.Id} after successful email send.", ex);
-                }
-
-                if (reason is "scheduled" or "first")
-                    state.LastScheduledSentUtc = now;
-                else
-                    state.LastUnscheduledSentUtc = now;
-
-                // Record the evidence identity behind this send so the next
-                // unchanged cycle pre-filter-skips. Set on every actual send,
-                // even observationless ones (TAF/GFS identity still advances).
-                // LastSentInputHash advances only here (an actual delivery), unlike
-                // LastClaudeInputHash which also advances on not-news / WX-108
-                // suppression — so "changed since last send" stays accurate.
-                state.LastClaudeInputHash = inputHash;
-                state.LastSentInputHash = inputHash;
-
-                // Only capture the station when we have real observation data;
-                // otherwise leave the last-known value so station-switch detection
-                // resumes correctly once observations return.
-                if (snapshot.ObservationAvailable)
-                    state.LastMetarIcao = snapshot.StationIcao;
-
-                try
-                {
-                    await ctx.SaveChangesAsync(ct);
-                    reportsSent++;
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                {
-                    Logger.Error($"{recipient.Id} {recipient.Email} ({recipient.Name}): failed to save recipient state.", ex);
-                }
+                reportsSent += await ProcessLocalityAsync(ctx, locality, members, reconciler, emailer, cfg, now, ct);
             }
 
             Logger.Info(reportsSent > 0
@@ -809,34 +457,406 @@ public sealed class ReportWorker : BackgroundService
         }
     }
 
-    // ── persistence helpers ───────────────────────────────────────────────────
-
-    /// <summary>WX-114: per-call token-usage DEBUG line — surfaces each Claude reconciliation's input/output/cache token split in the text log (the OTel counters carry the same totals for the dashboards, but not per call).</summary>
-    private static void LogClaudeTokens(RecipientConfig recipient, TokenUsage tokens, string context) =>
-        Logger.Debug($"{recipient.Id} {recipient.Email} ({recipient.Name}): Claude reconciliation tokens [{context}] — in={tokens.InputTokens} out={tokens.OutputTokens} cache-read={tokens.CacheReadInputTokens} cache-write={tokens.CacheCreationInputTokens}.");
+    /// <summary>
+    /// Partitions valid, locality-assigned recipients into per-locality member
+    /// lists.  Recipients with no email, no <see cref="Recipient.RecipientId"/>, a
+    /// duplicate id, or no <see cref="Recipient.LocalityId"/> are dropped here: the
+    /// no-locality case is the firm WX-130 rule — no report, logged ERROR — so it
+    /// surfaces via WxMonitor rather than being silently throttled.
+    /// </summary>
+    private static Dictionary<long, List<Recipient>> GroupMembersByLocality(
+        IReadOnlyList<Recipient> recipients, IReadOnlySet<string> duplicateIds)
+    {
+        var byLocality = new Dictionary<long, List<Recipient>>();
+        foreach (var r in recipients)
+        {
+            if (string.IsNullOrWhiteSpace(r.Email)) continue;
+            if (string.IsNullOrWhiteSpace(r.RecipientId))
+            {
+                Logger.Warn($"{r.Email} ({r.Name}): no RecipientId — skipping. Set a unique Id via WxManager → Recipients.");
+                continue;
+            }
+            if (duplicateIds.Contains(r.RecipientId)) continue;
+            if (r.LocalityId is not long localityId)
+            {
+                Logger.Error($"{r.RecipientId} {r.Email} ({r.Name}): not assigned to a locality — no report sent. Assign one via WxManager → Recipients.");
+                continue;
+            }
+            if (!byLocality.TryGetValue(localityId, out var list))
+                byLocality[localityId] = list = new List<Recipient>();
+            list.Add(r);
+        }
+        return byLocality;
+    }
 
     /// <summary>
-    /// Persists the "called Claude but not sending this cycle" state shared by the
-    /// WX-80 not-news gate and the WX-108 suppression backstop: records the input
-    /// hash so an identical next cycle pre-filter-skips, keeps the reasoning trace
-    /// on the provisional for diagnosability, and leaves the committed anchor and
-    /// last-sent state untouched (the provisional keeps <c>SentAtUtc = null</c>, so
-    /// it never becomes a prior snapshot). Persistence errors are logged, not
-    /// thrown — an unsent cycle must not crash the worker.
+    /// Runs one locality's cycle: builds a single snapshot from the locality's
+    /// stations + GFS centroid, evaluates the send decision against the shared
+    /// <see cref="LocalityState"/>, makes at most one Claude reconciliation call,
+    /// and on success renders + sends a per-recipient email for each member with
+    /// no further LLM call (WX-123 economics).  Returns the number of members
+    /// actually emailed (drives the cycle's send count and the state advance).
+    /// </summary>
+    private async Task<int> ProcessLocalityAsync(
+        WeatherDataContext ctx, Locality locality, List<Recipient> members,
+        ForecastReconciler reconciler, SmtpSender emailer, ReportConfig cfg, DateTime now, CancellationToken ct)
+    {
+        var label = $"locality '{locality.Name}' (Id={locality.Id})";
+
+        // Per-locality reconciliation baseline + send cadence (replaces RecipientState).
+        var state = await ctx.LocalityStates.FirstOrDefaultAsync(s => s.LocalityId == locality.Id, ct);
+        if (state is null)
+        {
+            state = new LocalityState { LocalityId = locality.Id };
+            ctx.LocalityStates.Add(state);
+        }
+
+        var tz = ResolveTimezone(locality.Timezone);
+        var scheduledHours = ParseHourList(locality.ScheduledSendHours ?? cfg.DefaultScheduledSendHours);
+
+        // One snapshot per locality: locality stations + centroid as the GFS point.
+        var preferredIcaos = ParseIcaoList(locality.MetarIcao);
+        var snapshot = await WxInterpreter.GetSnapshotAsync(
+            preferredIcaos, locality.TafIcao == "NONE" ? null : locality.TafIcao, locality.Name, _dbOptions,
+            homeLat: locality.CentroidLat, homeLon: locality.CentroidLon,
+            precipThresholdMmHr: cfg.PrecipRateThresholdMmHr,
+            ct: ct);
+
+        if (snapshot is null)
+        {
+            Logger.Warn($"{label}: no METAR, TAF, or GFS data available — skipping.");
+            return 0;
+        }
+        if (!snapshot.ObservationAvailable)
+            Logger.Warn($"{label}: station(s) [{string.Join(", ", preferredIcaos)}] had no data and no station within 30 mi reported in the last 3 hours — sending forecast-only report.");
+        else if (preferredIcaos.Count > 0 && !preferredIcaos.Contains(snapshot.StationIcao))
+        {
+            var distStr = snapshot.ObservationDistanceKm is double km ? $" ({km * 0.621371:F0} mi away)" : "";
+            Logger.Warn($"{label}: station(s) [{string.Join(", ", preferredIcaos)}] had no data — fell back to {snapshot.StationIcao}{distStr}.");
+        }
+
+        if (snapshot.GfsForecast is { } gfs)
+            Logger.Info($"{label}: GFS run {gfs.ModelRunUtc:yyyy-MM-dd HH}Z — {gfs.Days.Count} day(s); " +
+                string.Join(", ", gfs.Days.Select(d => $"{d.Date:MM/dd} {d.HighTempC:F0}°/{d.LowTempC:F0}°C")));
+        else
+            Logger.Warn($"{label}: no GFS forecast available.");
+
+        // WX-80 pre-filter identity + WX-108 changed-since-last-DELIVERED context,
+        // both now keyed on the locality's shared LocalityState.
+        var inputIdentity = InputIdentity.From(snapshot);
+        var inputHash = inputIdentity.Serialize();
+        var changedSinceLastSend = inputIdentity.ChangedSourcesSince(state.LastSentInputHash);
+        bool freshTafSinceLastSend = changedSinceLastSend.Contains(TriggerSource.Taf);
+        bool freshGuidanceSinceLastSend = freshTafSinceLastSend || changedSinceLastSend.Contains(TriggerSource.Gfs);
+
+        var (shouldSend, reason, severity, allowSkip) = ShouldSend(tz, scheduledHours, state, inputIdentity, cfg, now);
+        if (!shouldSend)
+        {
+            if (reason == "prefilter-skip")
+            {
+                _preFilterSkips.Add(1);
+                Logger.Debug($"{label}: no input changed since last Claude call — pre-filter skip.");
+            }
+            return 0;
+        }
+
+        var triggerType = reason == "change"
+            ? ArrivalLabel(inputIdentity.ChangedSourcesSince(state.LastClaudeInputHash))
+            : reason;
+        _triggers.Add(1, new KeyValuePair<string, object?>("trigger.type", triggerType));
+        Logger.Info(reason == "change"
+            ? $"{label}: {triggerType} arrival — invoking Claude invalidation gate."
+            : $"{label}: generating {reason} report.");
+
+        // Station switch: the locality's primary station had no data and a fallback
+        // is in use; pass the previous ICAO so Claude can note it in the narrative.
+        var previousMetarIcao = snapshot.ObservationAvailable
+            && state.LastMetarIcao is not null
+            && state.LastMetarIcao != snapshot.StationIcao
+                ? state.LastMetarIcao
+                : null;
+        if (previousMetarIcao is not null)
+            Logger.Info($"{label}: METAR station changed {previousMetarIcao} → {snapshot.StationIcao} — noting in report.");
+
+        // Pre-Claude audit anchor (minimal-schema, WX-130): persist the GFS
+        // provisional projection for the locality. On a Claude failure this orphan
+        // snapshot records what we were about to reconcile. Per-recipient delivery
+        // rows (CommittedSend) are written only on success — there is no provisional
+        // CommittedSend in the per-locality model.
+        var snapshotKey = !string.IsNullOrWhiteSpace(snapshot.StationIcao)
+            ? snapshot.StationIcao
+            : (snapshot.TafStationIcao ?? "");
+        var anchorSnapshot = await BuildProvisionalForecastSnapshotAsync(
+            snapshotKey, locality.CentroidLat, locality.CentroidLon, DateTime.UtcNow, ct);
+        ctx.ForecastSnapshots.Add(anchorSnapshot);
+        await ctx.SaveChangesAsync(ct);
+
+        // Locality baseline: the last DELIVERED reconciled snapshot for any member,
+        // excluding diagnostic sends (WX-130) and this cycle's provisional. Because
+        // every member's CommittedSend references the one shared reconciled snapshot,
+        // any member's most recent delivery points at the locality's baseline.
+        var memberIds = members.Select(m => m.RecipientId).ToList();
+        var priorSnapshot = await ctx.CommittedSends
+            .Where(cs => memberIds.Contains(cs.RecipientId) && cs.SentAtUtc.HasValue && !cs.IsDiagnostic)
+            .Select(cs => cs.ForecastSnapshot)
+            .Where(s => s.Id != anchorSnapshot.Id)
+            .OrderByDescending(s => s.GeneratedAtUtc)
+            .FirstOrDefaultAsync(ct);
+
+        var provisionalBody = ForecastSnapshotBody.Deserialize(anchorSnapshot.Body);
+
+        // WX-114 deterministic significance gate (cost pre-filter, unscheduled only).
+        var gateMode = cfg.SignificanceGate.Mode;
+        if (gateMode != SignificanceGateMode.Off && allowSkip && priorSnapshot is not null)
+        {
+            SignificanceResult? gate = null;
+            try
+            {
+                var priorBodyForGate = ForecastSnapshotBody.Deserialize(priorSnapshot.Body);
+                gate = SignificanceGate.Evaluate(priorBodyForGate, provisionalBody, cfg.SignificanceGate, now, tz, freshTafSinceLastSend);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Logger.Error($"{label}: WX-114 significance gate evaluation failed — proceeding to Claude.", ex);
+            }
+
+            if (gate is { Significant: false })
+            {
+                bool enforce = gateMode == SignificanceGateMode.Enforce;
+                _significanceGateSkips.Add(1, new KeyValuePair<string, object?>("mode", enforce ? "enforce" : "shadow"));
+                if (enforce)
+                {
+                    Logger.Debug($"{label}: WX-114 significance gate suppressed {triggerType} cycle — no material forecast change since last sent report; Claude not called.");
+                    await PersistUnsentCycleAsync(ctx, label, state, inputHash, ct);
+                    return 0;
+                }
+                Logger.Debug($"{label}: WX-114 significance gate (shadow) WOULD suppress {triggerType} cycle — calling Claude anyway.");
+            }
+            else if (gate is { Significant: true } passed)
+            {
+                Logger.Debug($"{label}: WX-114 significance gate passed ({gateMode}, {triggerType}) — fired: {string.Join(", ", passed.FiredCriteria)}.");
+            }
+        }
+
+        // The narrative must carry every language the locality's members read.
+        var narrativeLanguages = members
+            .Select(m => LanguageHelper.ToIetfTag(m.Language ?? cfg.DefaultLanguage))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        var claudeSw = Stopwatch.StartNew();
+        var reconcileResult = await reconciler.ReconcileAsync(
+            snapshot, provisionalBody,
+            snapshot.GfsForecast?.ModelRunUtc,
+            snapshot.TafIssuanceUtc, snapshot.TafValidToUtc,
+            priorSnapshot,
+            narrativeLanguages, tz,
+            changeSeverity: severity,
+            previousMetarIcao: previousMetarIcao,
+            allowSkip: allowSkip,
+            changedSinceLastSend: changedSinceLastSend,
+            ct: ct);
+        _claudeDuration.Record(claudeSw.Elapsed.TotalSeconds);
+        _claudeCalls.Add(1);
+
+        // WX-80 invalidation gate: Claude judged the arrival not news. Advance only
+        // LastClaudeInputHash (so an identical next cycle pre-filter-skips); do NOT
+        // send and do NOT advance last-sent. The not-news trace is logged (the
+        // minimal-schema model keeps no per-locality provisional row to carry it).
+        if (reconcileResult is ReconcileResult.NotNews notNews)
+        {
+            _claudeNotNews.Add(1);
+            AddClaudeTokens(notNews.Tokens);
+            LogClaudeTokens(label, notNews.Tokens, $"{triggerType}/not-news");
+            await PersistUnsentCycleAsync(ctx, label, state, inputHash, ct);
+            Logger.Info($"{label}: Claude judged the {triggerType} arrival not news — no send. Trace: {notNews.ReasoningTrace}");
+            return 0;
+        }
+
+        if (reconcileResult is not ReconcileResult.Success success)
+        {
+            _claudeMalformedOutput.Add(1);
+            var failureReason = ((ReconcileResult.Failure)reconcileResult).Reason;
+            Logger.Error($"{label}: Reconciliation failed: {failureReason}. Provisional ForecastSnapshot Id={anchorSnapshot.Id} left as audit; no send.");
+            return 0;
+        }
+
+        _claudeToolUseSuccess.Add(1);
+        AddClaudeTokens(success.Tokens);
+        LogClaudeTokens(label, success.Tokens, $"{triggerType}/reconciled");
+
+        // WX-108 deterministic backstop (unscheduled cycles only) — idempotence /
+        // severe-flag hysteresis, not significance (Claude owns that via the gate).
+        if (allowSkip && priorSnapshot is not null)
+        {
+            var priorBody = ForecastSnapshotBody.Deserialize(priorSnapshot.Body);
+            var suppression = EvaluateUnscheduledSuppression(
+                priorBody, success.FinalSnapshot, freshGuidanceSinceLastSend);
+            if (suppression != UnscheduledSuppression.None)
+            {
+                if (suppression == UnscheduledSuppression.Redundant) _redundantSuppressed.Add(1);
+                else _severeFlipSuppressed.Add(1);
+                var why = suppression == UnscheduledSuppression.Redundant
+                    ? "reconciled snapshot is materially identical to the last sent report (redundant re-send)"
+                    : "severe-flag de-escalation on an observation-only advance with no newer GFS run or TAF (hysteresis)";
+                await PersistUnsentCycleAsync(ctx, label, state, inputHash, ct);
+                Logger.Info($"{label}: WX-108 suppressed {triggerType} send — {why}.");
+                return 0;
+            }
+        }
+
+        // Persist the reconciled snapshot ONCE; every member's CommittedSend
+        // references it. The structured report + reasoning trace are copied onto
+        // each per-recipient row so each delivery audit is self-contained.
+        var reconciledSnapshot = new ForecastSnapshot
+        {
+            StationIcao = snapshot.StationIcao,
+            GeneratedAtUtc = DateTime.UtcNow,
+            SchemaVersion = ForecastSnapshotBody.SchemaVersionCurrent,
+            Body = success.FinalSnapshot.Serialize(),
+        };
+        ctx.ForecastSnapshots.Add(reconciledSnapshot);
+        await ctx.SaveChangesAsync(ct);
+
+        var structuredReportJson = success.StructuredReport.Serialize();
+        var plotsDir = new WxPaths(_config["InstallRoot"]).PlotsDir;
+        bool isUnscheduled = reason == "change";
+        var sentThisLocality = 0;
+
+        // Inner loop: deterministic per-recipient render + send — no further LLM call.
+        foreach (var member in members)
+        {
+            try
+            {
+                var memberLang = member.Language ?? cfg.DefaultLanguage;
+
+                // First-report welcome is per-recipient: a member just added to an
+                // established locality still gets a welcome on their first delivery,
+                // independent of the locality's first/scheduled/change reason.
+                // Diagnostic startup rows don't count as a real first report.
+                bool isFirstReport = !await ctx.CommittedSends
+                    .AnyAsync(cs => cs.RecipientId == member.RecipientId && cs.SentAtUtc.HasValue && !cs.IsDiagnostic, ct);
+
+                var innerBody = StructuredReportRenderer.Render(
+                    success.StructuredReport, success.FinalSnapshot, snapshot, member, tz,
+                    isUnscheduled: isUnscheduled, isFirstReport: isFirstReport, scheduledHours: scheduledHours);
+                var report = WrapAsEmailHtml(innerBody, memberLang, snapshot, tz);
+
+                var committedSend = new CommittedSend
+                {
+                    ForecastSnapshot = reconciledSnapshot,
+                    RecipientId = member.RecipientId,
+                    ReasoningTrace = success.ReasoningTrace,
+                    StructuredReport = structuredReportJson,
+                    EmailBody = report,
+                    CreatedAtUtc = DateTime.UtcNow,
+                };
+                ctx.CommittedSends.Add(committedSend);
+                await ctx.SaveChangesAsync(ct);
+
+                var subject = BuildSubject(snapshot, memberLang, tz, severity, recipientName: member.Name);
+                var plainFallback = SnapshotDescriber.Describe(snapshot, tz, ToUnitPreferences(member));
+
+                var meteogramPath = FindMeteogramAbbrevPath(
+                    preferredIcaos.Count > 0 ? preferredIcaos[0] : "", member.TempUnit, locality.Timezone, plotsDir);
+                report = meteogramPath is not null
+                    ? InsertMeteogramImage(report)
+                    : report.Replace("<!--meteogram-->", "", StringComparison.Ordinal);
+                IReadOnlyDictionary<string, string>? inlineImages = meteogramPath is not null
+                    ? new Dictionary<string, string> { ["meteogramAbbrev"] = meteogramPath }
+                    : null;
+
+                var sent = await emailer.SendAsync(
+                    member.Email, subject, plainFallback,
+                    htmlBody: report, inlineImages: inlineImages,
+                    toName: member.Name, ct: ct);
+
+                if (!sent) { _sendFailures.Add(1); continue; }
+
+                _reportsSent.Add(1);
+                sentThisLocality++;
+
+                committedSend.SentAtUtc = DateTime.UtcNow;
+                try { await ctx.SaveChangesAsync(ct); }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    Logger.Error($"{member.RecipientId} {member.Email} ({member.Name}): failed to persist CommittedSend.SentAtUtc Id={committedSend.Id} after a successful send.", ex);
+                }
+                Logger.Info($"{member.RecipientId} {member.Email} ({member.Name}): report sent ({label}).");
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Logger.Error($"{member.RecipientId} {member.Email} ({member.Name}): failed to render or send report for {label}.", ex);
+            }
+        }
+
+        // Advance the locality baseline + cadence only when at least one member was
+        // actually delivered to, so a total send failure doesn't move the baseline
+        // the next cycle reconciles against. LastSentInputHash advances only here
+        // (a real delivery); not-news / suppression advance only LastClaudeInputHash.
+        if (sentThisLocality > 0)
+        {
+            if (reason is "scheduled" or "first")
+                state.LastScheduledSentUtc = now;
+            else
+                state.LastUnscheduledSentUtc = now;
+            state.LastClaudeInputHash = inputHash;
+            state.LastSentInputHash = inputHash;
+            if (snapshot.ObservationAvailable)
+                state.LastMetarIcao = snapshot.StationIcao;
+
+            try { await ctx.SaveChangesAsync(ct); }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Logger.Error($"{label}: failed to save locality state after sends.", ex);
+            }
+        }
+
+        return sentThisLocality;
+    }
+
+    // ── persistence helpers ───────────────────────────────────────────────────
+
+    /// <summary>WX-114: per-call token-usage DEBUG line — surfaces each Claude reconciliation's input/output/cache token split in the text log (the OTel counters carry the same totals for the dashboards, but not per call). <paramref name="label"/> identifies the locality (WX-130).</summary>
+    private static void LogClaudeTokens(string label, TokenUsage tokens, string context) =>
+        Logger.Debug($"{label}: Claude reconciliation tokens [{context}] — in={tokens.InputTokens} out={tokens.OutputTokens} cache-read={tokens.CacheReadInputTokens} cache-write={tokens.CacheCreationInputTokens}.");
+
+    /// <summary>Adds a reconciliation call's token usage to the four OTel cost counters in one place (input / output / cache-read / cache-write).</summary>
+    private void AddClaudeTokens(TokenUsage tokens)
+    {
+        _claudeInputTokens.Add(tokens.InputTokens);
+        _claudeOutputTokens.Add(tokens.OutputTokens);
+        _claudeCacheReadTokens.Add(tokens.CacheReadInputTokens);
+        _claudeCacheCreationTokens.Add(tokens.CacheCreationInputTokens);
+    }
+
+    /// <summary>Projects a <see cref="Recipient"/> entity's unit columns into the <see cref="UnitPreferences"/> the plain-text fallback describer consumes.</summary>
+    private static UnitPreferences ToUnitPreferences(Recipient r) => new()
+    {
+        Temperature = r.TempUnit,
+        Pressure = r.PressureUnit,
+        WindSpeed = r.WindSpeedUnit,
+    };
+
+    /// <summary>
+    /// Persists the "called Claude but not sending this cycle" locality state shared
+    /// by the WX-80 not-news gate, the WX-108 suppression backstop, and the WX-114
+    /// significance gate: records the input hash on the <see cref="LocalityState"/>
+    /// so an identical next cycle pre-filter-skips, and leaves the last-sent state
+    /// untouched (the locality's delivered baseline is unchanged). Persistence
+    /// errors are logged, not thrown — an unsent cycle must not crash the worker.
     /// </summary>
     private static async Task PersistUnsentCycleAsync(
-        WeatherDataContext ctx, RecipientConfig recipient, CommittedSend committedSend,
-        RecipientState state, string inputHash, string reasoningTrace, CancellationToken ct)
+        WeatherDataContext ctx, string label, LocalityState state, string inputHash, CancellationToken ct)
     {
         state.LastClaudeInputHash = inputHash;
-        committedSend.ReasoningTrace = reasoningTrace;
         try
         {
             await ctx.SaveChangesAsync(ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            Logger.Error($"{recipient.Id} {recipient.Email} ({recipient.Name}): failed to persist unsent-cycle state for CommittedSend Id={committedSend.Id}.", ex);
+            Logger.Error($"{label}: failed to persist unsent-cycle state.", ex);
         }
     }
 
@@ -948,12 +968,13 @@ public sealed class ReportWorker : BackgroundService
     // ── send-decision logic ───────────────────────────────────────────────────
 
     /// <summary>
-    /// Determines whether to invoke Claude for a recipient right now, and why.
-    /// Triggers are evaluated in priority order:
+    /// Determines whether to invoke Claude for a locality right now, and why
+    /// (WX-130 — the decision is per locality; every member shares one schedule
+    /// and baseline). Triggers are evaluated in priority order:
     /// <list type="number">
-    ///   <item><b>first</b> — recipient has never received any report. Always sends.</item>
+    ///   <item><b>first</b> — the locality has never sent any report. Always sends.</item>
     ///   <item><b>scheduled</b> — the daily scheduled hour has arrived in the
-    ///   recipient's timezone and no scheduled report has been sent in that slot.
+    ///   locality's timezone and no scheduled report has been sent in that slot.
     ///   Always sends; bypasses the pre-filter.</item>
     ///   <item><b>change</b> — an input (METAR/TAF/GFS) has advanced since the
     ///   last Claude call (the WX-80 pre-filter passed). Routes to the Claude
@@ -964,10 +985,11 @@ public sealed class ReportWorker : BackgroundService
     /// pre-filter only asks "has any input changed?"; "is it worth sending?" is
     /// Claude's call via <paramref name="state"/>'s gate.
     /// </summary>
-    /// <param name="recipient">Recipient config providing timezone and scheduled-send-hour.</param>
-    /// <param name="state">Persisted state: last send times and the last-Claude-call input hash.</param>
+    /// <param name="tz">The locality's timezone (WX-130), used to resolve the scheduled-slot comparison.</param>
+    /// <param name="scheduledHours">The locality's parsed daily send hours (0–23), shared by all members (WX-133).</param>
+    /// <param name="state">Per-locality persisted state: last send times and the last-Claude-call input hash.</param>
     /// <param name="inputIdentity">This cycle's raw input identity (observation time, TAF issuance, GFS run).</param>
-    /// <param name="cfg">Report config providing the minimum inter-send gap and default scheduled hour.</param>
+    /// <param name="cfg">Report config providing the minimum inter-send gap.</param>
     /// <param name="nowUtc">The UTC clock time to use as "now" for all comparisons.</param>
     /// <returns>
     /// A tuple of (<c>send</c>, <c>reason</c>, <c>severity</c>, <c>allowSkip</c>).
@@ -978,13 +1000,14 @@ public sealed class ReportWorker : BackgroundService
     /// first sends are guaranteed and never skippable.
     /// </returns>
     internal static (bool send, string reason, ChangeSeverity severity, bool allowSkip) ShouldSend(
-        RecipientConfig recipient,
-        RecipientState state,
+        TimeZoneInfo tz,
+        IReadOnlyList<int> scheduledHours,
+        LocalityState state,
         InputIdentity inputIdentity,
         ReportConfig cfg,
         DateTime nowUtc)
     {
-        // Brand-new recipient — send an introductory report on the first cycle.
+        // Locality that has never sent — guaranteed introductory send on the first cycle.
         if (!state.LastScheduledSentUtc.HasValue && !state.LastUnscheduledSentUtc.HasValue)
             return (true, "first", ChangeSeverity.None, false);
 
@@ -1008,9 +1031,7 @@ public sealed class ReportWorker : BackgroundService
 
         // ── Scheduled send (always sends; bypasses the pre-filter) ────────────
 
-        var tz = ResolveTimezone(recipient.Timezone);
         var localNow = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, tz);
-        var scheduledHours = ParseHourList(recipient.ScheduledSendHours ?? cfg.DefaultScheduledSendHours);
 
         // Find the most recently passed scheduled hour today (if any).
         // A send is due when the last passed hour's slot has not yet been served.

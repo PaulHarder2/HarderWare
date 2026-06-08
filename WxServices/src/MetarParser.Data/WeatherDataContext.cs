@@ -73,6 +73,9 @@ public sealed class WeatherDataContext : DbContext
     /// <summary>The <c>RecipientStates</c> table — one row per email recipient, tracking last send time and snapshot fingerprint.</summary>
     public DbSet<RecipientState> RecipientStates => Set<RecipientState>();
 
+    /// <summary>The <c>LocalityStates</c> table — one row per locality, holding the shared reconciliation baseline and send cadence (WX-130).</summary>
+    public DbSet<LocalityState> LocalityStates => Set<LocalityState>();
+
     /// <summary>
     /// The <c>GfsGrid</c> table — one row per GFS model grid point, forecast hour,
     /// and model-run time.  Holds the ingested NWP parameters used to augment
@@ -367,6 +370,29 @@ public sealed class WeatherDataContext : DbContext
             e.HasIndex(x => x.RecipientId)
              .IsUnique()
              .HasDatabaseName("UX_RecipientStates_RecipientId");
+        });
+
+        // ── LocalityStates ───────────────────────────────────────────────────
+
+        modelBuilder.Entity<LocalityState>(e =>
+        {
+            e.ToTable("LocalityStates");
+            e.HasKey(x => x.Id);
+
+            e.Property(x => x.LastClaudeInputHash).HasMaxLength(200);
+            e.Property(x => x.LastSentInputHash).HasMaxLength(200);
+            e.Property(x => x.LastMetarIcao).HasMaxLength(4).IsFixedLength();
+
+            e.HasIndex(x => x.LocalityId)
+             .IsUnique()
+             .HasDatabaseName("UX_LocalityStates_LocalityId");
+
+            // The state is owned by its locality — delete it with the locality
+            // (unlike the Recipient→Locality FK, which RESTRICTs to protect members).
+            e.HasOne(x => x.Locality)
+             .WithMany()
+             .HasForeignKey(x => x.LocalityId)
+             .OnDelete(DeleteBehavior.Cascade);
         });
 
         // ── GfsModelRuns ─────────────────────────────────────────────────────

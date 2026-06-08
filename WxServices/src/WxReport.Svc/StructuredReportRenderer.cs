@@ -47,7 +47,10 @@ public static class StructuredReportRenderer
     /// <paramref name="localityTz"/> localizes per-day bucketing and instant
     /// rendering.  <paramref name="isUnscheduled"/> selects the header's
     /// unscheduled-update line; the change-summary band itself renders whenever the
-    /// narrative carries one.
+    /// narrative carries one.  On <paramref name="isFirstReport"/> a deterministic
+    /// welcome band is prepended in the recipient's language, naming their
+    /// <paramref name="scheduledHours"/> (WX-130) — the reconciler no longer
+    /// authors a per-recipient welcome.
     /// </summary>
     public static string Render(
         StructuredReportBody report,
@@ -55,7 +58,9 @@ public static class StructuredReportRenderer
         WeatherSnapshot observation,
         Recipient recipient,
         TimeZoneInfo localityTz,
-        bool isUnscheduled)
+        bool isUnscheduled,
+        bool isFirstReport,
+        IReadOnlyList<int> scheduledHours)
     {
         // The narrative map and ReportVocabulary key on ISO 639-1 (en, es).
         // ToIetfTag already collapses to the two-letter code, but normalize
@@ -75,6 +80,9 @@ public static class StructuredReportRenderer
 
         AppendHeader(sb, observation, localityTz, vocab, isUnscheduled);
 
+        if (isFirstReport)
+            AppendWelcome(sb, vocab, scheduledHours);
+
         if (!string.IsNullOrWhiteSpace(sections.ChangeSummary))
             AppendChangeBand(sb, vocab, RenderProse(sections.ChangeSummary!));
 
@@ -84,6 +92,29 @@ public static class StructuredReportRenderer
 
         sb.Append("</div>");
         return sb.ToString();
+    }
+
+    // ── first-report welcome band ─────────────────────────────────────────────
+
+    private static void AppendWelcome(StringBuilder sb, ReportVocabulary vocab, IReadOnlyList<int> scheduledHours)
+    {
+        var welcome = string.Format(vocab.Culture, vocab.WelcomeFormat, FormatScheduleTimes(scheduledHours, vocab));
+        sb.Append("<div style=\"background:#eef4fb;padding:16px 24px;font-size:14px;color:#1a3a5c;\">");
+        sb.Append(HtmlText(welcome));
+        sb.Append("</div>");
+    }
+
+    /// <summary>Localized "6 AM and 12 PM" list of the recipient's daily send hours, joined with the language's conjunction. Empty when no hours are configured.</summary>
+    private static string FormatScheduleTimes(IReadOnlyList<int> hours, ReportVocabulary vocab)
+    {
+        var times = hours
+            .Select(h => new DateTime(2000, 1, 1, h, 0, 0).ToString("h tt", vocab.Culture))
+            .ToList();
+        if (times.Count == 0)
+            return "";
+        if (times.Count == 1)
+            return times[0];
+        return string.Join(", ", times.Take(times.Count - 1)) + $" {vocab.AndConjunction} " + times[^1];
     }
 
     /// <summary>The recipient's language narrative, falling back to en (then any present) if the recipient's own language is somehow absent. An entirely empty narrative is a precondition violation — <see cref="StructuredReportBody.Validate"/> guarantees at least one language — and throws here, failing the send closed rather than emailing a blank report.</summary>
@@ -132,6 +163,13 @@ public static class StructuredReportRenderer
         sb.Append("<div style=\"background:#f7f9fc;padding:20px 24px;\">");
         AppendSectionHeading(sb, vocab.CurrentConditionsHeading);
 
+        // Station-attribution subtitle (WX-130, restored): name the observing
+        // station beneath the heading when it differs from the locality, so the
+        // reader knows "Current Conditions" came from, e.g., the nearby airport.
+        var subtitle = StationSubtitle(snap, vocab);
+        if (subtitle is not null)
+            sb.Append($"<div style=\"font-size:13px;font-style:italic;color:#6b8fa8;font-weight:normal;margin-top:2px;\">{HtmlText(subtitle)}</div>");
+
         if (!snap.ObservationAvailable)
         {
             var note = string.IsNullOrWhiteSpace(snap.ObservationUnavailableNote)
@@ -166,6 +204,39 @@ public static class StructuredReportRenderer
             Row(vocab.RowPressure, FormatPressureInHg(inHg, recipient));
 
         sb.Append("</table></div>");
+    }
+
+    /// <summary>
+    /// The "at &lt;station&gt;" attribution shown under the Current Conditions
+    /// heading, or <see langword="null"/> when the observing station IS the
+    /// locality (no attribution needed) or no station metadata is available.
+    /// Ported from the former reconciler-prompt subtitle logic (WX-130): prefer
+    /// "at &lt;municipality&gt;, &lt;airport&gt;", collapse when the airport name
+    /// already contains the municipality, fall back to whichever single name exists.
+    /// </summary>
+    private static string? StationSubtitle(WeatherSnapshot snap, ReportVocabulary vocab)
+    {
+        var municipality = snap.StationMunicipality;
+        var airportName = snap.StationName;
+        var locality = snap.LocalityName;
+
+        if (municipality is not null &&
+            string.Equals(municipality, locality, StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        var at = vocab.StationAtPrefix;
+        if (municipality is not null && airportName is not null)
+        {
+            return airportName.Contains(municipality, StringComparison.OrdinalIgnoreCase)
+                ? $"{at} {airportName}"
+                : $"{at} {municipality}, {airportName}";
+        }
+        if (airportName is not null)
+            return $"{at} {airportName}";
+        if (municipality is not null)
+            return $"{at} {municipality}";
+
+        return null;
     }
 
     // ── extended forecast grid ────────────────────────────────────────────────

@@ -18,6 +18,7 @@ public class StructuredReportRendererTests
 {
     private static readonly DateTime AnchorUtc = new(2026, 6, 8, 18, 0, 0, DateTimeKind.Utc);
     private static readonly TimeZoneInfo Utc = TimeZoneInfo.Utc;
+    private static readonly IReadOnlyList<int> NoHours = [];
 
     private static Recipient Imperial() => new()
     {
@@ -96,16 +97,16 @@ public class StructuredReportRendererTests
             : [new ReportChange { Tier = ChangeTier.Plans, Phenomenon = ChangePhenomenon.Thunderstorm, Direction = ChangeDirection.Appearing, Window = new(AnchorUtc, AnchorUtc.AddHours(6)), Quantities = [], SummaryToken = "ch1" }],
         Narrative = new Dictionary<string, NarrativeSections>
         {
-            ["en"] = new() { ChangeSummary = changeSummary, CurrentConditions = "n/a", ExtendedForecast = "n/a", Closing = ClosingTokens },
-            ["es"] = new() { ChangeSummary = changeSummary is null ? null : "{ch1}Tormentas en camino.", CurrentConditions = "n/d", ExtendedForecast = "n/d", Closing = "Máximas cerca de {q:temp:33.5}, lluvia de {q:precip_mm:12}." },
+            ["en"] = new() { ChangeSummary = changeSummary, Closing = ClosingTokens },
+            ["es"] = new() { ChangeSummary = changeSummary is null ? null : "{ch1}Tormentas en camino.", Closing = "Máximas cerca de {q:temp:33.5}, lluvia de {q:precip_mm:12}." },
         },
     };
 
     [Fact]
     public void SameInput_ImperialVsMetric_DiffersOnlyByUnits()
     {
-        var en = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), Utc, isUnscheduled: false);
-        var me = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Metric(), Utc, isUnscheduled: false);
+        var en = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), Utc, isUnscheduled: false, isFirstReport: false, scheduledHours: NoHours);
+        var me = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Metric(), Utc, isUnscheduled: false, isFirstReport: false, scheduledHours: NoHours);
 
         // Imperial conversions from canonical °C / kt / hPa / mm.
         Assert.Contains("92°F", en);          // 33.5°C
@@ -127,14 +128,14 @@ public class StructuredReportRendererTests
     [Fact]
     public void TimeToken_RendersInLocalityTimeAndLocale()
     {
-        var en = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), Utc, isUnscheduled: false);
+        var en = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), Utc, isUnscheduled: false, isFirstReport: false, scheduledHours: NoHours);
         Assert.Contains("9:00 PM", en);  // 21:00Z in UTC locality
     }
 
     [Fact]
     public void ExtendedForecast_OneRowPerLocalDay_WithDailyHiLo()
     {
-        var en = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), Utc, isUnscheduled: false);
+        var en = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), Utc, isUnscheduled: false, isFirstReport: false, scheduledHours: NoHours);
 
         // Two local days → two High/Low pairs.
         Assert.Equal(2, CountOccurrences(en, "High:"));
@@ -149,7 +150,7 @@ public class StructuredReportRendererTests
     [Fact]
     public void Conditions_ComposeFromSkyPrecipSevere()
     {
-        var en = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), Utc, isUnscheduled: false);
+        var en = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), Utc, isUnscheduled: false, isFirstReport: false, scheduledHours: NoHours);
         // Day 1: Overcast (max sky), Certain rain at 18Z (evening) → "Overcast, evening rain expected".
         Assert.Contains("Overcast, evening rain expected", en);
         // Day 2: PartlyCloudy, no precip → just the sky phrase, not the clear-day "and dry".
@@ -175,14 +176,14 @@ public class StructuredReportRendererTests
             ],
             TemperatureCelsius = 20.0,
         };
-        var en = StructuredReportRenderer.Render(Body(), Forecast(), snap, Imperial(), Utc, isUnscheduled: false);
+        var en = StructuredReportRenderer.Render(Body(), Forecast(), snap, Imperial(), Utc, isUnscheduled: false, isFirstReport: false, scheduledHours: NoHours);
         Assert.Contains("Low mostly cloudy", en);  // Broken@4000 ft → Low prefix; NSC ignored
     }
 
     [Fact]
     public void CurrentConditions_TableFromObservation()
     {
-        var en = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), Utc, isUnscheduled: false);
+        var en = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), Utc, isUnscheduled: false, isFirstReport: false, scheduledHours: NoHours);
         Assert.Contains("Current Conditions", en);
         Assert.Contains("Low overcast", en);          // overcast at 3000 ft
         Assert.Contains("S at 14 mph, gusting 25 mph", en);  // 180°, 12 kt→14 mph, gust 22 kt→25 mph
@@ -194,7 +195,7 @@ public class StructuredReportRendererTests
     [Fact]
     public void Spanish_UsesEsNarrativeAndLabels()
     {
-        var es = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Spanish(), Utc, isUnscheduled: false);
+        var es = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Spanish(), Utc, isUnscheduled: false, isFirstReport: false, scheduledHours: NoHours);
         Assert.Contains("Condiciones actuales", es);
         Assert.Contains("En resumen:", es);
         Assert.Contains("Pronóstico para Spring", es);
@@ -205,12 +206,12 @@ public class StructuredReportRendererTests
     [Fact]
     public void ChangeBand_RendersOnlyWhenNarrativeCarriesOne()
     {
-        var scheduled = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), Utc, isUnscheduled: false);
+        var scheduled = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), Utc, isUnscheduled: false, isFirstReport: false, scheduledHours: NoHours);
         Assert.DoesNotContain("What's changed:", scheduled);
         Assert.DoesNotContain("Unscheduled update", scheduled);
 
         var unscheduled = StructuredReportRenderer.Render(
-            Body("{ch1}Thunderstorms now expected this afternoon."), Forecast(), Observation(), Imperial(), Utc, isUnscheduled: true);
+            Body("{ch1}Thunderstorms now expected this afternoon."), Forecast(), Observation(), Imperial(), Utc, isUnscheduled: true, isFirstReport: false, scheduledHours: NoHours);
         Assert.Contains("What's changed:", unscheduled);
         Assert.Contains("Thunderstorms now expected this afternoon.", unscheduled);
         Assert.Contains("Unscheduled update", unscheduled);
@@ -225,11 +226,62 @@ public class StructuredReportRendererTests
             ObservationUnavailableNote = "No recent observation from any nearby station.",
             LocalityName = "Spring",
         };
-        var en = StructuredReportRenderer.Render(Body(), Forecast(), snap, Imperial(), Utc, isUnscheduled: false);
+        var en = StructuredReportRenderer.Render(Body(), Forecast(), snap, Imperial(), Utc, isUnscheduled: false, isFirstReport: false, scheduledHours: NoHours);
 
         Assert.Contains("No recent observation from any nearby station.", en);
         Assert.DoesNotContain("Relative Humidity", en);  // CC table omitted
         Assert.Contains("Forecast for Spring", en);        // forecast grid still rendered
+    }
+
+    [Fact]
+    public void FirstReport_PrependsWelcomeBand_InRecipientLanguageWithScheduleTimes()
+    {
+        var welcome = StructuredReportRenderer.Render(
+            Body(), Forecast(), Observation(), Imperial(), Utc, isUnscheduled: false, isFirstReport: true, scheduledHours: new[] { 7, 12 });
+        Assert.Contains("Welcome to WxReport!", welcome);
+        Assert.Contains("7 AM and 12 PM", welcome);  // localized + joined send times
+
+        // A normal (non-first) report carries no welcome band.
+        var normal = StructuredReportRenderer.Render(
+            Body(), Forecast(), Observation(), Imperial(), Utc, isUnscheduled: false, isFirstReport: false, scheduledHours: new[] { 7, 12 });
+        Assert.DoesNotContain("Welcome to WxReport!", normal);
+    }
+
+    [Fact]
+    public void FirstReport_WelcomeBand_LocalizesToSpanish()
+    {
+        var welcome = StructuredReportRenderer.Render(
+            Body(), Forecast(), Observation(), Spanish(), Utc, isUnscheduled: false, isFirstReport: true, scheduledHours: new[] { 7 });
+        Assert.Contains("¡Bienvenido a WxReport!", welcome);
+        Assert.DoesNotContain("Welcome to WxReport!", welcome);
+    }
+
+    [Fact]
+    public void CurrentConditions_ShowsStationSubtitle_WhenStationDiffersFromLocality()
+    {
+        // Spring's nearest station (KDWH, also in Spring) had no data, so the report
+        // fell back to KIAH in Houston — a genuinely different town from the locality,
+        // so the "at <city>, <airport>" attribution subtitle appears.
+        var snap = new WeatherSnapshot
+        {
+            ObservationAvailable = true,
+            LocalityName = "Spring",
+            StationMunicipality = "Houston",
+            StationName = "George Bush Intercontinental Airport",
+            ObservationTimeUtc = AnchorUtc,
+            StationIcao = "KIAH",
+            SkyLayers = [new SkyLayer { Coverage = SkyCoverage.Overcast, HeightFeet = 3000 }],
+            VisibilityStatuteMiles = 10,
+            TemperatureCelsius = 31.0,
+        };
+        var en = StructuredReportRenderer.Render(
+            Body(), Forecast(), snap, Imperial(), Utc, isUnscheduled: false, isFirstReport: false, scheduledHours: NoHours);
+        Assert.Contains("at Houston, George Bush Intercontinental Airport", en);
+
+        // No subtitle when the station has no distinct municipality/name (default Observation()).
+        var plain = StructuredReportRenderer.Render(
+            Body(), Forecast(), Observation(), Imperial(), Utc, isUnscheduled: false, isFirstReport: false, scheduledHours: NoHours);
+        Assert.DoesNotContain(" at ", plain.Replace("S at 14 mph", "", StringComparison.Ordinal));
     }
 
     private static int CountOccurrences(string haystack, string needle)

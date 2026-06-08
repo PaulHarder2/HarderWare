@@ -43,9 +43,11 @@ public sealed record ForecastSnapshotBody
     /// <see cref="StructuredReportBody.SchemaVersionCurrent"/> since WX-128:
     /// the two bodies travel in the same tool_use envelope, so a change to
     /// either bumps both ("suspenders and belt").  v3 left this body's shape
-    /// unchanged; the bump marks the envelope gaining structured_report.
+    /// unchanged (the envelope gained structured_report); v4 likewise leaves it
+    /// unchanged — WX-130 slimmed the structured report's narrative to
+    /// changeSummary + closing and dropped email_body from the envelope.
     /// </summary>
-    public const int SchemaVersionCurrent = 3;
+    public const int SchemaVersionCurrent = 4;
 
     /// <summary>
     /// Schema version this body conforms to.  On write, defaults to
