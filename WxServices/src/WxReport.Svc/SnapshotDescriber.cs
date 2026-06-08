@@ -82,7 +82,7 @@ public static class SnapshotDescriber
         if (snap.TemperatureFahrenheit.HasValue)
             sb.AppendLine($"Temperature: {FormatTemp(snap.TemperatureFahrenheit, snap.TemperatureCelsius, units)}");
         if (snap.TemperatureCelsius.HasValue && snap.DewPointCelsius.HasValue)
-            sb.AppendLine($"Humidity: {ComputeRelativeHumidity(snap.TemperatureCelsius.Value, snap.DewPointCelsius.Value):0}%");
+            sb.AppendLine($"Humidity: {Meteorology.RelativeHumidity(snap.TemperatureCelsius.Value, snap.DewPointCelsius.Value):0}%");
 
         // Pressure
         if (snap.AltimeterInHg.HasValue)
@@ -138,7 +138,7 @@ public static class SnapshotDescriber
 
         if (day.MaxWindSpeedKt.HasValue)
         {
-            var dir = day.DominantWindDirDeg.HasValue ? $" from {DegreesToCompass(day.DominantWindDirDeg.Value)}" : "";
+            var dir = day.DominantWindDirDeg.HasValue ? $" from {Meteorology.DegreesToCompass(day.DominantWindDirDeg.Value)}" : "";
             sb.Append($" max wind {FormatWindSpeed(day.MaxWindSpeedKt.Value, units)}{dir};");
         }
 
@@ -154,15 +154,6 @@ public static class SnapshotDescriber
             sb.Append(" no significant precipitation");
 
         return sb.ToString().TrimEnd(';');
-    }
-
-    /// <summary>Converts a wind direction in degrees to a 16-point compass label.</summary>
-    /// <param name="deg">Wind direction in degrees true.</param>
-    /// <returns>A compass label such as <c>"NNW"</c> or <c>"SW"</c>.</returns>
-    private static string DegreesToCompass(int deg)
-    {
-        string[] dirs = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
-        return dirs[(int)Math.Round(((deg % 360 + 360) % 360) / 22.5) % 16];
     }
 
     /// <summary>Returns a qualitative CAPE label to help Claude choose appropriate language.</summary>
@@ -197,21 +188,6 @@ public static class SnapshotDescriber
     /// <returns>A formatted string such as <c>"87°F"</c> or <c>"31°C"</c>.</returns>
     private static string FormatTemp(float? tempF, float? tempC, UnitPreferences units)
         => FormatTemp((double?)tempF, (double?)tempC, units);
-
-    /// <summary>
-    /// Computes relative humidity from temperature and dew point using the Magnus formula.
-    /// Returns a value in the range 0–100.
-    /// </summary>
-    /// <param name="tempC">Air temperature in degrees Celsius.</param>
-    /// <param name="dewPointC">Dew-point temperature in degrees Celsius.</param>
-    /// <returns>Relative humidity as a percentage (0–100).</returns>
-    private static double ComputeRelativeHumidity(double tempC, double dewPointC)
-    {
-        const double a = 17.625;
-        const double b = 243.04;
-        return 100.0 * Math.Exp(a * dewPointC / (b + dewPointC))
-                     / Math.Exp(a * tempC / (b + tempC));
-    }
 
     /// <summary>Formats a wind speed from knots in the recipient's preferred speed unit.</summary>
     /// <param name="kt">Speed in knots.</param>

@@ -506,4 +506,55 @@ public static partial class ReportTokens
             m => AnchorTokenPattern().IsMatch(m.Value) ? "" : "00");
         return WhitespaceRunPattern().Replace(replaced, " ").Trim().Length;
     }
+
+    /// <summary>Reverse of the serializer's snake_case enum policy: token kind string (<c>temp</c>, <c>precip_mm</c>, …) → <see cref="QuantityKind"/>. The single source the validator's <see cref="QuantityKinds"/> set derives from, read the other direction.</summary>
+    private static readonly IReadOnlyDictionary<string, QuantityKind> QuantityKindByToken =
+        Enum.GetValues<QuantityKind>().ToDictionary(
+            k => JsonNamingPolicy.SnakeCaseLower.ConvertName(k.ToString()), k => k, StringComparer.Ordinal);
+
+    /// <summary>
+    /// Substitute every token in <paramref name="text"/> using the SAME grammar
+    /// the validator enforces (so the renderer and validator cannot drift): each
+    /// <c>{q:&lt;kind&gt;:&lt;value&gt;}</c> quantity is handed to
+    /// <paramref name="renderQuantity"/> (with its <see cref="QuantityKind"/> and
+    /// canonical-unit value), each <c>{q:time:…}</c> instant is parsed to a UTC
+    /// <see cref="DateTime"/> and handed to <paramref name="renderTime"/>, and each
+    /// <c>{chN}</c> anchor renders to the empty string.  Intended for bodies that
+    /// have already passed <see cref="StructuredReportBody.Validate"/>; a span that
+    /// somehow matches no token form is left verbatim rather than thrown on, since
+    /// rendering must never crash a send (validation is the gate that rejects
+    /// malformed tokens upstream).
+    /// </summary>
+    public static string Substitute(
+        string text,
+        Func<QuantityKind, double, string> renderQuantity,
+        Func<DateTime, string> renderTime)
+    {
+        return BraceSpanPattern().Replace(text, m =>
+        {
+            var span = m.Value;
+            if (AnchorTokenPattern().IsMatch(span))
+                return string.Empty;
+
+            var quantity = QuantityTokenPattern().Match(span);
+            if (!quantity.Success)
+                return span;
+
+            var kind = quantity.Groups["kind"].Value;
+            var value = quantity.Groups["value"].Value;
+
+            if (kind == "time")
+            {
+                return DateTime.TryParse(value, CultureInfo.InvariantCulture,
+                    DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var instant)
+                    ? renderTime(instant)
+                    : span;
+            }
+
+            return QuantityKindByToken.TryGetValue(kind, out var qk)
+                && double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed)
+                ? renderQuantity(qk, parsed)
+                : span;
+        });
+    }
 }
