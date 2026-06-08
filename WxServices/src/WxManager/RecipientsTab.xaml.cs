@@ -187,6 +187,7 @@ public partial class RecipientsTab : UserControl
         TempUnitBox.ItemsSource = new[] { "F", "C" };
         PressureUnitBox.ItemsSource = new[] { "inHg", "kPa" };
         WindUnitBox.ItemsSource = new[] { "mph", "kph" };
+        PrecipUnitBox.ItemsSource = new[] { "in", "mm" };
         TzBox.ItemsSource = IanaTimeZones.All();
 
         // Capture the mirrored fields' XAML tooltips once, so the locality lock
@@ -203,7 +204,7 @@ public partial class RecipientsTab : UserControl
         DirtyTracking.Attach(MarkDirty,
             RecipientIdBox, NameBox, EmailBox, LanguageBox, TzBox, ScheduledHoursBox,
             AddressBox, LocalityCombo, MetarIcaoBox, TafIcaoBox,
-            TempUnitBox, PressureUnitBox, WindUnitBox);
+            TempUnitBox, PressureUnitBox, WindUnitBox, PrecipUnitBox);
 
         // Track user typing in the Locality combo (selection changes are tracked
         // in LocalityCombo_SelectionChanged) — see _localityComboUserEdited.
@@ -731,6 +732,7 @@ public partial class RecipientsTab : UserControl
             r.TempUnit = TempUnitBox.SelectedItem?.ToString() ?? "F";
             r.PressureUnit = PressureUnitBox.SelectedItem?.ToString() ?? "inHg";
             r.WindSpeedUnit = WindUnitBox.SelectedItem?.ToString() ?? "mph";
+            r.PrecipUnit = PrecipUnitBox.SelectedItem?.ToString() ?? "in";
 
             // ── Locality membership (WX-127) ──────────────────────────────────
             // The Locality combo is the single control for both membership and the
@@ -1045,6 +1047,7 @@ public partial class RecipientsTab : UserControl
         TempUnitBox.SelectedItem = r.TempUnit;
         PressureUnitBox.SelectedItem = r.PressureUnit;
         WindUnitBox.SelectedItem = r.WindSpeedUnit;
+        PrecipUnitBox.SelectedItem = r.PrecipUnit;
     }
 
     /// <summary>
@@ -1085,6 +1088,7 @@ public partial class RecipientsTab : UserControl
         TempUnitBox.SelectedIndex = 0;  // "F"
         PressureUnitBox.SelectedIndex = 0;  // "inHg"
         WindUnitBox.SelectedIndex = 0;  // "mph"
+        PrecipUnitBox.SelectedIndex = 0;  // "in"
 
         HideMessages();
         StationsGroup.Visibility = Visibility.Collapsed;
@@ -1134,6 +1138,7 @@ public partial class RecipientsTab : UserControl
         TempUnitBox.SelectedIndex = -1;
         PressureUnitBox.SelectedIndex = -1;
         WindUnitBox.SelectedIndex = -1;
+        PrecipUnitBox.SelectedIndex = -1;
 
         HideMessages();
         StationsGroup.Visibility = Visibility.Collapsed;

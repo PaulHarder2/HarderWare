@@ -135,6 +135,7 @@
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
 
                         <!-- Id -->
@@ -206,6 +207,10 @@
                         <!-- Wind Speed Unit -->
                         <TextBlock Grid.Row="13" Grid.Column="0" Text="Wind Speed" VerticalAlignment="Center" Margin="0,3"/>
                         <ComboBox  Grid.Row="13" Grid.Column="1" x:Name="WindUnitBox" Margin="0,3"/>
+
+                        <!-- Precipitation Unit -->
+                        <TextBlock Grid.Row="14" Grid.Column="0" Text="Precipitation" VerticalAlignment="Center" Margin="0,3"/>
+                        <ComboBox  Grid.Row="14" Grid.Column="1" x:Name="PrecipUnitBox" Margin="0,3"/>
                     </Grid>
             </GroupBox>
 
