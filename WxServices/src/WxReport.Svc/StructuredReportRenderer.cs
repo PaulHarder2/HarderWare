@@ -57,7 +57,11 @@ public static class StructuredReportRenderer
         TimeZoneInfo localityTz,
         bool isUnscheduled)
     {
-        var lang = LanguageHelper.ToIetfTag(recipient.Language);
+        // The narrative map and ReportVocabulary key on ISO 639-1 (en, es).
+        // ToIetfTag already collapses to the two-letter code, but normalize
+        // defensively so a future regional tag (e.g. "es-419") can't silently
+        // miss the narrative and fall back.
+        var lang = LanguageHelper.ToIetfTag(recipient.Language).Split('-')[0].ToLowerInvariant();
         var sections = SelectNarrative(report, lang);
         var vocab = ReportVocabulary.ForLanguage(lang);
 
