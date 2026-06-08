@@ -35,8 +35,10 @@ public sealed record ReportVocabulary
     public required string UnscheduledNote { get; init; }
     public required string NoObservationNote { get; init; }
 
-    // ── first-report welcome (WX-130; deterministic, recipient's language) ────
-    public required string WelcomeFormat { get; init; }            // {0} = localized list of scheduled send times
+    // ── first-report welcome (WX-130; standalone welcome-only email) ──────────
+    public required string WelcomeSubject { get; init; }           // subject prefix; locality appended by the worker
+    public required string WelcomeGreeting { get; init; }          // bold opening line
+    public required string WelcomeFormat { get; init; }            // {0} = locality name, {1} = localized list of scheduled send times
     public required string AndConjunction { get; init; }           // joins the last two send times — "and" / "y"
 
     // ── current-conditions row labels ───────────────────────────────────────
@@ -128,7 +130,9 @@ public sealed record ReportVocabulary
         InSummaryLabel = "In summary:",
         UnscheduledNote = "Unscheduled update — see note below",
         NoObservationNote = "No recent observation is available from any station within about 30 miles, so the report below is based on forecast model data only.",
-        WelcomeFormat = "Welcome to WxReport! From now on you'll receive a weather update each day at {0} local time, plus additional alerts whenever significant weather changes occur.",
+        WelcomeSubject = "Welcome to WxReport",
+        WelcomeGreeting = "Welcome to WxReport!",
+        WelcomeFormat = "From now on you'll receive a daily weather report for {0} at {1} local time, plus extra alerts whenever the weather changes significantly. We're glad to have you.",
         AndConjunction = "and",
         RowSky = "Sky",
         RowVisibility = "Visibility",
@@ -195,7 +199,9 @@ public sealed record ReportVocabulary
         InSummaryLabel = "En resumen:",
         UnscheduledNote = "Actualización no programada — vea la nota a continuación",
         NoObservationNote = "No hay una observación reciente de ninguna estación a unos 50 km, por lo que el informe a continuación se basa únicamente en datos del modelo de pronóstico.",
-        WelcomeFormat = "¡Bienvenido a WxReport! A partir de ahora recibirá una actualización del tiempo cada día a las {0} hora local, además de alertas adicionales cada vez que el tiempo cambie significativamente.",
+        WelcomeSubject = "Bienvenido a WxReport",
+        WelcomeGreeting = "¡Bienvenido a WxReport!",
+        WelcomeFormat = "A partir de ahora recibirá un informe del tiempo diario para {0} a las {1} hora local, además de alertas adicionales cuando el tiempo cambie significativamente. Nos alegra tenerle con nosotros.",
         AndConjunction = "y",
         RowSky = "Cielo",
         RowVisibility = "Visibilidad",

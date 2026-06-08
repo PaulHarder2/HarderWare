@@ -217,7 +217,6 @@ public sealed class ReportWorker : BackgroundService
         var label = $"locality '{locality.Name}' (Id={locality.Id})";
 
         var tz = ResolveTimezone(locality.Timezone);
-        var scheduledHours = ParseHourList(locality.ScheduledSendHours ?? cfg.DefaultScheduledSendHours);
         var preferredIcaos = ParseIcaoList(locality.MetarIcao);
         var snapshot = await WxInterpreter.GetSnapshotAsync(
             preferredIcaos, locality.TafIcao == "NONE" ? null : locality.TafIcao, locality.Name, _dbOptions,
@@ -310,8 +309,7 @@ public sealed class ReportWorker : BackgroundService
             {
                 var memberLang = member.Language ?? cfg.DefaultLanguage;
                 var innerBody = StructuredReportRenderer.Render(
-                    success.StructuredReport, success.FinalSnapshot, snapshot, member, tz,
-                    isUnscheduled: false, isFirstReport: false, scheduledHours: scheduledHours);
+                    success.StructuredReport, success.FinalSnapshot, snapshot, member, tz, isUnscheduled: false);
                 var report = WrapAsEmailHtml(innerBody, memberLang, snapshot, tz);
 
                 var committedSend = new CommittedSend
@@ -549,15 +547,35 @@ public sealed class ReportWorker : BackgroundService
         bool freshTafSinceLastSend = changedSinceLastSend.Contains(TriggerSource.Taf);
         bool freshGuidanceSinceLastSend = freshTafSinceLastSend || changedSinceLastSend.Contains(TriggerSource.Gfs);
 
+        // Members already delivered to (excluding diagnostic startup rows) — ONE
+        // batched lookup, reused for the welcome decision and the per-member render
+        // branch below (replaces a per-member existence query). A member NOT in this
+        // set has never been contacted and gets a welcome-only first email (WX-130).
+        var memberIds = members.Select(m => m.RecipientId).ToList();
+        var servedIds = (await ctx.CommittedSends
+            .Where(cs => memberIds.Contains(cs.RecipientId) && cs.SentAtUtc.HasValue && !cs.IsDiagnostic)
+            .Select(cs => cs.RecipientId)
+            .Distinct()
+            .ToListAsync(ct))
+            .ToHashSet(StringComparer.Ordinal);
+
         var (shouldSend, reason, severity, allowSkip) = ShouldSend(tz, scheduledHours, state, inputIdentity, cfg, now);
         if (!shouldSend)
         {
-            if (reason == "prefilter-skip")
+            // Even on a non-sending cycle, onboard any never-contacted member with a
+            // standalone welcome-only email — no Claude call, no disturbance to other
+            // members, anchored to the locality's most-recent delivered snapshot
+            // (a !shouldSend locality has sent before, so that baseline exists).
+            var unwelcomed = members.Where(m => !servedIds.Contains(m.RecipientId)).ToList();
+            var welcomed = unwelcomed.Count > 0
+                ? await WelcomeNewMembersAsync(ctx, emailer, locality, unwelcomed, memberIds, tz, scheduledHours, cfg, ct)
+                : 0;
+            if (reason == "prefilter-skip" && welcomed == 0)
             {
                 _preFilterSkips.Add(1);
                 Logger.Debug($"{label}: no input changed since last Claude call — pre-filter skip.");
             }
-            return 0;
+            return welcomed;
         }
 
         var triggerType = reason == "change"
@@ -595,7 +613,6 @@ public sealed class ReportWorker : BackgroundService
         // excluding diagnostic sends (WX-130) and this cycle's provisional. Because
         // every member's CommittedSend references the one shared reconciled snapshot,
         // any member's most recent delivery points at the locality's baseline.
-        var memberIds = members.Select(m => m.RecipientId).ToList();
         var priorSnapshot = await ctx.CommittedSends
             .Where(cs => memberIds.Contains(cs.RecipientId) && cs.SentAtUtc.HasValue && !cs.IsDiagnostic)
             .Select(cs => cs.ForecastSnapshot)
@@ -721,25 +738,27 @@ public sealed class ReportWorker : BackgroundService
         var structuredReportJson = success.StructuredReport.Serialize();
         var plotsDir = new WxPaths(_config["InstallRoot"]).PlotsDir;
         bool isUnscheduled = reason == "change";
-        var sentThisLocality = 0;
+        var weatherSent = 0;   // weather reports delivered — drives the baseline/cadence advance
+        var welcomeSent = 0;   // first-contact welcome-only emails delivered
 
-        // Inner loop: deterministic per-recipient render + send — no further LLM call.
+        // Inner loop: deterministic per-recipient send — no further LLM call. A
+        // never-contacted member gets a welcome-only first email (anchored to this
+        // cycle's reconciled snapshot so they count as served next cycle); everyone
+        // already served gets the weather report.
         foreach (var member in members)
         {
             try
             {
+                if (!servedIds.Contains(member.RecipientId))
+                {
+                    if (await SendWelcomeAsync(ctx, emailer, member, locality, reconciledSnapshot, tz, scheduledHours, cfg, ct))
+                        welcomeSent++;
+                    continue;
+                }
+
                 var memberLang = member.Language ?? cfg.DefaultLanguage;
-
-                // First-report welcome is per-recipient: a member just added to an
-                // established locality still gets a welcome on their first delivery,
-                // independent of the locality's first/scheduled/change reason.
-                // Diagnostic startup rows don't count as a real first report.
-                bool isFirstReport = !await ctx.CommittedSends
-                    .AnyAsync(cs => cs.RecipientId == member.RecipientId && cs.SentAtUtc.HasValue && !cs.IsDiagnostic, ct);
-
                 var innerBody = StructuredReportRenderer.Render(
-                    success.StructuredReport, success.FinalSnapshot, snapshot, member, tz,
-                    isUnscheduled: isUnscheduled, isFirstReport: isFirstReport, scheduledHours: scheduledHours);
+                    success.StructuredReport, success.FinalSnapshot, snapshot, member, tz, isUnscheduled);
                 var report = WrapAsEmailHtml(innerBody, memberLang, snapshot, tz);
 
                 var committedSend = new CommittedSend
@@ -748,7 +767,7 @@ public sealed class ReportWorker : BackgroundService
                     RecipientId = member.RecipientId,
                     ReasoningTrace = success.ReasoningTrace,
                     StructuredReport = structuredReportJson,
-                    EmailBody = report,
+                    EmailBody = report,   // pre-meteogram, by the CommittedSend.EmailBody convention
                     CreatedAtUtc = DateTime.UtcNow,
                 };
                 ctx.CommittedSends.Add(committedSend);
@@ -759,7 +778,7 @@ public sealed class ReportWorker : BackgroundService
 
                 var meteogramPath = FindMeteogramAbbrevPath(
                     preferredIcaos.Count > 0 ? preferredIcaos[0] : "", member.TempUnit, locality.Timezone, plotsDir);
-                report = meteogramPath is not null
+                var htmlToSend = meteogramPath is not null
                     ? InsertMeteogramImage(report)
                     : report.Replace("<!--meteogram-->", "", StringComparison.Ordinal);
                 IReadOnlyDictionary<string, string>? inlineImages = meteogramPath is not null
@@ -768,13 +787,13 @@ public sealed class ReportWorker : BackgroundService
 
                 var sent = await emailer.SendAsync(
                     member.Email, subject, plainFallback,
-                    htmlBody: report, inlineImages: inlineImages,
+                    htmlBody: htmlToSend, inlineImages: inlineImages,
                     toName: member.Name, ct: ct);
 
                 if (!sent) { _sendFailures.Add(1); continue; }
 
                 _reportsSent.Add(1);
-                sentThisLocality++;
+                weatherSent++;
 
                 committedSend.SentAtUtc = DateTime.UtcNow;
                 try { await ctx.SaveChangesAsync(ct); }
@@ -790,11 +809,13 @@ public sealed class ReportWorker : BackgroundService
             }
         }
 
-        // Advance the locality baseline + cadence only when at least one member was
-        // actually delivered to, so a total send failure doesn't move the baseline
-        // the next cycle reconciles against. LastSentInputHash advances only here
-        // (a real delivery); not-news / suppression advance only LastClaudeInputHash.
-        if (sentThisLocality > 0)
+        // Advance the locality baseline + cadence only when a WEATHER report was
+        // actually delivered — welcomes (first-contact, no weather) must NOT move the
+        // baseline or the scheduled-slot cadence, else a welcome sent at/after the
+        // scheduled hour would mark the slot served and suppress the recipient's first
+        // real scheduled report. LastSentInputHash advances only here (a real weather
+        // delivery); not-news / suppression advance only LastClaudeInputHash.
+        if (weatherSent > 0)
         {
             if (reason is "scheduled" or "first")
                 state.LastScheduledSentUtc = now;
@@ -812,7 +833,93 @@ public sealed class ReportWorker : BackgroundService
             }
         }
 
-        return sentThisLocality;
+        return weatherSent + welcomeSent;
+    }
+
+    /// <summary>
+    /// Onboards never-contacted members of a locality whose cycle is NOT sending this
+    /// pass (pre-filter skip / gap): each gets a standalone welcome-only email,
+    /// anchored to the locality's most-recent delivered snapshot — no Claude call and
+    /// no disturbance to the other members (WX-130).  A non-sending locality has sent
+    /// before, so that baseline snapshot exists; if it somehow does not, the welcomes
+    /// are deferred to the locality's next reconciling cycle (which welcomes them in
+    /// the inner loop).  Returns the number of welcomes delivered.
+    /// </summary>
+    private async Task<int> WelcomeNewMembersAsync(
+        WeatherDataContext ctx, SmtpSender emailer, Locality locality, List<Recipient> newMembers,
+        List<string> memberIds, TimeZoneInfo tz, IReadOnlyList<int> scheduledHours, ReportConfig cfg, CancellationToken ct)
+    {
+        var anchor = await ctx.CommittedSends
+            .Where(cs => memberIds.Contains(cs.RecipientId) && cs.SentAtUtc.HasValue && !cs.IsDiagnostic)
+            .Select(cs => cs.ForecastSnapshot)
+            .OrderByDescending(s => s.GeneratedAtUtc)
+            .FirstOrDefaultAsync(ct);
+        if (anchor is null)
+            return 0;   // brand-new locality: founders are welcomed on its first reconciling cycle
+
+        var sent = 0;
+        foreach (var member in newMembers)
+        {
+            try
+            {
+                if (await SendWelcomeAsync(ctx, emailer, member, locality, anchor, tz, scheduledHours, cfg, ct))
+                    sent++;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Logger.Error($"{member.RecipientId} {member.Email} ({member.Name}): failed to send welcome for locality '{locality.Name}'.", ex);
+            }
+        }
+        return sent;
+    }
+
+    /// <summary>
+    /// Renders and sends one recipient's standalone welcome-only email (no weather),
+    /// records the delivery as a <see cref="CommittedSend"/> anchored to
+    /// <paramref name="anchorSnapshot"/> (so the recipient counts as served next
+    /// cycle) with null reasoning/structured-report, and returns whether the SMTP
+    /// send succeeded.  The welcome carries no meteogram.
+    /// </summary>
+    private async Task<bool> SendWelcomeAsync(
+        WeatherDataContext ctx, SmtpSender emailer, Recipient member, Locality locality,
+        ForecastSnapshot anchorSnapshot, TimeZoneInfo tz, IReadOnlyList<int> scheduledHours,
+        ReportConfig cfg, CancellationToken ct)
+    {
+        var memberLang = member.Language ?? cfg.DefaultLanguage;
+        var innerBody = StructuredReportRenderer.RenderWelcome(member, locality.Name, tz, scheduledHours);
+        var report = WrapWelcomeAsEmailHtml(innerBody, memberLang);
+
+        var committedSend = new CommittedSend
+        {
+            ForecastSnapshot = anchorSnapshot,
+            RecipientId = member.RecipientId,
+            ReasoningTrace = null,
+            StructuredReport = null,
+            EmailBody = report,
+            CreatedAtUtc = DateTime.UtcNow,
+        };
+        ctx.CommittedSends.Add(committedSend);
+        await ctx.SaveChangesAsync(ct);
+
+        var lang = LanguageHelper.ToIetfTag(memberLang).Split('-')[0].ToLowerInvariant();
+        var subject = $"{ReportVocabulary.ForLanguage(lang).WelcomeSubject} — {locality.Name}";
+        var plainFallback = StructuredReportRenderer.WelcomePlainText(member, locality.Name, scheduledHours);
+
+        var sent = await emailer.SendAsync(
+            member.Email, subject, plainFallback,
+            htmlBody: report, inlineImages: null, toName: member.Name, ct: ct);
+
+        if (!sent) { _sendFailures.Add(1); return false; }
+
+        _reportsSent.Add(1);
+        committedSend.SentAtUtc = DateTime.UtcNow;
+        try { await ctx.SaveChangesAsync(ct); }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Logger.Error($"{member.RecipientId} {member.Email} ({member.Name}): failed to persist CommittedSend.SentAtUtc Id={committedSend.Id} after a successful welcome send.", ex);
+        }
+        Logger.Info($"{member.RecipientId} {member.Email} ({member.Name}): welcome sent (locality '{locality.Name}').");
+        return true;
     }
 
     // ── persistence helpers ───────────────────────────────────────────────────
@@ -930,6 +1037,33 @@ public sealed class ReportWorker : BackgroundService
             <body style="margin:0;padding:16px;background:#f0f4f8;font-family:Arial,Helvetica,sans-serif;">
             {innerBodyHtml.Trim()}
             {footer}
+            </body>
+            </html>
+            """;
+    }
+
+    /// <summary>
+    /// Wraps a WX-130 welcome-only body (no weather) in the email envelope with a
+    /// minimal footer — just the product version, no observation/GFS line and no
+    /// meteogram, since a first-contact welcome carries no weather data.
+    /// </summary>
+    private static string WrapWelcomeAsEmailHtml(string innerBodyHtml, string language)
+    {
+        var langCode = LanguageHelper.ToIetfTag(language);
+        return $"""
+            <!DOCTYPE html>
+            <html lang="{langCode}">
+            <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            </head>
+            <body style="margin:0;padding:16px;background:#f0f4f8;font-family:Arial,Helvetica,sans-serif;">
+            {innerBodyHtml.Trim()}
+            <div style="max-width:600px;margin:0 auto;">
+            <div style="background:#1a3a5c;color:#c8daea;font-size:12px;text-align:center;padding:10px 20px;border-radius:0 0 6px 6px;">
+            HarderWare WxServices {WxPaths.ProductVersion}
+            </div>
+            </div>
             </body>
             </html>
             """;

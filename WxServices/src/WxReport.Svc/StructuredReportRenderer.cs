@@ -47,10 +47,9 @@ public static class StructuredReportRenderer
     /// <paramref name="localityTz"/> localizes per-day bucketing and instant
     /// rendering.  <paramref name="isUnscheduled"/> selects the header's
     /// unscheduled-update line; the change-summary band itself renders whenever the
-    /// narrative carries one.  On <paramref name="isFirstReport"/> a deterministic
-    /// welcome band is prepended in the recipient's language, naming their
-    /// <paramref name="scheduledHours"/> (WX-130) — the reconciler no longer
-    /// authors a per-recipient welcome.
+    /// narrative carries one.  (A recipient's first contact is a separate
+    /// welcome-only email — see <see cref="RenderWelcome"/>; this method always
+    /// renders a weather report.)
     /// </summary>
     public static string Render(
         StructuredReportBody report,
@@ -58,9 +57,7 @@ public static class StructuredReportRenderer
         WeatherSnapshot observation,
         Recipient recipient,
         TimeZoneInfo localityTz,
-        bool isUnscheduled,
-        bool isFirstReport,
-        IReadOnlyList<int> scheduledHours)
+        bool isUnscheduled)
     {
         // The narrative map and ReportVocabulary key on ISO 639-1 (en, es).
         // ToIetfTag already collapses to the two-letter code, but normalize
@@ -80,9 +77,6 @@ public static class StructuredReportRenderer
 
         AppendHeader(sb, observation, localityTz, vocab, isUnscheduled);
 
-        if (isFirstReport)
-            AppendWelcome(sb, vocab, scheduledHours);
-
         if (!string.IsNullOrWhiteSpace(sections.ChangeSummary))
             AppendChangeBand(sb, vocab, RenderProse(sections.ChangeSummary!));
 
@@ -94,14 +88,44 @@ public static class StructuredReportRenderer
         return sb.ToString();
     }
 
-    // ── first-report welcome band ─────────────────────────────────────────────
+    // ── first-contact welcome (WX-130; standalone welcome-only email) ──────────
 
-    private static void AppendWelcome(StringBuilder sb, ReportVocabulary vocab, IReadOnlyList<int> scheduledHours)
+    /// <summary>
+    /// Renders a recipient's one-time welcome email — a greeting plus a statement
+    /// of what to expect (daily reports for <paramref name="localityName"/> at the
+    /// locality's <paramref name="scheduledHours"/>, localized to the recipient's
+    /// language), with <b>no weather content</b>.  This is the first contact a new
+    /// recipient receives; weather reports begin on the locality's normal cadence.
+    /// </summary>
+    public static string RenderWelcome(
+        Recipient recipient,
+        string localityName,
+        TimeZoneInfo localityTz,
+        IReadOnlyList<int> scheduledHours)
     {
-        var welcome = string.Format(vocab.Culture, vocab.WelcomeFormat, FormatScheduleTimes(scheduledHours, vocab));
-        sb.Append("<div style=\"background:#eef4fb;padding:16px 24px;font-size:14px;color:#1a3a5c;\">");
-        sb.Append(HtmlText(welcome));
+        var lang = LanguageHelper.ToIetfTag(recipient.Language).Split('-')[0].ToLowerInvariant();
+        var vocab = ReportVocabulary.ForLanguage(lang);
+        var body = string.Format(vocab.Culture, vocab.WelcomeFormat, localityName, FormatScheduleTimes(scheduledHours, vocab));
+
+        var sb = new StringBuilder();
+        sb.Append("<div style=\"max-width:600px;margin:0 auto;font-family:Arial,Helvetica,sans-serif;color:#1a3a5c;\">");
+        sb.Append("<div style=\"background:#1a3a5c;color:#ffffff;text-align:left;padding:20px 24px;border-radius:6px 6px 0 0;\">");
+        sb.Append($"<div style=\"font-weight:bold;font-size:22px;\">{HtmlText(localityName)}</div>");
         sb.Append("</div>");
+        sb.Append("<div style=\"background:#eef4fb;padding:20px 24px;font-size:15px;line-height:1.5;border-radius:0 0 6px 6px;\">");
+        sb.Append($"<strong>{HtmlText(vocab.WelcomeGreeting)}</strong> {HtmlText(body)}");
+        sb.Append("</div>");
+        sb.Append("</div>");
+        return sb.ToString();
+    }
+
+    /// <summary>Plain-text form of the welcome email (the SMTP fallback), sharing the same vocabulary + schedule formatting as <see cref="RenderWelcome"/> so the two cannot drift.</summary>
+    public static string WelcomePlainText(Recipient recipient, string localityName, IReadOnlyList<int> scheduledHours)
+    {
+        var lang = LanguageHelper.ToIetfTag(recipient.Language).Split('-')[0].ToLowerInvariant();
+        var vocab = ReportVocabulary.ForLanguage(lang);
+        return $"{vocab.WelcomeGreeting} "
+            + string.Format(vocab.Culture, vocab.WelcomeFormat, localityName, FormatScheduleTimes(scheduledHours, vocab));
     }
 
     /// <summary>Localized "6 AM and 12 PM" list of the recipient's daily send hours, joined with the language's conjunction. Empty when no hours are configured.</summary>
