@@ -1318,6 +1318,7 @@ All logs are written to `{InstallRoot}\Logs\` (default `C:\HarderWare\Logs\`). L
 | WxMonitor does not watch itself | WxMonitor has no watchdog. A Windows Task Scheduler task could serve this purpose if needed. |
 | Nominatim rate limit | Nominatim's terms require a maximum of 1 request/second and a valid User-Agent. Resolution is one-time per recipient, so this is unlikely to be a problem in practice. |
 | WxViewer has no database access | WxViewer reads PNG files and manifest JSON files directly. METAR observation tables would require a database-connected panel in a future session. |
+| Locality reassignment can briefly bleed the reconciliation baseline | The per-locality prior-snapshot lookup (WX-130) keys on the current members' delivered `CommittedSend` rows, with no locality stamp on the row (the minimal-schema choice — `CommittedSend` has no `LocalityId`). If a recipient is moved from locality A to B, B's next cycle can pick that recipient's A-era snapshot as its reconciliation baseline, so Claude reasons "what changed" against the wrong locality for one cycle. Rare (reassignment is a manual admin action) and self-correcting (B's own snapshot becomes the most-recent after its first send). Accepted deliberately; the explicit-schema fix (a `CommittedSend.LocalityId` or a baseline pointer on `LocalityState`) was declined to keep WX-130 additive. |
 
 ---
 
