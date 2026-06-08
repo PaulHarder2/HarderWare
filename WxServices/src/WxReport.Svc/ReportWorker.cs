@@ -501,11 +501,38 @@ public sealed class ReportWorker : BackgroundService
     {
         var label = $"locality '{locality.Name}' (Id={locality.Id})";
 
+        // Members already delivered to (excluding diagnostic startup rows) — ONE
+        // batched lookup, reused for the LocalityState bootstrap, the welcome
+        // decision, and the per-member render branch below.
+        var memberIds = members.Select(m => m.RecipientId).ToList();
+
         // Per-locality reconciliation baseline + send cadence (replaces RecipientState).
         var state = await ctx.LocalityStates.FirstOrDefaultAsync(s => s.LocalityId == locality.Id, ct);
         if (state is null)
         {
-            state = new LocalityState { LocalityId = locality.Id };
+            // Bootstrap a freshly-created state from the locality's historical
+            // deliveries (CodeRabbit, WX-130): the WX-130 cutover starts with an empty
+            // LocalityStates table while recipients already have prior per-recipient
+            // deliveries — without this, ShouldSend would see all-null cadence and
+            // treat every established locality as "first", forcing an off-cadence send
+            // to everyone on the first post-deploy cycle. Seed both cadence timestamps
+            // from the most-recent real delivery (so a scheduled slot the old system
+            // already served this cycle isn't re-sent) plus the last station. The
+            // last-sent input hash stays null: the first cycle reconciles once against
+            // the historical prior snapshot to establish it.
+            var lastDelivered = await ctx.CommittedSends
+                .Where(cs => memberIds.Contains(cs.RecipientId) && cs.SentAtUtc.HasValue && !cs.IsDiagnostic)
+                .OrderByDescending(cs => cs.SentAtUtc)
+                .Select(cs => new { cs.SentAtUtc, cs.ForecastSnapshot.StationIcao })
+                .FirstOrDefaultAsync(ct);
+
+            state = new LocalityState
+            {
+                LocalityId = locality.Id,
+                LastScheduledSentUtc = lastDelivered?.SentAtUtc,
+                LastUnscheduledSentUtc = lastDelivered?.SentAtUtc,
+                LastMetarIcao = lastDelivered?.StationIcao,
+            };
             ctx.LocalityStates.Add(state);
         }
 
@@ -547,11 +574,8 @@ public sealed class ReportWorker : BackgroundService
         bool freshTafSinceLastSend = changedSinceLastSend.Contains(TriggerSource.Taf);
         bool freshGuidanceSinceLastSend = freshTafSinceLastSend || changedSinceLastSend.Contains(TriggerSource.Gfs);
 
-        // Members already delivered to (excluding diagnostic startup rows) — ONE
-        // batched lookup, reused for the welcome decision and the per-member render
-        // branch below (replaces a per-member existence query). A member NOT in this
-        // set has never been contacted and gets a welcome-only first email (WX-130).
-        var memberIds = members.Select(m => m.RecipientId).ToList();
+        // A member NOT in this set has never been contacted and gets a welcome-only
+        // first email (WX-130).
         var servedIds = (await ctx.CommittedSends
             .Where(cs => memberIds.Contains(cs.RecipientId) && cs.SentAtUtc.HasValue && !cs.IsDiagnostic)
             .Select(cs => cs.RecipientId)
