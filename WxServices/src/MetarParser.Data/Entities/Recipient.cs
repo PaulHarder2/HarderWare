@@ -117,8 +117,8 @@ public class Recipient
     public string PrecipUnit { get; set; } = "in";
 
     /// <summary>
-    /// .NET culture name controlling number formatting (decimal separator, digit
-    /// grouping, time format) when the renderer substitutes quantity tokens —
+    /// .NET culture name intended to drive number formatting (decimal separator
+    /// and digit grouping) when the renderer substitutes quantity tokens —
     /// e.g. <c>"en-US"</c>, <c>"es-US"</c>. <see langword="null"/> until set.
     /// Added by WX-142 but deliberately <em>unread</em> for now: WX-129 formats all
     /// recipients with US / period-decimal conventions, and WX-138 wires this
