@@ -301,6 +301,8 @@ public sealed class WeatherDataContext : DbContext
             e.Property(x => x.TempUnit).HasMaxLength(10).IsRequired();
             e.Property(x => x.PressureUnit).HasMaxLength(10).IsRequired();
             e.Property(x => x.WindSpeedUnit).HasMaxLength(10).IsRequired();
+            e.Property(x => x.PrecipUnit).HasMaxLength(10).IsRequired();
+            e.Property(x => x.NumberFormat).HasMaxLength(40);
 
             e.HasIndex(x => x.RecipientId)
              .IsUnique()

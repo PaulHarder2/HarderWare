@@ -107,4 +107,22 @@ public class Recipient
 
     /// <summary>Wind speed unit: <c>"mph"</c> (default) or <c>"kph"</c>.</summary>
     public string WindSpeedUnit { get; set; } = "mph";
+
+    /// <summary>
+    /// Precipitation unit: <c>"in"</c> (inches, default) or <c>"mm"</c> (millimetres).
+    /// The structured report's canonical precipitation quantity is millimetres
+    /// (<c>{q:precip_mm:…}</c>); the WX-129 deterministic renderer converts to this
+    /// unit per recipient. Independent of the other unit fields (WX-142 / Fork-2).
+    /// </summary>
+    public string PrecipUnit { get; set; } = "in";
+
+    /// <summary>
+    /// .NET culture name controlling number formatting (decimal separator, digit
+    /// grouping, time format) when the renderer substitutes quantity tokens —
+    /// e.g. <c>"en-US"</c>, <c>"es-US"</c>. <see langword="null"/> until set.
+    /// Added by WX-142 but deliberately <em>unread</em> for now: WX-129 formats all
+    /// recipients with US / period-decimal conventions, and WX-138 wires this
+    /// preference into the renderer (decoupling number format from language).
+    /// </summary>
+    public string? NumberFormat { get; set; }
 }

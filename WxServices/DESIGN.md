@@ -923,6 +923,8 @@ erDiagram
         string TempUnit
         string PressureUnit
         string WindSpeedUnit
+        string PrecipUnit
+        string NumberFormat "nullable"
         bigint LocalityId FK "nullable"
     }
 
@@ -1091,7 +1093,8 @@ The Recipients tab's **Locality** control is a single editable ComboBox doing do
 - `ScheduledSendHours` is a comma-separated string of hours (0–23) in the recipient's local timezone (e.g. `"6, 18"` for morning and evening; `"7"` for a single hour). Falls back at report time to the service's `Report:DefaultScheduledSendHours` (plural — distinct from `Report:DefaultScheduledSendHour`, the singular key WxManager reads only to seed the form default for a new recipient). The format contract lives in one place — `ScheduledSendHoursFormat` in MetarParser.Data (WX-127): `Parse` is the lenient runtime reader (WxReport.Svc), `TryValidate` the strict gate both WxManager tabs use.
 - `MetarIcao` accepts a comma-separated list in preference order (e.g. `"KDWH, KHOU"`). The first station with an observation within the last 3 hours is used; no DB update occurs when a fallback station is used.
 - `Latitude`, `Longitude`, `MetarIcao`, `TafIcao` are written back to the database automatically by the service on first resolution. To re-trigger resolution (e.g. after a move), set them to `NULL` in the `Recipients` table.
-- `TempUnit`, `PressureUnit`, `WindSpeedUnit` control how values are displayed. Each is independent. Supported values: `TempUnit`: `"F"` or `"C"`; `PressureUnit`: `"inHg"` or `"kPa"`; `WindSpeedUnit`: `"mph"` or `"kph"`. All default to US customary.
+- `TempUnit`, `PressureUnit`, `WindSpeedUnit`, `PrecipUnit` control how values are displayed. Each is independent. Supported values: `TempUnit`: `"F"` or `"C"`; `PressureUnit`: `"inHg"` or `"kPa"`; `WindSpeedUnit`: `"mph"` or `"kph"`; `PrecipUnit`: `"in"` or `"mm"`. All default to US customary. The WX-129 deterministic renderer converts the structured report's canonical millimetre precipitation to `PrecipUnit` per recipient.
+- `NumberFormat` (nullable) is a .NET culture name (`"en-US"`, `"es-US"`, …) governing number formatting — decimal separator, digit grouping, time format — when the renderer substitutes quantity tokens. Added by WX-142 but not yet read: the renderer currently formats all recipients with US / period-decimal conventions; WX-138 wires the preference in, decoupling number format from language.
 
 ### Localities — database
 
