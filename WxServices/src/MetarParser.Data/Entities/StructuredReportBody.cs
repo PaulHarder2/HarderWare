@@ -82,7 +82,7 @@ public sealed record StructuredReportBody
     /// semantically invalid body:
     /// <list type="bullet">
     /// <item>at least one narrative language; keys are ISO 639-1 codes;</item>
-    /// <item>each language has non-blank currentConditions, extendedForecast, and closing sections;</item>
+    /// <item>each language has a non-blank closing section (the only required section since v4);</item>
     /// <item>change summaryTokens are well-formed (<c>ch1</c>, <c>ch2</c>, …) and unique;</item>
     /// <item>every change's anchor appears in every language's changeSummary, and no
     /// changeSummary anchor dangles (references a change that doesn't exist) — the

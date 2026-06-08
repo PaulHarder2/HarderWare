@@ -524,12 +524,18 @@ public sealed class ForecastReconciler
         sb.AppendLine();
 
         // WX-130: the data payload is recipient-agnostic now, so it uses
-        // SnapshotDescriber's default display units (US customary). The unit
-        // system here is immaterial to Claude's reasoning — the final_snapshot
-        // schema fixes canonical °C/kt, and the structured_report's {q:...}
-        // tokens are canonical-unit by the token grammar (the renderer converts
-        // per recipient), so what Claude reads in the prompt does not bind the
-        // units anyone receives.
+        // SnapshotDescriber's default display units (US customary). For the
+        // forecast bodies this is harmless — the final_snapshot schema fixes
+        // canonical °C/kt and the structured_report's change quantities derive
+        // from that canonical snapshot, so the renderer converts per recipient.
+        // The exception worth knowing: live OBSERVATION values appear here ONLY
+        // in US-customary text, so if Claude cites a current-observation quantity
+        // directly in narrative prose it must convert it to the canonical
+        // {q:...} unit by hand (the token grammar accepts any number, so a
+        // copy-the-displayed-figure slip would not fail validation). This is a
+        // pre-existing WX-128 property, not introduced here; a follow-up could
+        // give SnapshotDescriber a canonical mode so the payload units match the
+        // token convention end-to-end.
         sb.AppendLine("current_observation and current_forecast (structured text):");
         sb.AppendLine(SnapshotDescriber.Describe(snapshot, tz));
         sb.AppendLine();

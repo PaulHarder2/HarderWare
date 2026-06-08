@@ -13,6 +13,16 @@ namespace MetarParser.Data.Migrations
         {
             migrationBuilder.AlterColumn<int>(
                 name: "SchemaVersion",
+                table: "ForecastSnapshots",
+                type: "int",
+                nullable: false,
+                defaultValue: 4,
+                oldClrType: typeof(int),
+                oldType: "int",
+                oldDefaultValue: 3);
+
+            migrationBuilder.AlterColumn<int>(
+                name: "SchemaVersion",
                 table: "CommittedSends",
                 type: "int",
                 nullable: false,
@@ -68,6 +78,16 @@ namespace MetarParser.Data.Migrations
             migrationBuilder.DropColumn(
                 name: "IsDiagnostic",
                 table: "CommittedSends");
+
+            migrationBuilder.AlterColumn<int>(
+                name: "SchemaVersion",
+                table: "ForecastSnapshots",
+                type: "int",
+                nullable: false,
+                defaultValue: 3,
+                oldClrType: typeof(int),
+                oldType: "int",
+                oldDefaultValue: 4);
 
             migrationBuilder.AlterColumn<int>(
                 name: "SchemaVersion",

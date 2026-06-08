@@ -12,7 +12,7 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace MetarParser.Data.Migrations
 {
     [DbContext(typeof(WeatherDataContext))]
-    [Migration("20260608191629_AddLocalityStateAndDiagnosticFlag")]
+    [Migration("20260608205018_AddLocalityStateAndDiagnosticFlag")]
     partial class AddLocalityStateAndDiagnosticFlag
     {
         /// <inheritdoc />
@@ -93,7 +93,7 @@ namespace MetarParser.Data.Migrations
                     b.Property<int>("SchemaVersion")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("int")
-                        .HasDefaultValue(3);
+                        .HasDefaultValue(4);
 
                     b.Property<string>("StationIcao")
                         .IsRequired()

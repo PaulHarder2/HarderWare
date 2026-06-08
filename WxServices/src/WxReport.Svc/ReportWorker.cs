@@ -900,14 +900,16 @@ public sealed class ReportWorker : BackgroundService
     // ── email envelope ────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Wraps the inner HTML body produced by Claude in the standard WxReport
-    /// email envelope: <c>&lt;!DOCTYPE html&gt;</c>, language-tagged
-    /// <c>&lt;html&gt;</c>, viewport meta, and the dark-blue footer line
-    /// carrying observation/GFS/version metadata.  The result is the
-    /// pre-meteogram HTML stored on <see cref="CommittedSend.EmailBody"/>;
-    /// meteogram replacement happens immediately after, before SMTP send.
+    /// Wraps the inner HTML body produced by the deterministic
+    /// <see cref="StructuredReportRenderer"/> (WX-130 — no longer a Claude
+    /// artifact) in the standard WxReport email envelope:
+    /// <c>&lt;!DOCTYPE html&gt;</c>, language-tagged <c>&lt;html&gt;</c>, viewport
+    /// meta, and the dark-blue footer line carrying observation/GFS/version
+    /// metadata.  The result is the pre-meteogram HTML stored on
+    /// <see cref="CommittedSend.EmailBody"/>; meteogram replacement happens
+    /// immediately after, before SMTP send.
     /// </summary>
-    /// <param name="innerBodyHtml">Inner content of the <c>&lt;body&gt;</c> tag returned by Claude (no doctype, no html/body wrappers, no markdown).</param>
+    /// <param name="innerBodyHtml">Inner content of the <c>&lt;body&gt;</c> tag from the renderer (no doctype, no html/body wrappers, no markdown).</param>
     /// <param name="language">Natural-language name of the recipient's language; used to derive the <c>lang</c> attribute via <see cref="LanguageHelper.ToIetfTag"/>.</param>
     /// <param name="snapshot">Weather snapshot supplying station + observation time + GFS run for the footer line.</param>
     /// <param name="tz">Recipient's timezone (presently unused — footer timestamps are UTC by Paul's request — but reserved for future per-recipient footer localisation).</param>

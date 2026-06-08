@@ -90,7 +90,7 @@ namespace MetarParser.Data.Migrations
                     b.Property<int>("SchemaVersion")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("int")
-                        .HasDefaultValue(3);
+                        .HasDefaultValue(4);
 
                     b.Property<string>("StationIcao")
                         .IsRequired()
