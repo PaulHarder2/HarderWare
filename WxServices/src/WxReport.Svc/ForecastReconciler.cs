@@ -28,13 +28,13 @@ public abstract record ReconcileResult
     /// <summary>Reconciliation succeeded; the four artifacts parsed cleanly.</summary>
     /// <param name="EmailBody">HTML email body for the recipient (inner content of the <c>&lt;body&gt;</c> tag).</param>
     /// <param name="FinalSnapshot">Refined <see cref="ForecastSnapshotBody"/> after Claude reconciled provisional + TAF + observation + prior.</param>
-    /// <param name="StructuredReport">Unit-neutral structured report (WX-128): language-free changes plus the language-keyed tokenized narrative the WX-129 renderer consumes.</param>
+    /// <param name="StructuredReport">Unit-neutral structured report (WX-128): language-free changes plus the language-keyed tokenized narrative the WX-129 renderer consumes. <see langword="null"/> when this dormant artifact failed validation (WX-144) — the email_body is still sent, until WX-130 makes the structured report the live rendering source.</param>
     /// <param name="ReasoningTrace">Brief plain-English audit log of what changed at each of the three reconciliation steps.</param>
     /// <param name="Tokens">Token-usage metadata extracted from the Anthropic API response.</param>
     public sealed record Success(
         string EmailBody,
         ForecastSnapshotBody FinalSnapshot,
-        StructuredReportBody StructuredReport,
+        StructuredReportBody? StructuredReport,
         string ReasoningTrace,
         TokenUsage Tokens) : ReconcileResult;
 
@@ -262,9 +262,34 @@ public sealed class ForecastReconciler
                 if (VisibleTextLength(emailBody) < MinVisibleBodyChars)
                     throw new DegenerateEmailBodyException(reasoningTrace);
 
-                var structuredReportJson = RequireProperty(input, "structured_report").GetRawText();
-                var structuredReport = StructuredReportBody.Deserialize(structuredReportJson);
-                ValidateNarrativeContract(structuredReport, narrativeLanguages);
+                // WX-144: the structured report is persisted-but-UNREAD during the
+                // WX-128 additive transition (email_body is the artifact actually
+                // sent). A validation failure on this dormant artifact must NOT abort a
+                // live send, so extract it defensively: on any failure — a missing
+                // field, schema/token validation, or the per-call narrative contract —
+                // log a WARN, keep a null structured report, and send the email_body
+                // anyway (no wasted retry of an otherwise-good body). email_body and
+                // final_snapshot above stay fatal: they are the live artifacts. WX-130
+                // makes the structured report the live rendering source and re-couples
+                // this — its validation becomes fatal again, and the
+                // currentConditions/extendedForecast sections that trip it today are
+                // dropped entirely.
+                StructuredReportBody? structuredReport = null;
+                try
+                {
+                    var structuredReportJson = RequireProperty(input, "structured_report").GetRawText();
+                    structuredReport = StructuredReportBody.Deserialize(structuredReportJson);
+                    ValidateNarrativeContract(structuredReport, narrativeLanguages);
+                }
+                catch (Exception sx) when (sx is MissingToolUseFieldException or JsonException)
+                {
+                    // Discard any value Deserialize assigned before ValidateNarrativeContract
+                    // threw — a contract failure means the parsed report is unusable.
+                    structuredReport = null;
+                    Logger.Warn(
+                        "Reconciliation structured_report failed validation; sending email_body with a null "
+                        + $"structured report (dormant artifact, WX-144): {sx.Message}");
+                }
 
                 return new ReconcileResult.Success(emailBody, finalSnapshot, structuredReport, reasoningTrace, tokens);
             }
