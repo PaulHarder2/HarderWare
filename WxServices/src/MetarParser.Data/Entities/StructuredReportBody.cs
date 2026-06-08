@@ -82,7 +82,7 @@ public sealed record StructuredReportBody
     /// semantically invalid body:
     /// <list type="bullet">
     /// <item>at least one narrative language; keys are ISO 639-1 codes;</item>
-    /// <item>each language has non-blank currentConditions, extendedForecast, and closing sections;</item>
+    /// <item>each language has a non-blank closing section (the only required section since v4);</item>
     /// <item>change summaryTokens are well-formed (<c>ch1</c>, <c>ch2</c>, …) and unique;</item>
     /// <item>every change's anchor appears in every language's changeSummary, and no
     /// changeSummary anchor dangles (references a change that doesn't exist) — the
@@ -93,10 +93,12 @@ public sealed record StructuredReportBody
     /// </summary>
     private void Validate()
     {
-        // Unlike ForecastSnapshotBody (whose v1/v2 rows predate this type and
-        // must keep loading), the structured report was born at v3 — there is
-        // no legacy to tolerate, so the version pins exactly.  Claude copying
-        // the prior snapshot's older version digit fails closed here.
+        // Only freshly-produced reports are ever deserialized+validated (the
+        // baseline lookup reads final_snapshot, never a persisted structured
+        // report), so there is no legacy to tolerate and the version pins
+        // exactly.  Claude copying the prior snapshot's older version digit fails
+        // closed here.  (Born at v3 in WX-128; bumped to v4 in WX-130 lockstep
+        // when the narrative slimmed to changeSummary + closing.)
         if (SchemaVersion != SchemaVersionCurrent)
             throw new JsonException(
                 $"Structured report schemaVersion {SchemaVersion} is not the supported version {SchemaVersionCurrent}.");
@@ -123,8 +125,6 @@ public sealed record StructuredReportBody
             if (!LanguageKeyPattern.IsMatch(lang))
                 throw new JsonException($"Narrative key '{lang}' is not an ISO 639-1 language code.");
 
-            RequireSection(lang, "currentConditions", sections.CurrentConditions);
-            RequireSection(lang, "extendedForecast", sections.ExtendedForecast);
             RequireSection(lang, "closing", sections.Closing);
 
             // changeSummary is the only section where {chN} anchors may appear,
@@ -141,8 +141,6 @@ public sealed record StructuredReportBody
                     throw new JsonException(
                         $"narrative.{lang}.changeSummary references anchor '{anchor}' but no change carries that summaryToken.");
 
-            ForbidAnchors(lang, "currentConditions", sections.CurrentConditions);
-            ForbidAnchors(lang, "extendedForecast", sections.ExtendedForecast);
             ForbidAnchors(lang, "closing", sections.Closing);
         }
     }
@@ -163,11 +161,13 @@ public sealed record StructuredReportBody
 }
 
 /// <summary>
-/// The narrative prose for one language: the per-section text the renderer
-/// (WX-129) substitutes tokens into and assembles into the recipient's email.
-/// Section names mirror the email structure the per-recipient prompt has
-/// always specified (change-summary band, Current Conditions, Extended
-/// Forecast, closing summary).
+/// The narrative prose for one language (WX-130): the two <em>judgment</em>
+/// sections the WX-129 renderer drops into the report scaffold (substituting
+/// <c>{q:...}</c> tokens) — the change-summary band and the closing summary.
+/// The Current Conditions table and the per-day Extended Forecast grid are
+/// rebuilt <em>deterministically</em> from the observation and the reconciled
+/// snapshot, so they carry no narrative prose (the WX-128 currentConditions /
+/// extendedForecast sections were dropped at v4).
 /// </summary>
 public sealed record NarrativeSections
 {
@@ -180,14 +180,6 @@ public sealed record NarrativeSections
     /// </summary>
     [JsonPropertyName("changeSummary")]
     public string? ChangeSummary { get; init; }
-
-    /// <summary>Prose for the Current Conditions section.</summary>
-    [JsonPropertyName("currentConditions")]
-    public required string CurrentConditions { get; init; }
-
-    /// <summary>Prose for the Extended Forecast section (the per-day Conditions sentences and any framing text).</summary>
-    [JsonPropertyName("extendedForecast")]
-    public required string ExtendedForecast { get; init; }
 
     /// <summary>Prose for the "In summary:" closing.</summary>
     [JsonPropertyName("closing")]

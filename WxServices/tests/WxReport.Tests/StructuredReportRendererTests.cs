@@ -96,8 +96,8 @@ public class StructuredReportRendererTests
             : [new ReportChange { Tier = ChangeTier.Plans, Phenomenon = ChangePhenomenon.Thunderstorm, Direction = ChangeDirection.Appearing, Window = new(AnchorUtc, AnchorUtc.AddHours(6)), Quantities = [], SummaryToken = "ch1" }],
         Narrative = new Dictionary<string, NarrativeSections>
         {
-            ["en"] = new() { ChangeSummary = changeSummary, CurrentConditions = "n/a", ExtendedForecast = "n/a", Closing = ClosingTokens },
-            ["es"] = new() { ChangeSummary = changeSummary is null ? null : "{ch1}Tormentas en camino.", CurrentConditions = "n/d", ExtendedForecast = "n/d", Closing = "Máximas cerca de {q:temp:33.5}, lluvia de {q:precip_mm:12}." },
+            ["en"] = new() { ChangeSummary = changeSummary, Closing = ClosingTokens },
+            ["es"] = new() { ChangeSummary = changeSummary is null ? null : "{ch1}Tormentas en camino.", Closing = "Máximas cerca de {q:temp:33.5}, lluvia de {q:precip_mm:12}." },
         },
     };
 
@@ -230,6 +230,66 @@ public class StructuredReportRendererTests
         Assert.Contains("No recent observation from any nearby station.", en);
         Assert.DoesNotContain("Relative Humidity", en);  // CC table omitted
         Assert.Contains("Forecast for Spring", en);        // forecast grid still rendered
+    }
+
+    [Fact]
+    public void RenderWelcome_IsWelcomeOnly_NamesLocalityAndScheduleTimes_NoWeather()
+    {
+        var welcome = StructuredReportRenderer.RenderWelcome(Imperial(), "Spring", Utc, new[] { 7, 12 });
+
+        Assert.Contains("Welcome to WxReport!", welcome);
+        Assert.Contains("Spring", welcome);             // locality named
+        Assert.Contains("7 AM and 12 PM", welcome);     // localized + joined send times
+        // No weather content in a welcome-only email.
+        Assert.DoesNotContain("Current Conditions", welcome);
+        Assert.DoesNotContain("Forecast for", welcome);
+        Assert.DoesNotContain("In summary:", welcome);
+    }
+
+    [Fact]
+    public void RenderWelcome_LocalizesToSpanish()
+    {
+        var welcome = StructuredReportRenderer.RenderWelcome(Spanish(), "Spring", Utc, new[] { 7 });
+        Assert.Contains("¡Bienvenido a WxReport!", welcome);
+        Assert.Contains("Spring", welcome);
+        Assert.DoesNotContain("Welcome to WxReport!", welcome);
+    }
+
+    [Fact]
+    public void WelcomePlainText_MatchesVocabularyAndNamesLocality()
+    {
+        var plain = StructuredReportRenderer.WelcomePlainText(Imperial(), "Spring", new[] { 7 });
+        Assert.Contains("Welcome to WxReport!", plain);
+        Assert.Contains("Spring", plain);
+        Assert.DoesNotContain("<", plain);  // plain text, no markup
+    }
+
+    [Fact]
+    public void CurrentConditions_ShowsStationSubtitle_WhenStationDiffersFromLocality()
+    {
+        // Spring's nearest station (KDWH, also in Spring) had no data, so the report
+        // fell back to KIAH in Houston — a genuinely different town from the locality,
+        // so the "at <city>, <airport>" attribution subtitle appears.
+        var snap = new WeatherSnapshot
+        {
+            ObservationAvailable = true,
+            LocalityName = "Spring",
+            StationMunicipality = "Houston",
+            StationName = "George Bush Intercontinental Airport",
+            ObservationTimeUtc = AnchorUtc,
+            StationIcao = "KIAH",
+            SkyLayers = [new SkyLayer { Coverage = SkyCoverage.Overcast, HeightFeet = 3000 }],
+            VisibilityStatuteMiles = 10,
+            TemperatureCelsius = 31.0,
+        };
+        var en = StructuredReportRenderer.Render(
+            Body(), Forecast(), snap, Imperial(), Utc, isUnscheduled: false);
+        Assert.Contains("at Houston, George Bush Intercontinental Airport", en);
+
+        // No subtitle when the station has no distinct municipality/name (default Observation()).
+        var plain = StructuredReportRenderer.Render(
+            Body(), Forecast(), Observation(), Imperial(), Utc, isUnscheduled: false);
+        Assert.DoesNotContain(" at ", plain.Replace("S at 14 mph", "", StringComparison.Ordinal));
     }
 
     private static int CountOccurrences(string haystack, string needle)

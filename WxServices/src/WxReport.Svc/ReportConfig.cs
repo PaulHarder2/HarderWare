@@ -108,8 +108,8 @@ public class ClaudeConfig
 
     public string? ApiKey { get; set; }
 
-    /// <summary>Claude model ID to use for text generation.</summary>
-    public string Model { get; set; } = "claude-haiku-4-5-20251001";
+    /// <summary>Claude model ID to use for text generation.  Overridden by <c>Claude:Model</c> in <c>appsettings.shared.json</c> (production: <c>claude-sonnet-4-6</c>); this default is the safety net when that config is absent, so it matches production rather than a cheaper model that under-sends hazards.</summary>
+    public string Model { get; set; } = "claude-sonnet-4-6";
 
     /// <summary>
     /// Per-request HTTP timeout for Claude Messages API calls, in seconds.

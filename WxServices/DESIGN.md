@@ -185,39 +185,31 @@ flowchart TD
 ```mermaid
 flowchart TD
     DB[("SQL Server WeatherData DB")]
-    NOM["Nominatim Geocoding API"]
-    AWC2["AWC Airport API (ICAO to coordinates)"]
     CLAUDE["Anthropic Claude API"]
     SMTP["Gmail SMTP"]
     RHB["wxreport-heartbeat.txt"]
     RLOG["wxreport-svc.log"]
 
-    START([Cycle starts]) --> EACH["For each recipient"]
+    START([Cycle starts]) --> EACH["For each locality (with members);\nlocality-less recipients → ERROR + skip"]
 
-    EACH --> RESOLVED{Location resolved?}
-    RESOLVED -->|No| GEO["Geocode address via Nominatim"]
-    GEO --> NEAREST["Find nearest METAR + TAF station in DB"]
-    NEAREST --> CACHE["Cache to Recipients table in DB"]
-    CACHE --> SNAP
-
-    RESOLVED -->|Yes| SNAP["Build WeatherSnapshot from DB\n(METAR + TAF + GFS)"]
+    EACH --> SNAP["Build WeatherSnapshot from DB\n(locality stations + centroid GFS point)"]
     DB --> SNAP
 
     SNAP --> PROV["GfsSnapshotBuilder → provisional\nForecastSnapshotBody (6-hr blocks)"]
     PROV --> GATE{"Pre-filter: input identity\nadvanced? (or scheduled / first)"}
     GATE -->|No| EACH
-    GATE -->|Yes| WRITE["Persist provisional CommittedSend\n+ ForecastSnapshot (safety fallback)"]
+    GATE -->|Yes| WRITE["Persist provisional ForecastSnapshot\n(per-locality audit anchor)"]
     WRITE --> SIGGATE{"WX-114 significance gate\n(unscheduled): derived forecast\nunchanged since last sent?"}
     SIGGATE -->|"Yes — Enforce: skip Claude"| EACH
-    SIGGATE -->|"No / first / scheduled / Shadow"| RECON["ForecastReconciler → Claude\n(provisional + METAR + TAF + prior committed)"]
+    SIGGATE -->|"No / first / scheduled / Shadow"| RECON["ForecastReconciler → Claude\n(once per locality; provisional + METAR + TAF + prior committed)"]
     RECON --> CLAUDE
     CLAUDE -->|"tool-use result"| DECIDE{submit or skip?}
     DECIDE -->|skip_send| NOSEND["No email; committed snapshot\nleft unchanged"]
     NOSEND --> EACH
-    DECIDE -->|submit_reconciled_report| FINAL["Overwrite committed snapshot\nwith final_snapshot; persist\nreasoning_trace + email_body"]
-    FINAL --> EMAIL["Send via SMTP"]
+    DECIDE -->|submit_reconciled_report| FINAL["Persist reconciled snapshot +\nreasoning_trace; render per recipient\n(StructuredReportRenderer — no LLM)"]
+    FINAL --> EMAIL["Send per recipient via SMTP;\npersist a CommittedSend each"]
     EMAIL --> SMTP
-    SMTP --> STATE["Update RecipientState\n(LastClaudeInputHash, timestamps)"]
+    SMTP --> STATE["Update LocalityState\n(LastClaudeInputHash, timestamps)"]
     STATE --> EACH
 
     EACH --> DONE([Cycle complete])
@@ -424,26 +416,22 @@ See [Section 11 — Observability](#11-observability) for the collection stack.
 flowchart TD
     A[Load config] --> B{Recipients configured?}
     B -->|No| Z[Done]
-    B -->|Yes| C[For each recipient]
-    C --> D{Resolved?}
-    D -->|No| E[Geocode address\nFind nearest METAR + TAF\nCache to Recipients table in DB]
-    E --> F{Success?}
-    F -->|No| SKIP[Skip recipient]
-    D -->|Yes| G[Build WeatherSnapshot]
-    F -->|Yes| G
+    B -->|Yes| C["For each locality (with members);\nlocality-less recipients → ERROR + skip"]
+    C --> G[Build WeatherSnapshot\nlocality stations + centroid GFS point]
     G --> G2[GfsSnapshotBuilder → provisional ForecastSnapshotBody]
     G2 --> H{Pre-filter: input identity advanced?\nor scheduled / first?}
     H -->|No| C
-    H -->|Yes| W[Persist provisional CommittedSend + ForecastSnapshot]
+    H -->|Yes| W[Persist provisional ForecastSnapshot\nper-locality audit anchor]
     W --> SG{WX-114 significance gate: derived forecast unchanged\nsince last sent? (unscheduled only)}
     SG -->|Yes, Enforce - skip Claude| C
-    SG -->|No / first / scheduled / Shadow| J[ForecastReconciler → Claude two-pass reconciliation]
+    SG -->|No / first / scheduled / Shadow| J[ForecastReconciler → Claude\nonce per locality]
     J --> I{submit or skip?}
     I -->|skip_send| C
-    I -->|submit_reconciled_report| K[Persist final snapshot + reasoning_trace + email_body]
-    K --> K2[Attach 48h meteogram PNG if available]
-    K2 --> L[Send email with cid: inline image]
-    L --> M[Update RecipientState in DB]
+    I -->|submit_reconciled_report| K[Persist reconciled snapshot + reasoning_trace]
+    K --> KR[For each member: render HTML\nStructuredReportRenderer — no LLM]
+    KR --> K2[Attach 48h meteogram PNG if available]
+    K2 --> L[Send per recipient; persist a CommittedSend each]
+    L --> M[Update LocalityState in DB]
     M --> C
 ```
 
@@ -453,14 +441,14 @@ The decision is split into a cheap deterministic gate followed by an LLM judgmen
 
 - **First run / startup:** Immediately sends a welcome + weather report. Bypasses the pre-filter.
 - **Scheduled:** Sends once per configured hour when that hour arrives in the recipient's local timezone. Multiple hours can be specified (e.g. `"6, 18"` for morning and evening); default is `"7"`. Bypasses the pre-filter. Subject line: "Weather report — …".
-- **Unified input-identity pre-filter (WX-80, refined WX-110):** For non-scheduled, non-first cycles, `ReportWorker.ShouldSend` asks a single cheap C# question — *has any input identity advanced since the last Claude call?* The input identity (`InputIdentity`) is the METAR material signature, the TAF issuance time, and the GFS model run, serialized into `RecipientState.LastClaudeInputHash`. The METAR component (WX-110) is no longer the raw observation timestamp but a coarse **material** signature — station plus public-meaningful bands: wind (under 17 / 17–33 / 34–47 / 48–63 / 64+ kt, matching `WindScale`), visibility (<1 mi vs ≥1 mi), sky (clear / partly / mostly / overcast), ~5 °F temperature bands, and present-weather tokens (with a `heavy`-intensity marker) — so a meteorologically-identical hourly re-observation produces the same identity and is skipped without paying for a Claude call (the dominant cost leak: metar-only arrivals were ~62% of gate calls). This is still identity, not significance — it never decides whether to *send*, only whether the evidence is materially what Claude already saw; TAF and GFS still key on issuance/run time, so genuinely new guidance always reaches the gate. There is no significance threshold in this gate. A minimum gap (`Report:MinGapMinutes`, default **90** since WX-110) floors the spacing between any two sends to one recipient.
+- **Unified input-identity pre-filter (WX-80, refined WX-110):** For non-scheduled, non-first cycles, `ReportWorker.ShouldSend` asks a single cheap C# question — *has any input identity advanced since the last Claude call?* The input identity (`InputIdentity`) is the METAR material signature, the TAF issuance time, and the GFS model run, serialized into `LocalityState.LastClaudeInputHash` (per locality since WX-130). The METAR component (WX-110) is no longer the raw observation timestamp but a coarse **material** signature — station plus public-meaningful bands: wind (under 17 / 17–33 / 34–47 / 48–63 / 64+ kt, matching `WindScale`), visibility (<1 mi vs ≥1 mi), sky (clear / partly / mostly / overcast), ~5 °F temperature bands, and present-weather tokens (with a `heavy`-intensity marker) — so a meteorologically-identical hourly re-observation produces the same identity and is skipped without paying for a Claude call (the dominant cost leak: metar-only arrivals were ~62% of gate calls). This is still identity, not significance — it never decides whether to *send*, only whether the evidence is materially what Claude already saw; TAF and GFS still key on issuance/run time, so genuinely new guidance always reaches the gate. There is no significance threshold in this gate. A minimum gap (`Report:MinGapMinutes`, default **90** since WX-110) floors the spacing between any two sends for one locality (WX-130).
 - **Deterministic significance gate (WX-114, cost pre-filter):** A *second* deterministic stage between the WX-80 input-identity pre-filter and the Claude call — active only on non-scheduled, non-first cycles, and only when a prior *sent* snapshot exists. `SignificanceGate.Evaluate` compares the current deterministic provisional snapshot against the last sent forecast (what the recipient last saw); when nothing has changed materially it **skips the Claude call entirely**. The input identity advanced (so the cheap WX-80 pre-filter let the cycle through), but the *derived forecast* did not, so there is nothing for Claude to judge — and that skipped call is the cost saving. It compares per local calendar day (daily high/low magnitude, a **directional** freeze/thaw at 32 °F — a freeze when the low falls strictly below 32, a thaw when it rises strictly above, with 32 itself staying in the prior state per the latent-heat dead band — and a heat-advisory crossing) and per 6-hour block (precipitation occurrence and frozen/freezing *type*, severe-flag, and sustained-wind advisory + magnitude), across four horizon tiers (0–24 / 24–48 / 48–72 / 72–120 h, thresholds loosening with range; day 6 is narrative-only and never gates). Onsets are eager and reach the far horizon; cessations are lazy and near-term-only; safety-floor rows (freeze onset, frozen-precip onset, severe onset, wind reaching advisory) always pass. Thresholds are config-driven (`Report:SignificanceGate`) and the gate has a three-state `Mode` — `Off` (never evaluated), `Shadow` (evaluated and logged but always falls through to Claude, for safe validation against real traffic), and `Enforce` (skips the Claude call on "not significant") — defaulting to **`Enforce`** so the cost saving is live and measurable; skips are counted by mode. Crucially it can only *suppress* a Claude call, never force a send, and it errs toward calling Claude on every boundary case — a wrongly-skipped real update is the only failure mode, so the gate is conservative by construction. Because the provisional snapshot is built from GFS alone, the gate is **blind to TAF**: a cycle in which a new or amended TAF arrived since the last sent report is presumed significant (the `taf-fresh` criterion) and routed to Claude, so a TAF-driven short-term update is never suppressed — the first enforce-mode data showed the gate otherwise dropping real TAF updates when GFS was flat (WX-114). Skips are counted (`wxreport.suppressed.significance_gate.total`). Wind-direction-shift (deferred to WX-111) and precip-intensity rows are out of v1 — neither has a snapshot field yet.
-- **Claude two-pass reconciliation (WX-79):** When an input has advanced, `ForecastReconciler.ReconcileAsync` sends Claude the provisional snapshot (from `GfsSnapshotBuilder`), the current METAR, the current TAF, and the prior committed snapshot, and asks it to reconcile them and decide whether the change is *news*. Claude responds via tool-use with either:
-  - `submit_reconciled_report` — an HTML `email_body`, a refined `final_snapshot`, a unit-neutral `structured_report` (WX-128), and a `reasoning_trace`; the report is sent.
+- **Claude two-pass reconciliation (WX-79):** When an input has advanced, `ForecastReconciler.ReconcileAsync` sends Claude the provisional snapshot (from `GfsSnapshotBuilder`), the current METAR, the current TAF, and the prior committed snapshot — **once per locality, recipient-agnostically** (WX-130) — and asks it to reconcile them and decide whether the change is *news*. Claude responds via tool-use with either:
+  - `submit_reconciled_report` — a refined `final_snapshot`, a unit-neutral `structured_report` (WX-128), and a `reasoning_trace`; the structured report is then rendered per recipient and sent (no `email_body` artifact — WX-130).
   - `skip_send` — a `reasoning_trace` only; no email is sent (the WX-80 invalidation gate).
-- **Unit-neutral structured report (WX-128, additive transition):** Alongside the email body, the reconciliation emits a `StructuredReportBody` (schema: `docs/structured-report-schema.md`): a language-free, salience-ranked `changes` array (tier / phenomenon / direction / UTC window / canonical-unit quantities / `chN` anchor) plus a `narrative` map keyed by ISO 639-1 code — one entry per language among the locality's recipients (Spanish-language recipients are live in production today — they already receive Spanish reports via the `email_body` path) — whose prose carries quantities only as `{q:...}` substitution tokens. The WX-129 deterministic renderer (`StructuredReportRenderer`, built and unit-tested as of WX-129) turns this into each recipient's report (units, locale, language) with **no further LLM call**, which is what makes WX-123's one-call-per-locality economics work. The structured report still validates — intrinsic invariants in `StructuredReportBody.Validate` (token grammar via `ReportTokens`; every change narrated in every language, no dangling anchors) plus per-call contracts in the reconciler (every requested language present; a WX-120-style per-language visible-length floor) — but because the artifact is **unread** during this transition, a validation failure on it is **logged and non-fatal (WX-144)**: the reconciler returns success with a null structured report, the `email_body` still sends, and a dormant-artifact defect can never abort a live send. (`email_body` and `final_snapshot` remain fail-closed — they are the live artifacts.) WX-130 re-couples the structured report — validation fatal again — once it becomes the live rendering source. The artifact is persisted to `CommittedSends.StructuredReport` but **unread** until WX-130 wires the renderer into the send path; `email_body` remains the sent artifact, and the tool drops it when the loop rewires (WX-130). Schema versions move in lockstep: `ForecastSnapshotBody` and `StructuredReportBody` both sit at v3.
+- **Unit-neutral structured report (WX-128, live since WX-130):** The reconciliation's rendered artifact is a `StructuredReportBody` (schema: `docs/structured-report-schema.md`): a language-free, salience-ranked `changes` array (tier / phenomenon / direction / UTC window / canonical-unit quantities / `chN` anchor) plus a `narrative` map keyed by ISO 639-1 code — one entry per language among the locality's recipients — whose prose carries quantities only as `{q:...}` substitution tokens and which slimmed (WX-130) to the two **judgment** sections, `changeSummary` and `closing` (the Current Conditions table and per-day grid are rebuilt deterministically from the data, so they carry no narrative prose). There is **no `email_body`**: the WX-129 deterministic renderer (`StructuredReportRenderer`) turns the structured report into each recipient's HTML — units, locale, language, plus the station-attribution subtitle — with **no further LLM call**, which is what makes WX-123's one-call-per-locality economics work. (A recipient's first contact is a separate **welcome-only email** — `RenderWelcome` — with no weather; weather reports begin on the locality's normal cadence.) As the **live rendering source** the structured report validates **fail-closed** (WX-130, after a brief WX-144 window where it was dormant/non-fatal): intrinsic invariants in `StructuredReportBody.Validate` (token grammar via `ReportTokens`; every change narrated in every language's `changeSummary`, no dangling anchors) plus per-call contracts in the reconciler (the exact requested-language set, no more no less) route a failure through the same retry → skip/`Failure` path as a schema-invalid `final_snapshot`; a well-formed-but-near-blank narrative trips the WX-120 fall-safe (skip-with-trace on an `allowSkip` cycle, `Failure` on a guaranteed send). The artifact is persisted per recipient to `CommittedSends.StructuredReport`. Schema versions move in lockstep: `ForecastSnapshotBody` and `StructuredReportBody` both sit at **v4**.
 
-  Malformed, incomplete, or truncated tool output — a missing or null required field, a schema-invalid `final_snapshot`, or a response Claude could not finish within the output-token cap (`ClaudeClient` surfaces the response's `stop_reason`; a `max_tokens` truncation drops a trailing required field, often `email_body`, and is short-circuited before any field-presence check so the operator log names the truncation rather than a phantom missing field) — yields a typed `Failure`: no email is sent, the provisional `CommittedSend` is left in place (`SentAtUtc` stays null, so it never becomes a prior and is never delivered), and the next cycle reconciles a fresh provisional and self-heals. The reconciliation call is capped at 32768 output tokens (WX-109 set 16384 for three artifacts; WX-128 doubled it for the structured report's per-language narratives). A **non-truncation** malformed response — a complete tool_use that simply omits an advisory-`required` field (the residual WX-110 case where Claude drops `email_body` even though `stop_reason != max_tokens`), or a **present-but-content-less** `email_body` that passes field-presence but carries no visible forecast text (WX-120: Claude called `submit_reconciled_report` when its own reasoning concluded `skip_send`, leaving only an HTML comment — rejected by a visible-text floor, `MinVisibleBodyChars`, so a blank report is never emailed) — is retried in-cycle up to 3 attempts before failing (the cached system-prompt prefix keeps retries cheap); a `max_tokens` truncation and a guaranteed-send `skip_send` are not retried. A content-less `email_body` that persists across all attempts falls **safe**: on an `allowSkip` cycle it becomes a skip (`NotNews`, keeping Claude's reasoning trace, matching the model's own intent), on a guaranteed send a `Failure`.
+  Malformed, incomplete, or truncated tool output — a missing or null required field, a schema-invalid `final_snapshot` or `structured_report`, or a response Claude could not finish within the output-token cap (`ClaudeClient` surfaces the response's `stop_reason`; a `max_tokens` truncation drops a trailing required field and is short-circuited before any field-presence check so the operator log names the truncation rather than a phantom missing field) — yields a typed `Failure`: no email is sent, the provisional `ForecastSnapshot` is left in place as a per-locality audit anchor (never delivered), and the next cycle reconciles a fresh provisional and self-heals. The reconciliation call is capped at 32768 output tokens (WX-109 set 16384 for three artifacts; WX-128 doubled it for the structured report's per-language narratives). A **non-truncation** malformed response — a complete tool_use that simply omits an advisory-`required` field (the residual WX-110 case where Claude drops a field even though `stop_reason != max_tokens`), or a **present-but-near-blank narrative** that passes the schema (`closing` is non-blank) but carries no real forecast prose (WX-120, carried into WX-130: a per-language visible-length floor, `MinVisibleNarrativeChars`, so a blank report is never rendered) — is retried in-cycle up to 3 attempts before failing (the cached system-prompt prefix keeps retries cheap); a `max_tokens` truncation and a guaranteed-send `skip_send` are not retried. A content-less narrative that persists across all attempts falls **safe**: on an `allowSkip` cycle it becomes a skip (`NotNews`, keeping Claude's reasoning trace, matching the model's own intent), on a guaranteed send a `Failure`.
 
   Significance-tier guidance (WX-81) steers the "is this news?" judgment **in the prompt**, not in C#: the safety-critical / plans-affecting / ambient-interest tiers, the directional-asymmetry rule (a worsening trend is more newsworthy than the equivalent improvement), and the 34 kt line. Subject-line and opening phrasing follow from Claude's reconciliation rather than a C#-classified severity.
 
@@ -472,7 +460,7 @@ Whether a change warrants an unscheduled *send* is judged by Claude, comparing t
 
 On a busy weather day the inputs advance often (a fresh METAR every hour, a reissued TAF every hour or two), and each advance is, by design, send-eligible. Left unchecked that produced an hourly stream of updates whose severe-weather assessment could whipsaw on unchanged model guidance. Three layers keep that in check, the first two steering Claude's judgment and the third a deterministic safety net:
 
-- **"Changed since last send" context.** `RecipientState.LastSentInputHash` records the input identity behind the last *delivered* report — distinct from `LastClaudeInputHash`, which also advances on not-news skips and the suppressions below. The reconciler hands Claude `changed_since_last_sent_report`, naming which inputs are genuinely newer than at the last send; "observation only" means no fresh TAF or GFS run has arrived.
+- **"Changed since last send" context.** `LocalityState.LastSentInputHash` records the input identity behind the locality's last *delivered* report — distinct from `LastClaudeInputHash`, which also advances on not-news skips and the suppressions below. The reconciler hands Claude `changed_since_last_sent_report`, naming which inputs are genuinely newer than at the last send; "observation only" means no fresh TAF or GFS run has arrived.
 - **Anti-reversal prompting + default-to-skip decision rule (WX-110).** Severe potential and precip-likelihood upgrades derive from model/TAF guidance, not a single new observation. On an observation-only advance Claude is told not to reverse or re-escalate a `severeFlag` or precip tier it already committed, and not to re-send a forecast it merely re-derived — while still flagging genuinely new weather *arriving* (the directional-asymmetry rule). WX-110 adds an explicit default-to-skip rule for arrival-triggered cycles: call `submit_reconciled_report` only when the reconciled snapshot differs from the prior in a reader-actionable way (a sky or precipitation *category* change, a wind change crossing into a higher impact band, a more-than-a-few-degree temperature swing, or a hazard appearing/clearing). A fresh TAF or GFS issuance that reconciles to a materially-unchanged forecast is explicitly not news. (WX-114 dropped `gustOutlook` and `visibilityExpectation` from the snapshot block — body schema **v2** — so neither factors into change-detection or the `submit_reconciled_report` tool schema; older v1 bodies still deserialize, with the removed JSON keys ignored on read.)
 - **Deterministic backstop.** After `submit_reconciled_report` on an unscheduled cycle, `ReportWorker` suppresses the send when the reconciled snapshot is materially identical to the last sent one (`ForecastSnapshotBody.MateriallyEquals` — categorical fields exact, temperature within tolerance, wind within tolerance **or in the same impact band** so trivial same-band drift is suppressed, WX-110), or when the only difference is a severe-flag **de-escalation** on an observation-only advance with no newer GFS run or TAF (`MateriallyEqualsIgnoringSevere` + `HasSevereEscalationOver` — severe-flag hysteresis). The hysteresis is one-directional: a severe hazard *appearing* (`severeFlag` false→true) is always news and is never suppressed, even on a bare observation — only an unsupported *removal* is held back. Suppressions persist the reasoning trace, leave the committed anchor unchanged, and are counted in telemetry (`wxreport.suppressed.redundant.total`, `wxreport.suppressed.severe_flip.total`). This is idempotence/stability, not significance judgment — Claude still owns the "is it news?" decision.
 
@@ -484,7 +472,7 @@ Independently, the email prose is calibrated never to state weather as flatly ce
 3. If no station qualifies but a TAF and/or GFS forecast are available, send a forecast-only report with a one-paragraph note in the Current Conditions section explaining that no recent observation is available from a station within ≈30 miles.
 4. Only when METAR, TAF, and GFS are all unavailable is the recipient skipped for the cycle.
 
-The config is never updated when a fallback station is used; a warning is logged with the fallback station's distance in miles.  When the station used differs from the one in `RecipientState.LastMetarIcao` (i.e. the station changed since the last report), Claude is informed via the prompt and includes a brief, matter-of-fact note in the report — in the change-summary band for unscheduled sends, or in the closing summary for scheduled ones.  `LastMetarIcao` is updated on every successful send *that carried a real observation*; forecast-only sends leave it untouched so change-detection resumes cleanly once observations return.
+The config is never updated when a fallback station is used; a warning is logged with the fallback station's distance in miles.  When the station used differs from the one in `LocalityState.LastMetarIcao` (i.e. the station changed since the locality's last report), Claude is informed via the prompt and includes a brief, matter-of-fact note in the report — in the change-summary band for unscheduled sends, or in the closing summary for scheduled ones.  `LastMetarIcao` is updated on every successful send *that carried a real observation*; forecast-only sends leave it untouched so change-detection resumes cleanly once observations return.
 
 Observation-less cycles are handled by the same input-identity pre-filter and Claude gate, with no special significance bookkeeping. When no recent observation is available, the METAR component of the input identity is simply absent, so an advance is driven only by the TAF issuance or GFS model run; the reconciler is given the snapshot without a current observation and decides whether the forecast-only change is news. Because there is no observation-to-observation fingerprint, a missing observation can no longer manufacture a misleading "conditions cleared!" send, and the committed forecast the reconciler diffs against advances only on an actual send (`LastSentInputHash` and the committed anchor; `LastClaudeInputHash` also advances on not-news/suppressed cycles, per the WX-108 section above) — so when observations return, the reconciler resumes diffing against the last genuinely committed forecast.
 
@@ -954,7 +942,18 @@ erDiagram
         datetime LastScheduledSentUtc
         datetime LastUnscheduledSentUtc
         string LastClaudeInputHash
+        string LastSentInputHash
         string LastMetarIcao
+    }
+
+    LocalityStates {
+        bigint Id PK
+        bigint LocalityId UK
+        string LastClaudeInputHash
+        string LastSentInputHash
+        string LastMetarIcao
+        datetime LastScheduledSentUtc
+        datetime LastUnscheduledSentUtc
     }
 
     ForecastSnapshots {
@@ -971,9 +970,10 @@ erDiagram
         string RecipientId
         datetime CreatedAtUtc
         datetime SentAtUtc "null until sent"
-        string EmailBody
+        string EmailBody "the per-recipient render (WX-130)"
         string ReasoningTrace
-        string StructuredReport "null until reconciled (WX-128)"
+        string StructuredReport "live rendering source (WX-130); null on failed rows"
+        bool IsDiagnostic "WX-130 startup/deploy-test send; excluded from baseline"
         int SchemaVersion
     }
 
@@ -1024,6 +1024,7 @@ erDiagram
     GfsModelRuns ||--o{ GfsGrid : "has"
     ForecastSnapshots ||--o{ CommittedSends : "anchored by"
     Localities ||--o{ Recipients : "groups"
+    Localities ||--o| LocalityStates : "tracked by"
 ```
 
 ### Key indexes
@@ -1038,6 +1039,7 @@ erDiagram
 | Recipients | LocalityId | Non-unique |
 | Localities | Name | Unique |
 | RecipientStates | RecipientId | Unique |
+| LocalityStates | LocalityId | Unique |
 | GfsGrid | ModelRunUtc + ForecastHour + Lat + Lon | Unique |
 | GfsGrid | ModelRunUtc + ForecastHour | Non-unique |
 | WxStations | IcaoId | Primary key |
@@ -1316,6 +1318,7 @@ All logs are written to `{InstallRoot}\Logs\` (default `C:\HarderWare\Logs\`). L
 | WxMonitor does not watch itself | WxMonitor has no watchdog. A Windows Task Scheduler task could serve this purpose if needed. |
 | Nominatim rate limit | Nominatim's terms require a maximum of 1 request/second and a valid User-Agent. Resolution is one-time per recipient, so this is unlikely to be a problem in practice. |
 | WxViewer has no database access | WxViewer reads PNG files and manifest JSON files directly. METAR observation tables would require a database-connected panel in a future session. |
+| Locality reassignment can briefly bleed the reconciliation baseline | The per-locality prior-snapshot lookup (WX-130) keys on the current members' delivered `CommittedSend` rows, with no locality stamp on the row (the minimal-schema choice — `CommittedSend` has no `LocalityId`). If a recipient is moved from locality A to B, B's next cycle can pick that recipient's A-era snapshot as its reconciliation baseline, so Claude reasons "what changed" against the wrong locality for one cycle. Rare (reassignment is a manual admin action) and self-correcting (B's own snapshot becomes the most-recent after its first send). Accepted deliberately; the explicit-schema fix (a `CommittedSend.LocalityId` or a baseline pointer on `LocalityState`) was declined to keep WX-130 additive. |
 
 ---
 

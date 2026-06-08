@@ -1,7 +1,5 @@
-using System.Net;
 using System.Text;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 
 using MetarParser.Data.Entities;
 
@@ -13,11 +11,14 @@ using WxServices.Logging;
 namespace WxReport.Svc;
 
 /// <summary>
-/// Outcome of a single reconciliation pass.  A <see cref="Success"/>
-/// carries the four artifacts Claude returned (HTML email body, parsed
-/// final snapshot, unit-neutral structured report, plain-English reasoning
-/// trace) plus token-usage
-/// metadata.  A <see cref="Failure"/> carries a short reason string; the
+/// Outcome of a single per-locality reconciliation pass.  A <see cref="Success"/>
+/// carries the three artifacts Claude returned (parsed final snapshot,
+/// unit-neutral structured report, plain-English reasoning trace) plus
+/// token-usage metadata.  The HTML email body is no longer a Claude artifact:
+/// the WX-129 <see cref="StructuredReportRenderer"/> builds each recipient's
+/// body deterministically from the structured report + final snapshot (WX-130),
+/// so the expensive reasoning runs once per locality and fans out per recipient
+/// for free.  A <see cref="Failure"/> carries a short reason string; the
 /// caller is expected to log it, skip the SMTP send, and leave any
 /// already-committed audit rows in place (never un-commit state).
 /// </summary>
@@ -25,16 +26,14 @@ public abstract record ReconcileResult
 {
     private ReconcileResult() { }
 
-    /// <summary>Reconciliation succeeded; the four artifacts parsed cleanly.</summary>
-    /// <param name="EmailBody">HTML email body for the recipient (inner content of the <c>&lt;body&gt;</c> tag).</param>
+    /// <summary>Reconciliation succeeded; the three artifacts parsed cleanly.</summary>
     /// <param name="FinalSnapshot">Refined <see cref="ForecastSnapshotBody"/> after Claude reconciled provisional + TAF + observation + prior.</param>
-    /// <param name="StructuredReport">Unit-neutral structured report (WX-128): language-free changes plus the language-keyed tokenized narrative the WX-129 renderer consumes. <see langword="null"/> when this dormant artifact failed validation (WX-144) — the email_body is still sent, until WX-130 makes the structured report the live rendering source.</param>
+    /// <param name="StructuredReport">Unit-neutral structured report (WX-128): language-free changes plus the language-keyed tokenized narrative the WX-129 renderer consumes.  The live rendering source as of WX-130 — its validation is fatal (a retry, then a skip/Failure), not best-effort.</param>
     /// <param name="ReasoningTrace">Brief plain-English audit log of what changed at each of the three reconciliation steps.</param>
     /// <param name="Tokens">Token-usage metadata extracted from the Anthropic API response.</param>
     public sealed record Success(
-        string EmailBody,
         ForecastSnapshotBody FinalSnapshot,
-        StructuredReportBody? StructuredReport,
+        StructuredReportBody StructuredReport,
         string ReasoningTrace,
         TokenUsage Tokens) : ReconcileResult;
 
@@ -61,15 +60,20 @@ public abstract record ReconcileResult
 }
 
 /// <summary>
-/// Orchestrates the WX-79 forecast reconciliation pass: builds Claude's
-/// per-recipient system prompt and user message from a recipient's
-/// <see cref="WeatherSnapshot"/>, the GFS-derived provisional
+/// Orchestrates the WX-79 forecast reconciliation pass, once per locality
+/// (WX-130): builds Claude's reconciliation system prompt and user message from
+/// the locality's <see cref="WeatherSnapshot"/>, the GFS-derived provisional
 /// <see cref="ForecastSnapshotBody"/>, and the prior committed snapshot if
 /// any; calls <see cref="ClaudeClient.InvokeReconciliationAsync"/>;
 /// validates the response (<c>final_snapshot</c> via
-/// <see cref="ForecastSnapshotBody.Deserialize"/>); and returns either a
-/// parsed four-artifact <see cref="ReconcileResult.Success"/> or a typed
-/// <see cref="ReconcileResult.Failure"/>.
+/// <see cref="ForecastSnapshotBody.Deserialize"/>, <c>structured_report</c> via
+/// <see cref="StructuredReportBody.Deserialize"/> plus the per-call narrative
+/// contract); and returns either a parsed three-artifact
+/// <see cref="ReconcileResult.Success"/> or a typed
+/// <see cref="ReconcileResult.Failure"/>.  The call is recipient-agnostic — it
+/// produces unit-neutral, multi-language content; the
+/// <see cref="StructuredReportRenderer"/> applies each recipient's units,
+/// language, and locale afterwards with no further LLM call.
 ///
 /// <para>
 /// Malformed-output policy (WX-79, retry added WX-110): a schema-violation,
@@ -105,23 +109,18 @@ public sealed class ForecastReconciler
     /// the parsed four artifacts on success or a typed failure on transport
     /// or schema problems.
     /// </summary>
-    /// <param name="snapshot">Recipient's <see cref="WeatherSnapshot"/>; supplies METAR, TAF periods, GFS daily summary, and per-station metadata used in the rendering rules.</param>
+    /// <param name="snapshot">Locality's <see cref="WeatherSnapshot"/>; supplies METAR, TAF periods, GFS daily summary, and per-station metadata used in the reconciliation rules.</param>
     /// <param name="provisional">GFS-derived provisional snapshot body produced by <see cref="GfsSnapshotBuilder.Build"/> (the first pass).</param>
-    /// <param name="gfsModelRunUtc">UTC initialisation time of the GFS run the provisional was built from; supplied to Claude for the issuance-time comparison in reconciliation step 1.  <see langword="null"/> when no GFS data was available for the recipient's location (provisional body will be empty in that case).</param>
+    /// <param name="gfsModelRunUtc">UTC initialisation time of the GFS run the provisional was built from; supplied to Claude for the issuance-time comparison in reconciliation step 1.  <see langword="null"/> when no GFS data was available for the locality (provisional body will be empty in that case).</param>
     /// <param name="tafIssuanceUtc">UTC time the active TAF was issued, or <see langword="null"/> when no TAF is available.  Required for reconciliation step 1.</param>
     /// <param name="tafValidToUtc">UTC end of the TAF's validity window, or <see langword="null"/> when no TAF is available.  Helps Claude scope step 1 to in-window blocks.</param>
-    /// <param name="prior">Most recently committed <see cref="ForecastSnapshot"/> for this station, or <see langword="null"/> on a first send.  Drives the news judgment in reconciliation step 3.</param>
-    /// <param name="language">Natural-language name for the desired email language (e.g. <c>"English"</c>, <c>"Spanish"</c>).</param>
-    /// <param name="narrativeLanguages">ISO 639-1 codes the structured report's narrative must carry (WX-128).  In the additive transition this is the single recipient's normalized language; WX-130's per-locality loop passes the locality's distinct set.  A returned narrative missing any of these fails closed.</param>
-    /// <param name="recipientName">Recipient's display name, surfaced in the user-message header.</param>
-    /// <param name="tz">Recipient's timezone, used by <see cref="SnapshotDescriber"/> when emitting the structured observation/forecast text.</param>
-    /// <param name="isFirstReport">When <see langword="true"/>, the system prompt asks Claude to open with a welcome note.</param>
-    /// <param name="scheduledHour">Daily scheduled send hour (0–23) in the recipient's timezone; referenced by the welcome note.</param>
-    /// <param name="units">Unit preferences for the rendered email; defaults to US customary when <see langword="null"/>.</param>
+    /// <param name="prior">Most recently committed <see cref="ForecastSnapshot"/> for this locality's station, or <see langword="null"/> on a first send.  Drives the news judgment in reconciliation step 3.</param>
+    /// <param name="narrativeLanguages">ISO 639-1 codes the structured report's narrative must carry (WX-128) — the distinct set of languages across the locality's recipients.  A returned narrative missing any of these (or carrying an extra one) fails closed.</param>
+    /// <param name="tz">Locality timezone, used by <see cref="SnapshotDescriber"/> when emitting the structured observation/forecast text and by Claude when reasoning about local time.</param>
     /// <param name="changeSeverity">Severity of the trigger that caused this send (alert, update, or none).</param>
     /// <param name="previousMetarIcao">ICAO of the previous report's station, when it differs from the current snapshot's station; <see langword="null"/> when no station change occurred.</param>
     /// <param name="allowSkip">When <see langword="true"/> (unscheduled, arrival-triggered cycles), Claude may decline to send via the <c>skip_send</c> tool, yielding a <see cref="ReconcileResult.NotNews"/>.  When <see langword="false"/> (scheduled / first / startup), the send is guaranteed and skipping is not offered.</param>
-    /// <param name="changedSinceLastSend">Which inputs (METAR/TAF/GFS) are newer than they were at the last report actually delivered to this recipient (WX-108).  Surfaced to Claude as <c>changed_since_last_sent_report</c> so the anti-reversal rule can bind on observation-only cycles.  Empty list means nothing advanced since the last send; treated as a first send when no prior send exists.</param>
+    /// <param name="changedSinceLastSend">Which inputs (METAR/TAF/GFS) are newer than they were at the last report actually delivered for this locality (WX-108).  Surfaced to Claude as <c>changed_since_last_sent_report</c> so the anti-reversal rule can bind on observation-only cycles.  Empty list means nothing advanced since the last send; treated as a first send when no prior send exists.</param>
     /// <param name="ct">Cancellation token propagated to the underlying HTTP call.</param>
     /// <returns>A <see cref="ReconcileResult.Success"/> on a clean three-artifact return; a <see cref="ReconcileResult.NotNews"/> when Claude skips an arrival-triggered send; a <see cref="ReconcileResult.Failure"/> otherwise.</returns>
     /// <sideeffects>Makes one HTTP POST to the Anthropic Messages API via <see cref="ClaudeClient.InvokeReconciliationAsync"/>.  Writes error log entries on schema-validation failure.</sideeffects>
@@ -132,26 +131,19 @@ public sealed class ForecastReconciler
         DateTime? tafIssuanceUtc,
         DateTime? tafValidToUtc,
         ForecastSnapshot? prior,
-        string language,
         IReadOnlyList<string> narrativeLanguages,
-        string recipientName,
         TimeZoneInfo tz,
-        bool isFirstReport,
-        int scheduledHour,
-        UnitPreferences? units,
         ChangeSeverity changeSeverity,
         string? previousMetarIcao,
         bool allowSkip,
         IReadOnlyList<TriggerSource> changedSinceLastSend,
         CancellationToken ct = default)
     {
-        units ??= new UnitPreferences();
-
-        var perRecipientPrompt = BuildPerRecipientSystemPrompt(
-            snapshot, language, narrativeLanguages, units, isFirstReport, scheduledHour, changeSeverity, previousMetarIcao, allowSkip);
+        var systemPrompt = BuildReconcilerSystemPrompt(
+            snapshot, narrativeLanguages, changeSeverity, previousMetarIcao, allowSkip);
 
         var userMessage = BuildUserMessage(
-            snapshot, provisional, gfsModelRunUtc, tafIssuanceUtc, tafValidToUtc, prior, recipientName, tz, units,
+            snapshot, provisional, gfsModelRunUtc, tafIssuanceUtc, tafValidToUtc, prior, tz,
             changedSinceLastSend);
 
         // WX-110: Claude intermittently returns a complete (untruncated) tool_use
@@ -171,7 +163,7 @@ public sealed class ForecastReconciler
         int accIn = 0, accOut = 0, accCacheRead = 0, accCacheWrite = 0;
         for (int attempt = 1; ; attempt++)
         {
-            var apiResult = await _claude.InvokeReconciliationAsync(perRecipientPrompt, userMessage, allowSkip, narrativeLanguages, ct);
+            var apiResult = await _claude.InvokeReconciliationAsync(systemPrompt, userMessage, allowSkip, narrativeLanguages, ct);
             if (apiResult is null)
             {
                 return new ReconcileResult.Failure(
@@ -230,8 +222,6 @@ public sealed class ForecastReconciler
                     return new ReconcileResult.NotNews(skipTrace, tokens);
                 }
 
-                var emailBody = RequireString(input, "email_body");
-
                 var finalSnapshotJson = RequireProperty(input, "final_snapshot").GetRawText();
                 var finalSnapshot = ForecastSnapshotBody.Deserialize(finalSnapshotJson);
 
@@ -240,67 +230,46 @@ public sealed class ForecastReconciler
                 // (old persisted rows must keep loading as priors), so the
                 // freshness pin lives here: Claude copying the older version
                 // digit it saw in prior_snapshot fails closed through the retry
-                // rather than persisting a row whose column says v3 while its
-                // body JSON says v2 (WX-128 review finding).
+                // rather than persisting a row whose column says v4 while its
+                // body JSON says v3 (WX-128 review finding).
                 if (finalSnapshot.SchemaVersion != ForecastSnapshotBody.SchemaVersionCurrent)
                     throw new JsonException(
                         $"final_snapshot.schemaVersion {finalSnapshot.SchemaVersion} is not the current version {ForecastSnapshotBody.SchemaVersionCurrent}.");
 
                 var reasoningTrace = RequireString(input, "reasoning_trace");
 
-                // WX-120: a present-but-content-less email_body — e.g. Claude called
-                // submit_reconciled_report when its own reasoning concluded skip_send,
-                // leaving only an HTML comment — is non-empty, so RequireString accepts
-                // it, but it must never be emailed. Treat it as malformed so it routes
-                // through the same retry; on exhaustion the caller-facing outcome is a
-                // skip (allowSkip) or Failure (guaranteed), not a blank report.
-                // Checked BEFORE the structured report so a content-less response
-                // (whose narrative typically degenerates too) keeps the WX-120
-                // fall-safe semantics on exhaustion — skip-with-trace on an
-                // allowSkip cycle — instead of surfacing as a narrative schema
-                // Failure (WX-128 review finding).
-                if (VisibleTextLength(emailBody) < MinVisibleBodyChars)
-                    throw new DegenerateEmailBodyException(reasoningTrace);
+                // WX-130: the structured report is now the LIVE rendering source —
+                // the StructuredReportRenderer builds every recipient's email from it,
+                // so its validation is fatal again (it was best-effort during the
+                // WX-144 additive transition, when email_body was the sent artifact).
+                // A missing field, schema/token violation, or a requested language
+                // absent/extra all throw and route through the retry → skip/Failure
+                // path, exactly like a final_snapshot schema violation.
+                var structuredReportJson = RequireProperty(input, "structured_report").GetRawText();
+                var structuredReport = StructuredReportBody.Deserialize(structuredReportJson);
+                ValidateNarrativeContract(structuredReport, narrativeLanguages);
 
-                // WX-144: the structured report is persisted-but-UNREAD during the
-                // WX-128 additive transition (email_body is the artifact actually
-                // sent). A validation failure on this dormant artifact must NOT abort a
-                // live send, so extract it defensively: on any failure — a missing
-                // field, schema/token validation, or the per-call narrative contract —
-                // log a WARN, keep a null structured report, and send the email_body
-                // anyway (no wasted retry of an otherwise-good body). email_body and
-                // final_snapshot above stay fatal: they are the live artifacts. WX-130
-                // makes the structured report the live rendering source and re-couples
-                // this — its validation becomes fatal again, and the
-                // currentConditions/extendedForecast sections that trip it today are
-                // dropped entirely.
-                StructuredReportBody? structuredReport = null;
-                try
-                {
-                    var structuredReportJson = RequireProperty(input, "structured_report").GetRawText();
-                    structuredReport = StructuredReportBody.Deserialize(structuredReportJson);
-                    ValidateNarrativeContract(structuredReport, narrativeLanguages);
-                }
-                catch (Exception sx) when (sx is MissingToolUseFieldException or JsonException)
-                {
-                    // Discard any value Deserialize assigned before ValidateNarrativeContract
-                    // threw — a contract failure means the parsed report is unusable.
-                    structuredReport = null;
-                    Logger.Warn(
-                        "Reconciliation structured_report failed validation; sending email_body with a null "
-                        + $"structured report (dormant artifact, WX-144): {sx.Message}");
-                }
+                // WX-120 fall-safe, carried forward to the structured-report world:
+                // a present-but-near-blank narrative — e.g. Claude submitted a report
+                // when its own reasoning concluded skip_send, leaving an empty closing
+                // — passes the schema (Closing is merely non-blank) but must never
+                // reach a recipient. Throw the degenerate signal AFTER the schema
+                // checks so a genuine schema fault surfaces as itself; on exhaustion
+                // this yields a skip-with-trace on an allowSkip cycle (matching
+                // Claude's skip-leaning reasoning) rather than a hard Failure.
+                if (IsDegenerateNarrative(structuredReport, narrativeLanguages))
+                    throw new DegenerateNarrativeException(reasoningTrace);
 
-                return new ReconcileResult.Success(emailBody, finalSnapshot, structuredReport, reasoningTrace, tokens);
+                return new ReconcileResult.Success(finalSnapshot, structuredReport, reasoningTrace, tokens);
             }
-            catch (Exception ex) when (ex is MissingToolUseFieldException or JsonException or InvalidOperationException or DegenerateEmailBodyException)
+            catch (Exception ex) when (ex is MissingToolUseFieldException or JsonException or InvalidOperationException or DegenerateNarrativeException)
             {
                 // Retryable-malformed output: re-call unless attempts are exhausted.
                 if (attempt < maxAttempts)
                 {
                     var what = ex switch
                     {
-                        DegenerateEmailBodyException => "returned a content-less email_body",
+                        DegenerateNarrativeException => "returned a content-less narrative",
                         MissingToolUseFieldException => $"is {ex.Message}",
                         _ => $"failed validation: {ex.Message}",
                     };
@@ -315,19 +284,19 @@ public sealed class ForecastReconciler
                 // place as a failed-attempt audit row (SentAtUtc stays null, so it
                 // never becomes a prior snapshot); the next cycle reconciles a fresh
                 // provisional, which is how the system self-heals.
-                if (ex is DegenerateEmailBodyException deg)
+                if (ex is DegenerateNarrativeException deg)
                 {
-                    // Claude returned a content-less body on every attempt. On a skippable
-                    // cycle that matches its own (typically skip-leaning) reasoning, so
-                    // treat it as a skip and keep its trace for the audit row; a guaranteed
-                    // send fails closed and self-heals on the next cycle.
+                    // Claude returned a content-less narrative on every attempt. On a
+                    // skippable cycle that matches its own (typically skip-leaning)
+                    // reasoning, so treat it as a skip and keep its trace for the audit
+                    // row; a guaranteed send fails closed and self-heals on the next cycle.
                     if (allowSkip)
                     {
-                        Logger.Error($"Reconciliation returned a content-less email_body after {maxAttempts} attempts on a skippable cycle; treating as skip (not sent).");
+                        Logger.Error($"Reconciliation returned a content-less narrative after {maxAttempts} attempts on a skippable cycle; treating as skip (not sent).");
                         return new ReconcileResult.NotNews(deg.ReasoningTrace, tokens);
                     }
-                    Logger.Error($"Reconciliation returned a content-less email_body after {maxAttempts} attempts on a guaranteed send.");
-                    return new ReconcileResult.Failure($"Reconciliation returned a content-less email_body after {maxAttempts} attempts.");
+                    Logger.Error($"Reconciliation returned a content-less narrative after {maxAttempts} attempts on a guaranteed send.");
+                    return new ReconcileResult.Failure($"Reconciliation returned a content-less narrative after {maxAttempts} attempts.");
                 }
                 if (ex is MissingToolUseFieldException)
                 {
@@ -366,117 +335,97 @@ public sealed class ForecastReconciler
             : base($"missing required field '{field}'") { }
     }
 
-    // WX-128: per-call contract checks the body's intrinsic Validate() cannot
-    // perform because they depend on what THIS cycle requested. Every requested
-    // language must be present (StructuredReportBody.Deserialize already proved
-    // the languages that ARE present are internally valid), and each requested
-    // language's narrative must clear the WX-120-style degeneracy floor — a
-    // tokens-only or near-blank narrative must never persist as renderable
-    // content. Throws JsonException so failures route through the existing
-    // retryable-malformed path (retry → skip/Failure), exactly like a
-    // final_snapshot schema violation.
+    // WX-128/WX-130: per-call contract checks the body's intrinsic Validate()
+    // cannot perform because they depend on what THIS cycle requested — the exact
+    // set of languages the locality's recipients need. Every requested language
+    // must be present, and no extra. Throws JsonException so failures route
+    // through the existing retryable-malformed path (retry → skip/Failure),
+    // exactly like a final_snapshot schema violation. (The degeneracy floor lives
+    // separately in IsDegenerateNarrative: a too-thin-but-well-formed narrative
+    // is the WX-120 fall-safe case, which must skip-with-trace, not hard-fail.)
     private static void ValidateNarrativeContract(
         StructuredReportBody report, IReadOnlyList<string> requestedLanguages)
     {
         // Exact-set match, both directions: a missing requested language is an
         // unrenderable report for someone; an EXTRA unrequested language is
-        // unvalidated-floor content persisting for no recipient — and a trap
-        // for a renderer that iterates narrative keys (WX-128 review finding).
+        // unvalidated content persisting for no recipient — and a trap for a
+        // renderer that iterates narrative keys (WX-128 review finding).
         foreach (var lang in report.Narrative.Keys)
             if (!requestedLanguages.Contains(lang, StringComparer.Ordinal))
                 throw new JsonException($"structured_report.narrative contains unrequested language '{lang}'.");
 
         foreach (var lang in requestedLanguages)
+            if (!report.Narrative.ContainsKey(lang))
+                throw new JsonException($"structured_report.narrative is missing requested language '{lang}'.");
+    }
+
+    // WX-120 fall-safe, carried into the structured-report world (WX-130): true
+    // when any requested language's narrative is near-blank. The narrative now
+    // carries only the two judgment sections — the optional changeSummary band
+    // and the required closing — so a genuine report's visible prose is far
+    // shorter than the old whole-email_body measure, but a degenerate one (empty
+    // closing, anchors only) still strips to ~0. Distinct from the schema floor:
+    // a well-formed-but-thin narrative is Claude effectively skipping, so on an
+    // allowSkip cycle this yields a skip-with-trace rather than a hard Failure.
+    private static bool IsDegenerateNarrative(
+        StructuredReportBody report, IReadOnlyList<string> requestedLanguages)
+    {
+        foreach (var lang in requestedLanguages)
         {
             if (!report.Narrative.TryGetValue(lang, out var sections))
-                throw new JsonException($"structured_report.narrative is missing requested language '{lang}'.");
-
-            int visible = ReportTokens.VisibleLength(sections.CurrentConditions)
-                + ReportTokens.VisibleLength(sections.ExtendedForecast)
-                + ReportTokens.VisibleLength(sections.Closing)
+                continue;  // missing-language is ValidateNarrativeContract's job, not this guard's
+            int visible = ReportTokens.VisibleLength(sections.Closing)
                 + ReportTokens.VisibleLength(sections.ChangeSummary ?? "");
             if (visible < MinVisibleNarrativeChars)
-                throw new JsonException(
-                    $"structured_report.narrative.{lang} is degenerate: {visible} visible chars (< {MinVisibleNarrativeChars}).");
+                return true;
         }
+        return false;
     }
 
-    // WX-128: smallest combined visible narrative length a real report can
-    // carry per language. Defined AS the WX-120 floor, not merely sized like
-    // it — the two artifacts express the same degeneracy policy, so a future
-    // recalibration moves both together by construction. Narrative prose is
-    // the email's text minus table headings, so a genuine report clears the
-    // floor comfortably in every language.
-    private const int MinVisibleNarrativeChars = MinVisibleBodyChars;
+    // WX-130: smallest combined visible narrative length (changeSummary + closing)
+    // a real report can carry per language. Recalibrated down from the WX-120
+    // whole-email_body floor of 200: the narrative is now just the two judgment
+    // sections, and on a steady scheduled send changeSummary is null, leaving only
+    // a one-or-two-sentence closing. A real closing ("Quiet weather; no changes
+    // expected.") clears 30 comfortably; a near-blank one (empty/punctuation-only,
+    // which the schema's non-blank check alone would let through) strips to ~0.
+    private const int MinVisibleNarrativeChars = 30;
 
-    // WX-120: the smallest visible-text length (HTML comments + tags stripped,
-    // entities decoded, whitespace collapsed) a real report can have. Measured
-    // reports run ~1,700 visible chars; a degenerate body (Claude left only an
-    // HTML comment) strips to ~0. 200 sits an order of magnitude below real
-    // reports and far above any content-less body, so a present-but-empty
-    // email_body never reaches the recipient.
-    private const int MinVisibleBodyChars = 200;
-
-    // Visible-text length of an HTML fragment: drop comments, then tags, decode
-    // entities, collapse whitespace. Used only to reject a content-less email_body
-    // (WX-120) — not a general-purpose sanitiser.
-    private static int VisibleTextLength(string html)
-    {
-        var noComments = Regex.Replace(html, "<!--.*?-->", " ", RegexOptions.Singleline);
-        var noTags = Regex.Replace(noComments, "<[^>]+>", " ");
-        return Regex.Replace(WebUtility.HtmlDecode(noTags), @"\s+", " ").Trim().Length;
-    }
-
-    // Signals that Claude returned a non-empty but content-less email_body — it
-    // passed RequireString but carries no real forecast text (WX-120). Holds the
+    // Signals that Claude returned a well-formed but near-blank narrative — it
+    // passed the schema (Closing is merely non-blank) but carries no real
+    // forecast prose (WX-120, carried forward in WX-130). Holds the
     // reasoning_trace so a skippable-cycle skip can keep Claude's audit trail.
-    private sealed class DegenerateEmailBodyException : Exception
+    private sealed class DegenerateNarrativeException : Exception
     {
-        public DegenerateEmailBodyException(string reasoningTrace)
-            : base("content-less email_body") => ReasoningTrace = reasoningTrace;
+        public DegenerateNarrativeException(string reasoningTrace)
+            : base("content-less narrative") => ReasoningTrace = reasoningTrace;
 
         public string ReasoningTrace { get; }
     }
 
-    // ── per-recipient system prompt ──────────────────────────────────────────
+    // ── per-locality cycle instructions (system block 3) ──────────────────────
 
-    // Builds the per-recipient rendering rules (the third system block).
-    // Originally ported from the now-removed ClaudeClient.GenerateReportAsync.
-    private static string BuildPerRecipientSystemPrompt(
-        WeatherSnapshot snapshot, string language, IReadOnlyList<string> narrativeLanguages, UnitPreferences units,
-        bool isFirstReport, int scheduledHour, ChangeSeverity changeSeverity, string? previousMetarIcao,
-        bool allowSkip)
+    // Builds the per-cycle, recipient-agnostic instructions (the third system
+    // block). Unlike the cached guidance (block 2), this varies per cycle — the
+    // requested languages, a station fallback, the trigger severity, whether
+    // skipping is permitted — so it is deliberately small. The HTML layout,
+    // units, and per-day grid rules that used to live here are gone: the WX-129
+    // StructuredReportRenderer builds each recipient's email deterministically
+    // from the structured report. Claude writes only the two judgment sections
+    // (changeSummary + closing); the content rules below scope the prose those
+    // sections may carry.
+    private static string BuildReconcilerSystemPrompt(
+        WeatherSnapshot snapshot, IReadOnlyList<string> narrativeLanguages,
+        ChangeSeverity changeSeverity, string? previousMetarIcao, bool allowSkip)
     {
-        var currentConditionsSubtitle = BuildCurrentConditionsSubtitle(snapshot);
-        var currentConditionsHeading = currentConditionsSubtitle is null
-            ? "\"Current Conditions\""
-            : $"\"Current Conditions\" followed on a new line by the subtitle \"{currentConditionsSubtitle}\" "
-              + "(font-size 13px, font-style italic, color #6b8fa8, font-weight normal)";
-        var forecastHeading = $"\"Forecast for {snapshot.LocalityName}\"";
-
-        var tempLabel = units.Temperature == "C" ? "Celsius" : "Fahrenheit";
-        var pressLabel = units.Pressure == "kPa" ? "kPa" : "inches of mercury (inHg)";
-        var windLabel = units.WindSpeed == "kph" ? "km/h" : "mph";
-        var unitInstruction = $"Use {tempLabel} for temperatures, {pressLabel} for pressure, "
-                            + $"and {windLabel} for wind speeds throughout. ";
-
-        var welcomeInstruction = isFirstReport
-            ? "This is the recipient's very first report. "
-              + $"Open with a warm, brief welcome note (2–3 sentences) in {language} "
-              + "introducing the WxReport service and letting them know they will receive "
-              + $"a daily weather update at {scheduledHour}:00 local time, plus additional "
-              + "alerts whenever significant weather changes occur. "
-              + "Then continue with the weather report as normal. "
-            : "";
-
         var currentStationLabel = snapshot.StationMunicipality ?? snapshot.StationName ?? snapshot.StationIcao;
         var stationChangeInstruction = previousMetarIcao is not null
             ? "Note: the weather data source has changed since the last report. "
               + "The previous weather station had no recent data, "
               + $"so this report uses conditions from {currentStationLabel} instead. "
-              + "Briefly acknowledge this in the report: on an unscheduled update, include one sentence "
-              + "in the change-summary band noting the station switch; on a scheduled report, include one "
-              + "sentence in the closing summary. Keep the tone matter-of-fact — this is routine fallback "
+              + "Briefly acknowledge this in the narrative: on an unscheduled update, include one sentence "
+              + "in the changeSummary noting the station switch; on a scheduled report, include one "
+              + "sentence in the closing. Keep the tone matter-of-fact — this is routine fallback "
               + "behaviour, not a cause for concern. "
             : "";
 
@@ -485,110 +434,52 @@ public sealed class ForecastReconciler
             ChangeSeverity.Alert =>
                 "This is an unscheduled weather alert — a significant and potentially dangerous change "
                 + "has occurred since the last report. "
-                + "For the change-summary band (section 2), write a single clear, direct sentence "
+                + "For the changeSummary, write a single clear, direct sentence "
                 + "identifying what changed (e.g. 'A thunderstorm has moved into the area' or "
                 + "'Visibility has dropped sharply'). ",
             ChangeSeverity.Update =>
                 "This is an unscheduled update — conditions have changed since the last report. "
-                + "For the change-summary band (section 2), write one or two sentences summarising "
+                + "For the changeSummary, write one or two sentences summarising "
                 + "what has changed (e.g. a forecast risk that has appeared, or a significant temperature shift). ",
             _ => "",
         };
 
-        // WX-128: the languages the structured report's narrative must carry.
-        // The reconciliation guidance (cached block) defines the structured-
-        // report rules language-agnostically; this per-recipient line supplies
-        // the actual set, matching the required keys in the tool schema.
+        // WX-128/WX-130: the exact language set the structured report's narrative
+        // must carry — the distinct languages across this locality's recipients.
+        // The cached guidance defines the structured-report rules language-
+        // agnostically; this line supplies the actual set, matching the required
+        // keys in the tool schema.
         var narrativeLanguageInstruction =
-            "The structured_report narrative must contain exactly these language keys: "
+            "The structured_report narrative must contain exactly these language keys, and no others: "
             + string.Join(", ", narrativeLanguages.Select(l => $"'{l}'"))
             + ". ";
 
         var skipInstruction = allowSkip
             ? "This is an unscheduled, arrival-triggered cycle. Apply the invalidation gate: if the "
               + "new evidence is not news worth sending — it confirms, or only trivially drifts from, "
-              + "what the prior committed forecast already told this recipient — call the skip_send tool "
-              + "with a brief reasoning_trace instead of producing a report. Only call "
+              + "what the prior committed forecast already told this locality's recipients — call the "
+              + "skip_send tool with a brief reasoning_trace instead of producing a report. Only call "
               + "submit_reconciled_report when the change is genuinely worth an unscheduled email. "
             : "This cycle is always worth sending — call submit_reconciled_report. Do not call skip_send. ";
 
         return
-            $"You are producing a weather report email in HTML format, written in {language}, "
-            + "for a general (non-specialist) audience. "
-            + "Return the HTML as the email_body argument to the submit_reconciled_report tool — "
-            + "this body must be only the inner HTML for the <body> tag, no <html>, <head>, or <body> "
-            + "tags, no markdown, no code fences. "
-            + "Use inline CSS throughout (email clients do not reliably support external stylesheets). "
-            + "Maximum content width: 600px, centred, with a clean and professional visual style. "
-            + "Structure the output in this order: "
-            + "(1) Header div — background #1a3a5c, white text, left-aligned, padding 20px 24px, border-radius 6px 6px 0 0. "
-            + "Line 1: the forecast location name in bold at 22px. "
-            + "Line 2: local observation time at 14px, color #c8daea. "
-            + "Line 3 (unscheduled reports only): italic text at 13px, color #a0bcd4, "
-            + $"reading 'Unscheduled update — see note below', translated into {language}. "
-            + "Never use the recipient's name in the header. "
-            + "(2) Change-summary band (unscheduled reports only) — background #fef6e4, "
-            + "left border 4px solid #e8a020, padding 14px 20px, font-size 14px. "
-            + $"Begin with the bold label 'What's changed:' translated into {language}, "
-            + "followed by the change summary text. "
-            + "Omit this section entirely on scheduled reports. "
-            + "(3) Current Conditions section — background #f7f9fc, padding 20px 24px. "
-            + $"Section heading: bold, 17px, color #1a3a5c, 2px solid #1a3a5c bottom border; text is {currentConditionsHeading}. "
-            + (snapshot.ObservationAvailable
-                ? "Two-column table (label | value), alternating row shading (#eaf0f7 / white). "
-                  + "Rows in this exact order: Sky; Visibility; Wind; "
-                  + "Weather (include only when weather phenomena are present, e.g. rain, fog, drizzle — omit on clear days); "
-                  + "Temperature; Relative Humidity; Pressure. "
-                : "When the data payload shows 'Current observation: NOT AVAILABLE', omit any weather table. "
-                  + $"Instead, render a single short paragraph in italic at 14px, color #6b8fa8, translated into {language}, "
-                  + "explaining in plain language that no recent observation is available from any station within about 30 miles, "
-                  + "and that the report below is therefore based on forecast model data only. "
-                  + "Do not invent or estimate any current-conditions values. ")
-            + "(4) Extended Forecast section — background white, padding 20px 24px. "
-            + $"Section heading styled identically to Current Conditions; text is {forecastHeading}. "
-            + "Multi-column table, header row background #1a3a5c white text. "
-            + "Columns: Date, Temperatures, Wind, Conditions. "
-            + "Render exactly ONE row per calendar day in the recipient's local timezone, "
-            + "aggregating that day's 6-hour blocks into a single row. Never split a day into "
-            + "Morning/Afternoon/Evening/Overnight or any other sub-period rows, and never emit "
-            + "more than one row for the same date. The first row is today (covering the remainder "
-            + "of today); list each subsequent day exactly once, in chronological order. "
-            + "The Date cell shows only the weekday and date (e.g. 'Wed Jun 3') — no period label. "
-            + "The Temperatures cell shows that day's overall high above its overall low — the "
-            + "maximum and minimum across all of that day's blocks — on two lines "
-            + "separated by <br/>, with each value carrying its own unit suffix and labeled "
-            + "(e.g. 'High: 85°F<br/>Low: 72°F' or 'High: 29°C<br/>Low: 22°C') — never "
-            + "combine the two values with a slash. "
-            + "Each Conditions cell: a single sentence of no more than 15 words covering the whole "
-            + "day — lead with the most important condition and omit anything that can be inferred. "
-            + "(5) Closing div — background #f0f4f9, padding 16px 24px, "
-            + "border-top 1px solid #d0dce8, border-radius 0. "
-            + $"Begin with the bold label 'In summary:' translated into {language}, "
-            + "followed by no more than two sentences of plain-language context — "
-            + "headline storm risk, a notable temperature trend, or similar. "
-            + unitInstruction
-            + "Rules: use only the data provided — never invent or estimate conditions. "
+            "You are reconciling a weather forecast for a single locality and producing a unit-neutral "
+            + "structured report for a general (non-specialist) audience. A deterministic renderer turns "
+            + "your structured report into each recipient's email — you do not produce HTML, and you write "
+            + "no current-conditions table or per-day forecast grid (those are rendered from the data). "
+            + "Your prose is only the two judgment sections: the changeSummary band and the closing. "
+            + "Narrative content rules (apply to that prose): "
+            + "use only the data provided — never invent or estimate conditions. "
             + "Never show raw METAR codes, numeric precipitation rates, or CAPE values to the reader. "
             + "Never use aviation terminology — no 'ceiling', 'TAF', 'METAR', 'IFR', 'VFR', or similar. "
             + "Never include altitude or height figures in sky descriptions. "
-            + "Describe sky conditions with a short plain phrase that conveys overall coverage and height "
-            + "(e.g. 'Low overcast', 'High thin overcast', 'Partly cloudy') — "
-            + "do not list or enumerate individual cloud layers. "
             + "You may use TAF forecast data to inform your descriptions, but do not reference it explicitly. "
-            + "Use the CAPE label to describe thunderstorm potential in plain language — "
+            + "Use the CAPE label to gauge thunderstorm potential and describe it in plain language — "
             + "low CAPE warrants at most a mention of an isolated storm; "
             + "significant or extreme CAPE should be described in terms of what the public might "
             + "experience (strong storms, possible damaging winds or hail). "
             + "When precipitation is forecast near freezing temperatures, consider whether "
             + "snow, sleet, or a wintry mix is possible and mention it if so. "
-            + "Never state weather as flatly certain — no forecast is ever 100% sure, and "
-            + "no forecaster speaks as if it were. Even when a block's precipExpectation is "
-            + "'certain' or its severeFlag is set — events as close to certain as makes no "
-            + "difference — render them as calibrated strong likelihood ('almost certain', "
-            + "'highly likely', 'expect', 'very likely'), never as a guarantee: avoid "
-            + "'will' used as a promise, 'certain', 'definitely', 'guaranteed', and "
-            + "'no chance'. Apply the same hedging to severe-weather and hazard wording. "
-            + welcomeInstruction
             + stationChangeInstruction
             + changeAlertInstruction
             + narrativeLanguageInstruction
@@ -605,12 +496,10 @@ public sealed class ForecastReconciler
     private static string BuildUserMessage(
         WeatherSnapshot snapshot, ForecastSnapshotBody provisional, DateTime? gfsModelRunUtc,
         DateTime? tafIssuanceUtc, DateTime? tafValidToUtc, ForecastSnapshot? prior,
-        string recipientName, TimeZoneInfo tz, UnitPreferences units,
-        IReadOnlyList<TriggerSource> changedSinceLastSend)
+        TimeZoneInfo tz, IReadOnlyList<TriggerSource> changedSinceLastSend)
     {
         var sb = new StringBuilder();
-        sb.Append("Reconcile the following inputs for ").Append(recipientName)
-          .AppendLine(" and emit your four artifacts via the submit_reconciled_report tool.");
+        sb.AppendLine("Reconcile the following inputs for this locality and emit your three artifacts via the submit_reconciled_report tool.");
         sb.AppendLine();
 
         sb.Append("changed_since_last_sent_report: ")
@@ -634,8 +523,21 @@ public sealed class ForecastReconciler
         }
         sb.AppendLine();
 
+        // WX-130: the data payload is recipient-agnostic now, so it uses
+        // SnapshotDescriber's default display units (US customary). For the
+        // forecast bodies this is harmless — the final_snapshot schema fixes
+        // canonical °C/kt and the structured_report's change quantities derive
+        // from that canonical snapshot, so the renderer converts per recipient.
+        // The exception worth knowing: live OBSERVATION values appear here ONLY
+        // in US-customary text, so if Claude cites a current-observation quantity
+        // directly in narrative prose it must convert it to the canonical
+        // {q:...} unit by hand (the token grammar accepts any number, so a
+        // copy-the-displayed-figure slip would not fail validation). This is a
+        // pre-existing WX-128 property, not introduced here; a follow-up could
+        // give SnapshotDescriber a canonical mode so the payload units match the
+        // token convention end-to-end.
         sb.AppendLine("current_observation and current_forecast (structured text):");
-        sb.AppendLine(SnapshotDescriber.Describe(snapshot, tz, units));
+        sb.AppendLine(SnapshotDescriber.Describe(snapshot, tz));
         sb.AppendLine();
 
         if (prior is not null)
@@ -675,32 +577,5 @@ public sealed class ForecastReconciler
         if (taf) parts.Add("new TAF");
         if (gfs) parts.Add("new GFS run");
         return string.Join("; ", parts);
-    }
-
-    // ── subtitle helper ──────────────────────────────────────────────────────
-
-    // Ported from ClaudeClient.BuildCurrentConditionsSubtitle; same logic.
-    private static string? BuildCurrentConditionsSubtitle(WeatherSnapshot snap)
-    {
-        var municipality = snap.StationMunicipality;
-        var airportName = snap.StationName;
-        var locality = snap.LocalityName;
-
-        if (municipality is not null &&
-            string.Equals(municipality, locality, StringComparison.OrdinalIgnoreCase))
-            return null;
-
-        if (municipality is not null && airportName is not null)
-        {
-            return airportName.Contains(municipality, StringComparison.OrdinalIgnoreCase)
-                ? $"at {airportName}"
-                : $"at {municipality}, {airportName}";
-        }
-        if (airportName is not null)
-            return $"at {airportName}";
-        if (municipality is not null)
-            return $"at {municipality}";
-
-        return null;
     }
 }

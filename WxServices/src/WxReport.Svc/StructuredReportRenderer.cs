@@ -47,7 +47,9 @@ public static class StructuredReportRenderer
     /// <paramref name="localityTz"/> localizes per-day bucketing and instant
     /// rendering.  <paramref name="isUnscheduled"/> selects the header's
     /// unscheduled-update line; the change-summary band itself renders whenever the
-    /// narrative carries one.
+    /// narrative carries one.  (A recipient's first contact is a separate
+    /// welcome-only email — see <see cref="RenderWelcome"/>; this method always
+    /// renders a weather report.)
     /// </summary>
     public static string Render(
         StructuredReportBody report,
@@ -84,6 +86,59 @@ public static class StructuredReportRenderer
 
         sb.Append("</div>");
         return sb.ToString();
+    }
+
+    // ── first-contact welcome (WX-130; standalone welcome-only email) ──────────
+
+    /// <summary>
+    /// Renders a recipient's one-time welcome email — a greeting plus a statement
+    /// of what to expect (daily reports for <paramref name="localityName"/> at the
+    /// locality's <paramref name="scheduledHours"/>, localized to the recipient's
+    /// language), with <b>no weather content</b>.  This is the first contact a new
+    /// recipient receives; weather reports begin on the locality's normal cadence.
+    /// </summary>
+    public static string RenderWelcome(
+        Recipient recipient,
+        string localityName,
+        TimeZoneInfo localityTz,
+        IReadOnlyList<int> scheduledHours)
+    {
+        var lang = LanguageHelper.ToIetfTag(recipient.Language).Split('-')[0].ToLowerInvariant();
+        var vocab = ReportVocabulary.ForLanguage(lang);
+        var body = string.Format(vocab.Culture, vocab.WelcomeFormat, localityName, FormatScheduleTimes(scheduledHours, vocab));
+
+        var sb = new StringBuilder();
+        sb.Append("<div style=\"max-width:600px;margin:0 auto;font-family:Arial,Helvetica,sans-serif;color:#1a3a5c;\">");
+        sb.Append("<div style=\"background:#1a3a5c;color:#ffffff;text-align:left;padding:20px 24px;border-radius:6px 6px 0 0;\">");
+        sb.Append($"<div style=\"font-weight:bold;font-size:22px;\">{HtmlText(localityName)}</div>");
+        sb.Append("</div>");
+        sb.Append("<div style=\"background:#eef4fb;padding:20px 24px;font-size:15px;line-height:1.5;border-radius:0 0 6px 6px;\">");
+        sb.Append($"<strong>{HtmlText(vocab.WelcomeGreeting)}</strong> {HtmlText(body)}");
+        sb.Append("</div>");
+        sb.Append("</div>");
+        return sb.ToString();
+    }
+
+    /// <summary>Plain-text form of the welcome email (the SMTP fallback), sharing the same vocabulary + schedule formatting as <see cref="RenderWelcome"/> so the two cannot drift.</summary>
+    public static string WelcomePlainText(Recipient recipient, string localityName, IReadOnlyList<int> scheduledHours)
+    {
+        var lang = LanguageHelper.ToIetfTag(recipient.Language).Split('-')[0].ToLowerInvariant();
+        var vocab = ReportVocabulary.ForLanguage(lang);
+        return $"{vocab.WelcomeGreeting} "
+            + string.Format(vocab.Culture, vocab.WelcomeFormat, localityName, FormatScheduleTimes(scheduledHours, vocab));
+    }
+
+    /// <summary>Localized "6 AM and 12 PM" list of the recipient's daily send hours, joined with the language's conjunction. Empty when no hours are configured.</summary>
+    private static string FormatScheduleTimes(IReadOnlyList<int> hours, ReportVocabulary vocab)
+    {
+        var times = hours
+            .Select(h => new DateTime(2000, 1, 1, h, 0, 0).ToString("h tt", vocab.Culture))
+            .ToList();
+        if (times.Count == 0)
+            return "";
+        if (times.Count == 1)
+            return times[0];
+        return string.Join(", ", times.Take(times.Count - 1)) + $" {vocab.AndConjunction} " + times[^1];
     }
 
     /// <summary>The recipient's language narrative, falling back to en (then any present) if the recipient's own language is somehow absent. An entirely empty narrative is a precondition violation — <see cref="StructuredReportBody.Validate"/> guarantees at least one language — and throws here, failing the send closed rather than emailing a blank report.</summary>
@@ -132,6 +187,13 @@ public static class StructuredReportRenderer
         sb.Append("<div style=\"background:#f7f9fc;padding:20px 24px;\">");
         AppendSectionHeading(sb, vocab.CurrentConditionsHeading);
 
+        // Station-attribution subtitle (WX-130, restored): name the observing
+        // station beneath the heading when it differs from the locality, so the
+        // reader knows "Current Conditions" came from, e.g., the nearby airport.
+        var subtitle = StationSubtitle(snap, vocab);
+        if (subtitle is not null)
+            sb.Append($"<div style=\"font-size:13px;font-style:italic;color:#6b8fa8;font-weight:normal;margin-top:2px;\">{HtmlText(subtitle)}</div>");
+
         if (!snap.ObservationAvailable)
         {
             var note = string.IsNullOrWhiteSpace(snap.ObservationUnavailableNote)
@@ -166,6 +228,39 @@ public static class StructuredReportRenderer
             Row(vocab.RowPressure, FormatPressureInHg(inHg, recipient));
 
         sb.Append("</table></div>");
+    }
+
+    /// <summary>
+    /// The "at &lt;station&gt;" attribution shown under the Current Conditions
+    /// heading, or <see langword="null"/> when the observing station IS the
+    /// locality (no attribution needed) or no station metadata is available.
+    /// Ported from the former reconciler-prompt subtitle logic (WX-130): prefer
+    /// "at &lt;municipality&gt;, &lt;airport&gt;", collapse when the airport name
+    /// already contains the municipality, fall back to whichever single name exists.
+    /// </summary>
+    private static string? StationSubtitle(WeatherSnapshot snap, ReportVocabulary vocab)
+    {
+        var municipality = snap.StationMunicipality;
+        var airportName = snap.StationName;
+        var locality = snap.LocalityName;
+
+        if (municipality is not null &&
+            string.Equals(municipality, locality, StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        var at = vocab.StationAtPrefix;
+        if (municipality is not null && airportName is not null)
+        {
+            return airportName.Contains(municipality, StringComparison.OrdinalIgnoreCase)
+                ? $"{at} {airportName}"
+                : $"{at} {municipality}, {airportName}";
+        }
+        if (airportName is not null)
+            return $"{at} {airportName}";
+        if (municipality is not null)
+            return $"{at} {municipality}";
+
+        return null;
     }
 
     // ── extended forecast grid ────────────────────────────────────────────────

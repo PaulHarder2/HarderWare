@@ -6,12 +6,14 @@ namespace WxReport.Svc;
 
 /// <summary>
 /// Prompt fragments and tool-use schema for the WX-79 forecast reconciliation
-/// pass.  The reconciliation guidance text is the second system block in the
-/// Claude request, sitting between the recipient persona (block 1) and the
-/// per-recipient rendering rules (block 3).  Carrying the
+/// pass, run once per locality (WX-130).  The reconciliation guidance text is
+/// the second system block in the Claude request, sitting between the persona
+/// (block 1) and the per-locality cycle instructions (block 3); the HTML
+/// rendering rules are gone — a deterministic renderer (WX-129) now builds each
+/// recipient's email from the structured report.  Carrying the
 /// <c>cache_control: ephemeral</c> marker, it extends the cached prefix
 /// beyond the persona to include the reconciliation procedure itself, so
-/// retries and same-recipient cycle reruns within five minutes incur near-
+/// retries and same-locality cycle reruns within five minutes incur near-
 /// zero token cost for these blocks.
 ///
 /// <para>
@@ -27,16 +29,16 @@ internal static class ReconcilerPrompts
 {
     /// <summary>
     /// Stable, recipient-agnostic system block added to every reconciler call.
-    /// Lays out the four inputs Claude receives, the three-step reconciliation
+    /// Lays out the five inputs Claude receives, the three-step reconciliation
     /// procedure (TAF-vs-GFS by issuance time; observation-overrides-model for
     /// hour X or X+1; prior-snapshot diff for the news judgment), the
     /// significance hierarchy that calibrates "worth sending" (safety-critical /
     /// plans-affecting / ambient-interest tiers, the directional-asymmetry rule,
-    /// and worked examples — added in WX-81), and the four artifacts the tool
+    /// and worked examples — added in WX-81), and the three artifacts the tool
     /// must return.
     /// </summary>
     internal const string ReconciliationGuidanceText = """
-        You receive structured weather data for a single recipient cycle:
+        You receive structured weather data for a single locality cycle:
 
           • provisional_snapshot — a ForecastSnapshotBody derived deterministically
             from GFS model output, plus the gfs_model_run_utc. Treat the body as
@@ -51,7 +53,7 @@ internal static class ReconcilerPrompts
             send.
           • changed_since_last_sent_report — which of the three inputs (METAR
             observation, TAF, GFS run) are newer than they were at the last report
-            actually DELIVERED to this recipient. "observation only" means no new
+            actually SENT for this locality. "observation only" means no new
             TAF or GFS run has arrived since you last sent — the only fresh input is
             a routine hourly observation.
 
@@ -89,8 +91,7 @@ internal static class ReconcilerPrompts
             energy points to strong-to-severe storms (the snapshot's severeFlag and
             convective signals). Otherwise treat thunderstorms as plans-affecting.
             When winds of 34 kt or greater qualify, the send is warranted regardless
-            of how you choose to describe those winds — let the per-recipient
-            rendering rules govern the wording.
+            of how you describe those winds in the narrative.
 
           • Plans-affecting — precipitation versus dry, notable but non-hazardous
             winds, a meaningful temperature swing, ordinary non-severe thunderstorms.
@@ -193,27 +194,26 @@ internal static class ReconcilerPrompts
         You have two tools, and you must call exactly one of them:
 
           • submit_reconciled_report — when this cycle is worth sending. Return all
-            four artifacts (below).
+            three artifacts (below).
           • skip_send — when this cycle is NOT news worth sending: return only a
             reasoning_trace explaining why no email is warranted. No email is sent
             and the committed forecast is left unchanged.
 
-        The per-recipient instructions state whether skipping is permitted for
+        The per-cycle instructions state whether skipping is permitted for
         this cycle. Scheduled and first sends are always worth sending — never
         skip them. Only unscheduled, arrival-triggered cycles may be skipped.
 
-        When you DO send, return all four artifacts via the submit_reconciled_report tool:
+        When you DO send, return all three artifacts via the submit_reconciled_report tool:
 
           • final_snapshot — your refined ForecastSnapshotBody. Same schema as
-            provisional_snapshot: schemaVersion 3, ordered 6-hour blocks aligned
+            provisional_snapshot: schemaVersion 4, ordered 6-hour blocks aligned
             to 00/06/12/18Z, all required fields per block. Temperatures stay in
-            Celsius; winds stay in knots; the per-recipient block converts units
-            for the email_body.
-          • structured_report — the unit-neutral structured report (WX-128): the
-            language-free changes array plus the language-keyed narrative. Rules
-            below.
-          • email_body      — HTML matching the rendering rules in the per-recipient
-            system block.
+            Celsius; winds stay in knots — a deterministic renderer converts
+            units per recipient.
+          • structured_report — the unit-neutral structured report. It is the
+            ONLY rendered artifact (there is no email_body): a deterministic
+            program turns it into each recipient's report, applying their units
+            and language with no further LLM involvement. Rules below.
           • reasoning_trace — brief audit log naming what changed at each of the
             three reconciliation steps above. Plain English.
 
@@ -229,12 +229,14 @@ internal static class ReconcilerPrompts
             window affected, typed quantities, and a summaryToken ("ch1", "ch2",
             … in array order). Empty when nothing changed (e.g. a steady-forecast
             scheduled send).
-          • narrative — one entry per language code listed in the per-recipient
-            block, each with the prose for the report sections: changeSummary
-            (null when there is no change band), currentConditions,
-            extendedForecast, closing. Write each language natively and
-            idiomatically — never translate word-for-word — but keep the
-            meteorological content identical across languages.
+          • narrative — one entry per language code requested below, each with
+            exactly two prose sections: changeSummary (null when there is no
+            change band) and closing (the "In summary:" wrap-up). The current-
+            conditions table and the per-day forecast grid are rendered
+            deterministically from the data, so do NOT narrate them here. Write
+            each language natively and idiomatically — never translate
+            word-for-word — but keep the meteorological content identical across
+            languages.
           • Quantity tokens: inside narrative prose, NEVER write a number with a
             unit. Write a token the renderer substitutes in the recipient's own
             units and locale:
@@ -268,9 +270,11 @@ internal static class ReconcilerPrompts
             ties the sentence to the change. Every change must be narrated in
             EVERY language's changeSummary, and anchors appear only in
             changeSummary.
-          • The hedged-certainty rule in the per-recipient block applies to the
-            narrative exactly as it does to email_body: never state weather as
-            flatly certain, in any language.
+          • Hedged certainty: never state weather as flatly certain, in any
+            language — no forecast is ever 100% sure. Render even a "certain"
+            precip expectation or a set severeFlag as calibrated strong
+            likelihood ("almost certain", "highly likely", "expect"), never as a
+            guarantee ("will", "definitely", "guaranteed").
 
         Always act via one of the two tools. Never return free text outside a tool call.
         """;
@@ -301,7 +305,7 @@ internal static class ReconcilerPrompts
         var narrativeSectionSchema = new
         {
             type = "object",
-            required = new[] { "currentConditions", "extendedForecast", "closing" },
+            required = new[] { "closing" },
             properties = new
             {
                 changeSummary = new
@@ -309,9 +313,7 @@ internal static class ReconcilerPrompts
                     type = new[] { "string", "null" },
                     description = "Prose for the change band; null when no change band. The only section where {chN} anchors appear — every change's anchor, in every language.",
                 },
-                currentConditions = new { type = "string" },
-                extendedForecast = new { type = "string" },
-                closing = new { type = "string" },
+                closing = new { type = "string", description = "Prose for the \"In summary:\" closing. The current-conditions table and per-day grid are rendered deterministically — narrate only the change band and this closing." },
             },
         };
         // Normalized: distinct + ordinal-sorted, so the serialized tool JSON —
@@ -329,18 +331,13 @@ internal static class ReconcilerPrompts
         return new
         {
             name = "submit_reconciled_report",
-            description = "Submit the reconciled forecast snapshot, the unit-neutral structured report, the rendered HTML email body, and the reasoning trace.",
+            description = "Submit the reconciled forecast snapshot, the unit-neutral structured report, and the reasoning trace.",
             input_schema = new
             {
                 type = "object",
-                required = new[] { "email_body", "final_snapshot", "structured_report", "reasoning_trace" },
+                required = new[] { "final_snapshot", "structured_report", "reasoning_trace" },
                 properties = new
                 {
-                    email_body = new
-                    {
-                        type = "string",
-                        description = "HTML for the email <body> inner content, rendered per the per-recipient system block.",
-                    },
                     structured_report = new
                     {
                         type = "object",

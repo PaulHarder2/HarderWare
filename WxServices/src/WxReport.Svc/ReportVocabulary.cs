@@ -28,11 +28,18 @@ public sealed record ReportVocabulary
 {
     // ── section headings / band labels ──────────────────────────────────────
     public required string CurrentConditionsHeading { get; init; }
+    public required string StationAtPrefix { get; init; }          // "at <station>" subtitle — "at" / "en"
     public required string ForecastHeadingFormat { get; init; }   // {0} = locality name
     public required string WhatsChangedLabel { get; init; }
     public required string InSummaryLabel { get; init; }
     public required string UnscheduledNote { get; init; }
     public required string NoObservationNote { get; init; }
+
+    // ── first-report welcome (WX-130; standalone welcome-only email) ──────────
+    public required string WelcomeSubject { get; init; }           // subject prefix; locality appended by the worker
+    public required string WelcomeGreeting { get; init; }          // bold opening line
+    public required string WelcomeFormat { get; init; }            // {0} = locality name, {1} = localized list of scheduled send times
+    public required string AndConjunction { get; init; }           // joins the last two send times — "and" / "y"
 
     // ── current-conditions row labels ───────────────────────────────────────
     public required string RowSky { get; init; }
@@ -117,11 +124,16 @@ public sealed record ReportVocabulary
     public static readonly ReportVocabulary En = new()
     {
         CurrentConditionsHeading = "Current Conditions",
+        StationAtPrefix = "at",
         ForecastHeadingFormat = "Forecast for {0}",
         WhatsChangedLabel = "What's changed:",
         InSummaryLabel = "In summary:",
         UnscheduledNote = "Unscheduled update — see note below",
         NoObservationNote = "No recent observation is available from any station within about 30 miles, so the report below is based on forecast model data only.",
+        WelcomeSubject = "Welcome to WxReport",
+        WelcomeGreeting = "Welcome to WxReport!",
+        WelcomeFormat = "From now on you'll receive a daily weather report for {0} at {1} local time, plus extra alerts whenever the weather changes significantly. We're glad to have you.",
+        AndConjunction = "and",
         RowSky = "Sky",
         RowVisibility = "Visibility",
         RowWind = "Wind",
@@ -181,11 +193,16 @@ public sealed record ReportVocabulary
     public static readonly ReportVocabulary Es = new()
     {
         CurrentConditionsHeading = "Condiciones actuales",
+        StationAtPrefix = "en",
         ForecastHeadingFormat = "Pronóstico para {0}",
         WhatsChangedLabel = "Qué ha cambiado:",
         InSummaryLabel = "En resumen:",
         UnscheduledNote = "Actualización no programada — vea la nota a continuación",
         NoObservationNote = "No hay una observación reciente de ninguna estación a unos 50 km, por lo que el informe a continuación se basa únicamente en datos del modelo de pronóstico.",
+        WelcomeSubject = "Bienvenido a WxReport",
+        WelcomeGreeting = "¡Bienvenido a WxReport!",
+        WelcomeFormat = "A partir de ahora recibirá un informe del tiempo diario para {0} a las {1} hora local, además de alertas adicionales cuando el tiempo cambie significativamente. Nos alegra tenerle con nosotros.",
+        AndConjunction = "y",
         RowSky = "Cielo",
         RowVisibility = "Visibilidad",
         RowWind = "Viento",

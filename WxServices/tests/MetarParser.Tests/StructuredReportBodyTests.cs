@@ -39,8 +39,6 @@ public class StructuredReportBodyTests
     private static NarrativeSections SampleSections(string? changeSummary) => new()
     {
         ChangeSummary = changeSummary,
-        CurrentConditions = $"Currently near {{q:temp:31.2}} with winds around {{q:wind:12}}. {LongProse}",
-        ExtendedForecast = $"Highs near {{q:temp:33.5}} tomorrow. {LongProse}",
         Closing = "A stormy stretch ahead — keep an eye on the afternoon sky.",
     };
 
@@ -319,9 +317,9 @@ public class StructuredReportBodyTests
     [Fact]
     public void StaleSchemaVersion_IsRejected()
     {
-        // Born at v3 — no legacy to tolerate, so the version pins exactly
-        // (unlike ForecastSnapshotBody, whose old persisted rows must keep loading).
-        var json = SampleBody().Serialize().Replace("\"schemaVersion\":3", "\"schemaVersion\":2");
+        // Pins exactly to the current version — no legacy to tolerate (unlike
+        // ForecastSnapshotBody, whose old persisted rows must keep loading).
+        var json = SampleBody().Serialize().Replace("\"schemaVersion\":4", "\"schemaVersion\":2");
 
         var ex = Assert.Throws<JsonException>(() => StructuredReportBody.Deserialize(json));
         Assert.Contains("schemaVersion", ex.Message);

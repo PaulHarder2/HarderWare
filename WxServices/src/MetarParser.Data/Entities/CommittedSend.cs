@@ -16,8 +16,8 @@ namespace MetarParser.Data.Entities;
 /// </summary>
 public sealed class CommittedSend
 {
-    /// <summary>Current schema version for the column shape on this row.  v2 added <see cref="StructuredReport"/> (WX-128).</summary>
-    public const int SchemaVersionCurrent = 2;
+    /// <summary>Current schema version for the column shape on this row.  v2 added <see cref="StructuredReport"/> (WX-128); v3 added <see cref="IsDiagnostic"/> (WX-130).</summary>
+    public const int SchemaVersionCurrent = 3;
 
     /// <summary>Primary key, auto-incremented by the database.</summary>
     public int Id { get; set; }
@@ -69,6 +69,15 @@ public sealed class CommittedSend
     /// (Claude failed, send failed, or the cycle aborted earlier).
     /// </summary>
     public DateTime? SentAtUtc { get; set; }
+
+    /// <summary>
+    /// True for a diagnostic / deploy-verification send (the WX-130 startup report).
+    /// Diagnostic rows are excluded from prior-snapshot baseline lookups and never
+    /// advance a locality's last-sent state, so a deploy-time test report can't shift
+    /// the shared baseline the next real cycle reconciles against — the failure mode
+    /// the WX-133 shared-schedule invariant exists to prevent.
+    /// </summary>
+    public bool IsDiagnostic { get; set; }
 
     /// <summary>Schema version of the column shape on this row.  Defaults to <see cref="SchemaVersionCurrent"/>.</summary>
     public int SchemaVersion { get; set; } = SchemaVersionCurrent;
