@@ -19,6 +19,25 @@ public static class MetarFetcher
     private const string MetarApiBase = "https://aviationweather.gov/api/data/metar";
 
     /// <summary>
+    /// Report count at which a bbox response is suspiciously large (WX-140):
+    /// the AWC data API silently truncates continent-sized bbox queries at
+    /// roughly 550–600 reports — no error, no marker, just a capped subset.
+    /// A response at or above this threshold is logged as a WARN so silent
+    /// coverage loss is loud; the WX-140 per-locality fetch plan keeps healthy
+    /// responses far below it.
+    /// </summary>
+    public const int AwcCapSuspicionThreshold = 500;
+
+    // WX-140 inline cleanup: identical per-line parse failures (e.g. the MYGF
+    // automated METAR that omits its date/time group at the source) recur on
+    // every 10-minute cycle and were WARN-spamming the log. First occurrence
+    // of each (station, message) signature stays WARN; repeats drop to DEBUG.
+    // Bounded: one entry per distinct failing station+message for the process
+    // lifetime.
+    private static readonly HashSet<string> _seenParseFailures = [];
+    private static readonly object _seenParseFailuresLock = new();
+
+    /// <summary>
     /// Fetches all METAR and SPECI reports within the given geographic region,
     /// then parses, deduplicates, and inserts any reports not already in the database.
     /// </summary>
@@ -26,13 +45,48 @@ public static class MetarFetcher
     /// <param name="dbOptions">EF Core options for deduplication queries and insertion.</param>
     /// <param name="httpClient">HTTP client for the Aviation Weather Center API request.</param>
     /// <sideeffects>Inserts new <see cref="MetarRecord"/> rows into the database. Writes progress and error log entries.</sideeffects>
-    public static async Task FetchAndInsertAsync(
+    /// <returns>The number of reports the response carried (the WX-140 adaptive split keys on this); 0 on failure.</returns>
+    public static async Task<int> FetchAndInsertAsync(
         WxServices.Common.FetchRegion region,
         DbContextOptions<WeatherDataContext> dbOptions,
         HttpClient httpClient)
     {
         var url = $"{MetarApiBase}?bbox={region.ToAwcBbox()}&hours=1&format=raw";
-        await FetchUrlAndInsertAsync(url, dbOptions, httpClient);
+        return (await FetchUrlAndInsertAsync(url, dbOptions, httpClient)).LineCount;
+    }
+
+    /// <summary>
+    /// Fetches recent METAR/SPECI reports for a batch of stations in chunked
+    /// <c>ids=</c> requests (WX-140 gap fill / direct list), and reports each
+    /// productive station with its newest observation time — the gap filler
+    /// uses the age to distinguish genuinely bbox-unreliable stations from
+    /// slow-cadence or just-published ones before promoting to
+    /// <c>AlwaysFetchDirect</c>.
+    /// </summary>
+    /// <param name="stationIcaos">ICAO identifiers to fetch.</param>
+    /// <param name="dbOptions">EF Core options for deduplication queries and insertion.</param>
+    /// <param name="httpClient">HTTP client for the Aviation Weather Center API requests.</param>
+    /// <param name="hours">
+    /// AWC lookback window.  The gap filler passes 3 to match the freshness
+    /// window that defines a gap — fetching 1 hour against a 3-hour freshness
+    /// test left slow-cadence stations as permanent phantom gaps (WX-140 review).
+    /// </param>
+    /// <returns>One entry per station that returned a parseable report, with its newest observation time.</returns>
+    /// <sideeffects>Inserts new <see cref="MetarRecord"/> rows into the database. Writes progress and error log entries.</sideeffects>
+    public static async Task<IReadOnlyList<(string Icao, DateTime NewestObsUtc)>> FetchAndInsertByStationsAsync(
+        IReadOnlyList<string> stationIcaos,
+        DbContextOptions<WeatherDataContext> dbOptions,
+        HttpClient httpClient,
+        int hours = 1)
+    {
+        const int chunkSize = 20;
+        var productive = new List<(string Icao, DateTime NewestObsUtc)>();
+        foreach (var chunk in stationIcaos.Chunk(chunkSize))
+        {
+            var url = $"{MetarApiBase}?ids={string.Join(',', chunk)}&hours={hours}&format=raw";
+            productive.AddRange((await FetchUrlAndInsertAsync(url, dbOptions, httpClient)).Stations);
+        }
+        return productive;
     }
 
     /// <summary>
@@ -70,7 +124,8 @@ public static class MetarFetcher
     /// Inserts new <see cref="WxStation"/> rows for any station ICAOs not yet in <c>WxStations</c>.
     /// Writes progress and error log entries.
     /// </sideeffects>
-    private static async Task FetchUrlAndInsertAsync(
+    /// <returns>The raw response report count plus the distinct stations that produced a parseable report (each with its newest observation time); empty on fetch failure or an empty response.</returns>
+    private static async Task<FetchResult> FetchUrlAndInsertAsync(
         string url,
         DbContextOptions<WeatherDataContext> dbOptions,
         HttpClient httpClient)
@@ -85,7 +140,7 @@ public static class MetarFetcher
         catch (Exception ex)
         {
             Logger.Error($"METAR fetch failed after retries: {ex.Message}");
-            return;
+            return FetchResult.Empty;
         }
 
         var lines = raw.Split('\n',
@@ -97,11 +152,23 @@ public static class MetarFetcher
 
         if (lines.Count == 0)
         {
-            Logger.Warn($"No METAR/SPECI reports were returned for: {url}");
-            return;
+            // ids= requests for defined-but-silent airfields legitimately come
+            // back empty; only an empty bbox is surprising.
+            if (url.Contains("bbox=", StringComparison.Ordinal))
+                Logger.Warn($"No METAR/SPECI reports were returned for: {url}");
+            else
+                Logger.Debug($"No METAR/SPECI reports were returned for: {url}");
+            return FetchResult.Empty;
         }
 
         Logger.Info($"Received {lines.Count} METAR/SPECI report(s). Parsing...");
+
+        // WX-140 truncation tripwire: the AWC API caps oversized bbox
+        // responses silently, so a "successful" fetch can be missing most of
+        // its stations. Make the cap loud instead of invisible.
+        if (lines.Count >= AwcCapSuspicionThreshold)
+            Logger.Warn($"METAR response returned {lines.Count} report(s) — at or near the AWC response cap; "
+                + $"the result may be silently truncated and stations silently missing. Shrink the bbox: {url}");
 
         var parsed = new List<(MetarReport Report, MetarRecord Entity)>();
         int parseErrors = 0;
@@ -116,7 +183,7 @@ public static class MetarFetcher
             }
             catch (MetarParseException ex)
             {
-                Logger.Warn($"METAR parse error: {ex.Message} — input: {line}");
+                LogParseFailure(ex.Message, line);
                 parseErrors++;
             }
         }
@@ -124,7 +191,7 @@ public static class MetarFetcher
         if (parsed.Count == 0)
         {
             Logger.Warn($"No METAR reports parsed successfully ({parseErrors} parse error(s)).");
-            return;
+            return new FetchResult(lines.Count, []);
         }
 
         using var ctx = new WeatherDataContext(dbOptions);
@@ -155,7 +222,7 @@ public static class MetarFetcher
             catch (DbUpdateException ex)
             {
                 Logger.Error($"Database error during METAR batch insert: {ex.InnerException?.Message ?? ex.Message}");
-                return;
+                return new FetchResult(lines.Count, []);
             }
         }
 
@@ -163,6 +230,48 @@ public static class MetarFetcher
 
         // ── Upsert any station ICAOs not yet in WxStations ───────────────────
         await UpsertNewStationsAsync(stations, dbOptions, httpClient);
+
+        return new FetchResult(
+            lines.Count,
+            parsed
+                .GroupBy(p => p.Entity.StationIcao, StringComparer.OrdinalIgnoreCase)
+                .Select(g => (Icao: g.Key, NewestObsUtc: g.Max(p => p.Entity.ObservationUtc)))
+                .ToList());
+    }
+
+    /// <summary>Raw response size plus per-station newest-observation results for one fetch URL.</summary>
+    private sealed record FetchResult(int LineCount, IReadOnlyList<(string Icao, DateTime NewestObsUtc)> Stations)
+    {
+        internal static readonly FetchResult Empty = new(0, []);
+    }
+
+    // WARN the first time a (station, message) parse failure is seen, DEBUG on
+    // repeats — a structurally malformed feed (MYGF) fails identically forever
+    // and one WARN carries all the information the next thousand would.
+    private static void LogParseFailure(string message, string line)
+    {
+        // The dedupe key must be stable across cycles: only accept tokens[1]
+        // as the station when it looks like one — for malformed lines whose
+        // second token is a date/time group or COR marker, collapse to "?" so
+        // the set stays bounded and repeats still dedupe (WX-140 review).
+        var tokens = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var station = tokens.Length > 1
+            && tokens[1].Length == 4
+            && tokens[1].All(char.IsAsciiLetterOrDigit)
+            && !tokens[1].All(char.IsAsciiDigit)
+                ? tokens[1]
+                : "?";
+        bool firstSeen;
+        lock (_seenParseFailuresLock)
+        {
+            firstSeen = _seenParseFailures.Add($"{station}|{message}");
+        }
+
+        var text = $"METAR parse error: {message} — input: {line}";
+        if (firstSeen)
+            Logger.Warn($"{text} (repeats of this station+error log at DEBUG)");
+        else
+            Logger.Debug(text);
     }
 
     /// <summary>

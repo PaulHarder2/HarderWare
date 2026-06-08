@@ -363,11 +363,12 @@ graph TD
 
 **METAR/TAF cycle (default: every 10 minutes):**
 1. Resolve home coordinates from config (`HomeLatitude`, `HomeLongitude`). If absent, look up via `AirportLocator` using `HomeIcao` and cache to `appsettings.local.json`.
-2. Fetch all METARs within the configured fetch region via the AWC API.  The region is either explicit bounds (`RegionSouth/North/West/East`) or derived from `HomeLatitude/HomeLongitude ± BoundingBoxDegrees`.
-3. Fetch the home ICAO station explicitly (in case it falls outside the region).
-4. Fetch all TAFs within the same region.
-5. Insert new records; skip duplicates (unique index on station + observation time + report type).
-6. Write the current UTC timestamp to `wxparser-heartbeat.txt`.
+2. Resolve the **observation fetch geometry** (WX-140): the configured wide region (`Fetch:ObsRegion*` when set, else `Fetch:Region*` — the CONUS bounds the **WxVis synoptic analysis map's METAR feed requires** — else `Home ± BoundingBoxDegrees`), plus one small box (`± LocalityBoxDegrees`, default 2°) around every locality centroid and locality-less recipient (`ObsFetchPlanner`), containment-deduplicated. The AWC data API **silently truncates** oversized bbox responses at ~550–600 reports (the Watonga/KEND incident), so each seed box is fetched with **adaptive splitting**: any box whose response reaches the cap threshold (`MetarFetcher.AwcCapSuspicionThreshold`) is split into quadrants and refetched recursively (bounded depth) — the region self-tiles to whatever density the cap demands, restoring full-station coverage that the single capped query never had. `Fetch:Region*` is also consumed by the GFS fetch.
+3. Fetch METARs per the split geometry; fetch the home ICAO by ID and every `WxStations.AlwaysFetchDirect` station in **batched** `ids=` calls.
+4. **Station gap fill (WX-140, `StationGapFiller` — shared with WxManager's save flow, WX-141):** AWC omits individual stations from bbox results even when boxes are small (the long-standing reason `AlwaysFetchDirect` exists). Every defined station within the fallback radius (`StationCoverage.MaxFallbackDistanceKm`, shared with `WxInterpreter`) of a locality centroid or locality-less recipient — plus every station named by a locality/recipient `MetarIcao`, regardless of distance — is checked for an observation within `StationCoverage.FreshObservationWindow`; gaps are direct-fetched in batched `ids=` calls **over that same window**. A gap station whose returned observation is old enough that the bbox pass should have carried it (and not a just-published timing race) is **automatically promoted to `AlwaysFetchDirect`**; silent stations back off for several hours between retries instead of refetching every cycle.
+5. Fetch TAFs per the same split geometry, then every TAF station referenced by a locality or recipient in a **batched** `ids=` call (the by-station TAF rescue path, WX-140).
+6. Insert new records; skip duplicates (unique index on station + observation time + report type). Repeated identical METAR parse failures (e.g. a structurally malformed automated feed) WARN once and DEBUG thereafter.
+7. Write the current UTC timestamp to `wxparser-heartbeat.txt`.
 
 **GFS cycle (default: every 60 minutes):**
 1. Check for any incomplete model run registered in `GfsModelRuns`. If one exists, resume it; otherwise compute the most recent GFS cycle (00Z/06Z/12Z/18Z) that should be available on NOMADS.

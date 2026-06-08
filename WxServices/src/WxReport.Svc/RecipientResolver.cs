@@ -187,7 +187,7 @@ public sealed class RecipientResolver
     /// <returns>A read-only set of active ICAO identifiers.</returns>
     private async Task<IReadOnlySet<string>> GetActiveMetarStationsAsync()
     {
-        var cutoff = DateTime.UtcNow.AddHours(-3);
+        var cutoff = DateTime.UtcNow - WxServices.Common.StationCoverage.FreshObservationWindow;
         await using var ctx = new WeatherDataContext(_dbOptions);
         var stations = await ctx.Metars
             .Where(m => m.ObservationUtc >= cutoff)

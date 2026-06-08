@@ -94,6 +94,11 @@ public sealed class FetchWorker : BackgroundService
     /// Makes HTTP calls to the Aviation Weather Center API.
     /// Writes log entries throughout.
     /// </sideeffects>
+    // Config doubles parse invariant-culture (matching FetchRegion.FromConfig)
+    // so "2.0" means 2.0 on any host culture (WX-140 review).
+    private static double? ParseInvariant(string? value)
+        => double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var d) ? d : null;
+
     private async Task FetchCycleAsync(CancellationToken cancellationToken)
     {
         var sw = Stopwatch.StartNew();
@@ -139,34 +144,106 @@ public sealed class FetchWorker : BackgroundService
                 }
             }
 
-            var region = FetchRegion.FromConfig(key => _config[key]);
-            if (region is null)
+            // WX-140: the AWC data API silently truncates an oversized
+            // METAR/TAF bbox at roughly 550-600 reports — stations for any
+            // locality outside the arbitrary surviving subset were never
+            // ingested (the Watonga/KEND incident). Observation fetching keeps
+            // the configured wide region (the WxVis synoptic analysis map is
+            // METAR-driven over the full CONUS extent, so coverage must NOT
+            // shrink to locality neighborhoods) and defeats the cap by
+            // ADAPTIVE SPLITTING: any box whose response reaches the cap
+            // threshold is split into quadrants and refetched, recursively, so
+            // the region self-tiles to whatever density AWC's cap demands.
+            // Per-locality boxes are appended for when the configured region
+            // is small; the gap fill + AlwaysFetchDirect handle per-station
+            // omissions. Fetch:ObsRegion* overrides Fetch:Region* (which the
+            // GFS fetch also reads) when the two need to diverge.
+            double pointBoxDegrees = ParseInvariant(_config["Fetch:LocalityBoxDegrees"]) ?? 2.0;
+            double homeBoxDegrees = ParseInvariant(_config["Fetch:BoundingBoxDegrees"]) ?? 9.0;
+
+            var obsRegion = FetchRegion.Resolve(
+                regionSouth: ParseInvariant(_config["Fetch:ObsRegionSouth"]) ?? ParseInvariant(_config["Fetch:RegionSouth"]),
+                regionNorth: ParseInvariant(_config["Fetch:ObsRegionNorth"]) ?? ParseInvariant(_config["Fetch:RegionNorth"]),
+                regionWest: ParseInvariant(_config["Fetch:ObsRegionWest"]) ?? ParseInvariant(_config["Fetch:RegionWest"]),
+                regionEast: ParseInvariant(_config["Fetch:ObsRegionEast"]) ?? ParseInvariant(_config["Fetch:RegionEast"]),
+                homeLat: homeLat, homeLon: homeLon,
+                boxDegrees: homeBoxDegrees);
+
+            var targets = await ObsFetchTargets.LoadAsync(_dbOptions, cancellationToken);
+
+            List<string> directIcaos;
+            await using (var db = new WeatherDataContext(_dbOptions))
             {
-                Logger.Error("No fetch region could be resolved from configuration. Skipping fetch cycle.");
+                // Stations flagged as unreliable in bbox results (METAR direct fetch).
+                directIcaos = await db.WxStations
+                    .Where(s => s.AlwaysFetchDirect == true && s.IcaoId != homeIcao)
+                    .Select(s => s.IcaoId)
+                    .ToListAsync(cancellationToken);
+            }
+
+            var seedBoxes = new List<FetchRegion>();
+            if (obsRegion is not null) seedBoxes.Add(obsRegion);
+            foreach (var box in ObsFetchPlanner.Plan(homeLat, homeLon, homeBoxDegrees, targets.Points, pointBoxDegrees))
+                if (!seedBoxes.Any(existing => existing.Contains(box)))
+                    seedBoxes.Add(box);
+
+            if (seedBoxes.Count == 0)
+            {
+                Logger.Error("No observation fetch geometry could be resolved (no region config, home coordinates, localities, or located recipients). Skipping fetch cycle.");
                 return;
             }
 
-            Logger.Info($"Starting fetch cycle for {homeIcao ?? "unknown"} (region {region.South:F1}–{region.North:F1}°N, {region.West:F1}–{region.East:F1}°E).");
+            Logger.Info($"Starting fetch cycle for {homeIcao ?? "unknown"}: {seedBoxes.Count} seed box(es), "
+                + $"{directIcaos.Count} direct METAR station(s), {targets.TafIcaos.Count} direct TAF station(s).");
 
-            await MetarFetcher.FetchAndInsertAsync(region, _dbOptions, _http);
+            // Adaptive split: a cap-sized response means silent truncation —
+            // split into quadrants and refetch until every tile is under the
+            // cap (bounded depth; a depth-4 split of CONUS is a 256-tile
+            // worst case that real station density never approaches).
+            static async Task FetchSplitAsync(FetchRegion box, Func<FetchRegion, Task<int>> fetch, int depth)
+            {
+                int count = await fetch(box);
+                if (count < MetarFetcher.AwcCapSuspicionThreshold || depth >= 4)
+                    return;
+                Logger.Info($"Adaptive split: box {box.ToAwcBbox()} returned {count} report(s) (>= cap threshold) — splitting into quadrants.");
+                double midLat = (box.South + box.North) / 2;
+                double midLon = (box.West + box.East) / 2;
+                foreach (var quadrant in new[]
+                {
+                    new FetchRegion(box.South, midLat, box.West, midLon),
+                    new FetchRegion(box.South, midLat, midLon, box.East),
+                    new FetchRegion(midLat, box.North, box.West, midLon),
+                    new FetchRegion(midLat, box.North, midLon, box.East),
+                })
+                    await FetchSplitAsync(quadrant, fetch, depth + 1);
+            }
+
+            foreach (var box in seedBoxes)
+                await FetchSplitAsync(box, b => MetarFetcher.FetchAndInsertAsync(b, _dbOptions, _http), 0);
 
             // Fetch the home station explicitly in case it is omitted from the bounding box results.
             if (!string.IsNullOrWhiteSpace(homeIcao))
                 await MetarFetcher.FetchAndInsertByStationAsync(homeIcao, _dbOptions, _http);
 
-            // Fetch any additional stations flagged as unreliable in bbox results.
-            await using (var db = new WeatherDataContext(_dbOptions))
-            {
-                var directIcaos = await db.WxStations
-                    .Where(s => s.AlwaysFetchDirect == true && s.IcaoId != homeIcao)
-                    .Select(s => s.IcaoId)
-                    .ToListAsync();
+            // Direct list, batched (ids= takes comma lists); auto-promotion
+            // grows this list, so per-station calls would grow without bound.
+            await MetarFetcher.FetchAndInsertByStationsAsync(directIcaos, _dbOptions, _http);
 
-                foreach (var icao in directIcaos)
-                    await MetarFetcher.FetchAndInsertByStationAsync(icao, _dbOptions, _http);
-            }
+            // WX-140 gap fill: AWC omits individual stations from bbox results
+            // even when the box is small (the long-standing reason
+            // AlwaysFetchDirect exists). Every defined station near a locality
+            // centroid or locality-less recipient — plus every explicitly
+            // named station — is freshness-checked; gaps get a batched direct
+            // fetch and evidence-confirmed bbox-unreliable stations are
+            // promoted to AlwaysFetchDirect automatically.
+            await StationGapFiller.FillAsync(targets.Points, targets.MetarIcaos, homeIcao, _dbOptions, _http, cancellationToken);
 
-            await TafFetcher.FetchAndInsertAsync(region, _dbOptions, _http);
+            foreach (var box in seedBoxes)
+                await FetchSplitAsync(box, b => TafFetcher.FetchAndInsertAsync(b, _dbOptions, _http), 0);
+
+            // TAF stations named by localities/recipients — the by-station
+            // rescue path TAFs never had — batched.
+            await TafFetcher.FetchAndInsertByStationsAsync(targets.TafIcaos, _dbOptions, _http);
 
             Logger.Info("Fetch cycle complete.");
             WriteHeartbeat(_config["Fetch:HeartbeatFile"]

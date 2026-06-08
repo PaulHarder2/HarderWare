@@ -34,6 +34,16 @@ public sealed record FetchRegion(double South, double North, double West, double
         => lat >= South && lat <= North && lon >= West && lon <= East;
 
     /// <summary>
+    /// Returns <see langword="true"/> when <paramref name="other"/> lies entirely
+    /// within this region.  Used by the WX-140 observation fetch plan to drop
+    /// per-locality boxes already covered by a larger box, so overlapping
+    /// geometry never costs a redundant API call.
+    /// </summary>
+    public bool Contains(FetchRegion other)
+        => other.South >= South && other.North <= North
+        && other.West >= West && other.East <= East;
+
+    /// <summary>
     /// Resolves the fetch region from configuration values.
     /// <para>
     /// If explicit region bounds (<c>RegionSouth</c>, <c>RegionNorth</c>,
