@@ -303,6 +303,15 @@ public sealed class ClaudeClient
 
             var toolUse = toolUseBlocks[0];
 
+            // A tool_use block without an id is malformed (the API always assigns one);
+            // treat it as such rather than substituting an empty id, which would later
+            // produce a tool_use/tool_result pair the retry can't match (WX-148 feedback).
+            if (string.IsNullOrEmpty(toolUse.Id))
+            {
+                Logger.Error($"Claude response tool_use '{toolName}' is missing its id.");
+                return null;
+            }
+
             var usage = parsed?.Usage;
             var tokens = new TokenUsage(
                 InputTokens: usage?.InputTokens ?? 0,
@@ -310,7 +319,7 @@ public sealed class ClaudeClient
                 CacheReadInputTokens: usage?.CacheReadInputTokens ?? 0,
                 CacheCreationInputTokens: usage?.CacheCreationInputTokens ?? 0);
 
-            return new ClaudeReconciliationResult(toolName, toolUse.Id ?? "", toolUse.Input, tokens, parsed?.StopReason);
+            return new ClaudeReconciliationResult(toolName, toolUse.Id, toolUse.Input, tokens, parsed?.StopReason);
         }
     }
 

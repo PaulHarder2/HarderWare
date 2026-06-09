@@ -38,6 +38,7 @@ public sealed class ReportWorker : BackgroundService
     private readonly Counter<long> _reportCycles;
     private readonly Counter<long> _reportsSent;
     private readonly Counter<long> _sendFailures;
+    private readonly Counter<long> _statePersistFailures;
     private readonly Counter<long> _claudeCalls;
     private readonly Counter<long> _claudeInputTokens;
     private readonly Counter<long> _claudeOutputTokens;
@@ -80,6 +81,7 @@ public sealed class ReportWorker : BackgroundService
         _reportCycles = _meter.CreateCounter<long>("wxreport.cycles.total", description: "Number of completed report cycles.");
         _reportsSent = _meter.CreateCounter<long>("wxreport.sends.total", description: "Number of reports successfully sent.");
         _sendFailures = _meter.CreateCounter<long>("wxreport.send.failures.total", description: "Number of failed email sends.");
+        _statePersistFailures = _meter.CreateCounter<long>("wxreport.send.state_persist_failures.total", description: "Post-send DB writes (the SentAtUtc stamp or the locality-baseline advance) that failed AFTER an email was already delivered — the send can't be un-sent, but the fact wasn't fully recorded, so the baseline may not advance and next cycle could resend. A first-class signal to alarm on, not a silent log line.");
         _claudeCalls = _meter.CreateCounter<long>("wxreport.claude.calls.total", description: "Number of Claude API calls.");
         _claudeInputTokens = _meter.CreateCounter<long>("wxreport.claude.tokens.input.total", description: "Total billed input tokens (cached + uncached) across reconciliation calls.");
         _claudeOutputTokens = _meter.CreateCounter<long>("wxreport.claude.tokens.output.total", description: "Total output tokens generated across reconciliation calls.");
@@ -363,6 +365,7 @@ public sealed class ReportWorker : BackgroundService
                 try { await ctx.SaveChangesAsync(ct); }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
+                    _statePersistFailures.Add(1);
                     Logger.Error($"{member.RecipientId} {member.Email} ({member.Name}): failed to persist CommittedSend.SentAtUtc Id={committedSend.Id} after a successful startup send.", ex);
                 }
                 Logger.Info($"{member.RecipientId} {member.Email} ({member.Name}): startup (diagnostic) report sent ({label}).");
@@ -888,7 +891,7 @@ public sealed class ReportWorker : BackgroundService
     /// <c>LastClaudeInputHash</c>. Shared so the normal and degraded paths cannot drift
     /// — the baseline-bleed class of bug DESIGN.md §10 documents.
     /// </summary>
-    private static async Task AdvanceBaselineAfterSendAsync(
+    private async Task AdvanceBaselineAfterSendAsync(
         WeatherDataContext ctx, LocalityState state, string reason, DateTime now, string inputHash,
         WeatherSnapshot snapshot, string label, CancellationToken ct)
     {
@@ -904,7 +907,8 @@ public sealed class ReportWorker : BackgroundService
         try { await ctx.SaveChangesAsync(ct); }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            Logger.Error($"{label}: failed to save locality state after sends.", ex);
+            _statePersistFailures.Add(1);
+            Logger.Error($"{label}: failed to save locality state after sends — baseline did not advance; next cycle may resend.", ex);
         }
     }
 
@@ -972,6 +976,7 @@ public sealed class ReportWorker : BackgroundService
         try { await ctx.SaveChangesAsync(ct); }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            _statePersistFailures.Add(1);
             Logger.Error($"{member.RecipientId} {member.Email} ({member.Name}): failed to persist CommittedSend.SentAtUtc Id={committedSend.Id} after a successful send.", ex);
         }
         Logger.Info($"{member.RecipientId} {member.Email} ({member.Name}): report sent ({label}).");
@@ -1049,6 +1054,7 @@ public sealed class ReportWorker : BackgroundService
         try { await ctx.SaveChangesAsync(ct); }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            _statePersistFailures.Add(1);
             Logger.Error($"{member.RecipientId} {member.Email} ({member.Name}): failed to persist CommittedSend.SentAtUtc Id={committedSend.Id} after a successful welcome send.", ex);
         }
         Logger.Info($"{member.RecipientId} {member.Email} ({member.Name}): welcome sent (locality '{locality.Name}').");
