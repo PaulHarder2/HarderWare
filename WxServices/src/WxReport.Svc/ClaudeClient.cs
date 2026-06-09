@@ -31,6 +31,7 @@ public sealed record TokenUsage(
 /// which enforces both shape and the precipPhenomenon-iff-non-none invariant.
 /// </summary>
 /// <param name="ToolName">Name of the tool Claude invoked — <c>"submit_reconciled_report"</c> to send, or <c>"skip_send"</c> for the WX-80 "not news" outcome.</param>
+/// <param name="ToolUseId">The tool_use block's <c>id</c>.  Lets the caller (WX-148) replay a rejected attempt as a <c>tool_result</c> on the next call, so a validation retry carries the specific failure back to Claude instead of blindly resampling.</param>
 /// <param name="ToolUseInput">JsonElement representing the tool_use block's <c>input</c> object.</param>
 /// <param name="Tokens">Token-usage metadata extracted from the response's <c>usage</c> block.</param>
 /// <param name="StopReason">
@@ -43,9 +44,29 @@ public sealed record TokenUsage(
 /// </param>
 public sealed record ClaudeReconciliationResult(
     string ToolName,
+    string ToolUseId,
     JsonElement ToolUseInput,
     TokenUsage Tokens,
     string? StopReason);
+
+/// <summary>
+/// A rejected reconciliation attempt, replayed on the next call as the
+/// assistant's <c>tool_use</c> followed by a user <c>tool_result</c> carrying the
+/// validation error (WX-148).  Accumulated by <see cref="ForecastReconciler"/>
+/// across attempts so each retry is a <em>continuation</em> that sees why the
+/// prior attempts failed — not a blind resample.  The stable
+/// system-prompt + first-user-message prefix still cache-hits; only these
+/// appended turns are uncached, and only on a cycle that actually failed.
+/// </summary>
+/// <param name="ToolUseId">The rejected attempt's tool_use id; ties the replayed tool_use to its tool_result.</param>
+/// <param name="ToolName">The tool the rejected attempt called.</param>
+/// <param name="ToolUseInput">The rejected attempt's raw input, replayed verbatim so Claude sees exactly what it submitted.</param>
+/// <param name="ErrorText">The validation failure, phrased as a correction instruction Claude should act on.</param>
+public sealed record ReconciliationCorrection(
+    string ToolUseId,
+    string ToolName,
+    JsonElement ToolUseInput,
+    string ErrorText);
 
 /// <summary>
 /// Thin wrapper around the Anthropic Messages API.  Exposes the single
@@ -148,6 +169,7 @@ public sealed class ClaudeClient
         string userMessageText,
         bool allowSkip,
         IReadOnlyList<string> narrativeLanguages,
+        IReadOnlyList<ReconciliationCorrection>? corrections = null,
         CancellationToken ct = default)
     {
         // Arrival-triggered cycles offer Claude the invalidation gate (submit OR
@@ -177,10 +199,7 @@ public sealed class ClaudeClient
             },
             tools,
             tool_choice = toolChoice,
-            messages = new[]
-            {
-                new { role = "user", content = userMessageText },
-            },
+            messages = BuildMessages(userMessageText, corrections),
         };
 
         const int maxAttempts = 3;
@@ -284,6 +303,15 @@ public sealed class ClaudeClient
 
             var toolUse = toolUseBlocks[0];
 
+            // A tool_use block without an id is malformed (the API always assigns one);
+            // treat it as such rather than substituting an empty id, which would later
+            // produce a tool_use/tool_result pair the retry can't match (WX-148 feedback).
+            if (string.IsNullOrEmpty(toolUse.Id))
+            {
+                Logger.Error($"Claude response tool_use '{toolName}' is missing its id.");
+                return null;
+            }
+
             var usage = parsed?.Usage;
             var tokens = new TokenUsage(
                 InputTokens: usage?.InputTokens ?? 0,
@@ -291,8 +319,36 @@ public sealed class ClaudeClient
                 CacheReadInputTokens: usage?.CacheReadInputTokens ?? 0,
                 CacheCreationInputTokens: usage?.CacheCreationInputTokens ?? 0);
 
-            return new ClaudeReconciliationResult(toolName, toolUse.Input, tokens, parsed?.StopReason);
+            return new ClaudeReconciliationResult(toolName, toolUse.Id, toolUse.Input, tokens, parsed?.StopReason);
         }
+    }
+
+    /// <summary>
+    /// Builds the messages array: the stable first user turn (which, with the
+    /// system blocks, forms the cached prefix), followed by any rejected attempts
+    /// replayed as assistant <c>tool_use</c> + user <c>tool_result</c> pairs so a
+    /// validation retry carries its feedback to Claude (WX-148).
+    /// </summary>
+    private static object[] BuildMessages(string userMessageText, IReadOnlyList<ReconciliationCorrection>? corrections)
+    {
+        var messages = new List<object> { new { role = "user", content = userMessageText } };
+        if (corrections is not null)
+        {
+            foreach (var c in corrections)
+            {
+                messages.Add(new
+                {
+                    role = "assistant",
+                    content = new object[] { new { type = "tool_use", id = c.ToolUseId, name = c.ToolName, input = c.ToolUseInput } },
+                });
+                messages.Add(new
+                {
+                    role = "user",
+                    content = new object[] { new { type = "tool_result", tool_use_id = c.ToolUseId, content = c.ErrorText, is_error = true } },
+                });
+            }
+        }
+        return [.. messages];
     }
 
     // ── response DTOs ─────────────────────────────────────────────────────────
@@ -314,6 +370,9 @@ public sealed class ClaudeClient
     {
         [JsonPropertyName("type")] public string? Type { get; set; }
         [JsonPropertyName("text")] public string? Text { get; set; }
+
+        /// <summary>Tool-use block id when <see cref="Type"/> is <c>"tool_use"</c>; <see langword="null"/> for text blocks.</summary>
+        [JsonPropertyName("id")] public string? Id { get; set; }
 
         /// <summary>Tool name when <see cref="Type"/> is <c>"tool_use"</c>; <see langword="null"/> for text blocks.</summary>
         [JsonPropertyName("name")] public string? Name { get; set; }

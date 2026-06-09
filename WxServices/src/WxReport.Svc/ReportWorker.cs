@@ -38,6 +38,7 @@ public sealed class ReportWorker : BackgroundService
     private readonly Counter<long> _reportCycles;
     private readonly Counter<long> _reportsSent;
     private readonly Counter<long> _sendFailures;
+    private readonly Counter<long> _statePersistFailures;
     private readonly Counter<long> _claudeCalls;
     private readonly Counter<long> _claudeInputTokens;
     private readonly Counter<long> _claudeOutputTokens;
@@ -53,6 +54,12 @@ public sealed class ReportWorker : BackgroundService
     private readonly Counter<long> _significanceGateSkips;
     private readonly Histogram<double> _cycleDuration;
     private readonly Histogram<double> _claudeDuration;
+
+    // WX-148: how near a severe block must fall for a DEGRADED (narrative-less) cycle
+    // to still send a hazard report. Deliberately its own constant, distinct from
+    // SignificanceGate's tier horizons — this is "is there a hazard worth interrupting
+    // for, right now", not a significance-tier edge.
+    private static readonly TimeSpan DegradeHazardHorizon = TimeSpan.FromHours(36);
 
     /// <summary>Initializes a new instance of <see cref="ReportWorker"/> with the given dependencies.</summary>
     /// <param name="config">Application configuration used to load the <c>Report</c> config section each cycle.</param>
@@ -74,6 +81,7 @@ public sealed class ReportWorker : BackgroundService
         _reportCycles = _meter.CreateCounter<long>("wxreport.cycles.total", description: "Number of completed report cycles.");
         _reportsSent = _meter.CreateCounter<long>("wxreport.sends.total", description: "Number of reports successfully sent.");
         _sendFailures = _meter.CreateCounter<long>("wxreport.send.failures.total", description: "Number of failed email sends.");
+        _statePersistFailures = _meter.CreateCounter<long>("wxreport.send.state_persist_failures.total", description: "Post-send DB writes (the SentAtUtc stamp or the locality-baseline advance) that failed AFTER an email was already delivered — the send can't be un-sent, but the fact wasn't fully recorded, so the baseline may not advance and next cycle could resend. A first-class signal to alarm on, not a silent log line.");
         _claudeCalls = _meter.CreateCounter<long>("wxreport.claude.calls.total", description: "Number of Claude API calls.");
         _claudeInputTokens = _meter.CreateCounter<long>("wxreport.claude.tokens.input.total", description: "Total billed input tokens (cached + uncached) across reconciliation calls.");
         _claudeOutputTokens = _meter.CreateCounter<long>("wxreport.claude.tokens.output.total", description: "Total output tokens generated across reconciliation calls.");
@@ -273,11 +281,19 @@ public sealed class ReportWorker : BackgroundService
             ct: ct);
 
         // allowSkip:false, so ReconcileAsync never returns NotNews — a stray
-        // skip_send is converted to Failure at the reconciler and handled here.
+        // skip_send is converted to Failure at the reconciler and handled here. A
+        // WX-148 Degraded (clean snapshot, unusable narrative) is treated like a
+        // failure for the startup *diagnostic* send: a deploy verification doesn't
+        // degrade-and-send a hazard report (it never advances the baseline anyway).
         if (reconcileResult is not ReconcileResult.Success success)
         {
             _claudeMalformedOutput.Add(1);
-            var reason = ((ReconcileResult.Failure)reconcileResult).Reason;
+            var reason = reconcileResult switch
+            {
+                ReconcileResult.Failure f => f.Reason,
+                ReconcileResult.Degraded d => $"degraded ({d.Reason})",
+                _ => reconcileResult.GetType().Name,
+            };
             Logger.Error($"{label}: reconciliation failed for startup send: {reason}. Provisional ForecastSnapshot Id={anchorSnapshot.Id} left as audit.");
             return;
         }
@@ -349,6 +365,7 @@ public sealed class ReportWorker : BackgroundService
                 try { await ctx.SaveChangesAsync(ct); }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
+                    _statePersistFailures.Add(1);
                     Logger.Error($"{member.RecipientId} {member.Email} ({member.Name}): failed to persist CommittedSend.SentAtUtc Id={committedSend.Id} after a successful startup send.", ex);
                 }
                 Logger.Info($"{member.RecipientId} {member.Email} ({member.Name}): startup (diagnostic) report sent ({label}).");
@@ -714,6 +731,67 @@ public sealed class ReportWorker : BackgroundService
             return 0;
         }
 
+        // WX-148 tier-aware degrade: Claude could not produce a self-consistent
+        // narrative, but the snapshot parsed cleanly. Never withhold a hazard over a
+        // prose fault — if a severe block falls in the near horizon, send a
+        // narrative-less hazard report (deterministic banner + conditions + grid, no
+        // summary) built from the parsed snapshot. Otherwise the missing summary isn't
+        // worth an interruption: log it and self-heal next cycle.
+        if (reconcileResult is ReconcileResult.Degraded degraded)
+        {
+            AddClaudeTokens(degraded.Tokens);
+            LogClaudeTokens(label, degraded.Tokens, $"{triggerType}/degraded");
+            bool hazardSoon = degraded.FinalSnapshot.Blocks.Any(b =>
+                b.SevereFlag && b.StartUtc.AddHours(6) > now && b.StartUtc <= now.Add(DegradeHazardHorizon));
+            if (!hazardSoon)
+            {
+                _claudeMalformedOutput.Add(1);
+                await PersistUnsentCycleAsync(ctx, label, state, inputHash, ct);
+                Logger.Warn($"{label}: reconciliation degraded ({degraded.Reason}); no near-term severe block, summary omitted and no send — self-heal next cycle.");
+                return 0;
+            }
+
+            Logger.Warn($"{label}: reconciliation degraded ({degraded.Reason}); sending a narrative-less hazard report (summary omitted) to served members.");
+            var degradedSnapshot = new ForecastSnapshot
+            {
+                StationIcao = snapshot.StationIcao,
+                GeneratedAtUtc = DateTime.UtcNow,
+                SchemaVersion = ForecastSnapshotBody.SchemaVersionCurrent,
+                Body = degraded.FinalSnapshot.Serialize(),
+            };
+            ctx.ForecastSnapshots.Add(degradedSnapshot);
+            await ctx.SaveChangesAsync(ct);
+
+            var degradedPlotsDir = new WxPaths(_config["InstallRoot"]).PlotsDir;
+            var degradedSent = 0;
+            foreach (var member in members)
+            {
+                if (!servedIds.Contains(member.RecipientId))
+                    continue;  // brand-new members are onboarded on a normal cycle, not via a degraded alert
+                try
+                {
+                    var memberLang = member.Language ?? cfg.DefaultLanguage;
+                    var innerBody = StructuredReportRenderer.RenderDegraded(degraded.FinalSnapshot, snapshot, member, tz, now);
+                    if (await DeliverWeatherReportAsync(
+                            ctx, emailer, member, memberLang, degradedSnapshot, innerBody,
+                            structuredReportJson: null, reasoningTrace: $"DEGRADED: {degraded.Reason}",
+                            snapshot, locality, tz, preferredIcaos, degradedPlotsDir, ChangeSeverity.Alert, label, ct))
+                        degradedSent++;
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    Logger.Error($"{member.RecipientId} {member.Email} ({member.Name}): failed to render or send degraded report for {label}.", ex);
+                }
+            }
+
+            // A degraded hazard report is still a delivered weather report: advance the
+            // baseline exactly as a normal send (shared helper), so the block-valid
+            // snapshot becomes the next cycle's prior and the slot is marked served.
+            if (degradedSent > 0)
+                await AdvanceBaselineAfterSendAsync(ctx, state, reason, now, inputHash, snapshot, label, ct);
+            return degradedSent;
+        }
+
         if (reconcileResult is not ReconcileResult.Success success)
         {
             _claudeMalformedOutput.Add(1);
@@ -783,49 +861,11 @@ public sealed class ReportWorker : BackgroundService
                 var memberLang = member.Language ?? cfg.DefaultLanguage;
                 var innerBody = StructuredReportRenderer.Render(
                     success.StructuredReport, success.FinalSnapshot, snapshot, member, tz, isUnscheduled);
-                var report = WrapAsEmailHtml(innerBody, memberLang, snapshot, tz);
-
-                var committedSend = new CommittedSend
-                {
-                    ForecastSnapshot = reconciledSnapshot,
-                    RecipientId = member.RecipientId,
-                    ReasoningTrace = success.ReasoningTrace,
-                    StructuredReport = structuredReportJson,
-                    EmailBody = report,   // pre-meteogram, by the CommittedSend.EmailBody convention
-                    CreatedAtUtc = DateTime.UtcNow,
-                };
-                ctx.CommittedSends.Add(committedSend);
-                await ctx.SaveChangesAsync(ct);
-
-                var subject = BuildSubject(snapshot, memberLang, tz, severity, recipientName: member.Name);
-                var plainFallback = SnapshotDescriber.Describe(snapshot, tz, ToUnitPreferences(member));
-
-                var meteogramPath = FindMeteogramAbbrevPath(
-                    preferredIcaos.Count > 0 ? preferredIcaos[0] : "", member.TempUnit, locality.Timezone, plotsDir);
-                var htmlToSend = meteogramPath is not null
-                    ? InsertMeteogramImage(report)
-                    : report.Replace("<!--meteogram-->", "", StringComparison.Ordinal);
-                IReadOnlyDictionary<string, string>? inlineImages = meteogramPath is not null
-                    ? new Dictionary<string, string> { ["meteogramAbbrev"] = meteogramPath }
-                    : null;
-
-                var sent = await emailer.SendAsync(
-                    member.Email, subject, plainFallback,
-                    htmlBody: htmlToSend, inlineImages: inlineImages,
-                    toName: member.Name, ct: ct);
-
-                if (!sent) { _sendFailures.Add(1); continue; }
-
-                _reportsSent.Add(1);
-                weatherSent++;
-
-                committedSend.SentAtUtc = DateTime.UtcNow;
-                try { await ctx.SaveChangesAsync(ct); }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                {
-                    Logger.Error($"{member.RecipientId} {member.Email} ({member.Name}): failed to persist CommittedSend.SentAtUtc Id={committedSend.Id} after a successful send.", ex);
-                }
-                Logger.Info($"{member.RecipientId} {member.Email} ({member.Name}): report sent ({label}).");
+                if (await DeliverWeatherReportAsync(
+                        ctx, emailer, member, memberLang, reconciledSnapshot, innerBody,
+                        structuredReportJson, success.ReasoningTrace, snapshot, locality, tz,
+                        preferredIcaos, plotsDir, severity, label, ct))
+                    weatherSent++;
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -833,31 +873,43 @@ public sealed class ReportWorker : BackgroundService
             }
         }
 
-        // Advance the locality baseline + cadence only when a WEATHER report was
-        // actually delivered — welcomes (first-contact, no weather) must NOT move the
-        // baseline or the scheduled-slot cadence, else a welcome sent at/after the
-        // scheduled hour would mark the slot served and suppress the recipient's first
-        // real scheduled report. LastSentInputHash advances only here (a real weather
-        // delivery); not-news / suppression advance only LastClaudeInputHash.
+        // Advance the baseline only when a WEATHER report was actually delivered —
+        // welcomes (first-contact, no weather) must NOT move it (see helper).
         if (weatherSent > 0)
-        {
-            if (reason is "scheduled" or "first")
-                state.LastScheduledSentUtc = now;
-            else
-                state.LastUnscheduledSentUtc = now;
-            state.LastClaudeInputHash = inputHash;
-            state.LastSentInputHash = inputHash;
-            if (snapshot.ObservationAvailable)
-                state.LastMetarIcao = snapshot.StationIcao;
-
-            try { await ctx.SaveChangesAsync(ct); }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                Logger.Error($"{label}: failed to save locality state after sends.", ex);
-            }
-        }
+            await AdvanceBaselineAfterSendAsync(ctx, state, reason, now, inputHash, snapshot, label, ct);
 
         return weatherSent + welcomeSent;
+    }
+
+    /// <summary>
+    /// Advances the locality's baseline + cadence after a delivered WEATHER report
+    /// (the normal path or the WX-148 degraded hazard report). Welcomes never call
+    /// this: a first-contact email must not move the baseline or mark a scheduled slot
+    /// served, else a welcome sent at/after the scheduled hour would suppress the
+    /// recipient's first real scheduled report. <c>LastSentInputHash</c> advances only
+    /// on a real weather delivery; not-news / suppression advance only
+    /// <c>LastClaudeInputHash</c>. Shared so the normal and degraded paths cannot drift
+    /// — the baseline-bleed class of bug DESIGN.md §10 documents.
+    /// </summary>
+    private async Task AdvanceBaselineAfterSendAsync(
+        WeatherDataContext ctx, LocalityState state, string reason, DateTime now, string inputHash,
+        WeatherSnapshot snapshot, string label, CancellationToken ct)
+    {
+        if (reason is "scheduled" or "first")
+            state.LastScheduledSentUtc = now;
+        else
+            state.LastUnscheduledSentUtc = now;
+        state.LastClaudeInputHash = inputHash;
+        state.LastSentInputHash = inputHash;
+        if (snapshot.ObservationAvailable)
+            state.LastMetarIcao = snapshot.StationIcao;
+
+        try { await ctx.SaveChangesAsync(ct); }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _statePersistFailures.Add(1);
+            Logger.Error($"{label}: failed to save locality state after sends — baseline did not advance; next cycle may resend.", ex);
+        }
     }
 
     /// <summary>
@@ -869,6 +921,68 @@ public sealed class ReportWorker : BackgroundService
     /// are deferred to the locality's next reconciling cycle (which welcomes them in
     /// the inner loop).  Returns the number of welcomes delivered.
     /// </summary>
+    /// <summary>
+    /// Delivers one rendered report to one served member: wraps the inner body,
+    /// writes the <see cref="CommittedSend"/> audit row, inserts the meteogram,
+    /// sends via SMTP, and stamps <see cref="CommittedSend.SentAtUtc"/> on success.
+    /// Shared by the normal (WX-130) and the degraded (WX-148) send paths — the
+    /// callers differ only in how <paramref name="innerBody"/> is rendered and
+    /// whether <paramref name="structuredReportJson"/> is present (null on a
+    /// degraded, narrative-less send). Returns true iff the email was accepted.
+    /// </summary>
+    private async Task<bool> DeliverWeatherReportAsync(
+        WeatherDataContext ctx, SmtpSender emailer, Recipient member, string memberLang,
+        ForecastSnapshot reconciledSnapshot, string innerBody,
+        string? structuredReportJson, string? reasoningTrace,
+        WeatherSnapshot snapshot, Locality locality, TimeZoneInfo tz,
+        IReadOnlyList<string> preferredIcaos, string plotsDir, ChangeSeverity severity, string label,
+        CancellationToken ct)
+    {
+        var report = WrapAsEmailHtml(innerBody, memberLang, snapshot, tz);
+
+        var committedSend = new CommittedSend
+        {
+            ForecastSnapshot = reconciledSnapshot,
+            RecipientId = member.RecipientId,
+            ReasoningTrace = reasoningTrace,
+            StructuredReport = structuredReportJson,
+            EmailBody = report,   // pre-meteogram, by the CommittedSend.EmailBody convention
+            CreatedAtUtc = DateTime.UtcNow,
+        };
+        ctx.CommittedSends.Add(committedSend);
+        await ctx.SaveChangesAsync(ct);
+
+        var subject = BuildSubject(snapshot, memberLang, tz, severity, recipientName: member.Name);
+        var plainFallback = SnapshotDescriber.Describe(snapshot, tz, ToUnitPreferences(member));
+
+        var meteogramPath = FindMeteogramAbbrevPath(
+            preferredIcaos.Count > 0 ? preferredIcaos[0] : "", member.TempUnit, locality.Timezone, plotsDir);
+        var htmlToSend = meteogramPath is not null
+            ? InsertMeteogramImage(report)
+            : report.Replace("<!--meteogram-->", "", StringComparison.Ordinal);
+        IReadOnlyDictionary<string, string>? inlineImages = meteogramPath is not null
+            ? new Dictionary<string, string> { ["meteogramAbbrev"] = meteogramPath }
+            : null;
+
+        var sent = await emailer.SendAsync(
+            member.Email, subject, plainFallback,
+            htmlBody: htmlToSend, inlineImages: inlineImages,
+            toName: member.Name, ct: ct);
+
+        if (!sent) { _sendFailures.Add(1); return false; }
+
+        _reportsSent.Add(1);
+        committedSend.SentAtUtc = DateTime.UtcNow;
+        try { await ctx.SaveChangesAsync(ct); }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _statePersistFailures.Add(1);
+            Logger.Error($"{member.RecipientId} {member.Email} ({member.Name}): failed to persist CommittedSend.SentAtUtc Id={committedSend.Id} after a successful send.", ex);
+        }
+        Logger.Info($"{member.RecipientId} {member.Email} ({member.Name}): report sent ({label}).");
+        return true;
+    }
+
     private async Task<int> WelcomeNewMembersAsync(
         WeatherDataContext ctx, SmtpSender emailer, Locality locality, List<Recipient> newMembers,
         List<string> memberIds, TimeZoneInfo tz, IReadOnlyList<int> scheduledHours, ReportConfig cfg, CancellationToken ct)
@@ -940,6 +1054,7 @@ public sealed class ReportWorker : BackgroundService
         try { await ctx.SaveChangesAsync(ct); }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            _statePersistFailures.Add(1);
             Logger.Error($"{member.RecipientId} {member.Email} ({member.Name}): failed to persist CommittedSend.SentAtUtc Id={committedSend.Id} after a successful welcome send.", ex);
         }
         Logger.Info($"{member.RecipientId} {member.Email} ({member.Name}): welcome sent (locality '{locality.Name}').");

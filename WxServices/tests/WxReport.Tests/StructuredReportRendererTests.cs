@@ -84,6 +84,38 @@ public class StructuredReportRendererTests
         ],
     };
 
+    // A severe afternoon thunderstorm followed by evening rain, same local day —
+    // exercises the severe-sentence cell and the degraded hazard banner.
+    private static ForecastSnapshotBody SevereForecast() => new()
+    {
+        Blocks =
+        [
+            new() { StartUtc = new(2026, 6, 8, 12, 0, 0, DateTimeKind.Utc), SkyState = SkyState.Overcast, Obscuration = Obscuration.None, TemperatureCelsius = new(26, 33), WindKt = new(8, 20), PrecipExpectation = PrecipExpectation.Likely, PrecipPhenomenon = PrecipPhenomenon.Thunderstorm, SevereFlag = true },
+            new() { StartUtc = new(2026, 6, 8, 18, 0, 0, DateTimeKind.Utc), SkyState = SkyState.Overcast, Obscuration = Obscuration.None, TemperatureCelsius = new(24, 31), WindKt = new(5, 12), PrecipExpectation = PrecipExpectation.Certain, PrecipPhenomenon = PrecipPhenomenon.Rain, SevereFlag = false },
+        ],
+    };
+
+    // A severe block carrying NO precipitation (a damaging-wind event) — forms no
+    // episode, so it exercises the day-level severe path that must still surface it.
+    private static ForecastSnapshotBody SevereNoPrecipForecast() => new()
+    {
+        Blocks =
+        [
+            new() { StartUtc = new(2026, 6, 8, 12, 0, 0, DateTimeKind.Utc), SkyState = SkyState.MostlyCloudy, Obscuration = Obscuration.None, TemperatureCelsius = new(28, 36), WindKt = new(20, 40), PrecipExpectation = PrecipExpectation.None, PrecipPhenomenon = null, SevereFlag = true },
+        ],
+    };
+
+    // One rain episode spanning the 06Z and 12Z blocks (morning into afternoon) —
+    // exercises the range-label timing.
+    private static ForecastSnapshotBody SpanningForecast() => new()
+    {
+        Blocks =
+        [
+            new() { StartUtc = new(2026, 6, 8, 6, 0, 0, DateTimeKind.Utc), SkyState = SkyState.Overcast, Obscuration = Obscuration.None, TemperatureCelsius = new(20, 26), WindKt = new(3, 8), PrecipExpectation = PrecipExpectation.Likely, PrecipPhenomenon = PrecipPhenomenon.Rain, SevereFlag = false },
+            new() { StartUtc = new(2026, 6, 8, 12, 0, 0, DateTimeKind.Utc), SkyState = SkyState.Overcast, Obscuration = Obscuration.None, TemperatureCelsius = new(24, 30), WindKt = new(4, 10), PrecipExpectation = PrecipExpectation.Likely, PrecipPhenomenon = PrecipPhenomenon.Rain, SevereFlag = false },
+        ],
+    };
+
     // Closing prose carries one of every quantity-token kind + a time token; no
     // unit words adjacent (the renderer appends units).
     private const string ClosingTokens =
@@ -147,14 +179,65 @@ public class StructuredReportRendererTests
     }
 
     [Fact]
-    public void Conditions_ComposeFromSkyPrecipSevere()
+    public void Conditions_SplitDayIntoEpisodes_NotCollapsedToPeak()
     {
         var en = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), Utc, isUnscheduled: false);
-        // Day 1: Overcast (max sky), Certain rain at 18Z (evening) → "Overcast, evening rain expected".
-        Assert.Contains("Overcast, evening rain expected", en);
+        // WX-148 Class 2: Day 1 has two episodes — a thunderstorm at 12Z (afternoon)
+        // then rain at 18Z (evening) — and BOTH must surface as labeled lines rather
+        // than collapse to the single highest-expectation one.
+        Assert.Contains("Afternoon — storms likely", en);
+        Assert.Contains("Evening — rain expected", en);
         // Day 2: PartlyCloudy, no precip → just the sky phrase, not the clear-day "and dry".
         Assert.Contains("Partly cloudy", en);
         Assert.DoesNotContain("Partly cloudy and dry", en);
+    }
+
+    [Fact]
+    public void Conditions_SevereDay_TimedSentenceWithSecondaryEpisode()
+    {
+        // A severe day breaks the labeled-line rhythm into a single sentence: the
+        // severe clause leads with its timing, the secondary episode joined by "then".
+        var en = StructuredReportRenderer.Render(Body(), SevereForecast(), Observation(), Imperial(), Utc, isUnscheduled: false);
+        Assert.Contains("Severe storms likely in the afternoon, then rain in the evening", en);
+    }
+
+    [Fact]
+    public void Conditions_SevereWithoutPrecip_StillSurfacesHazard()
+    {
+        // Regression guard: a severe block with no precipitation forms no episode, but
+        // must not collapse to a benign sky phrase — the day-level severe path leads
+        // with a generic hazard line timed by the severe block.
+        var en = StructuredReportRenderer.Render(Body(), SevereNoPrecipForecast(), Observation(), Imperial(), Utc, isUnscheduled: false);
+        // Generic "Severe weather" — not storm-specific — because the severe block carries no precip (a wind event).
+        Assert.Contains("Severe weather likely in the afternoon", en);
+    }
+
+    [Fact]
+    public void Conditions_EpisodeSpanningBuckets_RendersRangeLabel()
+    {
+        // A single rain episode spanning the 06Z and 12Z blocks crosses the
+        // morning/afternoon boundary, so it is timed as a range, not one bucket.
+        var en = StructuredReportRenderer.Render(Body(), SpanningForecast(), Observation(), Imperial(), Utc, isUnscheduled: false);
+        Assert.Contains("Morning–afternoon — rain likely", en);
+    }
+
+    [Fact]
+    public void RenderDegraded_LeadsWithHazardBanner_NoSummaryNoChangeBand()
+    {
+        // WX-148 tier-aware degrade: a narrative-less hazard report — deterministic
+        // banner + conditions + grid, with NO What's-changed band and NO summary
+        // (a summary we cannot deliver is left out, not apologized for).
+        var nowUtc = new DateTime(2026, 6, 8, 12, 0, 0, DateTimeKind.Utc);  // within the 12–18Z severe block
+        var en = StructuredReportRenderer.RenderDegraded(SevereForecast(), Observation(), Imperial(), Utc, nowUtc);
+        // Full deterministic banner (SevereForecast is convective → "Severe storms"); weekday
+        // computed so the assertion can't drift, and "in your forecast" is banner-specific
+        // (the grid cell says "Severe storms likely …", never "in your forecast").
+        var expectedDay = nowUtc.ToString("dddd", System.Globalization.CultureInfo.GetCultureInfo("en-US"));
+        Assert.Contains($"Severe storms in your forecast — {expectedDay} afternoon.", en);
+        Assert.Contains("Current Conditions", en);              // conditions table present
+        Assert.Contains("Forecast for Spring", en);             // forecast grid present
+        Assert.DoesNotContain("What's changed:", en);           // no change band
+        Assert.DoesNotContain("In summary:", en);               // no closing/summary
     }
 
     [Fact]

@@ -57,6 +57,22 @@ public abstract record ReconcileResult
     /// </summary>
     /// <param name="Reason">Short human-readable description of why reconciliation failed.</param>
     public sealed record Failure(string Reason) : ReconcileResult;
+
+    /// <summary>
+    /// Reconciliation exhausted its retries on a contract/consistency violation,
+    /// but Claude's <c>final_snapshot</c> itself parsed cleanly (WX-148): the
+    /// blocks are usable, only the change narrative could not be made
+    /// self-consistent. Distinct from <see cref="Failure"/> (where even the
+    /// snapshot is unusable) so the caller can degrade gracefully — on a
+    /// safety-critical forecast, send a narrative-less hazard report built from
+    /// the parsed snapshot rather than withhold the hazard; otherwise skip and
+    /// self-heal next cycle. Carries no structured report: the suspect narrative
+    /// is deliberately dropped, not repaired.
+    /// </summary>
+    /// <param name="FinalSnapshot">The cleanly-parsed reconciled snapshot from the last attempt.</param>
+    /// <param name="Tokens">Token-usage metadata summed across the attempts.</param>
+    /// <param name="Reason">Short human-readable description of the consistency failure that triggered the degrade.</param>
+    public sealed record Degraded(ForecastSnapshotBody FinalSnapshot, TokenUsage Tokens, string Reason) : ReconcileResult;
 }
 
 /// <summary>
@@ -161,9 +177,17 @@ public sealed class ForecastReconciler
         // cheap).
         const int maxAttempts = 3;
         int accIn = 0, accOut = 0, accCacheRead = 0, accCacheWrite = 0;
+        // WX-148: rejected attempts replayed on the next call as tool_use + tool_result,
+        // so a validation retry tells Claude what was wrong instead of blindly resampling.
+        var corrections = new List<ReconciliationCorrection>();
+        // WX-148: the last attempt whose final_snapshot parsed cleanly. If retries
+        // exhaust on a consistency/contract violation (snapshot good, narrative not),
+        // this lets the caller degrade to a narrative-less hazard report rather than
+        // a bare Failure. Stays null when even the snapshot never parsed.
+        ForecastSnapshotBody? lastParsedSnapshot = null;
         for (int attempt = 1; ; attempt++)
         {
-            var apiResult = await _claude.InvokeReconciliationAsync(systemPrompt, userMessage, allowSkip, narrativeLanguages, ct);
+            var apiResult = await _claude.InvokeReconciliationAsync(systemPrompt, userMessage, allowSkip, narrativeLanguages, corrections, ct);
             if (apiResult is null)
             {
                 return new ReconcileResult.Failure(
@@ -236,6 +260,12 @@ public sealed class ForecastReconciler
                     throw new JsonException(
                         $"final_snapshot.schemaVersion {finalSnapshot.SchemaVersion} is not the current version {ForecastSnapshotBody.SchemaVersionCurrent}.");
 
+                // WX-148: record the snapshot as degrade-usable only AFTER the version
+                // pin — a stale-version body must stay a hard Failure, never degrade
+                // (degrading would persist the very column-says-v4 / body-says-v3
+                // mismatch the pin exists to prevent).
+                lastParsedSnapshot = finalSnapshot;
+
                 var reasoningTrace = RequireString(input, "reasoning_trace");
 
                 // WX-130: the structured report is now the LIVE rendering source —
@@ -248,6 +278,7 @@ public sealed class ForecastReconciler
                 var structuredReportJson = RequireProperty(input, "structured_report").GetRawText();
                 var structuredReport = StructuredReportBody.Deserialize(structuredReportJson);
                 ValidateNarrativeContract(structuredReport, narrativeLanguages);
+                ValidateChangeSnapshotConsistency(structuredReport, finalSnapshot);
 
                 // WX-120 fall-safe, carried forward to the structured-report world:
                 // a present-but-near-blank narrative — e.g. Claude submitted a report
@@ -273,7 +304,13 @@ public sealed class ForecastReconciler
                         MissingToolUseFieldException => $"is {ex.Message}",
                         _ => $"failed validation: {ex.Message}",
                     };
-                    Logger.Warn($"Reconciliation tool_use input {what} (attempt {attempt}/{maxAttempts}); retrying.");
+                    // WX-148: replay this rejected attempt to Claude on the next call with
+                    // the reason, so the retry corrects the specific fault rather than
+                    // blindly resampling (a no-op for the semantic faults this catches).
+                    corrections.Add(new ReconciliationCorrection(
+                        apiResult.ToolUseId, apiResult.ToolName, apiResult.ToolUseInput,
+                        $"Your previous {apiResult.ToolName} was rejected ({ex.Message}). Fix only that and resubmit via the tool."));
+                    Logger.Warn($"Reconciliation tool_use input {what} (attempt {attempt}/{maxAttempts}); retrying with feedback.");
                     continue;
                 }
 
@@ -302,6 +339,15 @@ public sealed class ForecastReconciler
                 {
                     Logger.Error($"Reconciliation tool_use input is {ex.Message} (after {maxAttempts} attempts).");
                     return new ReconcileResult.Failure($"Reconciliation response {ex.Message} (after {maxAttempts} attempts).");
+                }
+                // WX-148: if the snapshot itself parsed cleanly and only the narrative
+                // could not be made self-consistent, degrade rather than fail outright —
+                // the caller can still send a narrative-less hazard report from the
+                // snapshot on a safety-critical forecast.
+                if (lastParsedSnapshot is not null)
+                {
+                    Logger.Error($"Reconciliation could not produce a self-consistent report after {maxAttempts} attempts ({ex.Message}); degrading to the parsed snapshot, narrative dropped.");
+                    return new ReconcileResult.Degraded(lastParsedSnapshot, tokens, ex.Message);
                 }
                 Logger.Error($"Reconciliation tool_use input failed validation (after {maxAttempts} attempts): {ex.Message}");
                 return new ReconcileResult.Failure($"Schema validation failed (after {maxAttempts} attempts): {ex.Message}");
@@ -358,6 +404,67 @@ public sealed class ForecastReconciler
             if (!report.Narrative.ContainsKey(lang))
                 throw new JsonException($"structured_report.narrative is missing requested language '{lang}'.");
     }
+
+    // WX-148: cross-artifact consistency between the change narrative and the
+    // final_snapshot. The "What's changed" prose is driven by changes[].window,
+    // while the deterministic day-grid is built from the snapshot blocks; nothing
+    // else reconciles the two, so they can disagree (the 6/9 "afternoon" narrative
+    // over a forecast whose only rain sat in the block the grid calls "morning").
+    // Two rules, both fail-closed via JsonException so they route through the same
+    // retry-then-fail path as the other contract checks:
+    //   1. Every change window aligns to the 6-hour block grid (00/06/12/18Z). This
+    //      forbids sub-block precision — a block-aligned window cannot claim timing
+    //      the blocks don't support, which is exactly what the 6/9 17-21Z window did.
+    //   2. Precipitation that is APPEARING or STRENGTHENING must be backed by a block
+    //      carrying that phenomenon within the window — else the narrative announces
+    //      precip the grid will not show. Removal directions (weakening/clearing,
+    //      which the new snapshot legitimately shows reduced/gone) and non-precip
+    //      phenomena (wind/fog/temperature) are out of this check's scope; WX-149
+    //      adds the phenomenon/tier/raw-UTC assertions on top of this scaffold.
+    private static void ValidateChangeSnapshotConsistency(
+        StructuredReportBody report, ForecastSnapshotBody finalSnapshot)
+    {
+        foreach (var change in report.Changes)
+        {
+            var w = change.Window;
+            if (!IsBlockAligned(w.StartUtc) || !IsBlockAligned(w.EndUtc) || w.EndUtc <= w.StartUtc)
+                throw new JsonException(
+                    $"structured_report change '{change.SummaryToken}' window {w.StartUtc:O}..{w.EndUtc:O} is not "
+                    + "aligned to the 6-hour block grid (00/06/12/18Z); change windows must coincide with snapshot "
+                    + "block boundaries so the narrative cannot claim timing finer than the blocks support.");
+
+            if (TryMapPrecip(change.Phenomenon, out var precip)
+                && change.Direction is ChangeDirection.Appearing or ChangeDirection.Strengthening)
+            {
+                bool backed = finalSnapshot.Blocks.Any(b =>
+                    b.PrecipExpectation != PrecipExpectation.None
+                    && b.PrecipPhenomenon == precip
+                    && BlockOverlapsWindow(b.StartUtc, w));
+                if (!backed)
+                    throw new JsonException(
+                        $"structured_report change '{change.SummaryToken}' ({change.Phenomenon} {change.Direction}, "
+                        + $"window {w.StartUtc:O}..{w.EndUtc:O}) is not backed by any final_snapshot block carrying "
+                        + $"{precip} precipitation in that window; the change narrative and the day-grid would disagree.");
+            }
+        }
+    }
+
+    // A change window endpoint must land on the 00/06/12/18Z grid the snapshot blocks use.
+    private static bool IsBlockAligned(DateTime utc) =>
+        utc is { Minute: 0, Second: 0, Millisecond: 0 } && utc.Hour % 6 == 0;
+
+    // A 6-hour block [StartUtc, StartUtc+6h) overlaps the half-open window [start, end).
+    private static bool BlockOverlapsWindow(DateTime blockStartUtc, ChangeWindow w) =>
+        blockStartUtc < w.EndUtc && blockStartUtc.AddHours(6) > w.StartUtc;
+
+    // The precipitation ChangePhenomenon values share names 1:1 with PrecipPhenomenon
+    // (StructuredReportBody documents the mirror), so match by NAME rather than a
+    // hand-maintained switch: a sixth precip phenomenon added to both enums is covered
+    // automatically, and a non-precip ChangePhenomenon (Wind / WindShift / Fog / Haze /
+    // Smoke / Dust / Temperature / Severe) simply doesn't parse. IsDefined guards the
+    // edge where p is an undefined value cast from int (ToString() yields a number).
+    private static bool TryMapPrecip(ChangePhenomenon p, out PrecipPhenomenon precip) =>
+        Enum.TryParse(p.ToString(), out precip) && Enum.IsDefined(precip);
 
     // WX-120 fall-safe, carried into the structured-report world (WX-130): true
     // when any requested language's narrative is near-blank. The narrative now

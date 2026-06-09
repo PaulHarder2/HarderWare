@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using System.Text.Json;
 
 using WxReport.Svc;
 
@@ -62,7 +63,7 @@ public class ClaudeClientRetryTests
             }));
         var client = new ClaudeClient(new HttpClient(handler), apiKey: "k", model: "claude-sonnet-4-6", personaPrefix: "persona");
 
-        var result = await client.InvokeReconciliationAsync("rules", "payload", allowSkip: false, narrativeLanguages: new[] { "en" }, CancellationToken.None);
+        var result = await client.InvokeReconciliationAsync("rules", "payload", allowSkip: false, narrativeLanguages: new[] { "en" }, ct: CancellationToken.None);
 
         Assert.Null(result); // un-offered tool rejected at the boundary
     }
@@ -79,7 +80,7 @@ public class ClaudeClientRetryTests
             }));
         var client = new ClaudeClient(new HttpClient(handler), apiKey: "k", model: "claude-sonnet-4-6", personaPrefix: "persona");
 
-        var result = await client.InvokeReconciliationAsync("rules", "payload", allowSkip: true, narrativeLanguages: new[] { "en" }, CancellationToken.None);
+        var result = await client.InvokeReconciliationAsync("rules", "payload", allowSkip: true, narrativeLanguages: new[] { "en" }, ct: CancellationToken.None);
 
         Assert.NotNull(result);
         Assert.Equal("skip_send", result!.ToolName);
@@ -115,7 +116,7 @@ public class ClaudeClientRetryTests
             }));
         var client = new ClaudeClient(new HttpClient(handler), apiKey: "k", model: "claude-sonnet-4-6", personaPrefix: "persona");
 
-        var result = await client.InvokeReconciliationAsync("rules", "payload", allowSkip: true, narrativeLanguages: new[] { "en" }, CancellationToken.None);
+        var result = await client.InvokeReconciliationAsync("rules", "payload", allowSkip: true, narrativeLanguages: new[] { "en" }, ct: CancellationToken.None);
 
         Assert.Null(result); // ambiguous multi-block response rejected at the boundary
     }
@@ -139,7 +140,7 @@ public class ClaudeClientRetryTests
         var http = new HttpClient(handler) { Timeout = TimeSpan.FromMilliseconds(100) };
         var client = new ClaudeClient(http, apiKey: "k", model: "claude-sonnet-4-6", personaPrefix: "persona");
 
-        var result = await client.InvokeReconciliationAsync("rules", "payload", allowSkip: false, narrativeLanguages: new[] { "en" }, CancellationToken.None);
+        var result = await client.InvokeReconciliationAsync("rules", "payload", allowSkip: false, narrativeLanguages: new[] { "en" }, ct: CancellationToken.None);
 
         Assert.Null(result); // timeout fails the reconciliation
         Assert.Equal(1, calls); // not retried — a single attempt
@@ -163,7 +164,7 @@ public class ClaudeClientRetryTests
         });
         var client = new ClaudeClient(new HttpClient(handler), apiKey: "k", model: "claude-sonnet-4-6", personaPrefix: "persona");
 
-        var result = await client.InvokeReconciliationAsync("rules", "payload", allowSkip: false, narrativeLanguages: new[] { "en" }, CancellationToken.None);
+        var result = await client.InvokeReconciliationAsync("rules", "payload", allowSkip: false, narrativeLanguages: new[] { "en" }, ct: CancellationToken.None);
 
         Assert.NotNull(result); // recovered on retry
         Assert.Equal(2, calls); // first attempt failed, second succeeded
@@ -186,13 +187,59 @@ public class ClaudeClientRetryTests
         });
         var client = new ClaudeClient(new HttpClient(handler), apiKey: "k", model: "claude-sonnet-4-6", personaPrefix: "persona");
 
-        var call = client.InvokeReconciliationAsync("rules", "payload", allowSkip: false, narrativeLanguages: new[] { "en" }, cts.Token);
+        var call = client.InvokeReconciliationAsync("rules", "payload", allowSkip: false, narrativeLanguages: new[] { "en" }, ct: cts.Token);
         await started.Task;
         cts.Cancel();
         var result = await call;
 
         Assert.Null(result); // shutdown surfaces as a failed reconciliation
         Assert.Equal(1, calls); // aborted immediately — no retry attempts
+    }
+
+    [Fact(Timeout = 10_000)]
+    public async Task Corrections_AreReplayed_AsToolUseThenToolResult()
+    {
+        // WX-148: a rejected attempt is fed back on the next call as the assistant's
+        // tool_use followed by a user tool_result carrying the error — so a validation
+        // retry corrects the specific fault rather than blindly resampling.
+        string? capturedBody = null;
+        var handler = new ScriptedHandler(async (req, ct) =>
+        {
+            capturedBody = await req.Content!.ReadAsStringAsync(ct);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(ValidToolUseResponse, Encoding.UTF8, "application/json"),
+            };
+        });
+        var client = new ClaudeClient(new HttpClient(handler), apiKey: "k", model: "claude-sonnet-4-6", personaPrefix: "persona");
+
+        using var input = JsonDocument.Parse("""{"final_snapshot":{"schemaVersion":4}}""");
+        var corrections = new[]
+        {
+            new ReconciliationCorrection("toolu_prev", "submit_reconciled_report", input.RootElement.Clone(),
+                "window not aligned to the 6-hour block grid"),
+        };
+
+        var result = await client.InvokeReconciliationAsync(
+            "rules", "payload", allowSkip: false, narrativeLanguages: new[] { "en" }, corrections, ct: CancellationToken.None);
+
+        Assert.NotNull(result);
+        Assert.NotNull(capturedBody);
+        using var sent = JsonDocument.Parse(capturedBody!);
+        var messages = sent.RootElement.GetProperty("messages");
+        Assert.Equal(3, messages.GetArrayLength());  // first user + replayed assistant tool_use + user tool_result
+
+        var assistant = messages[1];
+        Assert.Equal("assistant", assistant.GetProperty("role").GetString());
+        var toolUse = assistant.GetProperty("content")[0];
+        Assert.Equal("tool_use", toolUse.GetProperty("type").GetString());
+        Assert.Equal("toolu_prev", toolUse.GetProperty("id").GetString());
+
+        var toolResult = messages[2].GetProperty("content")[0];
+        Assert.Equal("tool_result", toolResult.GetProperty("type").GetString());
+        Assert.Equal("toolu_prev", toolResult.GetProperty("tool_use_id").GetString());
+        Assert.True(toolResult.GetProperty("is_error").GetBoolean());
+        Assert.Contains("not aligned", toolResult.GetProperty("content").GetString());
     }
 
     private sealed class ScriptedHandler : HttpMessageHandler

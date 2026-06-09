@@ -94,9 +94,14 @@ public sealed record ReportVocabulary
     public required string WxSmoke { get; init; }
     public required string WxMixed { get; init; }       // wintry mix / sleet
 
-    // ── per-day conditions connectives + precip outlook adverbs ─────────────
-    public required string CondAndDry { get; init; }        // "Clear and dry" → "{sky} and dry" when no precip & clear
-    public required string CondWith { get; init; }          // "{sky} with {precip}"
+    // ── per-day conditions: day-part labels, when-adverbials, outlook, connectives ─
+    public required string CondAndDry { get; init; }        // dry day: "{sky} and dry" when clear, else just the sky word
+    // Capitalized day-part LABELS for the per-day conditions grid lines ("Afternoon — rain likely").
+    public required string PartMorning { get; init; }
+    public required string PartAfternoon { get; init; }
+    public required string PartEvening { get; init; }
+    public required string PartOvernight { get; init; }
+    // Mid-sentence WHEN-adverbials for the severe one-liner ("Severe storms likely in the afternoon").
     public required string CondMorning { get; init; }
     public required string CondAfternoon { get; init; }
     public required string CondEvening { get; init; }
@@ -104,8 +109,11 @@ public sealed record ReportVocabulary
     public required string OutlookPossible { get; init; }   // hedge: "possible"
     public required string OutlookLikely { get; init; }     // hedge: "likely"
     public required string OutlookExpected { get; init; }   // hedge for Certain — never "certain"
-    public required string SevereStormsLead { get; init; }  // "Strong storms possible — wind, hail"
+    public required string CondSevereStorms { get; init; }  // severe lead, convective: "Severe storms"
+    public required string CondSevereWeather { get; init; } // severe lead, non-convective (e.g. damaging wind, no precip): "Severe weather"
+    public required string CondThen { get; init; }          // joins the two clauses of a severe day: "then"
     public required string Storms { get; init; }            // generic "storms"
+    public required string HazardBannerFormat { get; init; } // degraded safety send: {0} = severe phrase, {1} = "Saturday afternoon"
 
     /// <summary>The IETF culture used for date/time names and number formatting. Localized to the language; number conventions stay US/period-decimal until WX-138 (so <c>es-US</c>, not <c>es-ES</c>).</summary>
     public required CultureInfo Culture { get; init; }
@@ -176,16 +184,22 @@ public sealed record ReportVocabulary
         WxSmoke = "Smoke",
         WxMixed = "Wintry mix",
         CondAndDry = "and dry",
-        CondWith = "with",
-        CondMorning = "morning",
-        CondAfternoon = "afternoon",
-        CondEvening = "evening",
+        PartMorning = "Morning",
+        PartAfternoon = "Afternoon",
+        PartEvening = "Evening",
+        PartOvernight = "Overnight",
+        CondMorning = "in the morning",
+        CondAfternoon = "in the afternoon",
+        CondEvening = "in the evening",
         CondOvernight = "overnight",
         OutlookPossible = "possible",
         OutlookLikely = "likely",
         OutlookExpected = "expected",
-        SevereStormsLead = "Strong storms possible — damaging wind, hail",
+        CondSevereStorms = "Severe storms",
+        CondSevereWeather = "Severe weather",
+        CondThen = "then",
         Storms = "storms",
+        HazardBannerFormat = "{0} in your forecast — {1}.",
         Culture = SafeCulture("en-US"),
     };
 
@@ -245,7 +259,10 @@ public sealed record ReportVocabulary
         WxSmoke = "Humo",
         WxMixed = "Mezcla invernal",
         CondAndDry = "y seco",
-        CondWith = "con",
+        PartMorning = "Mañana",
+        PartAfternoon = "Tarde",
+        PartEvening = "Noche",
+        PartOvernight = "Madrugada",
         CondMorning = "por la mañana",
         CondAfternoon = "por la tarde",
         CondEvening = "al anochecer",
@@ -253,8 +270,11 @@ public sealed record ReportVocabulary
         OutlookPossible = "posibles",
         OutlookLikely = "probables",
         OutlookExpected = "previstas",
-        SevereStormsLead = "Posibles tormentas fuertes — vientos dañinos, granizo",
+        CondSevereStorms = "Tormentas severas",
+        CondSevereWeather = "Tiempo severo",
+        CondThen = "luego",
         Storms = "tormentas",
+        HazardBannerFormat = "{0} en su pronóstico — {1}.",
         Culture = SafeCulture("es-US"),
     };
 
