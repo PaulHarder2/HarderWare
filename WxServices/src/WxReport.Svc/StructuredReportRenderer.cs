@@ -138,7 +138,7 @@ public static class StructuredReportRenderer
             return;
         var local = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(severe.StartUtc, DateTimeKind.Utc), tz);
         var timing = $"{local.ToString("dddd", vocab.Culture)} {Lower(PartLabel(PartOf(local.Hour), vocab))}";
-        var text = string.Format(vocab.Culture, vocab.HazardBannerFormat, vocab.CondSevereStorms, timing);
+        var text = string.Format(vocab.Culture, vocab.HazardBannerFormat, SevereNoun(severe.PrecipPhenomenon, vocab), timing);
         sb.Append("<div style=\"background:#7a1c1c;color:#ffffff;padding:14px 24px;font-weight:bold;font-size:15px;\">");
         sb.Append(HtmlText(text));
         sb.Append("</div>");
@@ -458,6 +458,7 @@ public static class StructuredReportRenderer
         int startHour = 0, endHour = 0;
         PrecipPhenomenon phenomenon = default;
         PrecipExpectation peak = PrecipExpectation.None;
+        DateTime prevStartUtc = default;
         bool severe = false, open = false;
 
         void Close()
@@ -477,7 +478,11 @@ public static class StructuredReportRenderer
                 continue;
             }
 
-            if (open && p == phenomenon)
+            // Extend only when this block is contiguous with the run: same phenomenon AND
+            // immediately after the previous block (StartUtc == prev + 6h). A missing block
+            // (a time gap) breaks the run even when the phenomenon matches, so two rain
+            // spells either side of a dropped slot don't merge into one mistimed episode.
+            if (open && p == phenomenon && b.StartUtc == prevStartUtc.AddHours(6))
             {
                 endHour = hour;
                 if ((int)b.PrecipExpectation > (int)peak)
@@ -493,6 +498,7 @@ public static class StructuredReportRenderer
                 peak = b.PrecipExpectation;
                 severe = b.SevereFlag;
             }
+            prevStartUtc = b.StartUtc;
         }
 
         Close();
@@ -646,17 +652,18 @@ public static class StructuredReportRenderer
                 if (e.Severe)
                 {
                     severeNamed = true;
-                    clauses.Add($"{vocab.CondSevereStorms} {OutlookWord(e.Expectation, vocab)} {WhenWord(PartOf(e.StartHour), vocab)}");
+                    clauses.Add($"{SevereNoun(e.Phenomenon, vocab)} {OutlookWord(e.Expectation, vocab)} {WhenWord(PartOf(e.StartHour), vocab)}");
                 }
                 else
                 {
                     clauses.Add($"{Lower(PhenomenonWord(e.Phenomenon, vocab))} {WhenWord(PartOf(e.StartHour), vocab)}");
                 }
             }
-            // Severe but no severe precip episode → lead generically, timed by the
-            // earliest severe block, with any precip episodes following.
+            // Severe but no severe precip episode → a non-convective hazard (e.g. damaging
+            // wind); lead generically, timed by the earliest severe block, with any precip
+            // episodes following.
             if (!severeNamed)
-                clauses.Insert(0, $"{vocab.CondSevereStorms} {vocab.OutlookLikely} {WhenWord(PartOf(day.SevereLocalHour), vocab)}");
+                clauses.Insert(0, $"{vocab.CondSevereWeather} {vocab.OutlookLikely} {WhenWord(PartOf(day.SevereLocalHour), vocab)}");
             return HtmlText(string.Join($", {vocab.CondThen} ", clauses));
         }
 
@@ -734,6 +741,10 @@ public static class StructuredReportRenderer
         SkyState.Overcast => vocab.SkyOvercast,
         _ => vocab.SkyClear,
     };
+
+    /// <summary>The severe lead noun: convective ("Severe storms") for a thunderstorm, generic ("Severe weather") otherwise — a severe block can be a damaging-wind event with no precip.</summary>
+    private static string SevereNoun(PrecipPhenomenon? phenomenon, ReportVocabulary vocab) =>
+        phenomenon == PrecipPhenomenon.Thunderstorm ? vocab.CondSevereStorms : vocab.CondSevereWeather;
 
     /// <summary>The episode's time label: a single day-part, or a "start–end" range when it spans buckets.</summary>
     private static string EpisodeRangeLabel(Episode e, ReportVocabulary vocab)

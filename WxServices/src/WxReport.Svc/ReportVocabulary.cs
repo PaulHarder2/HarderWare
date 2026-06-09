@@ -109,7 +109,8 @@ public sealed record ReportVocabulary
     public required string OutlookPossible { get; init; }   // hedge: "possible"
     public required string OutlookLikely { get; init; }     // hedge: "likely"
     public required string OutlookExpected { get; init; }   // hedge for Certain — never "certain"
-    public required string CondSevereStorms { get; init; }  // severe lead noun phrase: "Severe storms"
+    public required string CondSevereStorms { get; init; }  // severe lead, convective: "Severe storms"
+    public required string CondSevereWeather { get; init; } // severe lead, non-convective (e.g. damaging wind, no precip): "Severe weather"
     public required string CondThen { get; init; }          // joins the two clauses of a severe day: "then"
     public required string Storms { get; init; }            // generic "storms"
     public required string HazardBannerFormat { get; init; } // degraded safety send: {0} = severe phrase, {1} = "Saturday afternoon"
@@ -195,6 +196,7 @@ public sealed record ReportVocabulary
         OutlookLikely = "likely",
         OutlookExpected = "expected",
         CondSevereStorms = "Severe storms",
+        CondSevereWeather = "Severe weather",
         CondThen = "then",
         Storms = "storms",
         HazardBannerFormat = "{0} in your forecast — {1}.",
@@ -269,6 +271,7 @@ public sealed record ReportVocabulary
         OutlookLikely = "probables",
         OutlookExpected = "previstas",
         CondSevereStorms = "Tormentas severas",
+        CondSevereWeather = "Tiempo severo",
         CondThen = "luego",
         Storms = "tormentas",
         HazardBannerFormat = "{0} en su pronóstico — {1}.",

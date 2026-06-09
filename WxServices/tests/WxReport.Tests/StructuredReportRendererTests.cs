@@ -208,7 +208,8 @@ public class StructuredReportRendererTests
         // must not collapse to a benign sky phrase — the day-level severe path leads
         // with a generic hazard line timed by the severe block.
         var en = StructuredReportRenderer.Render(Body(), SevereNoPrecipForecast(), Observation(), Imperial(), Utc, isUnscheduled: false);
-        Assert.Contains("Severe storms likely in the afternoon", en);
+        // Generic "Severe weather" — not storm-specific — because the severe block carries no precip (a wind event).
+        Assert.Contains("Severe weather likely in the afternoon", en);
     }
 
     [Fact]
@@ -228,8 +229,11 @@ public class StructuredReportRendererTests
         // (a summary we cannot deliver is left out, not apologized for).
         var nowUtc = new DateTime(2026, 6, 8, 12, 0, 0, DateTimeKind.Utc);  // within the 12–18Z severe block
         var en = StructuredReportRenderer.RenderDegraded(SevereForecast(), Observation(), Imperial(), Utc, nowUtc);
-        Assert.Contains("Severe storms in your forecast", en);  // deterministic hazard banner
-        Assert.Contains("afternoon", en);                       // severe block is at 12Z (afternoon)
+        // Full deterministic banner (SevereForecast is convective → "Severe storms"); weekday
+        // computed so the assertion can't drift, and "in your forecast" is banner-specific
+        // (the grid cell says "Severe storms likely …", never "in your forecast").
+        var expectedDay = nowUtc.ToString("dddd", System.Globalization.CultureInfo.GetCultureInfo("en-US"));
+        Assert.Contains($"Severe storms in your forecast — {expectedDay} afternoon.", en);
         Assert.Contains("Current Conditions", en);              // conditions table present
         Assert.Contains("Forecast for Spring", en);             // forecast grid present
         Assert.DoesNotContain("What's changed:", en);           // no change band
