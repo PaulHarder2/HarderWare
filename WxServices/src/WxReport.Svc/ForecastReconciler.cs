@@ -187,6 +187,23 @@ public sealed class ForecastReconciler
         // this lets the caller degrade to a narrative-less hazard report rather than
         // a bare Failure. Stays null when even the snapshot never parsed.
         ForecastSnapshotBody? lastParsedSnapshot = null;
+        // WX-151: parse the prior committed snapshot once for prior-aware change
+        // verification. Version-lenient (old persisted priors must still load). A
+        // malformed prior is non-fatal — log and skip the prior comparison rather
+        // than fail a cycle over an old row; the check then falls back to WX-148's
+        // new-only backing. Null prior is a first send (nothing to compare against).
+        ForecastSnapshotBody? priorBody = null;
+        if (prior is not null)
+        {
+            try
+            {
+                priorBody = ForecastSnapshotBody.Deserialize(prior.Body);
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"Prior snapshot body could not be parsed for prior-aware change verification ({ex.Message}); skipping the prior comparison this cycle.");
+            }
+        }
         for (int attempt = 1; ; attempt++)
         {
             var apiResult = await _claude.InvokeReconciliationAsync(systemPrompt, userMessage, allowSkip, narrativeLanguages, corrections, ct);
@@ -280,8 +297,9 @@ public sealed class ForecastReconciler
                 var structuredReportJson = RequireProperty(input, "structured_report").GetRawText();
                 var structuredReport = StructuredReportBody.Deserialize(structuredReportJson);
                 ValidateNarrativeContract(structuredReport, narrativeLanguages);
-                ValidateChangeSnapshotConsistency(structuredReport, finalSnapshot);
+                ValidateChangeSnapshotConsistency(structuredReport, finalSnapshot, priorBody);
                 ValidateProseHygiene(structuredReport, tz);
+                ValidateAnchoredProseTiming(structuredReport, tz);
 
                 // WX-120 fall-safe, carried forward to the structured-report world:
                 // a present-but-near-blank narrative — e.g. Claude submitted a report
@@ -413,19 +431,23 @@ public sealed class ForecastReconciler
     // while the deterministic day-grid is built from the snapshot blocks; nothing
     // else reconciles the two, so they can disagree (the 6/9 "afternoon" narrative
     // over a forecast whose only rain sat in the block the grid calls "morning").
-    // Two rules, both fail-closed via JsonException so they route through the same
-    // retry-then-fail path as the other contract checks:
+    // The rules below all fail closed via JsonException so they route through the
+    // same retry-then-fail path as the other contract checks:
     //   1. Every change window aligns to the 6-hour block grid (00/06/12/18Z). This
     //      forbids sub-block precision — a block-aligned window cannot claim timing
     //      the blocks don't support, which is exactly what the 6/9 17-21Z window did.
-    //   2. Precipitation that is APPEARING or STRENGTHENING must be backed by a block
-    //      carrying that phenomenon within the window — else the narrative announces
-    //      precip the grid will not show. Removal directions (weakening/clearing,
-    //      which the new snapshot legitimately shows reduced/gone) and non-precip
-    //      phenomena (wind/fog/temperature) are out of this check's scope; WX-149
-    //      adds the phenomenon/tier/raw-UTC assertions on top of this scaffold.
+    //   2. (WX-151, generalizing the original WX-148 new-only backing) Every precip
+    //      (or standalone Severe) change must be a REAL difference versus the PRIOR
+    //      snapshot in its window: APPEARING/STRENGTHENING requires the in-window
+    //      expectation to exceed the prior's (or this phenomenon's severeFlag to rise),
+    //      WEAKENING/CLEARING requires it to fall (or severe to drop) — and only when
+    //      the prior actually covered the window (else there's nothing to weaken from).
+    //      A change identical in prior and new is a phantom (send 1977). Non-precip
+    //      phenomena (wind/windshift/fog/temperature) have no clean snapshot-comparable
+    //      semantics and stay prompt-governed. WX-149 adds the tier/raw-UTC/prose
+    //      assertions on top of this scaffold.
     private static void ValidateChangeSnapshotConsistency(
-        StructuredReportBody report, ForecastSnapshotBody finalSnapshot)
+        StructuredReportBody report, ForecastSnapshotBody finalSnapshot, ForecastSnapshotBody? prior)
     {
         foreach (var change in report.Changes)
         {
@@ -436,18 +458,76 @@ public sealed class ForecastReconciler
                     + "aligned to the 6-hour block grid (00/06/12/18Z); change windows must coincide with snapshot "
                     + "block boundaries so the narrative cannot claim timing finer than the blocks support.");
 
-            if (TryMapPrecip(change.Phenomenon, out var precip)
-                && change.Direction is ChangeDirection.Appearing or ChangeDirection.Strengthening)
+            // WX-151: prior-aware change verification. A change must correspond to a
+            // REAL prior->new difference of its claimed direction within its window,
+            // or it is a phantom — the reader is told something happened that did not
+            // (send 1977: a storm "downgrade" + rain "appearing" over a cycle whose
+            // only movement was sky-cover wobble; prior == new on every precip block).
+            // This GENERALIZES WX-148's new-only backing: appearing/strengthening now
+            // also requires the prior LACKED it (a change identical in prior and new
+            // is not news), and weakening/clearing — which WX-148 exempted outright —
+            // requires the prior actually carried it. The strength axis is
+            // precipExpectation (None<Possible<Likely<Certain) OR the block severeFlag,
+            // so a thunderstorm whose expectation is flat but whose severeFlag rises
+            // false->true still counts as strengthening (the WX-148 worked example).
+            // Null prior is a first send: priorE is None and there is no prior severe,
+            // so the check degenerates to WX-148's new-only backing (appearing/
+            // strengthening must be carried by the new snapshot; weakening/clearing
+            // has nothing to have weakened from and is rejected). Covers precipitation
+            // phenomena and the standalone Severe phenomenon (WX-151 scope decision);
+            // wind/windshift/temperature/fog have no clean snapshot-comparable
+            // appearing semantics and stay prompt-governed (the documented residual).
+            // Weakening/clearing is only verifiable when the prior actually covered
+            // this window — otherwise there is nothing to have weakened from (a first
+            // send with a null prior, or a far-horizon window past the prior's reach).
+            // Without coverage the validator can't disprove the change, so it doesn't
+            // reject it (the WX-149 "never reject what you can't prove wrong" policy);
+            // appearing/strengthening still get new-snapshot backing via newE/newSevere,
+            // preserving WX-148's behaviour on a first send.
+            bool priorCoversWindow = prior is not null && PriorFullyCoversWindow(prior, w);
+
+            if (TryMapPrecip(change.Phenomenon, out var precip))
             {
-                bool backed = finalSnapshot.Blocks.Any(b =>
-                    b.PrecipExpectation != PrecipExpectation.None
-                    && b.PrecipPhenomenon == precip
-                    && BlockOverlapsWindow(b.StartUtc, w));
-                if (!backed)
+                int newE = (int)MaxExpect(finalSnapshot, precip, w);
+                int priorE = prior is null ? (int)PrecipExpectation.None : (int)MaxExpect(prior, precip, w);
+                // Severe is a PER-PHENOMENON strength axis: a block carrying THIS
+                // phenomenon whose severeFlag is set. Using window-level severe would
+                // let an unrelated severe block (a thunderstorm) vouch for a different
+                // phenomenon's change (a phantom "snow strengthening").
+                bool newSevere = SevereForPhenomenon(finalSnapshot, precip, w);
+                bool priorSevere = prior is not null && SevereForPhenomenon(prior, precip, w);
+                bool real = change.Direction switch
+                {
+                    ChangeDirection.Appearing or ChangeDirection.Strengthening => newE > priorE || (newSevere && !priorSevere),
+                    ChangeDirection.Weakening or ChangeDirection.Clearing => !priorCoversWindow || newE < priorE || (priorSevere && !newSevere),
+                    _ => true,  // Shifting (WX-111 wind vector) is not a precip-intensity change; prompt-governed
+                };
+                if (!real)
                     throw new JsonException(
                         $"structured_report change '{change.SummaryToken}' ({change.Phenomenon} {change.Direction}, "
-                        + $"window {w.StartUtc:O}..{w.EndUtc:O}) is not backed by any final_snapshot block carrying "
-                        + $"{precip} precipitation in that window; the change narrative and the day-grid would disagree.");
+                        + $"window {w.StartUtc:O}..{w.EndUtc:O}) is not a real change versus prior_snapshot: in-window "
+                        + $"{precip} expectation moved prior->{(PrecipExpectation)priorE}->new->{(PrecipExpectation)newE} "
+                        + $"and severeFlag prior={priorSevere}/new={newSevere} do not support '{change.Direction}'. "
+                        + "The narrative would announce a change that did not occur.");
+            }
+            else if (change.Phenomenon == ChangePhenomenon.Severe)
+            {
+                // The standalone Severe phenomenon is window-level (any severe block),
+                // not tied to a precip phenomenon.
+                bool newSevere = AnySevereInWindow(finalSnapshot, w);
+                bool priorSevere = prior is not null && AnySevereInWindow(prior, w);
+                bool real = change.Direction switch
+                {
+                    ChangeDirection.Appearing or ChangeDirection.Strengthening => newSevere && !priorSevere,
+                    ChangeDirection.Weakening or ChangeDirection.Clearing => !priorCoversWindow || (priorSevere && !newSevere),
+                    _ => true,
+                };
+                if (!real)
+                    throw new JsonException(
+                        $"structured_report change '{change.SummaryToken}' (Severe {change.Direction}, "
+                        + $"window {w.StartUtc:O}..{w.EndUtc:O}) is not a real change versus prior_snapshot: in-window "
+                        + $"severeFlag is prior={priorSevere}, new={newSevere}, which does not support '{change.Direction}'. "
+                        + "The narrative would announce a severe change that did not occur.");
             }
 
             // WX-149 (b): tier over-escalation. A Safety-tier change must be backed
@@ -694,6 +774,127 @@ public sealed class ForecastReconciler
         return prose.Length;
     }
 
+    // WX-151: extends WX-149's prose time-word check from {q:time} tokens to the
+    // {chN}-ANCHORED sentence — the anchor ties a sentence to a change with a known
+    // window, so the day-part words narrating a change can be checked against that
+    // change's own window local buckets (no token needed). Conservative, like
+    // WX-149: a sentence is rejected only when it carries day-part words and NONE of
+    // them fall in the window's buckets — i.e. the whole sentence is mis-timed. A
+    // sentence that names an in-window part plus a transition word ("...this
+    // afternoon, clearing by evening") keeps the in-window match and is not
+    // rejected. Catches a change narrated in the wrong part of the day relative to
+    // the window the grid is built from (the WX-148 narrative/grid mismatch class,
+    // for bare prose words the {q:time} check can't see).
+    private static void ValidateAnchoredProseTiming(StructuredReportBody report, TimeZoneInfo tz)
+    {
+        if (report.Changes.Count == 0)
+            return;
+
+        // Mask each language's changeSummary once ({...} tokens → equal-length blanks,
+        // same as CheckProse) so the sentence/word scans ignore token interiors with
+        // offsets still aligned to the original. Hoisted out of the change loop so the
+        // regex runs once per language, not once per (change × language).
+        var maskedByLang = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (lang, sections) in report.Narrative)
+            if (!string.IsNullOrEmpty(sections.ChangeSummary))
+                maskedByLang[lang] = BraceToken.Replace(sections.ChangeSummary, m => new string(' ', m.Length));
+
+        foreach (var change in report.Changes)
+        {
+            var windowParts = WindowDayParts(change.Window, tz);
+            if (windowParts.Count == 0)
+                continue;  // an off-grid window is ValidateChangeSnapshotConsistency's job, not this one's
+            var anchor = "{" + change.SummaryToken + "}";
+            foreach (var (lang, sections) in report.Narrative)
+            {
+                var prose = sections.ChangeSummary;
+                if (string.IsNullOrEmpty(prose))
+                    continue;
+                int ai = prose.IndexOf(anchor, StringComparison.Ordinal);
+                if (ai < 0)
+                    continue;  // anchor presence is StructuredReportBody.Validate's contract, not this guard's
+
+                var masked = maskedByLang[lang];  // present: prose is non-empty
+                int sentStart = SentenceStart(masked, ai);
+                int sentEnd = SentenceEnd(masked, ai + anchor.Length);
+                var found = SentenceDayPartWords(masked, sentStart, sentEnd);
+                if (found.Count > 0 && !found.Any(f => windowParts.Contains(f.Part)))
+                    throw new JsonException(
+                        $"structured_report change '{change.SummaryToken}' narrative '{lang}' times it \"{found[0].Word}\" "
+                        + $"but the change's window {change.Window.StartUtc:O}..{change.Window.EndUtc:O} is the "
+                        + $"{string.Join("/", windowParts.OrderBy(p => p).Select(DayPartName))} locally; the prose "
+                        + "time-of-day word contradicts the change's own window.");
+            }
+        }
+    }
+
+    // A day-part word immediately preceded by one of these is pinned to a SPECIFIC
+    // (often different) day than the change's window — "Friday evening", "tomorrow
+    // morning" — which we cannot compare to the window's local buckets without
+    // day-level parsing, so we conservatively skip it (never reject prose we can't
+    // prove wrong — the WX-149 policy). An unqualified "this evening" / "by evening"
+    // still refers to the change and is checked.
+    private static readonly string[] DayQualifiers =
+    {
+        "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+        "today", "tonight", "tomorrow", "yesterday",
+    };
+
+    // Every unambiguous day-part word in [sentStart, sentEnd), whole-word and
+    // case-insensitive (shares DayPartWords with the {q:time} check), excluding
+    // words pinned to a specific day by a preceding DayQualifier.
+    private static List<(string Word, int Part)> SentenceDayPartWords(string prose, int sentStart, int sentEnd)
+    {
+        var found = new List<(string Word, int Part)>();
+        foreach (var (word, part) in DayPartWords)
+        {
+            int from = sentStart;
+            while (from < sentEnd)
+            {
+                int idx = prose.IndexOf(word, from, sentEnd - from, StringComparison.OrdinalIgnoreCase);
+                if (idx < 0)
+                    break;
+                int after = idx + word.Length;
+                bool wholeWord = (idx == 0 || !char.IsLetter(prose[idx - 1]))
+                    && (after >= prose.Length || !char.IsLetter(prose[after]));
+                if (wholeWord && !QualifiedByOtherDay(prose, sentStart, idx))
+                    found.Add((prose.Substring(idx, word.Length), part));
+                from = after;
+            }
+        }
+        return found;
+    }
+
+    // True when the word ending at the letters before wordStart is a DayQualifier.
+    // Bounded by sentStart so the scan never crosses into a previous sentence — a
+    // "Friday." ending the prior sentence must not qualify a word in this one.
+    private static bool QualifiedByOtherDay(string prose, int sentStart, int wordStart)
+    {
+        int i = wordStart - 1;
+        while (i >= sentStart && !char.IsLetter(prose[i]))
+            i--;
+        if (i < sentStart)
+            return false;
+        int end = i + 1;
+        while (i >= sentStart && char.IsLetter(prose[i]))
+            i--;
+        var prev = prose.Substring(i + 1, end - (i + 1));
+        return DayQualifiers.Contains(prev, StringComparer.OrdinalIgnoreCase);
+    }
+
+    // The set of local day-part buckets a change window covers, by walking its UTC
+    // hours and bucketing each into local time (mirrors DayPartOfHour / the renderer).
+    private static HashSet<int> WindowDayParts(ChangeWindow w, TimeZoneInfo tz)
+    {
+        var parts = new HashSet<int>();
+        for (var u = w.StartUtc; u < w.EndUtc; u = u.AddHours(1))
+        {
+            var local = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(u, DateTimeKind.Utc), tz);
+            parts.Add(DayPartOfHour(local.Hour));
+        }
+        return parts;
+    }
+
     // A change window endpoint must land on the 00/06/12/18Z grid the snapshot blocks use.
     private static bool IsBlockAligned(DateTime utc) =>
         utc is { Minute: 0, Second: 0, Millisecond: 0 } && utc.Hour % 6 == 0;
@@ -710,6 +911,43 @@ public sealed class ForecastReconciler
     // edge where p is an undefined value cast from int (ToString() yields a number).
     private static bool TryMapPrecip(ChangePhenomenon p, out PrecipPhenomenon precip) =>
         Enum.TryParse(p.ToString(), out precip) && Enum.IsDefined(precip);
+
+    // WX-151: highest precipExpectation across blocks overlapping the window whose
+    // phenomenon is p — None when no such block (a block carrying a phenomenon
+    // always has a non-None expectation by the snapshot invariant). Used to compare
+    // the prior and new snapshots' in-window intensity for a phenomenon.
+    private static PrecipExpectation MaxExpect(ForecastSnapshotBody body, PrecipPhenomenon p, ChangeWindow w)
+    {
+        var max = PrecipExpectation.None;
+        foreach (var b in body.Blocks)
+            if (b.PrecipPhenomenon == p && BlockOverlapsWindow(b.StartUtc, w) && (int)b.PrecipExpectation > (int)max)
+                max = b.PrecipExpectation;
+        return max;
+    }
+
+    // WX-151: whether any block overlapping the window carries the safety severeFlag.
+    private static bool AnySevereInWindow(ForecastSnapshotBody body, ChangeWindow w) =>
+        body.Blocks.Any(b => b.SevereFlag && BlockOverlapsWindow(b.StartUtc, w));
+
+    // WX-151: severe within the window on a block carrying phenomenon p — the
+    // per-phenomenon severe axis, so an unrelated severe block does not vouch for a
+    // different phenomenon's change.
+    private static bool SevereForPhenomenon(ForecastSnapshotBody body, PrecipPhenomenon p, ChangeWindow w) =>
+        body.Blocks.Any(b => b.PrecipPhenomenon == p && b.SevereFlag && BlockOverlapsWindow(b.StartUtc, w));
+
+    // WX-151: true when the prior has a block at EVERY 6-hour step of the window.
+    // Weakening/clearing is only verifiable against a prior that fully covers the
+    // window — a prior reaching only part of a multi-block window (e.g. near its
+    // horizon edge) is incomplete evidence, so we treat it as uncoverable and do not
+    // reject (never reject what we can't prove wrong). Window endpoints are
+    // block-aligned (validated above) and blocks sit on the 00/06/12/18Z grid.
+    private static bool PriorFullyCoversWindow(ForecastSnapshotBody prior, ChangeWindow w)
+    {
+        for (var u = w.StartUtc; u < w.EndUtc; u = u.AddHours(6))
+            if (!prior.Blocks.Any(b => b.StartUtc == u))
+                return false;
+        return true;
+    }
 
     // WX-120 fall-safe, carried into the structured-report world (WX-130): true
     // when any requested language's narrative is near-blank. The narrative now

@@ -53,7 +53,7 @@ public class ForecastReconcilerTests
             { "tier": "plans", "phenomenon": "rain", "direction": "appearing", "window": { "startUtc": "2026-06-09T12:00:00Z", "endUtc": "2026-06-09T18:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
           ],
           "narrative": {
-            "en": { "changeSummary": "{ch1}Rain is now likely this morning.", "closing": "A wet stretch ahead — keep an umbrella handy." }
+            "en": { "changeSummary": "{ch1}Rain is now likely.", "closing": "A wet stretch ahead — keep an umbrella handy." }
           }
         }
         """;
@@ -178,7 +178,7 @@ public class ForecastReconcilerTests
             { "tier": "safety", "phenomenon": "thunderstorm", "direction": "appearing", "window": { "startUtc": "2026-06-09T12:00:00Z", "endUtc": "2026-06-09T18:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
           ],
           "narrative": {
-            "en": { "changeSummary": "{ch1}Severe storms are now likely this morning.", "closing": "Stay weather-aware today." }
+            "en": { "changeSummary": "{ch1}Severe storms are now likely.", "closing": "Stay weather-aware today." }
           }
         }
         """;
@@ -192,7 +192,7 @@ public class ForecastReconcilerTests
             { "tier": "safety", "phenomenon": "fog", "direction": "appearing", "window": { "startUtc": "2026-06-09T12:00:00Z", "endUtc": "2026-06-09T18:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
           ],
           "narrative": {
-            "en": { "changeSummary": "{ch1}Dense fog is now likely this morning.", "closing": "Allow extra time on the roads." }
+            "en": { "changeSummary": "{ch1}Dense fog is now likely.", "closing": "Allow extra time on the roads." }
           }
         }
         """;
@@ -205,6 +205,100 @@ public class ForecastReconcilerTests
     // A 6/9 12-18Z block carrying a severe thunderstorm — backs a safety-tier change.
     private const string SevereThunderstormBlockSnapshotJson = """
         {"schemaVersion":4,"blocks":[{"startUtc":"2026-06-09T12:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":24,"max":31},"windKt":{"min":10,"max":20},"precipExpectation":"likely","precipPhenomenon":"thunderstorm","severeFlag":true}]}
+        """;
+
+    // ── WX-151 prior-aware snapshots ──────────────────────────────────────────
+
+    // A 6/9 12-18Z block carrying rain at LIKELY (RainBlockSnapshotJson is the same
+    // block at possible) — a stronger prior, for weakening (Likely→Possible).
+    private const string RainLikelyBlockSnapshotJson = """
+        {"schemaVersion":4,"blocks":[{"startUtc":"2026-06-09T12:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":22,"max":30},"windKt":{"min":5,"max":12},"precipExpectation":"likely","precipPhenomenon":"rain","severeFlag":false}]}
+        """;
+
+    // A 6/9 12-18Z block carrying freezing precip (possible) — a prior whose hazard
+    // the new (rain) snapshot legitimately clears.
+    private const string FreezingPrecipBlockSnapshotJson = """
+        {"schemaVersion":4,"blocks":[{"startUtc":"2026-06-09T12:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":-1,"max":2},"windKt":{"min":5,"max":12},"precipExpectation":"possible","precipPhenomenon":"freezingPrecip","severeFlag":false}]}
+        """;
+
+    // A 6/9 12-18Z thunderstorm POSSIBLE, severeFlag FALSE — prior for the severe-
+    // escalation guard (expectation flat, severe rises false→true).
+    private const string StormPossibleNoSevereSnapshotJson = """
+        {"schemaVersion":4,"blocks":[{"startUtc":"2026-06-09T12:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":24,"max":31},"windKt":{"min":10,"max":20},"precipExpectation":"possible","precipPhenomenon":"thunderstorm","severeFlag":false}]}
+        """;
+
+    // A 6/9 12-18Z thunderstorm POSSIBLE, severeFlag TRUE — new snapshot for the
+    // severe-escalation guard, and for severe-appearing.
+    private const string StormPossibleSevereSnapshotJson = """
+        {"schemaVersion":4,"blocks":[{"startUtc":"2026-06-09T12:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":24,"max":31},"windKt":{"min":10,"max":20},"precipExpectation":"possible","precipPhenomenon":"thunderstorm","severeFlag":true}]}
+        """;
+
+    // ── WX-151 prior-aware change fixtures (window 6/9 12-18Z) ─────────────────
+    // changeSummaries avoid day-part words so the anchored-prose check stays inert
+    // (these fixtures exercise the prior-aware verification, not the prose check).
+
+    private const string RainWeakeningReportJson = """
+        {
+          "schemaVersion": 4,
+          "changes": [
+            { "tier": "plans", "phenomenon": "rain", "direction": "weakening", "window": { "startUtc": "2026-06-09T12:00:00Z", "endUtc": "2026-06-09T18:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
+          ],
+          "narrative": {
+            "en": { "changeSummary": "{ch1}The rain is easing off.", "closing": "Drier than it looked." }
+          }
+        }
+        """;
+
+    private const string StormStrengtheningReportJson = """
+        {
+          "schemaVersion": 4,
+          "changes": [
+            { "tier": "plans", "phenomenon": "thunderstorm", "direction": "strengthening", "window": { "startUtc": "2026-06-09T12:00:00Z", "endUtc": "2026-06-09T18:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
+          ],
+          "narrative": {
+            "en": { "changeSummary": "{ch1}The storm threat has stepped up.", "closing": "Worth keeping an eye on." }
+          }
+        }
+        """;
+
+    private const string SevereAppearingReportJson = """
+        {
+          "schemaVersion": 4,
+          "changes": [
+            { "tier": "safety", "phenomenon": "severe", "direction": "appearing", "window": { "startUtc": "2026-06-09T12:00:00Z", "endUtc": "2026-06-09T18:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
+          ],
+          "narrative": {
+            "en": { "changeSummary": "{ch1}Severe weather is now in the forecast.", "closing": "Stay weather-aware." }
+          }
+        }
+        """;
+
+    // A genuine change but the prose times it "this evening" while the window
+    // (6/9 12-18Z) is morning/afternoon in CDT — the anchored-prose contradiction.
+    private const string RainAppearingEveningProseReportJson = """
+        {
+          "schemaVersion": 4,
+          "changes": [
+            { "tier": "plans", "phenomenon": "rain", "direction": "appearing", "window": { "startUtc": "2026-06-09T12:00:00Z", "endUtc": "2026-06-09T18:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
+          ],
+          "narrative": {
+            "en": { "changeSummary": "{ch1}Rain develops this evening.", "closing": "Keep an umbrella handy." }
+          }
+        }
+        """;
+
+    // Same window, but the anchored sentence names an in-window part plus a
+    // transition word ("this morning … by evening") — must NOT be rejected.
+    private const string RainAppearingTransitionProseReportJson = """
+        {
+          "schemaVersion": 4,
+          "changes": [
+            { "tier": "plans", "phenomenon": "rain", "direction": "appearing", "window": { "startUtc": "2026-06-09T12:00:00Z", "endUtc": "2026-06-09T18:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
+          ],
+          "narrative": {
+            "en": { "changeSummary": "{ch1}Rain develops this morning, tapering by evening.", "closing": "A damp start." }
+          }
+        }
         """;
 
     // A safety-tier hazard CLEARING — the new snapshot correctly no longer carries
@@ -829,7 +923,7 @@ public class ForecastReconcilerTests
             structuredReportJson: RainAppearingAlignedReportJson);
 
         var degraded = Assert.IsType<ReconcileResult.Degraded>(await RunReconciler(responseJson));
-        Assert.Contains("not backed", degraded.Reason);
+        Assert.Contains("did not occur", degraded.Reason);
     }
 
     // ── WX-149 prose-hygiene validator assertions ────────────────────────────
@@ -847,7 +941,7 @@ public class ForecastReconcilerTests
             structuredReportJson: PhantomThunderstormSafetyReportJson);
 
         var degraded = Assert.IsType<ReconcileResult.Degraded>(await RunReconciler(responseJson));
-        Assert.Contains("not backed", degraded.Reason);
+        Assert.Contains("did not occur", degraded.Reason);
     }
 
     [Fact]
@@ -958,13 +1052,16 @@ public class ForecastReconcilerTests
         // A removal-direction safety change ("the ice threat has lifted"): the new
         // snapshot legitimately carries no safety signal, but a newly removed hazard
         // is still safety-tier news — the tier-backing check must not false-reject it.
+        // The prior carried freezing precip in-window, so the prior-aware check sees
+        // a real clearing (WX-151).
         var responseJson = BuildClaudeResponseJson(
             finalSnapshotJson: RainBlockSnapshotJson,
             reasoningTrace: "trace",
             inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
             structuredReportJson: SafetyClearingReportJson);
 
-        Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
+        Assert.IsType<ReconcileResult.Success>(
+            await RunReconciler(responseJson, prior: PriorOf(FreezingPrecipBlockSnapshotJson)));
     }
 
     [Fact]
@@ -982,6 +1079,194 @@ public class ForecastReconcilerTests
         Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
     }
 
+    // ── WX-151 prior-aware change verification ────────────────────────────────
+
+    private const string DryPriorSnapshotJson = """{"schemaVersion":4,"blocks":[]}""";
+
+    [Fact]
+    public async Task PriorAware_PrecipUnchanged_PhantomAppearing_Degrades()
+    {
+        // The send-1977 repro essence: prior and new carry the SAME rain in-window,
+        // so "rain appearing" is a change that did not occur. Rejected → degrade.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: RainBlockSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: RainAppearingAlignedReportJson);
+
+        var degraded = Assert.IsType<ReconcileResult.Degraded>(
+            await RunReconciler(responseJson, prior: PriorOf(RainBlockSnapshotJson)));
+        Assert.Contains("did not occur", degraded.Reason);
+    }
+
+    [Fact]
+    public async Task PriorAware_DryToRain_GenuineAppearing_Succeeds()
+    {
+        // Prior was dry in-window, new carries rain — a real onset, not a phantom.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: RainBlockSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: RainAppearingAlignedReportJson);
+
+        Assert.IsType<ReconcileResult.Success>(
+            await RunReconciler(responseJson, prior: PriorOf(DryPriorSnapshotJson)));
+    }
+
+    [Fact]
+    public async Task PriorAware_LikelyToPossible_Weakening_Succeeds()
+    {
+        // Prior rain Likely, new rain Possible — a real weakening.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: RainBlockSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: RainWeakeningReportJson);
+
+        Assert.IsType<ReconcileResult.Success>(
+            await RunReconciler(responseJson, prior: PriorOf(RainLikelyBlockSnapshotJson)));
+    }
+
+    [Fact]
+    public async Task PriorAware_RainUnchanged_PhantomWeakening_Degrades()
+    {
+        // Prior fully covers the window and carries the SAME rain as new, so a
+        // "rain weakening" is a change that did not occur — rejected.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: RainBlockSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: RainWeakeningReportJson);
+
+        var degraded = Assert.IsType<ReconcileResult.Degraded>(
+            await RunReconciler(responseJson, prior: PriorOf(RainBlockSnapshotJson)));
+        Assert.Contains("did not occur", degraded.Reason);
+    }
+
+    [Fact]
+    public async Task PriorAware_PhantomStrengthening_PhenomenonAbsentBothSides_Degrades()
+    {
+        // "thunderstorm strengthening" over a window that carries only rain in both
+        // prior and new — the storm exists nowhere, so the change is phantom.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: RainBlockSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: StormStrengtheningReportJson);
+
+        var degraded = Assert.IsType<ReconcileResult.Degraded>(
+            await RunReconciler(responseJson, prior: PriorOf(RainBlockSnapshotJson)));
+        Assert.Contains("did not occur", degraded.Reason);
+    }
+
+    [Fact]
+    public async Task PriorAware_SevereEscalation_FlatExpectation_NotFalseRejected_Succeeds()
+    {
+        // WX-148 worked example: thunderstorm expectation flat (Possible→Possible) but
+        // severeFlag rises false→true. That IS a real strengthening — must not be
+        // rejected just because the expectation band did not move.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: StormPossibleSevereSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: StormStrengtheningReportJson);
+
+        Assert.IsType<ReconcileResult.Success>(
+            await RunReconciler(responseJson, prior: PriorOf(StormPossibleNoSevereSnapshotJson)));
+    }
+
+    [Fact]
+    public async Task PriorAware_SeverePhenomenon_GenuineAppearing_Succeeds()
+    {
+        // severeFlag false→true in-window backs a "severe appearing" change.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: StormPossibleSevereSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: SevereAppearingReportJson);
+
+        Assert.IsType<ReconcileResult.Success>(
+            await RunReconciler(responseJson, prior: PriorOf(StormPossibleNoSevereSnapshotJson)));
+    }
+
+    [Fact]
+    public async Task PriorAware_SeverePhenomenon_AlreadySevere_PhantomAppearing_Degrades()
+    {
+        // Prior already severe in-window — "severe appearing" did not happen.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: StormPossibleSevereSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: SevereAppearingReportJson);
+
+        var degraded = Assert.IsType<ReconcileResult.Degraded>(
+            await RunReconciler(responseJson, prior: PriorOf(StormPossibleSevereSnapshotJson)));
+        Assert.Contains("did not occur", degraded.Reason);
+    }
+
+    [Fact]
+    public async Task PriorAware_Weakening_NullPrior_NotRejected_Succeeds()
+    {
+        // First send (no prior): weakening/clearing can't be verified — there's
+        // nothing to have weakened from — so it must NOT be hard-rejected (which
+        // would drop a guaranteed first weather report). Appearing/strengthening
+        // still get new-snapshot backing.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: RainBlockSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: RainWeakeningReportJson);
+
+        Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, prior: null));
+    }
+
+    [Fact]
+    public async Task PriorAware_MalformedPriorBody_FallsBackToNewOnly_Succeeds()
+    {
+        // A prior whose body can't be parsed is non-fatal: the cycle logs a WARN and
+        // the prior-aware check degenerates to new-only backing rather than failing.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: RainBlockSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: RainAppearingAlignedReportJson);
+
+        Assert.IsType<ReconcileResult.Success>(
+            await RunReconciler(responseJson, prior: PriorOf("{ this is not valid json")));
+    }
+
+    [Fact]
+    public async Task AnchoredProse_DayPartWordOutsideChangeWindow_Degrades()
+    {
+        // Genuine onset (dry→rain), but the prose times it "this evening" while the
+        // change window (12-18Z) is morning/afternoon in CDT — a narrative/window
+        // contradiction the {q:time} check can't see (no token).
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: RainBlockSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: RainAppearingEveningProseReportJson);
+
+        var degraded = Assert.IsType<ReconcileResult.Degraded>(
+            await RunReconciler(responseJson, tz: Cdt, prior: PriorOf(DryPriorSnapshotJson)));
+        Assert.Contains("contradicts the change's own window", degraded.Reason);
+    }
+
+    [Fact]
+    public async Task AnchoredProse_InWindowWordPlusTransition_NotRejected_Succeeds()
+    {
+        // "this morning, tapering by evening": morning is in-window, so the sentence
+        // is on-window and the trailing transition word must not trigger a rejection.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: RainBlockSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: RainAppearingTransitionProseReportJson);
+
+        Assert.IsType<ReconcileResult.Success>(
+            await RunReconciler(responseJson, tz: Cdt, prior: PriorOf(DryPriorSnapshotJson)));
+    }
+
     // ── helpers ─────────────────────────────────────────────────────────────
 
     // A fixed UTC-5 zone (US Central in June / CDT) used by the WX-149 prose-token
@@ -991,13 +1276,13 @@ public class ForecastReconcilerTests
     private static readonly TimeZoneInfo Cdt =
         TimeZoneInfo.CreateCustomTimeZone("Test-CDT", TimeSpan.FromHours(-5), "Test CDT", "Test CDT");
 
-    private static async Task<ReconcileResult> RunReconciler(string anthropicResponseJson, bool allowSkip = false, TimeZoneInfo? tz = null)
+    private static async Task<ReconcileResult> RunReconciler(string anthropicResponseJson, bool allowSkip = false, TimeZoneInfo? tz = null, ForecastSnapshot? prior = null)
         => await RunReconciler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent(anthropicResponseJson, Encoding.UTF8, "application/json"),
-        }, allowSkip, tz: tz);
+        }, allowSkip, tz: tz, prior: prior);
 
-    private static async Task<ReconcileResult> RunReconciler(Func<HttpRequestMessage, HttpResponseMessage> respond, bool allowSkip = false, string[]? narrativeLanguages = null, TimeZoneInfo? tz = null)
+    private static async Task<ReconcileResult> RunReconciler(Func<HttpRequestMessage, HttpResponseMessage> respond, bool allowSkip = false, string[]? narrativeLanguages = null, TimeZoneInfo? tz = null, ForecastSnapshot? prior = null)
     {
         var http = new HttpClient(new StubHandler(respond));
         var claude = new ClaudeClient(http, apiKey: "test-key", model: "claude-sonnet-4-6", personaPrefix: "Persona text.");
@@ -1009,7 +1294,7 @@ public class ForecastReconcilerTests
             gfsModelRunUtc: DateTime.UtcNow,
             tafIssuanceUtc: null,
             tafValidToUtc: null,
-            prior: null,
+            prior: prior,
             narrativeLanguages: narrativeLanguages ?? new[] { "en" },
             tz: tz ?? TimeZoneInfo.Utc,
             changeSeverity: ChangeSeverity.None,
@@ -1017,6 +1302,16 @@ public class ForecastReconcilerTests
             allowSkip: allowSkip,
             changedSinceLastSend: Array.Empty<TriggerSource>());
     }
+
+    // WX-151: wrap a final_snapshot JSON as a prior ForecastSnapshot for the
+    // prior-aware change-verification tests.
+    private static ForecastSnapshot PriorOf(string bodyJson) => new()
+    {
+        StationIcao = "KTEST",
+        GeneratedAtUtc = new DateTime(2026, 6, 9, 18, 0, 0, DateTimeKind.Utc),
+        SchemaVersion = 4,
+        Body = bodyJson,
+    };
 
     private static WeatherSnapshot BuildSnapshot() => new()
     {

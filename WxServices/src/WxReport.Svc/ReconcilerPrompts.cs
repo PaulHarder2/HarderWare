@@ -229,6 +229,19 @@ internal static class ReconcilerPrompts
             window affected, typed quantities, and a summaryToken ("ch1", "ch2",
             … in array order). Empty when nothing changed (e.g. a steady-forecast
             scheduled send).
+              - Every change MUST be a real difference from prior_snapshot. A
+                change is news only when this reconciled forecast differs from
+                prior_snapshot in its window: precipitation appearing where the
+                prior was dry, strengthening or weakening a band, clearing, or a
+                severe flag flipping. If the prior already carried the same
+                precipitation at the same likelihood in that window, it has NOT
+                changed — do not narrate it. Never invent a downgrade, an onset,
+                or a clearing that the prior-vs-now comparison does not show.
+              - Sky-cover drift (partly/mostly cloudy/overcast) and a few knots of
+                wind within the same impact band are NOT "what's changed"
+                precipitation news. When a cycle's only differences from
+                prior_snapshot are that kind of wobble, the changes list is empty;
+                do not manufacture a precipitation change to fill the band.
               - Each change window MUST align to the 6-hour block grid: startUtc
                 and endUtc are 00/06/12/18Z block boundaries, and the window
                 spans exactly the affected blocks. The per-day grid the reader
