@@ -209,8 +209,8 @@ public class ForecastReconcilerTests
 
     // ── WX-151 prior-aware snapshots ──────────────────────────────────────────
 
-    // A 6/9 12-18Z block carrying possible rain (same window as RainBlockSnapshotJson)
-    // but at LIKELY — a stronger prior, for weakening (Likely→Possible).
+    // A 6/9 12-18Z block carrying rain at LIKELY (RainBlockSnapshotJson is the same
+    // block at possible) — a stronger prior, for weakening (Likely→Possible).
     private const string RainLikelyBlockSnapshotJson = """
         {"schemaVersion":4,"blocks":[{"startUtc":"2026-06-09T12:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":22,"max":30},"windKt":{"min":5,"max":12},"precipExpectation":"likely","precipPhenomenon":"rain","severeFlag":false}]}
         """;
@@ -1125,6 +1125,22 @@ public class ForecastReconcilerTests
 
         Assert.IsType<ReconcileResult.Success>(
             await RunReconciler(responseJson, prior: PriorOf(RainLikelyBlockSnapshotJson)));
+    }
+
+    [Fact]
+    public async Task PriorAware_RainUnchanged_PhantomWeakening_Degrades()
+    {
+        // Prior fully covers the window and carries the SAME rain as new, so a
+        // "rain weakening" is a change that did not occur — rejected.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: RainBlockSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: RainWeakeningReportJson);
+
+        var degraded = Assert.IsType<ReconcileResult.Degraded>(
+            await RunReconciler(responseJson, prior: PriorOf(RainBlockSnapshotJson)));
+        Assert.Contains("did not occur", degraded.Reason);
     }
 
     [Fact]

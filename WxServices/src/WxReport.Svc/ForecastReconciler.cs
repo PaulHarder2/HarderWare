@@ -484,7 +484,7 @@ public sealed class ForecastReconciler
             // reject it (the WX-149 "never reject what you can't prove wrong" policy);
             // appearing/strengthening still get new-snapshot backing via newE/newSevere,
             // preserving WX-148's behaviour on a first send.
-            bool priorCoversWindow = prior is not null && prior.Blocks.Any(b => BlockOverlapsWindow(b.StartUtc, w));
+            bool priorCoversWindow = prior is not null && PriorFullyCoversWindow(prior, w);
 
             if (TryMapPrecip(change.Phenomenon, out var precip))
             {
@@ -857,7 +857,7 @@ public sealed class ForecastReconciler
                 int after = idx + word.Length;
                 bool wholeWord = (idx == 0 || !char.IsLetter(prose[idx - 1]))
                     && (after >= prose.Length || !char.IsLetter(prose[after]));
-                if (wholeWord && !QualifiedByOtherDay(prose, idx))
+                if (wholeWord && !QualifiedByOtherDay(prose, sentStart, idx))
                     found.Add((prose.Substring(idx, word.Length), part));
                 from = after;
             }
@@ -866,15 +866,17 @@ public sealed class ForecastReconciler
     }
 
     // True when the word ending at the letters before wordStart is a DayQualifier.
-    private static bool QualifiedByOtherDay(string prose, int wordStart)
+    // Bounded by sentStart so the scan never crosses into a previous sentence — a
+    // "Friday." ending the prior sentence must not qualify a word in this one.
+    private static bool QualifiedByOtherDay(string prose, int sentStart, int wordStart)
     {
         int i = wordStart - 1;
-        while (i >= 0 && !char.IsLetter(prose[i]))
+        while (i >= sentStart && !char.IsLetter(prose[i]))
             i--;
-        if (i < 0)
+        if (i < sentStart)
             return false;
         int end = i + 1;
-        while (i >= 0 && char.IsLetter(prose[i]))
+        while (i >= sentStart && char.IsLetter(prose[i]))
             i--;
         var prev = prose.Substring(i + 1, end - (i + 1));
         return DayQualifiers.Contains(prev, StringComparer.OrdinalIgnoreCase);
@@ -932,6 +934,20 @@ public sealed class ForecastReconciler
     // different phenomenon's change.
     private static bool SevereForPhenomenon(ForecastSnapshotBody body, PrecipPhenomenon p, ChangeWindow w) =>
         body.Blocks.Any(b => b.PrecipPhenomenon == p && b.SevereFlag && BlockOverlapsWindow(b.StartUtc, w));
+
+    // WX-151: true when the prior has a block at EVERY 6-hour step of the window.
+    // Weakening/clearing is only verifiable against a prior that fully covers the
+    // window — a prior reaching only part of a multi-block window (e.g. near its
+    // horizon edge) is incomplete evidence, so we treat it as uncoverable and do not
+    // reject (never reject what we can't prove wrong). Window endpoints are
+    // block-aligned (validated above) and blocks sit on the 00/06/12/18Z grid.
+    private static bool PriorFullyCoversWindow(ForecastSnapshotBody prior, ChangeWindow w)
+    {
+        for (var u = w.StartUtc; u < w.EndUtc; u = u.AddHours(6))
+            if (!prior.Blocks.Any(b => b.StartUtc == u))
+                return false;
+        return true;
+    }
 
     // WX-120 fall-safe, carried into the structured-report world (WX-130): true
     // when any requested language's narrative is near-blank. The narrative now
