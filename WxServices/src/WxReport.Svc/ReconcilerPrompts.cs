@@ -241,6 +241,19 @@ internal static class ReconcilerPrompts
                 STRENGTHENING must correspond to a final_snapshot block that
                 actually carries that phenomenon within the window. Never report
                 precipitation (or a tier) the reconciled snapshot does not back.
+              - A change's PHENOMENON must be one the blocks in its window carry:
+                do not label a change "thunderstorm" when the blocks are rain.
+              - A change's TIER must be backed by the blocks. The safety-critical
+                tier in particular requires a block in the window carrying a
+                safety-grade signal: severeFlag set, freezing precipitation or
+                snow, or sustained wind of 34 kt or more. Ordinary "possible rain"
+                with no severe block is plans-affecting, NOT safety-critical — do
+                not over-escalate the tier above what the snapshot supports. This
+                block-backing requirement applies only to phenomena the snapshot
+                can encode; safety-critical conditions it cannot represent — dense
+                fog and the other obscurations, or extreme temperature — still
+                follow the significance hierarchy above, so a genuine dense-fog
+                hazard remains safety-critical without a severe/precip/wind block.
           • narrative — one entry per language code requested below, each with
             exactly two prose sections: changeSummary (null when there is no
             change band) and closing (the "In summary:" wrap-up). The current-
@@ -276,6 +289,17 @@ internal static class ReconcilerPrompts
             unit system — no "in the low 90s", no "below freezing point of 32".
             Say "highs near {q:temp:33.5}", "gusts to {q:gust:30}". Relative or
             unit-free phrasing ("a sharp warm-up", "near freezing") is fine.
+          • Never write raw UTC block notation in prose. The 6-hour grid
+            shorthand ("12-18Z", "18Z", "the 12-18Z block") is internal
+            engineering notation; it must NEVER reach the reader. Express every
+            instant as a {q:time:...} token, which the renderer shows in the
+            recipient's own local time.
+          • Prose time-of-day words must match the LOCAL time their {q:time}
+            token renders to. The renderer converts each token to the locality's
+            local clock, so a token at 12:00Z that is 7:00 AM locally reads as
+            "morning", not "afternoon". When you write a day-part word
+            ("morning", "afternoon", "evening", "overnight") beside a {q:time}
+            token, make the word agree with that token's local hour.
           • Change anchors: begin each changeSummary sentence that narrates a
             change with that change's anchor token, e.g. "{ch1}Thunderstorms are
             now expected after {q:time:...}." The anchor renders to nothing; it
