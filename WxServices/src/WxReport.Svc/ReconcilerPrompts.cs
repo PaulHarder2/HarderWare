@@ -248,7 +248,12 @@ internal static class ReconcilerPrompts
                 safety-grade signal: severeFlag set, freezing precipitation or
                 snow, or sustained wind of 34 kt or more. Ordinary "possible rain"
                 with no severe block is plans-affecting, NOT safety-critical — do
-                not over-escalate the tier above what the snapshot supports.
+                not over-escalate the tier above what the snapshot supports. This
+                block-backing requirement applies only to phenomena the snapshot
+                can encode; safety-critical conditions it cannot represent — dense
+                fog and the other obscurations, or extreme temperature — still
+                follow the significance hierarchy above, so a genuine dense-fog
+                hazard remains safety-critical without a severe/precip/wind block.
           • narrative — one entry per language code requested below, each with
             exactly two prose sections: changeSummary (null when there is no
             change band) and closing (the "In summary:" wrap-up). The current-

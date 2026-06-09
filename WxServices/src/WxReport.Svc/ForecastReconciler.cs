@@ -524,11 +524,13 @@ public sealed class ForecastReconciler
     // scanning prose, so a token's interior (a {q:time:...Z} trailing Z, a decimal
     // inside {q:pressure:1013.2}) cannot be mistaken for a leak or a sentence end.
     private static readonly Regex BraceToken = new(@"\{[^}]*\}", RegexOptions.Compiled);
-    // Raw 6-hour-grid shorthand: a 1-2 digit hour immediately followed by an
-    // uppercase Z on a word boundary ("18Z", and each half of "12-18Z"). No space
-    // between digits and Z — the real leak has none, and allowing one only widens
-    // the false-positive surface ("5 Zulu", a number adjacent to a Z-word).
-    private static readonly Regex RawUtcBlock = new(@"\d{1,2}Z\b", RegexOptions.Compiled);
+    // Raw 6-hour-grid shorthand: a 1-2 digit hour immediately followed by a Z on a
+    // word boundary ("18Z", and each half of "12-18Z"). Case-insensitive so a
+    // lower-cased leak ("18z") is caught too (CodeRabbit, PR #87). No space between
+    // digits and Z — the real leak has none, and allowing one only widens the
+    // false-positive surface ("5 Zulu", a number adjacent to a Z-word).
+    private static readonly Regex RawUtcBlock =
+        new(@"\d{1,2}Z\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     // {q:time:<ISO-8601 UTC>} — the only sanctioned way to express an instant in
     // prose. Captures the inner timestamp so we can render it to a local hour.
     private static readonly Regex QTimeToken = new(@"\{q:time:([^}]+)\}", RegexOptions.Compiled);

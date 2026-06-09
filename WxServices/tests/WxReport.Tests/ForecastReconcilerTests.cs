@@ -131,6 +131,17 @@ public class ForecastReconcilerTests
         }
         """;
 
+    // A lower-cased leak ("12-18z") must be caught too (case-insensitive, PR #87).
+    private const string RawUtcLeakLowercaseReportJson = """
+        {
+          "schemaVersion": 4,
+          "changes": [],
+          "narrative": {
+            "en": { "changeSummary": null, "closing": "The afternoon block (12-18z) has shifted from dry to wet." }
+          }
+        }
+        """;
+
     // Defect 2 (send 1927): prose says "afternoon" next to a {q:time} token at
     // 12:00Z, which renders to 7:00 AM local (CDT) — the morning, not afternoon.
     private const string ProseTimeMismatchReportJson = """
@@ -865,6 +876,20 @@ public class ForecastReconcilerTests
             reasoningTrace: "trace",
             inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
             structuredReportJson: RawUtcLeakReportJson);
+
+        var degraded = Assert.IsType<ReconcileResult.Degraded>(await RunReconciler(responseJson));
+        Assert.Contains("raw UTC block notation", degraded.Reason);
+    }
+
+    [Fact]
+    public async Task RawUtcBlockNotation_LowerCase_InProse_Degrades()
+    {
+        // Case-insensitive: a lower-cased "12-18z" leak is caught too (PR #87).
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: RainBlockSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: RawUtcLeakLowercaseReportJson);
 
         var degraded = Assert.IsType<ReconcileResult.Degraded>(await RunReconciler(responseJson));
         Assert.Contains("raw UTC block notation", degraded.Reason);
