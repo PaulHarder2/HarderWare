@@ -1,5 +1,7 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 using MetarParser.Data.Entities;
 
@@ -279,6 +281,7 @@ public sealed class ForecastReconciler
                 var structuredReport = StructuredReportBody.Deserialize(structuredReportJson);
                 ValidateNarrativeContract(structuredReport, narrativeLanguages);
                 ValidateChangeSnapshotConsistency(structuredReport, finalSnapshot);
+                ValidateProseHygiene(structuredReport, tz);
 
                 // WX-120 fall-safe, carried forward to the structured-report world:
                 // a present-but-near-blank narrative — e.g. Claude submitted a report
@@ -446,7 +449,247 @@ public sealed class ForecastReconciler
                         + $"window {w.StartUtc:O}..{w.EndUtc:O}) is not backed by any final_snapshot block carrying "
                         + $"{precip} precipitation in that window; the change narrative and the day-grid would disagree.");
             }
+
+            // WX-149 (b): tier over-escalation. A Safety-tier change must be backed
+            // by a block in its window that actually carries a safety-grade signal —
+            // the snapshot's severeFlag (severe convection or wind >= 50 kt, per
+            // GfsSnapshotBuilder.DeriveSevereFlag), freezing precip or snow, or
+            // sustained wind >= 34 kt (tropical-storm force, the significance
+            // hierarchy's bright line for non-thunderstorm wind). This catches
+            // defect 4 (send 1938): "possible rain" emitted at the safety tier with
+            // no severe block to back it. severeFlag is deliberately NOT the sole
+            // criterion: it is narrow (it never encodes dense fog, freezing precip,
+            // or 34-49 kt winds the hierarchy still calls safety-critical), so a bare
+            // "safety => severeFlag" rule would reject legitimate ice/wind safety
+            // sends. Phenomena the snapshot cannot encode a safety signal for at all
+            // — fog/haze/smoke/dust (Obscuration is reserved, always None today) and
+            // temperature (no safety threshold) — are exempt and lean on the prompt
+            // rule (WX-149 documented residual). Gated on APPEARING/STRENGTHENING
+            // exactly as the precip-backing check above: a safety hazard WEAKENING
+            // or CLEARING is legitimate safety-tier news (the significance hierarchy
+            // counts a "newly removed hazard" as news at any horizon), and the new
+            // snapshot correctly no longer carries the signal — checking those would
+            // false-reject a real "the ice threat has lifted" send.
+            if (change.Tier == ChangeTier.Safety
+                && change.Direction is ChangeDirection.Appearing or ChangeDirection.Strengthening
+                && SafetyTierIsVerifiable(change.Phenomenon))
+            {
+                bool safetyBacked = finalSnapshot.Blocks.Any(b =>
+                    BlockOverlapsWindow(b.StartUtc, w)
+                    && (b.SevereFlag
+                        || b.PrecipPhenomenon is PrecipPhenomenon.FreezingPrecip or PrecipPhenomenon.Snow
+                        || b.WindKt.Max >= SafetyWindKt));
+                if (!safetyBacked)
+                    throw new JsonException(
+                        $"structured_report change '{change.SummaryToken}' is tier '{change.Tier}' "
+                        + $"({change.Phenomenon}) but no final_snapshot block in its window "
+                        + $"{w.StartUtc:O}..{w.EndUtc:O} carries a safety-grade signal (severeFlag, "
+                        + "freezing/snow precip, or sustained wind >= 34 kt); the tier is over-escalated.");
+            }
         }
+    }
+
+    // Tropical-storm-force sustained wind — the significance hierarchy's safety
+    // bright line for non-thunderstorm wind (ReconcilerPrompts significance tiers).
+    private const int SafetyWindKt = 34;
+
+    // True when the final_snapshot can deterministically carry a safety-grade
+    // signal for this phenomenon, so a Safety-tier claim is checkable against the
+    // blocks. Fog/haze/smoke/dust have no block field (Obscuration is reserved,
+    // always None today) and temperature has no safety threshold, so a Safety-tier
+    // change naming one of those is exempt from the backing check and governed by
+    // the prompt rule alone (WX-149 documented residual). Severe, the precip
+    // phenomena, and wind/wind-shift remain verifiable.
+    private static bool SafetyTierIsVerifiable(ChangePhenomenon p) => p is not (
+        ChangePhenomenon.Fog or ChangePhenomenon.Haze or ChangePhenomenon.Smoke
+        or ChangePhenomenon.Dust or ChangePhenomenon.Temperature);
+
+    // WX-149: prose hygiene over the language-keyed narrative — two reader-facing
+    // faults the structured-schema and the change/snapshot consistency checks
+    // cannot see, because they live in the prose itself. Both fail closed via
+    // JsonException so they route through the same retry-with-feedback → degrade
+    // path as every other contract check. Applied to BOTH narrative sections
+    // (changeSummary and closing); a leak or a contradiction is just as wrong in
+    // the closing wrap-up as in the change band.
+    private static void ValidateProseHygiene(StructuredReportBody report, TimeZoneInfo tz)
+    {
+        foreach (var (lang, sections) in report.Narrative)
+        {
+            CheckProse(lang, sections.ChangeSummary, tz);
+            CheckProse(lang, sections.Closing, tz);
+        }
+    }
+
+    // Matches any {...} token; used to mask tokens to equal-length blanks before
+    // scanning prose, so a token's interior (a {q:time:...Z} trailing Z, a decimal
+    // inside {q:pressure:1013.2}) cannot be mistaken for a leak or a sentence end.
+    private static readonly Regex BraceToken = new(@"\{[^}]*\}", RegexOptions.Compiled);
+    // Raw 6-hour-grid shorthand: a 1-2 digit hour immediately followed by an
+    // uppercase Z on a word boundary ("18Z", and each half of "12-18Z"). No space
+    // between digits and Z — the real leak has none, and allowing one only widens
+    // the false-positive surface ("5 Zulu", a number adjacent to a Z-word).
+    private static readonly Regex RawUtcBlock = new(@"\d{1,2}Z\b", RegexOptions.Compiled);
+    // {q:time:<ISO-8601 UTC>} — the only sanctioned way to express an instant in
+    // prose. Captures the inner timestamp so we can render it to a local hour.
+    private static readonly Regex QTimeToken = new(@"\{q:time:([^}]+)\}", RegexOptions.Compiled);
+
+    private static void CheckProse(string lang, string? prose, TimeZoneInfo tz)
+    {
+        if (string.IsNullOrEmpty(prose))
+            return;
+
+        // Mask every {...} token to equal-length blanks so none of the three scans
+        // can see inside a token: the raw-UTC scan ignores a {q:time:...Z} token's
+        // own trailing Z, the sentence-boundary scan ignores a decimal inside
+        // {q:pressure:1013.2}, and the day-part word search ignores token interiors
+        // — while token offsets still line up with the original (same length).
+        string masked = BraceToken.Replace(prose, m => new string(' ', m.Length));
+
+        // (c) Raw internal UTC block-notation leak (defect 3, send 1938:
+        // "...the Wednesday afternoon block (12-18Z) has shifted..."). Internal
+        // 6-hour-grid shorthand must never reach the reader; instants are emitted
+        // only as {q:time:...} tokens the renderer localizes.
+        var leak = RawUtcBlock.Match(masked);
+        if (leak.Success)
+            throw new JsonException(
+                $"structured_report narrative '{lang}' leaks raw UTC block notation "
+                + $"('{leak.Value.Trim()}') into recipient prose; express instants only as "
+                + "{q:time:...} tokens, never the internal NNZ block shorthand.");
+
+        // (2) Prose time-of-day word must agree with its {q:time} token's LOCAL
+        // rendering (defect 2, send 1927: "...develop Saturday afternoon,
+        // {q:time:...T12:00:00Z}" — that token renders to 7:00 AM, i.e. morning).
+        // For each token, bucket its local hour into a day part and compare it
+        // against the nearest unambiguous day-part word DIRECTLY associated with
+        // the token. Only an unambiguous contradiction rejects (see DayPartWords
+        // and NearestDayPartWord) — the validator must never reject prose it cannot
+        // prove wrong. The {q:time} match runs on the original prose to read the
+        // timestamp; its offsets index the equal-length masked string.
+        foreach (Match m in QTimeToken.Matches(prose))
+        {
+            if (!DateTime.TryParse(m.Groups[1].Value, CultureInfo.InvariantCulture,
+                    DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var instantUtc))
+                continue;  // token-grammar validation is ReportTokens' job; skip an unparseable instant here
+
+            int localHour = TimeZoneInfo.ConvertTimeFromUtc(
+                DateTime.SpecifyKind(instantUtc, DateTimeKind.Utc), tz).Hour;
+            int tokenPart = DayPartOfHour(localHour);
+
+            var (word, wordPart) = NearestDayPartWord(masked, m.Index, m.Index + m.Length);
+            if (word is not null && wordPart != tokenPart)
+                throw new JsonException(
+                    $"structured_report narrative '{lang}' says \"{word}\" next to a {{q:time}} "
+                    + $"token that renders to the {DayPartName(tokenPart)} (local hour {localHour}); "
+                    + "the prose time-of-day word contradicts the token's local rendering.");
+        }
+    }
+
+    // Day-part buckets, mirroring StructuredReportRenderer.PartOf so the validator
+    // reads a {q:time} clock exactly as the renderer (and the reader) will:
+    // 0 overnight (00-06), 1 morning (06-12), 2 afternoon (12-18), 3 evening (18-24).
+    private static int DayPartOfHour(int hour) => hour switch
+    {
+        >= 6 and < 12 => 1,
+        >= 12 and < 18 => 2,
+        >= 18 => 3,
+        _ => 0,
+    };
+
+    private static string DayPartName(int part) => part switch
+    {
+        1 => "morning",
+        2 => "afternoon",
+        3 => "evening",
+        _ => "overnight",
+    };
+
+    // UNAMBIGUOUS day-part words only. Words whose local bucket is genuinely
+    // ambiguous are deliberately omitted so the check cannot false-reject: English
+    // "tonight"/"night" (evening OR overnight), and the Spanish "mañana" (morning
+    // OR tomorrow), "tarde" (afternoon OR evening), "noche" (evening OR night).
+    // English covers the common case and the 6/13 Spring repro; Spanish
+    // contributes only the unambiguous pre-dawn "madrugada". The residual leans on
+    // the prompt rule (WX-149 documented residual). Whole-word, case-insensitive.
+    private static readonly (string Word, int Part)[] DayPartWords =
+    {
+        ("overnight", 0),
+        ("morning", 1),
+        ("afternoon", 2),
+        ("evening", 3),
+        ("madrugada", 0),
+    };
+
+    // The unambiguous day-part word that DIRECTLY governs the token: searched only
+    // within the token's sentence, and only a word whose gap to the token holds no
+    // other word (no letters — just whitespace and punctuation) qualifies. That
+    // keeps the check to words the reader plainly attaches to this instant ("...
+    // Saturday afternoon, {q:time}") and rejects a day-part word bound to a
+    // DIFFERENT time reference in a compound sentence ("...Friday evening, then
+    // redevelop {q:time} Saturday..."), which the validator cannot prove wrong.
+    // Returns (null, -1) when no such word is directly associated. The trade is
+    // recall on the far side of a connector ("{q:time} in the afternoon") — that
+    // residual leans on the prompt rule, consistent with the conservative design.
+    private static (string? Word, int Part) NearestDayPartWord(string prose, int tokenStart, int tokenEnd)
+    {
+        int sentStart = SentenceStart(prose, tokenStart);
+        int sentEnd = SentenceEnd(prose, tokenEnd);
+
+        (string? Word, int Part) best = (null, -1);
+        int bestDist = int.MaxValue;
+        foreach (var (word, part) in DayPartWords)
+        {
+            int from = sentStart;
+            while (from < sentEnd)
+            {
+                int idx = prose.IndexOf(word, from, sentEnd - from, StringComparison.OrdinalIgnoreCase);
+                if (idx < 0)
+                    break;
+                int after = idx + word.Length;
+                bool wholeWord = (idx == 0 || !char.IsLetter(prose[idx - 1]))
+                    && (after >= prose.Length || !char.IsLetter(prose[after]));
+                if (wholeWord)
+                {
+                    // Gap between the word and the token (they never overlap — a
+                    // day-part word cannot sit inside a masked token). The word
+                    // governs the token only when that gap holds no other word.
+                    (int gapStart, int gapEnd) = after <= tokenStart
+                        ? (after, tokenStart)
+                        : (tokenEnd, idx);
+                    int dist = gapEnd - gapStart;
+                    if (dist < bestDist && !HasLetter(prose, gapStart, gapEnd))
+                    {
+                        bestDist = dist;
+                        best = (prose.Substring(idx, word.Length), part);
+                    }
+                }
+                from = after;
+            }
+        }
+        return best;
+    }
+
+    private static bool HasLetter(string s, int start, int end)
+    {
+        for (int i = start; i < end; i++)
+            if (char.IsLetter(s[i]))
+                return true;
+        return false;
+    }
+
+    private static int SentenceStart(string prose, int pos)
+    {
+        for (int i = pos - 1; i >= 0; i--)
+            if (prose[i] is '.' or '!' or '?')
+                return i + 1;
+        return 0;
+    }
+
+    private static int SentenceEnd(string prose, int pos)
+    {
+        for (int i = pos; i < prose.Length; i++)
+            if (prose[i] is '.' or '!' or '?')
+                return i;
+        return prose.Length;
     }
 
     // A change window endpoint must land on the 00/06/12/18Z grid the snapshot blocks use.

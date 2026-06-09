@@ -88,6 +88,145 @@ public class ForecastReconcilerTests
         }
         """;
 
+    // ── WX-149 prose-hygiene fixtures ─────────────────────────────────────────
+
+    // Defect 1 (send 1938): a change typed "thunderstorm" appearing, but the only
+    // precip block carries rain. The WX-148 phenomenon-backing rule already rejects
+    // this phantom (the block must carry the named phenomenon) — WX-149 pins it.
+    private const string PhantomThunderstormSafetyReportJson = """
+        {
+          "schemaVersion": 4,
+          "changes": [
+            { "tier": "safety", "phenomenon": "thunderstorm", "direction": "appearing", "window": { "startUtc": "2026-06-09T12:00:00Z", "endUtc": "2026-06-09T18:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
+          ],
+          "narrative": {
+            "en": { "changeSummary": "{ch1}Storms are now possible this morning.", "closing": "Keep an eye on the sky." }
+          }
+        }
+        """;
+
+    // Defect 4 (send 1938): "possible rain" emitted at the safety tier. The rain
+    // block backs the phenomenon (so the WX-148 check passes), but no block carries
+    // a safety-grade signal — WX-149's tier-backing assertion rejects it.
+    private const string SafetyRainOverEscalationReportJson = """
+        {
+          "schemaVersion": 4,
+          "changes": [
+            { "tier": "safety", "phenomenon": "rain", "direction": "appearing", "window": { "startUtc": "2026-06-09T12:00:00Z", "endUtc": "2026-06-09T18:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
+          ],
+          "narrative": {
+            "en": { "changeSummary": "{ch1}Rain is now possible this morning.", "closing": "Keep an umbrella handy." }
+          }
+        }
+        """;
+
+    // Defect 3 (send 1938): raw internal block notation leaked into the closing.
+    private const string RawUtcLeakReportJson = """
+        {
+          "schemaVersion": 4,
+          "changes": [],
+          "narrative": {
+            "en": { "changeSummary": null, "closing": "The Wednesday afternoon block (12-18Z) has shifted from dry to wet." }
+          }
+        }
+        """;
+
+    // Defect 2 (send 1927): prose says "afternoon" next to a {q:time} token at
+    // 12:00Z, which renders to 7:00 AM local (CDT) — the morning, not afternoon.
+    private const string ProseTimeMismatchReportJson = """
+        {
+          "schemaVersion": 4,
+          "changes": [
+            { "tier": "plans", "phenomenon": "rain", "direction": "appearing", "window": { "startUtc": "2026-06-13T12:00:00Z", "endUtc": "2026-06-13T18:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
+          ],
+          "narrative": {
+            "en": { "changeSummary": "{ch1}Rain is now expected to develop Saturday afternoon, {q:time:2026-06-13T12:00:00Z}.", "closing": "A wet start to the weekend." }
+          }
+        }
+        """;
+
+    // The same shape but the prose word AGREES with the token's local rendering
+    // (12:00Z is 7:00 AM CDT — morning) — must NOT be rejected.
+    private const string ProseTimeAgreesReportJson = """
+        {
+          "schemaVersion": 4,
+          "changes": [
+            { "tier": "plans", "phenomenon": "rain", "direction": "appearing", "window": { "startUtc": "2026-06-09T12:00:00Z", "endUtc": "2026-06-09T18:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
+          ],
+          "narrative": {
+            "en": { "changeSummary": "{ch1}Rain develops this morning, {q:time:2026-06-09T12:00:00Z}.", "closing": "A wet start to the day." }
+          }
+        }
+        """;
+
+    // A safety-tier thunderstorm BACKED by a severe block — must NOT be rejected.
+    private const string SafetyThunderstormBackedReportJson = """
+        {
+          "schemaVersion": 4,
+          "changes": [
+            { "tier": "safety", "phenomenon": "thunderstorm", "direction": "appearing", "window": { "startUtc": "2026-06-09T12:00:00Z", "endUtc": "2026-06-09T18:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
+          ],
+          "narrative": {
+            "en": { "changeSummary": "{ch1}Severe storms are now likely this morning.", "closing": "Stay weather-aware today." }
+          }
+        }
+        """;
+
+    // A safety-tier FOG change — fog has no snapshot field, so it is exempt from
+    // the tier-backing check (WX-149 documented residual) and must NOT be rejected.
+    private const string FogSafetyExemptReportJson = """
+        {
+          "schemaVersion": 4,
+          "changes": [
+            { "tier": "safety", "phenomenon": "fog", "direction": "appearing", "window": { "startUtc": "2026-06-09T12:00:00Z", "endUtc": "2026-06-09T18:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
+          ],
+          "narrative": {
+            "en": { "changeSummary": "{ch1}Dense fog is now likely this morning.", "closing": "Allow extra time on the roads." }
+          }
+        }
+        """;
+
+    // A 6/13 12-18Z block carrying rain — backs the prose-token-mismatch change.
+    private const string RainBlock613SnapshotJson = """
+        {"schemaVersion":4,"blocks":[{"startUtc":"2026-06-13T12:00:00Z","skyState":"partly_cloudy","obscuration":"none","temperatureCelsius":{"min":22,"max":30},"windKt":{"min":5,"max":12},"precipExpectation":"possible","precipPhenomenon":"rain","severeFlag":false}]}
+        """;
+
+    // A 6/9 12-18Z block carrying a severe thunderstorm — backs a safety-tier change.
+    private const string SevereThunderstormBlockSnapshotJson = """
+        {"schemaVersion":4,"blocks":[{"startUtc":"2026-06-09T12:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":24,"max":31},"windKt":{"min":10,"max":20},"precipExpectation":"likely","precipPhenomenon":"thunderstorm","severeFlag":true}]}
+        """;
+
+    // A safety-tier hazard CLEARING — the new snapshot correctly no longer carries
+    // a safety signal (the block is plain rain). A "newly removed hazard" is still
+    // safety-tier news, so the tier-backing check must NOT fire on a removal
+    // direction. (Snapshot: RainBlockSnapshotJson — rain, no severe/freezing.)
+    private const string SafetyClearingReportJson = """
+        {
+          "schemaVersion": 4,
+          "changes": [
+            { "tier": "safety", "phenomenon": "freezingPrecip", "direction": "clearing", "window": { "startUtc": "2026-06-09T12:00:00Z", "endUtc": "2026-06-09T18:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
+          ],
+          "narrative": {
+            "en": { "changeSummary": "{ch1}The ice threat has lifted; roads should be clear.", "closing": "A safer commute than this morning looked." }
+          }
+        }
+        """;
+
+    // A compound sentence whose day-part word ("evening") belongs to a DIFFERENT
+    // time reference than the {q:time} token (8:00 AM CDT — morning). Separated by
+    // intervening words, so it must NOT be read as governing the token.
+    private const string CompoundSentenceProseTimeReportJson = """
+        {
+          "schemaVersion": 4,
+          "changes": [
+            { "tier": "plans", "phenomenon": "rain", "direction": "appearing", "window": { "startUtc": "2026-06-13T12:00:00Z", "endUtc": "2026-06-13T18:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
+          ],
+          "narrative": {
+            "en": { "changeSummary": "{ch1}Showers taper Friday evening, then redevelop {q:time:2026-06-13T13:00:00Z} Saturday.", "closing": "An unsettled couple of days." }
+          }
+        }
+        """;
+
     // ── happy path ──────────────────────────────────────────────────────────
 
     [Fact]
@@ -682,15 +821,158 @@ public class ForecastReconcilerTests
         Assert.Contains("not backed", degraded.Reason);
     }
 
+    // ── WX-149 prose-hygiene validator assertions ────────────────────────────
+
+    [Fact]
+    public async Task PhantomPhenomenon_NotCarriedByAnyBlock_Degrades()
+    {
+        // Defect 1 (Watonga 6/10, send 1938): a change typed "thunderstorm" over a
+        // day whose only precip block is rain. The phenomenon-backing rule rejects
+        // the phantom; retries exhaust; the clean snapshot degrades.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: RainBlockSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: PhantomThunderstormSafetyReportJson);
+
+        var degraded = Assert.IsType<ReconcileResult.Degraded>(await RunReconciler(responseJson));
+        Assert.Contains("not backed", degraded.Reason);
+    }
+
+    [Fact]
+    public async Task SafetyTier_NotBackedBySevereSignal_Degrades()
+    {
+        // Defect 4 (Watonga 6/10, send 1938): "possible rain" at the safety tier.
+        // The rain block backs the phenomenon, but no block carries a safety-grade
+        // signal — the tier-backing assertion rejects the over-escalation.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: RainBlockSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: SafetyRainOverEscalationReportJson);
+
+        var degraded = Assert.IsType<ReconcileResult.Degraded>(await RunReconciler(responseJson));
+        Assert.Contains("over-escalated", degraded.Reason);
+    }
+
+    [Fact]
+    public async Task RawUtcBlockNotation_InProse_Degrades()
+    {
+        // Defect 3 (Watonga 6/10, send 1938): internal "(12-18Z)" shorthand leaked
+        // into the reader-facing closing. Rejected; retries exhaust; snapshot degrades.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: RainBlockSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: RawUtcLeakReportJson);
+
+        var degraded = Assert.IsType<ReconcileResult.Degraded>(await RunReconciler(responseJson));
+        Assert.Contains("raw UTC block notation", degraded.Reason);
+    }
+
+    [Fact]
+    public async Task ProseTimeWord_ContradictsTokenLocalRendering_Degrades()
+    {
+        // Defect 2 (Spring 6/13, send 1927): prose says "afternoon" beside a
+        // {q:time} token at 12:00Z that renders to 7:00 AM local (CDT) — morning.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: RainBlock613SnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: ProseTimeMismatchReportJson);
+
+        var degraded = Assert.IsType<ReconcileResult.Degraded>(await RunReconciler(responseJson, tz: Cdt));
+        Assert.Contains("contradicts", degraded.Reason);
+    }
+
+    [Fact]
+    public async Task ProseTimeWord_AgreesWithTokenLocalRendering_Succeeds()
+    {
+        // The conservative check must not false-reject: "morning" beside a token
+        // that renders to 7:00 AM local (CDT) agrees, so the report sends cleanly.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: RainBlockSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: ProseTimeAgreesReportJson);
+
+        Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
+    }
+
+    [Fact]
+    public async Task SafetyTier_BackedBySevereBlock_Succeeds()
+    {
+        // A genuine safety call — thunderstorm appearing, backed by a severeFlag
+        // block carrying it — passes both the phenomenon- and tier-backing checks.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: SevereThunderstormBlockSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: SafetyThunderstormBackedReportJson);
+
+        Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
+    }
+
+    [Fact]
+    public async Task SafetyTier_FogPhenomenon_ExemptFromBackingCheck_Succeeds()
+    {
+        // Fog has no snapshot field, so a safety-tier fog change is exempt from the
+        // tier-backing check (documented residual) and must not be false-rejected.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: RainBlockSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: FogSafetyExemptReportJson);
+
+        Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
+    }
+
+    [Fact]
+    public async Task SafetyTier_HazardClearing_NotBacked_Succeeds()
+    {
+        // A removal-direction safety change ("the ice threat has lifted"): the new
+        // snapshot legitimately carries no safety signal, but a newly removed hazard
+        // is still safety-tier news — the tier-backing check must not false-reject it.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: RainBlockSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: SafetyClearingReportJson);
+
+        Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
+    }
+
+    [Fact]
+    public async Task ProseTimeWord_BoundToDifferentReference_NotRejected_Succeeds()
+    {
+        // "Friday evening" modifies a different instant than the morning {q:time}
+        // token; intervening words separate them, so it must not be read as a
+        // contradiction (guards the conservative proximity rule against false rejects).
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: RainBlock613SnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: CompoundSentenceProseTimeReportJson);
+
+        Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
+    }
+
     // ── helpers ─────────────────────────────────────────────────────────────
 
-    private static async Task<ReconcileResult> RunReconciler(string anthropicResponseJson, bool allowSkip = false)
+    // A fixed UTC-5 zone (US Central in June / CDT) used by the WX-149 prose-token
+    // tests: a {q:time} token at 12:00Z renders to 7:00 AM local — "morning", not
+    // "afternoon". A custom fixed-offset zone keeps the test deterministic across
+    // platforms (no dependency on the host's IANA/Windows time-zone database).
+    private static readonly TimeZoneInfo Cdt =
+        TimeZoneInfo.CreateCustomTimeZone("Test-CDT", TimeSpan.FromHours(-5), "Test CDT", "Test CDT");
+
+    private static async Task<ReconcileResult> RunReconciler(string anthropicResponseJson, bool allowSkip = false, TimeZoneInfo? tz = null)
         => await RunReconciler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent(anthropicResponseJson, Encoding.UTF8, "application/json"),
-        }, allowSkip);
+        }, allowSkip, tz: tz);
 
-    private static async Task<ReconcileResult> RunReconciler(Func<HttpRequestMessage, HttpResponseMessage> respond, bool allowSkip = false, string[]? narrativeLanguages = null)
+    private static async Task<ReconcileResult> RunReconciler(Func<HttpRequestMessage, HttpResponseMessage> respond, bool allowSkip = false, string[]? narrativeLanguages = null, TimeZoneInfo? tz = null)
     {
         var http = new HttpClient(new StubHandler(respond));
         var claude = new ClaudeClient(http, apiKey: "test-key", model: "claude-sonnet-4-6", personaPrefix: "Persona text.");
@@ -704,7 +986,7 @@ public class ForecastReconcilerTests
             tafValidToUtc: null,
             prior: null,
             narrativeLanguages: narrativeLanguages ?? new[] { "en" },
-            tz: TimeZoneInfo.Utc,
+            tz: tz ?? TimeZoneInfo.Utc,
             changeSeverity: ChangeSeverity.None,
             previousMetarIcao: null,
             allowSkip: allowSkip,
