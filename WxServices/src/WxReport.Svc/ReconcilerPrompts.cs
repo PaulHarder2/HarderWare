@@ -229,6 +229,18 @@ internal static class ReconcilerPrompts
             window affected, typed quantities, and a summaryToken ("ch1", "ch2",
             … in array order). Empty when nothing changed (e.g. a steady-forecast
             scheduled send).
+              - Each change window MUST align to the 6-hour block grid: startUtc
+                and endUtc are 00/06/12/18Z block boundaries, and the window
+                spans exactly the affected blocks. The per-day grid the reader
+                sees is built deterministically from those same blocks, so a
+                window off the grid (e.g. 17:00–21:00Z) makes the narrative and
+                the grid disagree. Do NOT invent a finer clock window than the
+                blocks support — if rain sits in the 12–18Z block, the window is
+                12:00–18:00Z, not "noon to 4 PM".
+              - A change whose phenomenon is precipitation APPEARING or
+                STRENGTHENING must correspond to a final_snapshot block that
+                actually carries that phenomenon within the window. Never report
+                precipitation (or a tier) the reconciled snapshot does not back.
           • narrative — one entry per language code requested below, each with
             exactly two prose sections: changeSummary (null when there is no
             change band) and closing (the "In summary:" wrap-up). The current-
@@ -358,7 +370,7 @@ internal static class ReconcilerPrompts
                                         tier = new { type = "string", @enum = SnakeCaseNames<ChangeTier>() },
                                         phenomenon = new { type = "string", @enum = SnakeCaseNames<ChangePhenomenon>() },
                                         direction = new { type = "string", @enum = SnakeCaseNames<ChangeDirection>() },
-                                        window = new { type = "object", required = new[] { "startUtc", "endUtc" }, properties = new { startUtc = new { type = "string", format = "date-time" }, endUtc = new { type = "string", format = "date-time" } } },
+                                        window = new { type = "object", description = "UTC window the change affects. startUtc and endUtc MUST fall on 6-hour block boundaries (00/06/12/18Z) and span exactly the affected final_snapshot blocks — the per-day grid is built from those blocks, so an off-grid window disagrees with it.", required = new[] { "startUtc", "endUtc" }, properties = new { startUtc = new { type = "string", format = "date-time" }, endUtc = new { type = "string", format = "date-time" } } },
                                         quantities = new
                                         {
                                             type = "array",

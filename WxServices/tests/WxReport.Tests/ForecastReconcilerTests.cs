@@ -43,6 +43,39 @@ public class ForecastReconcilerTests
         }
         """;
 
+    // WX-148: a structured report announcing rain appearing in a block-aligned
+    // 12–18Z window (the {ch1} anchor appears in the changeSummary, as the body
+    // contract requires when changes is non-empty).
+    private const string RainAppearingAlignedReportJson = """
+        {
+          "schemaVersion": 4,
+          "changes": [
+            { "tier": "plans", "phenomenon": "rain", "direction": "appearing", "window": { "startUtc": "2026-06-09T12:00:00Z", "endUtc": "2026-06-09T18:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
+          ],
+          "narrative": {
+            "en": { "changeSummary": "{ch1}Rain is now likely this morning.", "closing": "A wet stretch ahead — keep an umbrella handy." }
+          }
+        }
+        """;
+
+    // The same change but with an OFF-GRID window (17–21Z) — the 6/9 contradiction shape.
+    private const string RainAppearingOffGridReportJson = """
+        {
+          "schemaVersion": 4,
+          "changes": [
+            { "tier": "plans", "phenomenon": "rain", "direction": "appearing", "window": { "startUtc": "2026-06-09T17:00:00Z", "endUtc": "2026-06-09T21:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
+          ],
+          "narrative": {
+            "en": { "changeSummary": "{ch1}Rain is now likely this afternoon.", "closing": "A wet stretch ahead — keep an umbrella handy." }
+          }
+        }
+        """;
+
+    // A final_snapshot whose 12–18Z block carries rain — backs the appearing-rain change.
+    private const string RainBlockSnapshotJson = """
+        {"schemaVersion":4,"blocks":[{"startUtc":"2026-06-09T12:00:00Z","skyState":"partly_cloudy","obscuration":"none","temperatureCelsius":{"min":22,"max":30},"windKt":{"min":5,"max":12},"precipExpectation":"possible","precipPhenomenon":"rain","severeFlag":false}]}
+        """;
+
     // Schema-valid (closing is non-blank) but below the per-language visible floor:
     // the WX-120 fall-safe degeneracy case the reconciler turns into a skip/Failure.
     private const string DegenerateStructuredReportJson = """
@@ -102,11 +135,13 @@ public class ForecastReconcilerTests
     }
 
     [Fact]
-    public async Task StructuredReportMissingRequestedLanguage_IsFatal_Retried()
+    public async Task StructuredReportMissingRequestedLanguage_Degrades_AfterRetries()
     {
-        // The cycle requests en AND es; the narrative is internally valid but
-        // carries en only. The per-call contract failure is fatal now (WX-130) and
-        // routes through the retry → Failure path like any schema violation.
+        // The cycle requests en AND es; the narrative is internally valid but carries
+        // en only. The per-call contract failure is retried (bounded); since the
+        // final_snapshot itself parsed cleanly, the exhausted result DEGRADES (WX-148)
+        // rather than failing outright — the snapshot is still usable for a hazard
+        // report, only the suspect narrative is dropped.
         var responseJson = BuildClaudeResponseJson(
             finalSnapshotJson: """{"schemaVersion":4,"blocks":[]}""",
             reasoningTrace: "trace",
@@ -122,16 +157,16 @@ public class ForecastReconcilerTests
             };
         }, narrativeLanguages: new[] { "en", "es" });
 
-        var failure = Assert.IsType<ReconcileResult.Failure>(result);
-        Assert.Contains("Schema validation failed", failure.Reason);
+        var degraded = Assert.IsType<ReconcileResult.Degraded>(result);
+        Assert.Contains("missing requested language", degraded.Reason);
         Assert.Equal(3, calls); // retried (bounded) like any malformed structured artifact
     }
 
     [Fact]
-    public async Task StructuredReportWithExtraLanguage_IsFatal_Retried()
+    public async Task StructuredReportWithExtraLanguage_Degrades_AfterRetries()
     {
         // Exact-set contract: an unrequested language is unvalidated content for no
-        // recipient — fatal now (WX-130), retried then Failure.
+        // recipient — retried, then DEGRADES (WX-148) because the final_snapshot parsed.
         var withExtra = ValidStructuredReportJson.Replace(
             "\"narrative\": {",
             "\"narrative\": { \"es\": { \"changeSummary\": null, \"closing\": \"Un cierre razonable y suficientemente largo.\" },");
@@ -143,8 +178,8 @@ public class ForecastReconcilerTests
 
         var result = await RunReconciler(responseJson);
 
-        var failure = Assert.IsType<ReconcileResult.Failure>(result);
-        Assert.Contains("Schema validation failed", failure.Reason);
+        var degraded = Assert.IsType<ReconcileResult.Degraded>(result);
+        Assert.Contains("unrequested language", degraded.Reason);
     }
 
     [Fact]
@@ -594,6 +629,57 @@ public class ForecastReconcilerTests
 
         var failure = Assert.IsType<ReconcileResult.Failure>(result);
         Assert.Contains("Schema validation failed", failure.Reason);
+    }
+
+    // ── WX-148 change ↔ snapshot consistency validator ───────────────────────
+
+    [Fact]
+    public async Task ChangeWindowOffGrid_IsRejected_ThenDegrades()
+    {
+        // The 6/9 contradiction shape: a 17–21Z window is off the 6-hour block grid,
+        // so the deterministic day-grid (built from the blocks) and the narrative would
+        // disagree. The validator rejects it; retries exhaust; the clean snapshot degrades.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: RainBlockSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: RainAppearingOffGridReportJson);
+
+        var result = await RunReconciler(responseJson);
+
+        var degraded = Assert.IsType<ReconcileResult.Degraded>(result);
+        Assert.Contains("aligned", degraded.Reason);
+    }
+
+    [Fact]
+    public async Task AppearingPrecip_BackedByBlock_Succeeds()
+    {
+        // A block-aligned 12–18Z window whose appearing rain is carried by the 12Z
+        // block passes the validator cleanly.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: RainBlockSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: RainAppearingAlignedReportJson);
+
+        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
+        Assert.Single(success.StructuredReport.Changes);
+    }
+
+    [Fact]
+    public async Task AppearingPrecip_NotBackedByAnyBlock_Degrades()
+    {
+        // A block-aligned window, but the snapshot has no block carrying the announced
+        // rain — the narrative would promise precip the grid never shows. Rejected,
+        // retried, then degraded on the (clean) empty snapshot.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: """{"schemaVersion":4,"blocks":[]}""",
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: RainAppearingAlignedReportJson);
+
+        var degraded = Assert.IsType<ReconcileResult.Degraded>(await RunReconciler(responseJson));
+        Assert.Contains("not backed", degraded.Reason);
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────
