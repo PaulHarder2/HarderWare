@@ -46,9 +46,9 @@ public static class StructuredReportRenderer
     /// HTML body.  <paramref name="finalSnapshot"/> drives the Extended Forecast
     /// grid, <paramref name="observation"/> the Current Conditions table, and
     /// <paramref name="localityTz"/> localizes per-day bucketing and instant
-    /// rendering.  <paramref name="isUnscheduled"/> selects the header's
-    /// unscheduled-update line; the change-summary band itself renders whenever the
-    /// narrative carries one.  (A recipient's first contact is a separate
+    /// rendering.  <paramref name="kind"/> selects the header's report-type label
+    /// (always shown); the change-summary band itself renders whenever the
+    /// narrative carries one — independent of the kind.  (A recipient's first contact is a separate
     /// welcome-only email — see <see cref="RenderWelcome"/>; this method always
     /// renders a weather report.)
     /// </summary>
@@ -58,7 +58,7 @@ public static class StructuredReportRenderer
         WeatherSnapshot observation,
         Recipient recipient,
         TimeZoneInfo localityTz,
-        bool isUnscheduled)
+        ReportKind kind)
     {
         // The narrative map and ReportVocabulary key on ISO 639-1 (en, es).
         // ToIetfTag already collapses to the two-letter code, but normalize
@@ -76,7 +76,7 @@ public static class StructuredReportRenderer
         var sb = new StringBuilder();
         sb.Append("<div style=\"max-width:600px;margin:0 auto;font-family:Arial,Helvetica,sans-serif;color:#1a3a5c;\">");
 
-        AppendHeader(sb, observation, localityTz, vocab, isUnscheduled);
+        AppendHeader(sb, observation, localityTz, vocab, kind);
 
         if (!string.IsNullOrWhiteSpace(sections.ChangeSummary))
             AppendChangeBand(sb, vocab, RenderProse(sections.ChangeSummary!));
@@ -97,7 +97,7 @@ public static class StructuredReportRenderer
     /// the prose), then the normal current-conditions table and day-grid built
     /// from <paramref name="finalSnapshot"/>. There is NO "What's changed" band
     /// and NO closing — a summary we cannot deliver is left out, not apologized
-    /// for. Always an unscheduled (alert) send.
+    /// for. Always an unscheduled send.
     /// </summary>
     public static string RenderDegraded(
         ForecastSnapshotBody finalSnapshot,
@@ -111,7 +111,7 @@ public static class StructuredReportRenderer
 
         var sb = new StringBuilder();
         sb.Append("<div style=\"max-width:600px;margin:0 auto;font-family:Arial,Helvetica,sans-serif;color:#1a3a5c;\">");
-        AppendHeader(sb, observation, localityTz, vocab, isUnscheduled: true);
+        AppendHeader(sb, observation, localityTz, vocab, ReportKind.Unscheduled);
         AppendHazardBanner(sb, finalSnapshot, localityTz, vocab, nowUtc);
         AppendCurrentConditions(sb, observation, recipient, vocab);
         AppendExtendedForecast(sb, finalSnapshot, observation.LocalityName, recipient, localityTz, vocab);
@@ -210,7 +210,7 @@ public static class StructuredReportRenderer
     // ── header ──────────────────────────────────────────────────────────────
 
     private static void AppendHeader(
-        StringBuilder sb, WeatherSnapshot snap, TimeZoneInfo tz, ReportVocabulary vocab, bool isUnscheduled)
+        StringBuilder sb, WeatherSnapshot snap, TimeZoneInfo tz, ReportVocabulary vocab, ReportKind kind)
     {
         sb.Append("<div style=\"background:#1a3a5c;color:#ffffff;text-align:left;padding:20px 24px;border-radius:6px 6px 0 0;\">");
         sb.Append($"<div style=\"font-weight:bold;font-size:22px;\">{HtmlText(snap.LocalityName)}</div>");
@@ -221,8 +221,8 @@ public static class StructuredReportRenderer
             var when = local.ToString("dddd, MMMM d, h:mm tt", vocab.Culture);
             sb.Append($"<div style=\"font-size:14px;color:#c8daea;\">{HtmlText(when)}</div>");
         }
-        if (isUnscheduled)
-            sb.Append($"<div style=\"font-style:italic;font-size:13px;color:#a0bcd4;\">{HtmlText(vocab.UnscheduledNote)}</div>");
+        var typeLabel = vocab.GetFromReportKind(kind, LabelType.Header);
+        sb.Append($"<div style=\"font-style:italic;font-size:13px;color:#a0bcd4;\">{HtmlText(typeLabel)}</div>");
         sb.Append("</div>");
     }
 

@@ -274,7 +274,7 @@ public sealed class ReportWorker : BackgroundService
             snapshot.TafIssuanceUtc, snapshot.TafValidToUtc,
             priorSnapshot,
             narrativeLanguages, tz,
-            changeSeverity: ChangeSeverity.None,
+            reportKind: ReportKind.Diagnostic,
             previousMetarIcao: null,
             allowSkip: false, // startup is an unconditional verification send — never skippable
             changedSinceLastSend: Array.Empty<TriggerSource>(), // unused on a guaranteed send
@@ -325,7 +325,7 @@ public sealed class ReportWorker : BackgroundService
             {
                 var memberLang = member.Language ?? cfg.DefaultLanguage;
                 var innerBody = StructuredReportRenderer.Render(
-                    success.StructuredReport, success.FinalSnapshot, snapshot, member, tz, isUnscheduled: false);
+                    success.StructuredReport, success.FinalSnapshot, snapshot, member, tz, ReportKind.Diagnostic);
                 var report = WrapAsEmailHtml(innerBody, memberLang, snapshot, tz);
 
                 var committedSend = new CommittedSend
@@ -341,7 +341,7 @@ public sealed class ReportWorker : BackgroundService
                 ctx.CommittedSends.Add(committedSend);
                 await ctx.SaveChangesAsync(ct);
 
-                var subject = BuildSubject(snapshot, memberLang, tz, recipientName: member.Name);
+                var subject = BuildSubject(snapshot, memberLang, tz, ReportKind.Diagnostic, recipientName: member.Name);
                 var plainFallback = SnapshotDescriber.Describe(snapshot, tz, ToUnitPreferences(member));
 
                 var meteogramPath = FindMeteogramAbbrevPath(
@@ -600,7 +600,7 @@ public sealed class ReportWorker : BackgroundService
             .ToListAsync(ct))
             .ToHashSet(StringComparer.Ordinal);
 
-        var (shouldSend, reason, severity, allowSkip) = ShouldSend(tz, scheduledHours, state, inputIdentity, cfg, now);
+        var (shouldSend, reason, kind, allowSkip) = ShouldSend(tz, scheduledHours, state, inputIdentity, cfg, now);
         if (!shouldSend)
         {
             // Even on a non-sending cycle, onboard any never-contacted member with a
@@ -709,7 +709,7 @@ public sealed class ReportWorker : BackgroundService
             snapshot.TafIssuanceUtc, snapshot.TafValidToUtc,
             priorSnapshot,
             narrativeLanguages, tz,
-            changeSeverity: severity,
+            reportKind: kind,
             previousMetarIcao: previousMetarIcao,
             allowSkip: allowSkip,
             changedSinceLastSend: changedSinceLastSend,
@@ -775,7 +775,7 @@ public sealed class ReportWorker : BackgroundService
                     if (await DeliverWeatherReportAsync(
                             ctx, emailer, member, memberLang, degradedSnapshot, innerBody,
                             structuredReportJson: null, reasoningTrace: $"DEGRADED: {degraded.Reason}",
-                            snapshot, locality, tz, preferredIcaos, degradedPlotsDir, ChangeSeverity.Alert, label, ct))
+                            snapshot, locality, tz, preferredIcaos, degradedPlotsDir, ReportKind.Unscheduled, label, ct))
                         degradedSent++;
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
@@ -839,7 +839,6 @@ public sealed class ReportWorker : BackgroundService
 
         var structuredReportJson = success.StructuredReport.Serialize();
         var plotsDir = new WxPaths(_config["InstallRoot"]).PlotsDir;
-        bool isUnscheduled = reason == "change";
         var weatherSent = 0;   // weather reports delivered — drives the baseline/cadence advance
         var welcomeSent = 0;   // first-contact welcome-only emails delivered
 
@@ -860,11 +859,11 @@ public sealed class ReportWorker : BackgroundService
 
                 var memberLang = member.Language ?? cfg.DefaultLanguage;
                 var innerBody = StructuredReportRenderer.Render(
-                    success.StructuredReport, success.FinalSnapshot, snapshot, member, tz, isUnscheduled);
+                    success.StructuredReport, success.FinalSnapshot, snapshot, member, tz, kind);
                 if (await DeliverWeatherReportAsync(
                         ctx, emailer, member, memberLang, reconciledSnapshot, innerBody,
                         structuredReportJson, success.ReasoningTrace, snapshot, locality, tz,
-                        preferredIcaos, plotsDir, severity, label, ct))
+                        preferredIcaos, plotsDir, kind, label, ct))
                     weatherSent++;
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -935,7 +934,7 @@ public sealed class ReportWorker : BackgroundService
         ForecastSnapshot reconciledSnapshot, string innerBody,
         string? structuredReportJson, string? reasoningTrace,
         WeatherSnapshot snapshot, Locality locality, TimeZoneInfo tz,
-        IReadOnlyList<string> preferredIcaos, string plotsDir, ChangeSeverity severity, string label,
+        IReadOnlyList<string> preferredIcaos, string plotsDir, ReportKind kind, string label,
         CancellationToken ct)
     {
         var report = WrapAsEmailHtml(innerBody, memberLang, snapshot, tz);
@@ -952,7 +951,7 @@ public sealed class ReportWorker : BackgroundService
         ctx.CommittedSends.Add(committedSend);
         await ctx.SaveChangesAsync(ct);
 
-        var subject = BuildSubject(snapshot, memberLang, tz, severity, recipientName: member.Name);
+        var subject = BuildSubject(snapshot, memberLang, tz, kind, recipientName: member.Name);
         var plainFallback = SnapshotDescriber.Describe(snapshot, tz, ToUnitPreferences(member));
 
         var meteogramPath = FindMeteogramAbbrevPath(
@@ -1268,14 +1267,14 @@ public sealed class ReportWorker : BackgroundService
     /// <param name="cfg">Report config providing the minimum inter-send gap.</param>
     /// <param name="nowUtc">The UTC clock time to use as "now" for all comparisons.</param>
     /// <returns>
-    /// A tuple of (<c>send</c>, <c>reason</c>, <c>severity</c>, <c>allowSkip</c>).
+    /// A tuple of (<c>send</c>, <c>reason</c>, <c>kind</c>, <c>allowSkip</c>).
     /// <c>reason</c> is <c>"first"</c>, <c>"scheduled"</c>, or <c>"change"</c> when
     /// sending; <c>"gap"</c> (rate-limited) or <c>"prefilter-skip"</c> (no input
     /// advanced) when not. <c>allowSkip</c> is <see langword="true"/> only for the
     /// <c>"change"</c> trigger, enabling Claude's "not news" gate; scheduled and
     /// first sends are guaranteed and never skippable.
     /// </returns>
-    internal static (bool send, string reason, ChangeSeverity severity, bool allowSkip) ShouldSend(
+    internal static (bool send, string reason, ReportKind kind, bool allowSkip) ShouldSend(
         TimeZoneInfo tz,
         IReadOnlyList<int> scheduledHours,
         LocalityState state,
@@ -1285,7 +1284,7 @@ public sealed class ReportWorker : BackgroundService
     {
         // Locality that has never sent — guaranteed introductory send on the first cycle.
         if (!state.LastScheduledSentUtc.HasValue && !state.LastUnscheduledSentUtc.HasValue)
-            return (true, "first", ChangeSeverity.None, false);
+            return (true, "first", ReportKind.Scheduled, false);
 
         var minGap = TimeSpan.FromMinutes(cfg.MinGapMinutes);
 
@@ -1303,7 +1302,7 @@ public sealed class ReportWorker : BackgroundService
         // into the gap path, or post-gap arrival sends would be silently swallowed
         // (covered by ShouldSendTests.PostGap_AdvancedInput_SendsOnceGapClears).
         if (lastSentUtc.HasValue && (nowUtc - lastSentUtc.Value) < minGap)
-            return (false, "gap", ChangeSeverity.None, false);
+            return (false, "gap", ReportKind.Scheduled, false);
 
         // ── Scheduled send (always sends; bypasses the pre-filter) ────────────
 
@@ -1325,7 +1324,7 @@ public sealed class ReportWorker : BackgroundService
                 && state.LastScheduledSentUtc.Value >= slotStartUtc;
 
             if (!sentAfterSlotStart)
-                return (true, "scheduled", ChangeSeverity.None, false);
+                return (true, "scheduled", ReportKind.Scheduled, false);
         }
 
         // ── Arrival pre-filter (WX-80) ────────────────────────────────────────
@@ -1337,9 +1336,9 @@ public sealed class ReportWorker : BackgroundService
         // fingerprint, which decided significance in C# and misfired on KDWH.
         var changed = inputIdentity.ChangedSourcesSince(state.LastClaudeInputHash);
         if (changed.Count == 0)
-            return (false, "prefilter-skip", ChangeSeverity.None, false);
+            return (false, "prefilter-skip", ReportKind.Scheduled, false);
 
-        return (true, "change", ChangeSeverity.Update, true);
+        return (true, "change", ReportKind.Unscheduled, true);
     }
 
     /// <summary>
@@ -1435,64 +1434,39 @@ public sealed class ReportWorker : BackgroundService
     // ── helpers ───────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Builds a localised email subject line for a weather report or alert.
+    /// Builds a localised email subject line for a weather report.
     /// The subject includes the recipient's first name, the locality name, and the local observation time.
-    /// When <paramref name="severity"/> is <see cref="ChangeSeverity.Alert"/> or
-    /// <see cref="ChangeSeverity.Update"/>, the subject uses the corresponding label.
-    /// Supported languages with translated subjects: Spanish, French; all others default to English.
+    /// The subject word is chosen from <paramref name="kind"/> — the same source as
+    /// the rendered header label (WX-154), so subject and label cannot disagree —
+    /// both read the kind→word mapping from <see cref="ReportVocabulary.GetFromReportKind"/>.
     /// </summary>
     /// <param name="snap">Snapshot providing the station ICAO, locality name, and observation time.</param>
-    /// <param name="language">Report language name (e.g. <c>"Spanish"</c>, <c>"French"</c>, <c>"English"</c>).</param>
+    /// <param name="language">Report language name (e.g. <c>"Spanish"</c>, <c>"English"</c>); unsupported
+    /// languages fall back to the English vocabulary, matching the rendered body.</param>
     /// <param name="tz">Timezone used to convert the UTC observation time for display.</param>
-    /// <param name="severity">
-    /// Severity of the change that triggered this send.
-    /// <see cref="ChangeSeverity.Alert"/> uses an alert label (e.g. <c>"Weather alert"</c>);
-    /// <see cref="ChangeSeverity.Update"/> uses an update label (e.g. <c>"Weather update"</c>);
-    /// all other values use the standard report label (e.g. <c>"Weather report"</c>).
+    /// <param name="kind">
+    /// The kind of send: <see cref="ReportKind.Unscheduled"/> → "Weather Update",
+    /// <see cref="ReportKind.Diagnostic"/> → "Diagnostic", and
+    /// <see cref="ReportKind.Scheduled"/> → "Weather Report".
     /// </param>
     /// <param name="recipientName">Display name of the recipient, included in the subject (e.g. <c>"Paul"</c>).</param>
-    /// <returns>A localised subject string, e.g. <c>"Weather report for Paul — The Woodlands (7:05 AM)"</c>,
-    /// <c>"Weather update for Paul — The Woodlands (7:05 AM)"</c>,
-    /// or <c>"Weather alert for Paul — The Woodlands (7:05 AM)"</c>.</returns>
+    /// <returns>A localised subject string, e.g. <c>"Weather Report for Paul — The Woodlands (7:05 AM)"</c>
+    /// or <c>"Weather Update for Paul — The Woodlands (7:05 AM)"</c>.</returns>
     private static string BuildSubject(WeatherSnapshot snap, string language, TimeZoneInfo tz,
-        ChangeSeverity severity = ChangeSeverity.None, string recipientName = "")
+        ReportKind kind, string recipientName = "")
     {
         // Use send-time when no observation is available; ObservationTimeUtc is
         // default(DateTime) in that case, which would render as 12:00 AM.
         var subjectTimeUtc = snap.ObservationAvailable ? snap.ObservationTimeUtc : DateTime.UtcNow;
         var localTime = TimeZoneInfo.ConvertTimeFromUtc(subjectTimeUtc, tz).ToString("h:mm tt");
-        var forName = string.IsNullOrWhiteSpace(recipientName) ? "" : $" for {recipientName}";
-        if (language.Equals("Spanish", StringComparison.OrdinalIgnoreCase))
-        {
-            var label = severity switch
-            {
-                ChangeSeverity.Alert => "Alerta meteorológica",
-                ChangeSeverity.Update => "Actualización del tiempo",
-                _ => "Reporte del tiempo",
-            };
-            var paraName = string.IsNullOrWhiteSpace(recipientName) ? "" : $" para {recipientName}";
-            return $"{label}{paraName} — {snap.LocalityName} ({localTime})";
-        }
-        if (language.Equals("French", StringComparison.OrdinalIgnoreCase))
-        {
-            var label = severity switch
-            {
-                ChangeSeverity.Alert => "Alerte météo",
-                ChangeSeverity.Update => "Mise à jour météo",
-                _ => "Bulletin météo",
-            };
-            var pourName = string.IsNullOrWhiteSpace(recipientName) ? "" : $" pour {recipientName}";
-            return $"{label}{pourName} — {snap.LocalityName} ({localTime})";
-        }
-        {
-            var label = severity switch
-            {
-                ChangeSeverity.Alert => "Weather alert",
-                ChangeSeverity.Update => "Weather update",
-                _ => "Weather report",
-            };
-            return $"{label}{forName} — {snap.LocalityName} ({localTime})";
-        }
+
+        var isoCode = LanguageHelper.ToIetfTag(language).Split('-')[0].ToLowerInvariant();
+        var vocab = ReportVocabulary.ForLanguage(isoCode);
+        var label = vocab.GetFromReportKind(kind, LabelType.Title);
+        var forName = string.IsNullOrWhiteSpace(recipientName)
+            ? ""
+            : $" {vocab.SubjectForConnective} {recipientName}";
+        return $"{label}{forName} — {snap.LocalityName} ({localTime})";
     }
 
     /// <summary>

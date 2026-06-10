@@ -1,8 +1,26 @@
 using System.Globalization;
 
+using log4net;
+
 using MetarParser.Data.Entities;
 
 namespace WxReport.Svc;
+
+/// <summary>
+/// Which surface a report-kind word is destined for: the email <see cref="Title"/>
+/// (subject line) or the rendered <see cref="Header"/> label inside the report.
+/// The two read differently for the same kind ("Weather Report" vs "Scheduled
+/// Report"), so <see cref="ReportVocabulary.GetFromReportKind"/> takes this to
+/// pick the right column.
+/// </summary>
+public enum LabelType
+{
+    /// <summary>The email subject word — e.g. "Weather Report" / "Weather Update".</summary>
+    Title,
+
+    /// <summary>The italic report-type label rendered in the header — e.g. "Scheduled Report" / "Unscheduled Update".</summary>
+    Header,
+}
 
 /// <summary>
 /// The language-specific words and labels the WX-129 deterministic renderer
@@ -32,7 +50,14 @@ public sealed record ReportVocabulary
     public required string ForecastHeadingFormat { get; init; }   // {0} = locality name
     public required string WhatsChangedLabel { get; init; }
     public required string InSummaryLabel { get; init; }
-    public required string UnscheduledNote { get; init; }
+    public required string ScheduledReportLabel { get; init; }
+    public required string UnscheduledUpdateLabel { get; init; }
+    public required string DiagnosticLabel { get; init; }
+    // ── email subject words (LabelType.Title) — read differently from the header labels above ─
+    public required string ScheduledReportSubject { get; init; }     // "Weather Report"
+    public required string UnscheduledUpdateSubject { get; init; }    // "Weather Update"
+    public required string DiagnosticSubject { get; init; }          // "Diagnostic"
+    public required string SubjectForConnective { get; init; }        // joins the recipient name in the subject — "for" / "para"
     public required string NoObservationNote { get; init; }
 
     // ── first-report welcome (WX-130; standalone welcome-only email) ──────────
@@ -118,6 +143,36 @@ public sealed record ReportVocabulary
     /// <summary>The IETF culture used for date/time names and number formatting. Localized to the language; number conventions stay US/period-decimal until WX-138 (so <c>es-US</c>, not <c>es-ES</c>).</summary>
     public required CultureInfo Culture { get; init; }
 
+    private static readonly ILog Logger = LogManager.GetLogger(typeof(ReportVocabulary));
+
+    /// <summary>
+    /// The single source of truth (WX-154) for the localized word a <see cref="ReportKind"/>
+    /// renders to, on either surface: the email subject (<see cref="LabelType.Title"/>) or
+    /// the in-report header label (<see cref="LabelType.Header"/>). Centralizing the
+    /// kind→word mapping here is what keeps the subject and the header from drifting apart
+    /// — they read from the same switch. A future <see cref="ReportKind"/> added without
+    /// updating this method falls to the Scheduled word but logs a warning, so it surfaces
+    /// without ever failing a send over a cosmetic label.
+    /// </summary>
+    public string GetFromReportKind(ReportKind kind, LabelType labelType)
+    {
+        switch (labelType, kind)
+        {
+            case (LabelType.Title, ReportKind.Scheduled): return ScheduledReportSubject;
+            case (LabelType.Title, ReportKind.Unscheduled): return UnscheduledUpdateSubject;
+            case (LabelType.Title, ReportKind.Diagnostic): return DiagnosticSubject;
+            case (LabelType.Header, ReportKind.Scheduled): return ScheduledReportLabel;
+            case (LabelType.Header, ReportKind.Unscheduled): return UnscheduledUpdateLabel;
+            case (LabelType.Header, ReportKind.Diagnostic): return DiagnosticLabel;
+            default:
+                // A future ReportKind or LabelType not handled above lands here: log it and
+                // fall back to the scheduled word for the requested surface, so the send
+                // never fails over a cosmetic label.
+                Logger.Warn($"GetFromReportKind: unhandled (kind={kind}, labelType={labelType}); defaulting to the scheduled {labelType}.");
+                return labelType == LabelType.Title ? ScheduledReportSubject : ScheduledReportLabel;
+        }
+    }
+
     /// <summary>Returns the vocabulary for an ISO 639-1 code. Falls back to <see cref="En"/> only defensively — a path that should be unreachable once WX-137 gates recipients to <see cref="SupportedCodes"/>.</summary>
     public static ReportVocabulary ForLanguage(string isoCode) =>
         ByCode.TryGetValue(isoCode, out var v) ? v : En;
@@ -136,7 +191,13 @@ public sealed record ReportVocabulary
         ForecastHeadingFormat = "Forecast for {0}",
         WhatsChangedLabel = "What's changed:",
         InSummaryLabel = "In summary:",
-        UnscheduledNote = "Unscheduled update — see note below",
+        ScheduledReportLabel = "Scheduled Report",
+        UnscheduledUpdateLabel = "Unscheduled Update",
+        DiagnosticLabel = "Diagnostic",
+        ScheduledReportSubject = "Weather Report",
+        UnscheduledUpdateSubject = "Weather Update",
+        DiagnosticSubject = "Diagnostic",
+        SubjectForConnective = "for",
         NoObservationNote = "No recent observation is available from any station within about 30 miles, so the report below is based on forecast model data only.",
         WelcomeSubject = "Welcome to WxReport",
         WelcomeGreeting = "Welcome to WxReport!",
@@ -211,7 +272,13 @@ public sealed record ReportVocabulary
         ForecastHeadingFormat = "Pronóstico para {0}",
         WhatsChangedLabel = "Qué ha cambiado:",
         InSummaryLabel = "En resumen:",
-        UnscheduledNote = "Actualización no programada — vea la nota a continuación",
+        ScheduledReportLabel = "Reporte programado",
+        UnscheduledUpdateLabel = "Actualización no programada",
+        DiagnosticLabel = "Diagnóstico",
+        ScheduledReportSubject = "Reporte del tiempo",
+        UnscheduledUpdateSubject = "Actualización del tiempo",
+        DiagnosticSubject = "Diagnóstico",
+        SubjectForConnective = "para",
         NoObservationNote = "No hay una observación reciente de ninguna estación a unos 50 km, por lo que el informe a continuación se basa únicamente en datos del modelo de pronóstico.",
         WelcomeSubject = "Bienvenido a WxReport",
         WelcomeGreeting = "¡Bienvenido a WxReport!",
