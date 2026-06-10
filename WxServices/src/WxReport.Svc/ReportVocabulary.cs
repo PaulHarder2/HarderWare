@@ -156,27 +156,21 @@ public sealed record ReportVocabulary
     /// </summary>
     public string GetFromReportKind(ReportKind kind, LabelType labelType)
     {
-        switch (labelType)
+        switch (labelType, kind)
         {
-            case LabelType.Title:
-                switch (kind)
-                {
-                    case ReportKind.Scheduled: return ScheduledReportSubject;
-                    case ReportKind.Unscheduled: return UnscheduledUpdateSubject;
-                    case ReportKind.Diagnostic: return DiagnosticSubject;
-                }
-                break;
-            case LabelType.Header:
-                switch (kind)
-                {
-                    case ReportKind.Scheduled: return ScheduledReportLabel;
-                    case ReportKind.Unscheduled: return UnscheduledUpdateLabel;
-                    case ReportKind.Diagnostic: return DiagnosticLabel;
-                }
-                break;
+            case (LabelType.Title, ReportKind.Scheduled): return ScheduledReportSubject;
+            case (LabelType.Title, ReportKind.Unscheduled): return UnscheduledUpdateSubject;
+            case (LabelType.Title, ReportKind.Diagnostic): return DiagnosticSubject;
+            case (LabelType.Header, ReportKind.Scheduled): return ScheduledReportLabel;
+            case (LabelType.Header, ReportKind.Unscheduled): return UnscheduledUpdateLabel;
+            case (LabelType.Header, ReportKind.Diagnostic): return DiagnosticLabel;
+            default:
+                // A future ReportKind or LabelType not handled above lands here: log it and
+                // fall back to the scheduled word for the requested surface, so the send
+                // never fails over a cosmetic label.
+                Logger.Warn($"GetFromReportKind: unhandled (kind={kind}, labelType={labelType}); defaulting to the scheduled {labelType}.");
+                return labelType == LabelType.Title ? ScheduledReportSubject : ScheduledReportLabel;
         }
-        Logger.Warn($"GetFromReportKind: unhandled (kind={kind}, labelType={labelType}); defaulting to the scheduled {labelType}.");
-        return labelType == LabelType.Title ? ScheduledReportSubject : ScheduledReportLabel;
     }
 
     /// <summary>Returns the vocabulary for an ISO 639-1 code. Falls back to <see cref="En"/> only defensively — a path that should be unreachable once WX-137 gates recipients to <see cref="SupportedCodes"/>.</summary>
