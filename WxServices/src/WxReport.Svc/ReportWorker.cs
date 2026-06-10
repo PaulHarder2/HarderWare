@@ -341,7 +341,7 @@ public sealed class ReportWorker : BackgroundService
                 ctx.CommittedSends.Add(committedSend);
                 await ctx.SaveChangesAsync(ct);
 
-                var subject = BuildSubject(snapshot, memberLang, tz, ReportKind.Diagnostic, recipientName: member.Name);
+                var subject = BuildSubject(snapshot, memberLang, tz, ReportKind.Diagnostic, recipientName: member.Name, severeBody: success.FinalSnapshot);
                 var plainFallback = SnapshotDescriber.Describe(snapshot, tz, ToUnitPreferences(member));
 
                 var meteogramPath = FindMeteogramAbbrevPath(
@@ -775,7 +775,8 @@ public sealed class ReportWorker : BackgroundService
                     if (await DeliverWeatherReportAsync(
                             ctx, emailer, member, memberLang, degradedSnapshot, innerBody,
                             structuredReportJson: null, reasoningTrace: $"DEGRADED: {degraded.Reason}",
-                            snapshot, locality, tz, preferredIcaos, degradedPlotsDir, ReportKind.Unscheduled, label, ct))
+                            snapshot, locality, tz, preferredIcaos, degradedPlotsDir, ReportKind.Unscheduled, label,
+                            degraded.FinalSnapshot, ct))
                         degradedSent++;
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
@@ -863,7 +864,7 @@ public sealed class ReportWorker : BackgroundService
                 if (await DeliverWeatherReportAsync(
                         ctx, emailer, member, memberLang, reconciledSnapshot, innerBody,
                         structuredReportJson, success.ReasoningTrace, snapshot, locality, tz,
-                        preferredIcaos, plotsDir, kind, label, ct))
+                        preferredIcaos, plotsDir, kind, label, success.FinalSnapshot, ct))
                     weatherSent++;
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -935,7 +936,7 @@ public sealed class ReportWorker : BackgroundService
         string? structuredReportJson, string? reasoningTrace,
         WeatherSnapshot snapshot, Locality locality, TimeZoneInfo tz,
         IReadOnlyList<string> preferredIcaos, string plotsDir, ReportKind kind, string label,
-        CancellationToken ct)
+        ForecastSnapshotBody finalBody, CancellationToken ct)
     {
         var report = WrapAsEmailHtml(innerBody, memberLang, snapshot, tz);
 
@@ -951,7 +952,7 @@ public sealed class ReportWorker : BackgroundService
         ctx.CommittedSends.Add(committedSend);
         await ctx.SaveChangesAsync(ct);
 
-        var subject = BuildSubject(snapshot, memberLang, tz, kind, recipientName: member.Name);
+        var subject = BuildSubject(snapshot, memberLang, tz, kind, recipientName: member.Name, severeBody: finalBody);
         var plainFallback = SnapshotDescriber.Describe(snapshot, tz, ToUnitPreferences(member));
 
         var meteogramPath = FindMeteogramAbbrevPath(
@@ -1450,10 +1451,12 @@ public sealed class ReportWorker : BackgroundService
     /// <see cref="ReportKind.Scheduled"/> → "Weather Report".
     /// </param>
     /// <param name="recipientName">Display name of the recipient, included in the subject (e.g. <c>"Paul"</c>).</param>
-    /// <returns>A localised subject string, e.g. <c>"Weather Report for Paul — The Woodlands (7:05 AM)"</c>
-    /// or <c>"Weather Update for Paul — The Woodlands (7:05 AM)"</c>.</returns>
+    /// <param name="severeBody">When provided, the reconciled forecast snapshot is inspected for a near-term severe
+    /// hazard (WX-156): if the rule holds, a front-loaded severe noun is prepended to the subject. Null skips the check.</param>
+    /// <returns>A localised subject string, e.g. <c>"Weather Report for Paul — The Woodlands (7:05 AM)"</c>,
+    /// or with a WX-156 hazard prefix <c>"Severe storms — Weather Update for Paul — The Woodlands (7:05 AM)"</c>.</returns>
     private static string BuildSubject(WeatherSnapshot snap, string language, TimeZoneInfo tz,
-        ReportKind kind, string recipientName = "")
+        ReportKind kind, string recipientName = "", ForecastSnapshotBody? severeBody = null)
     {
         // Use send-time when no observation is available; ObservationTimeUtc is
         // default(DateTime) in that case, which would render as 12:00 AM.
@@ -1466,7 +1469,11 @@ public sealed class ReportWorker : BackgroundService
         var forName = string.IsNullOrWhiteSpace(recipientName)
             ? ""
             : $" {vocab.SubjectForConnective} {recipientName}";
-        return $"{label}{forName} — {snap.LocalityName} ({localTime})";
+        var subject = $"{label}{forName} — {snap.LocalityName} ({localTime})";
+
+        // WX-156: front-load a severe-weather noun (mobile truncation) when one is in the next 24 h.
+        var hazardPrefix = severeBody is null ? null : SevereSubjectPrefix.Evaluate(severeBody, DateTime.UtcNow, vocab);
+        return hazardPrefix is null ? subject : $"{hazardPrefix} — {subject}";
     }
 
     /// <summary>

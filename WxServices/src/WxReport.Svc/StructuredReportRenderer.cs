@@ -138,7 +138,7 @@ public static class StructuredReportRenderer
             return;
         var local = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(severe.StartUtc, DateTimeKind.Utc), tz);
         var timing = $"{local.ToString("dddd", vocab.Culture)} {Lower(PartLabel(PartOf(local.Hour), vocab))}";
-        var text = string.Format(vocab.Culture, vocab.HazardBannerFormat, SevereNoun(severe.PrecipPhenomenon, vocab), timing);
+        var text = string.Format(vocab.Culture, vocab.HazardBannerFormat, vocab.SevereNoun(severe.PrecipPhenomenon), timing);
         sb.Append("<div style=\"background:#7a1c1c;color:#ffffff;padding:14px 24px;font-weight:bold;font-size:15px;\">");
         sb.Append(HtmlText(text));
         sb.Append("</div>");
@@ -652,7 +652,7 @@ public static class StructuredReportRenderer
                 if (e.Severe)
                 {
                     severeNamed = true;
-                    clauses.Add($"{SevereNoun(e.Phenomenon, vocab)} {OutlookWord(e.Expectation, vocab)} {WhenWord(PartOf(e.StartHour), vocab)}");
+                    clauses.Add($"{vocab.SevereNoun(e.Phenomenon)} {OutlookWord(e.Expectation, vocab)} {WhenWord(PartOf(e.StartHour), vocab)}");
                 }
                 else
                 {
@@ -741,10 +741,6 @@ public static class StructuredReportRenderer
         SkyState.Overcast => vocab.SkyOvercast,
         _ => vocab.SkyClear,
     };
-
-    /// <summary>The severe lead noun: convective ("Severe storms") for a thunderstorm, generic ("Severe weather") otherwise — a severe block can be a damaging-wind event with no precip.</summary>
-    private static string SevereNoun(PrecipPhenomenon? phenomenon, ReportVocabulary vocab) =>
-        phenomenon == PrecipPhenomenon.Thunderstorm ? vocab.CondSevereStorms : vocab.CondSevereWeather;
 
     /// <summary>The episode's time label: a single day-part, or a "start–end" range when it spans buckets.</summary>
     private static string EpisodeRangeLabel(Episode e, ReportVocabulary vocab)

@@ -36,8 +36,10 @@ public static class GfsSnapshotBuilder
     private const float ThunderstormCapeJKg = 1000f;
     /// <summary>CAPE at or above which a wet hour is considered severe-capable.</summary>
     private const float SevereCapeJKg = 2500f;
-    /// <summary>Sustained wind speed at or above which a forecast hour is severe regardless of CAPE (knots).</summary>
-    private const float SevereWindKt = 50f;
+    /// <summary>Sustained wind speed at or above which a forecast hour is severe regardless of CAPE (knots).
+    /// Public so the WX-156 severe subject prefix can tell a wind-severe block (qualifies standalone) from a
+    /// CAPE-severe one (needs <c>PrecipExpectation ≥ Likely</c>) without re-deriving the threshold — single source of truth.</summary>
+    public const float SevereWindKt = 50f;
 
     /// <summary>Maximum cloud-cover percentage that still maps to "clear".</summary>
     private const float SkyClearMaxPct = 20f;
@@ -59,8 +61,10 @@ public static class GfsSnapshotBuilder
     private const int MinHoursPerBlock = 4;
     /// <summary>Maximum number of 6-hour blocks emitted in one snapshot (six-day horizon).</summary>
     private const int MaxBlocks = 24;
-    /// <summary>Length of a snapshot block in hours.</summary>
-    private const int BlockHours = 6;
+    /// <summary>Length of a snapshot block in hours. Public so consumers that reason about a block's time
+    /// extent (e.g. the WX-156 severe subject prefix's in-window test) reference this one definition rather
+    /// than re-hardcoding the duration — single source of truth.</summary>
+    public const int BlockHours = 6;
 
     // ── public API ───────────────────────────────────────────────────────────
 
