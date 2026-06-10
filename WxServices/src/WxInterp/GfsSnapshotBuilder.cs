@@ -66,19 +66,22 @@ public static class GfsSnapshotBuilder
 
     /// <summary>
     /// Builds a provisional <see cref="ForecastSnapshotBody"/> from a GFS hourly
-    /// forecast.  Hours are grouped into 6-hour blocks aligned to 00/06/12/18Z
-    /// UTC; blocks with fewer than <see cref="MinHoursPerBlock"/> hours of data
-    /// or no temperature signal are skipped.  Up to <see cref="MaxBlocks"/>
-    /// blocks are emitted.
+    /// forecast.  Hours are grouped into 6-hour blocks aligned to the locality's
+    /// local day-parts (00/06/12/18 local: night/morning/afternoon/evening) per
+    /// <paramref name="tz"/>; blocks with fewer than <see cref="MinHoursPerBlock"/>
+    /// hours of data or no temperature signal are skipped.  Up to
+    /// <see cref="MaxBlocks"/> blocks are emitted.
     /// </summary>
     /// <param name="forecast">The hourly GFS forecast to project.</param>
+    /// <param name="tz">The locality timezone whose local day-parts define the block boundaries (WX-155).  Required — pass <see cref="TimeZoneInfo.Utc"/> for the pre-WX-155 UTC-aligned grid.</param>
     /// <returns>A schema-version-1 body whose blocks may be persisted as-is or refined by Pass 2 (WX-79).</returns>
-    public static ForecastSnapshotBody Build(GfsHourlyForecast forecast)
+    public static ForecastSnapshotBody Build(GfsHourlyForecast forecast, TimeZoneInfo tz)
     {
         ArgumentNullException.ThrowIfNull(forecast);
+        ArgumentNullException.ThrowIfNull(tz);
 
         var blocks = forecast.Hours
-            .GroupBy(h => FloorToBlockStart(h.ValidTimeUtc))
+            .GroupBy(h => FloorToLocalDayPartStart(h.ValidTimeUtc, tz))
             .OrderBy(g => g.Key)
             .Select(g => TryBuildBlock(g.Key, [.. g]))
             .Where(b => b is not null)
@@ -194,9 +197,27 @@ public static class GfsSnapshotBuilder
 
     // ── alignment ────────────────────────────────────────────────────────────
 
-    private static DateTime FloorToBlockStart(DateTime utc)
+    // WX-155: blocks are bucketed by the LOCALITY'S local day-part, not the UTC
+    // 6-hour grid. A UTC-aligned block straddles two local day-parts for any
+    // offset timezone (12Z–18Z is 7 AM–1 PM in CDT — five hours of morning plus
+    // one of afternoon), which let day-part prose contradict its own clock. Local
+    // day-parts: 00–05 night, 06–11 morning, 12–17 afternoon, 18–23 evening. A
+    // 6-hour boundary can be an invalid (spring-forward gap) or ambiguous
+    // (fall-back) local time in a zone whose DST transition lands on it — US zones
+    // transition at 02:00, but others (e.g. midnight-transition zones like
+    // America/Santiago) do not — so a gap boundary is stepped forward one hour to
+    // the first real instant (ConvertTimeToUtc otherwise throws), and an ambiguous
+    // boundary is resolved deterministically by ConvertTimeToUtc. Every hour of a
+    // day-part still maps to one key, so grouping is unaffected; a block's hour
+    // count varies by ±1 across a transition. StartUtc stays a UTC instant — only
+    // its anchoring changed.
+    private static DateTime FloorToLocalDayPartStart(DateTime utc, TimeZoneInfo tz)
     {
-        var flooredHour = utc.Hour - (utc.Hour % BlockHours);
-        return new DateTime(utc.Year, utc.Month, utc.Day, flooredHour, 0, 0, DateTimeKind.Utc);
+        var local = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(utc, DateTimeKind.Utc), tz);
+        var flooredHour = local.Hour - (local.Hour % BlockHours);
+        var localStart = new DateTime(local.Year, local.Month, local.Day, flooredHour, 0, 0, DateTimeKind.Unspecified);
+        if (tz.IsInvalidTime(localStart))
+            localStart = localStart.AddHours(1);  // the spring-forward gap is 1 h; step to the first real instant
+        return TimeZoneInfo.ConvertTimeToUtc(localStart, tz);
     }
 }

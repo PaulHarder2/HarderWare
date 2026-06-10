@@ -32,7 +32,7 @@ public class ForecastReconcilerTests
     // current-conditions table and per-day grid are rendered deterministically.
     private const string ValidStructuredReportJson = """
         {
-          "schemaVersion": 4,
+          "schemaVersion": 5,
           "changes": [],
           "narrative": {
             "en": {
@@ -44,13 +44,13 @@ public class ForecastReconcilerTests
         """;
 
     // WX-148: a structured report announcing rain appearing in a block-aligned
-    // 12–18Z window (the {ch1} anchor appears in the changeSummary, as the body
+    // 11–17Z window (the {ch1} anchor appears in the changeSummary, as the body
     // contract requires when changes is non-empty).
     private const string RainAppearingAlignedReportJson = """
         {
-          "schemaVersion": 4,
+          "schemaVersion": 5,
           "changes": [
-            { "tier": "plans", "phenomenon": "rain", "direction": "appearing", "window": { "startUtc": "2026-06-09T12:00:00Z", "endUtc": "2026-06-09T18:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
+            { "tier": "plans", "phenomenon": "rain", "direction": "appearing", "window": { "startUtc": "2026-06-09T11:00:00Z", "endUtc": "2026-06-09T17:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
           ],
           "narrative": {
             "en": { "changeSummary": "{ch1}Rain is now likely.", "closing": "A wet stretch ahead — keep an umbrella handy." }
@@ -61,7 +61,7 @@ public class ForecastReconcilerTests
     // The same change but with an OFF-GRID window (17–21Z) — the 6/9 contradiction shape.
     private const string RainAppearingOffGridReportJson = """
         {
-          "schemaVersion": 4,
+          "schemaVersion": 5,
           "changes": [
             { "tier": "plans", "phenomenon": "rain", "direction": "appearing", "window": { "startUtc": "2026-06-09T17:00:00Z", "endUtc": "2026-06-09T21:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
           ],
@@ -71,16 +71,16 @@ public class ForecastReconcilerTests
         }
         """;
 
-    // A final_snapshot whose 12–18Z block carries rain — backs the appearing-rain change.
+    // A final_snapshot whose 11–17Z block carries rain — backs the appearing-rain change.
     private const string RainBlockSnapshotJson = """
-        {"schemaVersion":4,"blocks":[{"startUtc":"2026-06-09T12:00:00Z","skyState":"partly_cloudy","obscuration":"none","temperatureCelsius":{"min":22,"max":30},"windKt":{"min":5,"max":12},"precipExpectation":"possible","precipPhenomenon":"rain","severeFlag":false}]}
+        {"schemaVersion":5,"blocks":[{"startUtc":"2026-06-09T11:00:00Z","skyState":"partly_cloudy","obscuration":"none","temperatureCelsius":{"min":22,"max":30},"windKt":{"min":5,"max":12},"precipExpectation":"possible","precipPhenomenon":"rain","severeFlag":false}]}
         """;
 
     // Schema-valid (closing is non-blank) but below the per-language visible floor:
     // the WX-120 fall-safe degeneracy case the reconciler turns into a skip/Failure.
     private const string DegenerateStructuredReportJson = """
         {
-          "schemaVersion": 4,
+          "schemaVersion": 5,
           "changes": [],
           "narrative": {
             "en": { "changeSummary": null, "closing": "ok" }
@@ -95,9 +95,9 @@ public class ForecastReconcilerTests
     // this phantom (the block must carry the named phenomenon) — WX-149 pins it.
     private const string PhantomThunderstormSafetyReportJson = """
         {
-          "schemaVersion": 4,
+          "schemaVersion": 5,
           "changes": [
-            { "tier": "safety", "phenomenon": "thunderstorm", "direction": "appearing", "window": { "startUtc": "2026-06-09T12:00:00Z", "endUtc": "2026-06-09T18:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
+            { "tier": "safety", "phenomenon": "thunderstorm", "direction": "appearing", "window": { "startUtc": "2026-06-09T11:00:00Z", "endUtc": "2026-06-09T17:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
           ],
           "narrative": {
             "en": { "changeSummary": "{ch1}Storms are now possible this morning.", "closing": "Keep an eye on the sky." }
@@ -110,9 +110,9 @@ public class ForecastReconcilerTests
     // a safety-grade signal — WX-149's tier-backing assertion rejects it.
     private const string SafetyRainOverEscalationReportJson = """
         {
-          "schemaVersion": 4,
+          "schemaVersion": 5,
           "changes": [
-            { "tier": "safety", "phenomenon": "rain", "direction": "appearing", "window": { "startUtc": "2026-06-09T12:00:00Z", "endUtc": "2026-06-09T18:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
+            { "tier": "safety", "phenomenon": "rain", "direction": "appearing", "window": { "startUtc": "2026-06-09T11:00:00Z", "endUtc": "2026-06-09T17:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
           ],
           "narrative": {
             "en": { "changeSummary": "{ch1}Rain is now possible this morning.", "closing": "Keep an umbrella handy." }
@@ -123,7 +123,7 @@ public class ForecastReconcilerTests
     // Defect 3 (send 1938): raw internal block notation leaked into the closing.
     private const string RawUtcLeakReportJson = """
         {
-          "schemaVersion": 4,
+          "schemaVersion": 5,
           "changes": [],
           "narrative": {
             "en": { "changeSummary": null, "closing": "The Wednesday afternoon block (12-18Z) has shifted from dry to wet." }
@@ -134,7 +134,7 @@ public class ForecastReconcilerTests
     // A lower-cased leak ("12-18z") must be caught too (case-insensitive, PR #87).
     private const string RawUtcLeakLowercaseReportJson = """
         {
-          "schemaVersion": 4,
+          "schemaVersion": 5,
           "changes": [],
           "narrative": {
             "en": { "changeSummary": null, "closing": "The afternoon block (12-18z) has shifted from dry to wet." }
@@ -143,29 +143,29 @@ public class ForecastReconcilerTests
         """;
 
     // Defect 2 (send 1927): prose says "afternoon" next to a {q:time} token at
-    // 12:00Z, which renders to 7:00 AM local (CDT) — the morning, not afternoon.
+    // 11:00Z, which renders to 6:00 AM local (CDT) — the morning, not afternoon.
     private const string ProseTimeMismatchReportJson = """
         {
-          "schemaVersion": 4,
+          "schemaVersion": 5,
           "changes": [
-            { "tier": "plans", "phenomenon": "rain", "direction": "appearing", "window": { "startUtc": "2026-06-13T12:00:00Z", "endUtc": "2026-06-13T18:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
+            { "tier": "plans", "phenomenon": "rain", "direction": "appearing", "window": { "startUtc": "2026-06-13T11:00:00Z", "endUtc": "2026-06-13T17:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
           ],
           "narrative": {
-            "en": { "changeSummary": "{ch1}Rain is now expected to develop Saturday afternoon, {q:time:2026-06-13T12:00:00Z}.", "closing": "A wet start to the weekend." }
+            "en": { "changeSummary": "{ch1}Rain is now expected to develop Saturday afternoon, {q:time:2026-06-13T11:00:00Z}.", "closing": "A wet start to the weekend." }
           }
         }
         """;
 
     // The same shape but the prose word AGREES with the token's local rendering
-    // (12:00Z is 7:00 AM CDT — morning) — must NOT be rejected.
+    // (11:00Z is 6:00 AM CDT — morning) — must NOT be rejected.
     private const string ProseTimeAgreesReportJson = """
         {
-          "schemaVersion": 4,
+          "schemaVersion": 5,
           "changes": [
-            { "tier": "plans", "phenomenon": "rain", "direction": "appearing", "window": { "startUtc": "2026-06-09T12:00:00Z", "endUtc": "2026-06-09T18:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
+            { "tier": "plans", "phenomenon": "rain", "direction": "appearing", "window": { "startUtc": "2026-06-09T11:00:00Z", "endUtc": "2026-06-09T17:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
           ],
           "narrative": {
-            "en": { "changeSummary": "{ch1}Rain develops this morning, {q:time:2026-06-09T12:00:00Z}.", "closing": "A wet start to the day." }
+            "en": { "changeSummary": "{ch1}Rain develops this morning, {q:time:2026-06-09T11:00:00Z}.", "closing": "A wet start to the day." }
           }
         }
         """;
@@ -173,9 +173,9 @@ public class ForecastReconcilerTests
     // A safety-tier thunderstorm BACKED by a severe block — must NOT be rejected.
     private const string SafetyThunderstormBackedReportJson = """
         {
-          "schemaVersion": 4,
+          "schemaVersion": 5,
           "changes": [
-            { "tier": "safety", "phenomenon": "thunderstorm", "direction": "appearing", "window": { "startUtc": "2026-06-09T12:00:00Z", "endUtc": "2026-06-09T18:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
+            { "tier": "safety", "phenomenon": "thunderstorm", "direction": "appearing", "window": { "startUtc": "2026-06-09T11:00:00Z", "endUtc": "2026-06-09T17:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
           ],
           "narrative": {
             "en": { "changeSummary": "{ch1}Severe storms are now likely.", "closing": "Stay weather-aware today." }
@@ -187,9 +187,9 @@ public class ForecastReconcilerTests
     // the tier-backing check (WX-149 documented residual) and must NOT be rejected.
     private const string FogSafetyExemptReportJson = """
         {
-          "schemaVersion": 4,
+          "schemaVersion": 5,
           "changes": [
-            { "tier": "safety", "phenomenon": "fog", "direction": "appearing", "window": { "startUtc": "2026-06-09T12:00:00Z", "endUtc": "2026-06-09T18:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
+            { "tier": "safety", "phenomenon": "fog", "direction": "appearing", "window": { "startUtc": "2026-06-09T11:00:00Z", "endUtc": "2026-06-09T17:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
           ],
           "narrative": {
             "en": { "changeSummary": "{ch1}Dense fog is now likely.", "closing": "Allow extra time on the roads." }
@@ -197,51 +197,51 @@ public class ForecastReconcilerTests
         }
         """;
 
-    // A 6/13 12-18Z block carrying rain — backs the prose-token-mismatch change.
+    // A 6/13 11-17Z block carrying rain — backs the prose-token-mismatch change.
     private const string RainBlock613SnapshotJson = """
-        {"schemaVersion":4,"blocks":[{"startUtc":"2026-06-13T12:00:00Z","skyState":"partly_cloudy","obscuration":"none","temperatureCelsius":{"min":22,"max":30},"windKt":{"min":5,"max":12},"precipExpectation":"possible","precipPhenomenon":"rain","severeFlag":false}]}
+        {"schemaVersion":5,"blocks":[{"startUtc":"2026-06-13T11:00:00Z","skyState":"partly_cloudy","obscuration":"none","temperatureCelsius":{"min":22,"max":30},"windKt":{"min":5,"max":12},"precipExpectation":"possible","precipPhenomenon":"rain","severeFlag":false}]}
         """;
 
-    // A 6/9 12-18Z block carrying a severe thunderstorm — backs a safety-tier change.
+    // A 6/9 11-17Z block carrying a severe thunderstorm — backs a safety-tier change.
     private const string SevereThunderstormBlockSnapshotJson = """
-        {"schemaVersion":4,"blocks":[{"startUtc":"2026-06-09T12:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":24,"max":31},"windKt":{"min":10,"max":20},"precipExpectation":"likely","precipPhenomenon":"thunderstorm","severeFlag":true}]}
+        {"schemaVersion":5,"blocks":[{"startUtc":"2026-06-09T11:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":24,"max":31},"windKt":{"min":10,"max":20},"precipExpectation":"likely","precipPhenomenon":"thunderstorm","severeFlag":true}]}
         """;
 
     // ── WX-151 prior-aware snapshots ──────────────────────────────────────────
 
-    // A 6/9 12-18Z block carrying rain at LIKELY (RainBlockSnapshotJson is the same
+    // A 6/9 11-17Z block carrying rain at LIKELY (RainBlockSnapshotJson is the same
     // block at possible) — a stronger prior, for weakening (Likely→Possible).
     private const string RainLikelyBlockSnapshotJson = """
-        {"schemaVersion":4,"blocks":[{"startUtc":"2026-06-09T12:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":22,"max":30},"windKt":{"min":5,"max":12},"precipExpectation":"likely","precipPhenomenon":"rain","severeFlag":false}]}
+        {"schemaVersion":5,"blocks":[{"startUtc":"2026-06-09T11:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":22,"max":30},"windKt":{"min":5,"max":12},"precipExpectation":"likely","precipPhenomenon":"rain","severeFlag":false}]}
         """;
 
-    // A 6/9 12-18Z block carrying freezing precip (possible) — a prior whose hazard
+    // A 6/9 11-17Z block carrying freezing precip (possible) — a prior whose hazard
     // the new (rain) snapshot legitimately clears.
     private const string FreezingPrecipBlockSnapshotJson = """
-        {"schemaVersion":4,"blocks":[{"startUtc":"2026-06-09T12:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":-1,"max":2},"windKt":{"min":5,"max":12},"precipExpectation":"possible","precipPhenomenon":"freezingPrecip","severeFlag":false}]}
+        {"schemaVersion":5,"blocks":[{"startUtc":"2026-06-09T11:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":-1,"max":2},"windKt":{"min":5,"max":12},"precipExpectation":"possible","precipPhenomenon":"freezingPrecip","severeFlag":false}]}
         """;
 
-    // A 6/9 12-18Z thunderstorm POSSIBLE, severeFlag FALSE — prior for the severe-
+    // A 6/9 11-17Z thunderstorm POSSIBLE, severeFlag FALSE — prior for the severe-
     // escalation guard (expectation flat, severe rises false→true).
     private const string StormPossibleNoSevereSnapshotJson = """
-        {"schemaVersion":4,"blocks":[{"startUtc":"2026-06-09T12:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":24,"max":31},"windKt":{"min":10,"max":20},"precipExpectation":"possible","precipPhenomenon":"thunderstorm","severeFlag":false}]}
+        {"schemaVersion":5,"blocks":[{"startUtc":"2026-06-09T11:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":24,"max":31},"windKt":{"min":10,"max":20},"precipExpectation":"possible","precipPhenomenon":"thunderstorm","severeFlag":false}]}
         """;
 
-    // A 6/9 12-18Z thunderstorm POSSIBLE, severeFlag TRUE — new snapshot for the
+    // A 6/9 11-17Z thunderstorm POSSIBLE, severeFlag TRUE — new snapshot for the
     // severe-escalation guard, and for severe-appearing.
     private const string StormPossibleSevereSnapshotJson = """
-        {"schemaVersion":4,"blocks":[{"startUtc":"2026-06-09T12:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":24,"max":31},"windKt":{"min":10,"max":20},"precipExpectation":"possible","precipPhenomenon":"thunderstorm","severeFlag":true}]}
+        {"schemaVersion":5,"blocks":[{"startUtc":"2026-06-09T11:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":24,"max":31},"windKt":{"min":10,"max":20},"precipExpectation":"possible","precipPhenomenon":"thunderstorm","severeFlag":true}]}
         """;
 
-    // ── WX-151 prior-aware change fixtures (window 6/9 12-18Z) ─────────────────
+    // ── WX-151 prior-aware change fixtures (window 6/9 11-17Z) ─────────────────
     // changeSummaries avoid day-part words so the anchored-prose check stays inert
     // (these fixtures exercise the prior-aware verification, not the prose check).
 
     private const string RainWeakeningReportJson = """
         {
-          "schemaVersion": 4,
+          "schemaVersion": 5,
           "changes": [
-            { "tier": "plans", "phenomenon": "rain", "direction": "weakening", "window": { "startUtc": "2026-06-09T12:00:00Z", "endUtc": "2026-06-09T18:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
+            { "tier": "plans", "phenomenon": "rain", "direction": "weakening", "window": { "startUtc": "2026-06-09T11:00:00Z", "endUtc": "2026-06-09T17:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
           ],
           "narrative": {
             "en": { "changeSummary": "{ch1}The rain is easing off.", "closing": "Drier than it looked." }
@@ -251,9 +251,9 @@ public class ForecastReconcilerTests
 
     private const string StormStrengtheningReportJson = """
         {
-          "schemaVersion": 4,
+          "schemaVersion": 5,
           "changes": [
-            { "tier": "plans", "phenomenon": "thunderstorm", "direction": "strengthening", "window": { "startUtc": "2026-06-09T12:00:00Z", "endUtc": "2026-06-09T18:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
+            { "tier": "plans", "phenomenon": "thunderstorm", "direction": "strengthening", "window": { "startUtc": "2026-06-09T11:00:00Z", "endUtc": "2026-06-09T17:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
           ],
           "narrative": {
             "en": { "changeSummary": "{ch1}The storm threat has stepped up.", "closing": "Worth keeping an eye on." }
@@ -263,9 +263,9 @@ public class ForecastReconcilerTests
 
     private const string SevereAppearingReportJson = """
         {
-          "schemaVersion": 4,
+          "schemaVersion": 5,
           "changes": [
-            { "tier": "safety", "phenomenon": "severe", "direction": "appearing", "window": { "startUtc": "2026-06-09T12:00:00Z", "endUtc": "2026-06-09T18:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
+            { "tier": "safety", "phenomenon": "severe", "direction": "appearing", "window": { "startUtc": "2026-06-09T11:00:00Z", "endUtc": "2026-06-09T17:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
           ],
           "narrative": {
             "en": { "changeSummary": "{ch1}Severe weather is now in the forecast.", "closing": "Stay weather-aware." }
@@ -274,12 +274,12 @@ public class ForecastReconcilerTests
         """;
 
     // A genuine change but the prose times it "this evening" while the window
-    // (6/9 12-18Z) is morning/afternoon in CDT — the anchored-prose contradiction.
+    // (6/9 11-17Z) is morning in CDT — the anchored-prose contradiction.
     private const string RainAppearingEveningProseReportJson = """
         {
-          "schemaVersion": 4,
+          "schemaVersion": 5,
           "changes": [
-            { "tier": "plans", "phenomenon": "rain", "direction": "appearing", "window": { "startUtc": "2026-06-09T12:00:00Z", "endUtc": "2026-06-09T18:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
+            { "tier": "plans", "phenomenon": "rain", "direction": "appearing", "window": { "startUtc": "2026-06-09T11:00:00Z", "endUtc": "2026-06-09T17:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
           ],
           "narrative": {
             "en": { "changeSummary": "{ch1}Rain develops this evening.", "closing": "Keep an umbrella handy." }
@@ -291,9 +291,9 @@ public class ForecastReconcilerTests
     // transition word ("this morning … by evening") — must NOT be rejected.
     private const string RainAppearingTransitionProseReportJson = """
         {
-          "schemaVersion": 4,
+          "schemaVersion": 5,
           "changes": [
-            { "tier": "plans", "phenomenon": "rain", "direction": "appearing", "window": { "startUtc": "2026-06-09T12:00:00Z", "endUtc": "2026-06-09T18:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
+            { "tier": "plans", "phenomenon": "rain", "direction": "appearing", "window": { "startUtc": "2026-06-09T11:00:00Z", "endUtc": "2026-06-09T17:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
           ],
           "narrative": {
             "en": { "changeSummary": "{ch1}Rain develops this morning, tapering by evening.", "closing": "A damp start." }
@@ -307,9 +307,9 @@ public class ForecastReconcilerTests
     // direction. (Snapshot: RainBlockSnapshotJson — rain, no severe/freezing.)
     private const string SafetyClearingReportJson = """
         {
-          "schemaVersion": 4,
+          "schemaVersion": 5,
           "changes": [
-            { "tier": "safety", "phenomenon": "freezingPrecip", "direction": "clearing", "window": { "startUtc": "2026-06-09T12:00:00Z", "endUtc": "2026-06-09T18:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
+            { "tier": "safety", "phenomenon": "freezingPrecip", "direction": "clearing", "window": { "startUtc": "2026-06-09T11:00:00Z", "endUtc": "2026-06-09T17:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
           ],
           "narrative": {
             "en": { "changeSummary": "{ch1}The ice threat has lifted; roads should be clear.", "closing": "A safer commute than this morning looked." }
@@ -322,9 +322,9 @@ public class ForecastReconcilerTests
     // intervening words, so it must NOT be read as governing the token.
     private const string CompoundSentenceProseTimeReportJson = """
         {
-          "schemaVersion": 4,
+          "schemaVersion": 5,
           "changes": [
-            { "tier": "plans", "phenomenon": "rain", "direction": "appearing", "window": { "startUtc": "2026-06-13T12:00:00Z", "endUtc": "2026-06-13T18:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
+            { "tier": "plans", "phenomenon": "rain", "direction": "appearing", "window": { "startUtc": "2026-06-13T11:00:00Z", "endUtc": "2026-06-13T17:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
           ],
           "narrative": {
             "en": { "changeSummary": "{ch1}Showers taper Friday evening, then redevelop {q:time:2026-06-13T13:00:00Z} Saturday.", "closing": "An unsettled couple of days." }
@@ -338,7 +338,7 @@ public class ForecastReconcilerTests
     public async Task HappyPath_ReturnsSuccess_WithThreeArtifactsAndTokens()
     {
         var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: """{"schemaVersion":4,"blocks":[]}""",
+            finalSnapshotJson: """{"schemaVersion":5,"blocks":[]}""",
             reasoningTrace: "All three steps clean.",
             inputTokens: 100, outputTokens: 50,
             cacheReadInputTokens: 80, cacheCreationInputTokens: 10);
@@ -366,7 +366,7 @@ public class ForecastReconcilerTests
     {
         var responseJson = BuildClaudeResponseJsonWithRawInput("""
             {
-              "final_snapshot": { "schemaVersion": 4, "blocks": [] },
+              "final_snapshot": { "schemaVersion": 5, "blocks": [] },
               "reasoning_trace": "trace"
             }
             """);
@@ -387,7 +387,7 @@ public class ForecastReconcilerTests
         // rather than failing outright — the snapshot is still usable for a hazard
         // report, only the suspect narrative is dropped.
         var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: """{"schemaVersion":4,"blocks":[]}""",
+            finalSnapshotJson: """{"schemaVersion":5,"blocks":[]}""",
             reasoningTrace: "trace",
             inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0);
 
@@ -415,7 +415,7 @@ public class ForecastReconcilerTests
             "\"narrative\": {",
             "\"narrative\": { \"es\": { \"changeSummary\": null, \"closing\": \"Un cierre razonable y suficientemente largo.\" },");
         var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: """{"schemaVersion":4,"blocks":[]}""",
+            finalSnapshotJson: """{"schemaVersion":5,"blocks":[]}""",
             reasoningTrace: "trace",
             inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
             structuredReportJson: withExtra);
@@ -433,7 +433,7 @@ public class ForecastReconcilerTests
         // guaranteed send it cannot become a skip — it fails closed so the
         // provisional stays and the next cycle self-heals (WX-120 carried forward).
         var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: """{"schemaVersion":4,"blocks":[]}""",
+            finalSnapshotJson: """{"schemaVersion":5,"blocks":[]}""",
             reasoningTrace: "trace",
             inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
             structuredReportJson: DegenerateStructuredReportJson);
@@ -450,7 +450,7 @@ public class ForecastReconcilerTests
         // A near-blank narrative on a skippable cycle matches Claude's (skip-leaning)
         // reasoning: after bounded retries it becomes a NotNews and keeps the trace.
         var degenerate = BuildClaudeResponseJson(
-            finalSnapshotJson: """{"schemaVersion":4,"blocks":[]}""",
+            finalSnapshotJson: """{"schemaVersion":5,"blocks":[]}""",
             reasoningTrace: "Confirms the prior forecast — not news. SKIP.",
             inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
             structuredReportJson: DegenerateStructuredReportJson);
@@ -621,7 +621,7 @@ public class ForecastReconcilerTests
         // reasoning_trace (the reconciler checks final_snapshot, then reasoning_trace).
         var responseJson = BuildClaudeResponseJsonWithRawInput($$"""
             {
-              "final_snapshot": { "schemaVersion": 4, "blocks": [] },
+              "final_snapshot": { "schemaVersion": 5, "blocks": [] },
               "structured_report": {{ValidStructuredReportJson}}
             }
             """);
@@ -646,7 +646,7 @@ public class ForecastReconcilerTests
         // mislabel it a missing field — it keys on stop_reason, before reading fields.
         var responseJson = BuildClaudeResponseJsonWithRawInput("""
             {
-              "final_snapshot": { "schemaVersion": 4, "blocks": [] },
+              "final_snapshot": { "schemaVersion": 5, "blocks": [] },
               "reasoning_trace": "trace"
             }
             """,
@@ -668,7 +668,7 @@ public class ForecastReconcilerTests
         // not trust a capped generation — the result is the truncation Failure.
         var responseJson = BuildClaudeResponseJsonWithRawInput($$"""
             {
-              "final_snapshot": { "schemaVersion": 4, "blocks": [] },
+              "final_snapshot": { "schemaVersion": 5, "blocks": [] },
               "structured_report": {{ValidStructuredReportJson}},
               "reasoning_trace": "trace"
             }
@@ -690,10 +690,10 @@ public class ForecastReconcilerTests
         // that simply dropped the advisory-required field); the second is complete.
         // The reconciler retries within the cycle and lands on Success.
         var malformed = BuildClaudeResponseJsonWithRawInput("""
-            { "final_snapshot": { "schemaVersion": 4, "blocks": [] }, "reasoning_trace": "trace" }
+            { "final_snapshot": { "schemaVersion": 5, "blocks": [] }, "reasoning_trace": "trace" }
             """);
         var valid = BuildClaudeResponseJson(
-            finalSnapshotJson: """{"schemaVersion":4,"blocks":[]}""",
+            finalSnapshotJson: """{"schemaVersion":5,"blocks":[]}""",
             reasoningTrace: "trace",
             inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0);
 
@@ -718,10 +718,10 @@ public class ForecastReconcilerTests
         // The failed attempt is real billable spend; the returned Tokens must include
         // it so the cost dashboards don't undercount retried cycles.
         var malformed = BuildClaudeResponseJsonWithRawInput("""
-            { "final_snapshot": { "schemaVersion": 4, "blocks": [] }, "reasoning_trace": "trace" }
+            { "final_snapshot": { "schemaVersion": 5, "blocks": [] }, "reasoning_trace": "trace" }
             """); // default tokens: 10 in / 10 out / 0 / 0
         var valid = BuildClaudeResponseJson(
-            finalSnapshotJson: """{"schemaVersion":4,"blocks":[]}""",
+            finalSnapshotJson: """{"schemaVersion":5,"blocks":[]}""",
             reasoningTrace: "trace",
             inputTokens: 100, outputTokens: 50, cacheReadInputTokens: 80, cacheCreationInputTokens: 10);
 
@@ -749,12 +749,12 @@ public class ForecastReconcilerTests
         // A near-blank narrative first response recovers on retry to a real report:
         // Success, exactly one retry.
         var degenerate = BuildClaudeResponseJson(
-            finalSnapshotJson: """{"schemaVersion":4,"blocks":[]}""",
+            finalSnapshotJson: """{"schemaVersion":5,"blocks":[]}""",
             reasoningTrace: "trace",
             inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
             structuredReportJson: DegenerateStructuredReportJson);
         var valid = BuildClaudeResponseJson(
-            finalSnapshotJson: """{"schemaVersion":4,"blocks":[]}""",
+            finalSnapshotJson: """{"schemaVersion":5,"blocks":[]}""",
             reasoningTrace: "trace",
             inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0);
 
@@ -777,7 +777,7 @@ public class ForecastReconcilerTests
     public async Task RetryableMalformed_AllAttemptsFail_ReturnsFailureBoundedAtThreeCalls()
     {
         var malformed = BuildClaudeResponseJsonWithRawInput("""
-            { "final_snapshot": { "schemaVersion": 4, "blocks": [] }, "reasoning_trace": "trace" }
+            { "final_snapshot": { "schemaVersion": 5, "blocks": [] }, "reasoning_trace": "trace" }
             """);
 
         int calls = 0;
@@ -802,7 +802,7 @@ public class ForecastReconcilerTests
         // A max_tokens stop_reason is authoritative: re-calling at the same cap would
         // just re-truncate, so the truncation Failure is returned on the first call.
         var truncated = BuildClaudeResponseJsonWithRawInput("""
-            { "final_snapshot": { "schemaVersion": 4, "blocks": [] }, "reasoning_trace": "trace" }
+            { "final_snapshot": { "schemaVersion": 5, "blocks": [] }, "reasoning_trace": "trace" }
             """, stopReason: "max_tokens");
 
         int calls = 0;
@@ -863,7 +863,7 @@ public class ForecastReconcilerTests
             """;
         var responseJson = BuildClaudeResponseJsonWithRawInput($$"""
             {
-              "final_snapshot": { "schemaVersion": 4, "blocks": [{{blockJson}}] },
+              "final_snapshot": { "schemaVersion": 5, "blocks": [{{blockJson}}] },
               "structured_report": {{ValidStructuredReportJson}},
               "reasoning_trace": "trace"
             }
@@ -898,7 +898,7 @@ public class ForecastReconcilerTests
     [Fact]
     public async Task AppearingPrecip_BackedByBlock_Succeeds()
     {
-        // A block-aligned 12–18Z window whose appearing rain is carried by the 12Z
+        // A block-aligned 11–17Z window whose appearing rain is carried by the 11Z
         // block passes the validator cleanly.
         var responseJson = BuildClaudeResponseJson(
             finalSnapshotJson: RainBlockSnapshotJson,
@@ -917,7 +917,7 @@ public class ForecastReconcilerTests
         // rain — the narrative would promise precip the grid never shows. Rejected,
         // retried, then degraded on the (clean) empty snapshot.
         var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: """{"schemaVersion":4,"blocks":[]}""",
+            finalSnapshotJson: """{"schemaVersion":5,"blocks":[]}""",
             reasoningTrace: "trace",
             inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
             structuredReportJson: RainAppearingAlignedReportJson);
@@ -993,7 +993,7 @@ public class ForecastReconcilerTests
     public async Task ProseTimeWord_ContradictsTokenLocalRendering_Degrades()
     {
         // Defect 2 (Spring 6/13, send 1927): prose says "afternoon" beside a
-        // {q:time} token at 12:00Z that renders to 7:00 AM local (CDT) — morning.
+        // {q:time} token at 11:00Z that renders to 6:00 AM local (CDT) — morning.
         var responseJson = BuildClaudeResponseJson(
             finalSnapshotJson: RainBlock613SnapshotJson,
             reasoningTrace: "trace",
@@ -1008,7 +1008,7 @@ public class ForecastReconcilerTests
     public async Task ProseTimeWord_AgreesWithTokenLocalRendering_Succeeds()
     {
         // The conservative check must not false-reject: "morning" beside a token
-        // that renders to 7:00 AM local (CDT) agrees, so the report sends cleanly.
+        // that renders to 6:00 AM local (CDT) agrees, so the report sends cleanly.
         var responseJson = BuildClaudeResponseJson(
             finalSnapshotJson: RainBlockSnapshotJson,
             reasoningTrace: "trace",
@@ -1081,7 +1081,7 @@ public class ForecastReconcilerTests
 
     // ── WX-151 prior-aware change verification ────────────────────────────────
 
-    private const string DryPriorSnapshotJson = """{"schemaVersion":4,"blocks":[]}""";
+    private const string DryPriorSnapshotJson = """{"schemaVersion":5,"blocks":[]}""";
 
     [Fact]
     public async Task PriorAware_PrecipUnchanged_PhantomAppearing_Degrades()
@@ -1239,7 +1239,7 @@ public class ForecastReconcilerTests
     public async Task AnchoredProse_DayPartWordOutsideChangeWindow_Degrades()
     {
         // Genuine onset (dry→rain), but the prose times it "this evening" while the
-        // change window (12-18Z) is morning/afternoon in CDT — a narrative/window
+        // change window (11-17Z) is morning in CDT — a narrative/window
         // contradiction the {q:time} check can't see (no token).
         var responseJson = BuildClaudeResponseJson(
             finalSnapshotJson: RainBlockSnapshotJson,
@@ -1268,36 +1268,36 @@ public class ForecastReconcilerTests
     }
 
     // ── WX-152 closing-claim validation ──────────────────────────────────────
-    // Snapshots: first block is 2026-06-09T18:00:00Z = Tue 13:00 CDT (afternoon), so
-    // refDate = Tue 6/9; "tonight" = Tue 18:00 → Wed 06:00 local (the 00Z + 06Z blocks).
+    // Snapshots: first block is 2026-06-09T17:00:00Z = Tue 12:00 CDT (afternoon), so
+    // refDate = Tue 6/9; "tonight" = Tue 18:00 → Wed 06:00 local (the 23Z + 05Z blocks).
 
     // Tue afternoon thunderstorm, then dry Tue-evening and Wed-overnight.
     private const string ClosingStormAfternoonDrySnapshotJson = """
-        {"schemaVersion":4,"blocks":[
-          {"startUtc":"2026-06-09T18:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":24,"max":31},"windKt":{"min":8,"max":16},"precipExpectation":"possible","precipPhenomenon":"thunderstorm","severeFlag":false},
-          {"startUtc":"2026-06-10T00:00:00Z","skyState":"partly_cloudy","obscuration":"none","temperatureCelsius":{"min":20,"max":26},"windKt":{"min":5,"max":10},"precipExpectation":"none","precipPhenomenon":null,"severeFlag":false},
-          {"startUtc":"2026-06-10T06:00:00Z","skyState":"clear","obscuration":"none","temperatureCelsius":{"min":18,"max":22},"windKt":{"min":3,"max":8},"precipExpectation":"none","precipPhenomenon":null,"severeFlag":false}
+        {"schemaVersion":5,"blocks":[
+          {"startUtc":"2026-06-09T17:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":24,"max":31},"windKt":{"min":8,"max":16},"precipExpectation":"possible","precipPhenomenon":"thunderstorm","severeFlag":false},
+          {"startUtc":"2026-06-09T23:00:00Z","skyState":"partly_cloudy","obscuration":"none","temperatureCelsius":{"min":20,"max":26},"windKt":{"min":5,"max":10},"precipExpectation":"none","precipPhenomenon":null,"severeFlag":false},
+          {"startUtc":"2026-06-10T05:00:00Z","skyState":"clear","obscuration":"none","temperatureCelsius":{"min":18,"max":22},"windKt":{"min":3,"max":8},"precipExpectation":"none","precipPhenomenon":null,"severeFlag":false}
         ]}
         """;
 
     // Tue afternoon dry, but a Tue-evening (tonight) thunderstorm — backs a "tonight" claim.
     private const string ClosingStormEveningSnapshotJson = """
-        {"schemaVersion":4,"blocks":[
-          {"startUtc":"2026-06-09T18:00:00Z","skyState":"partly_cloudy","obscuration":"none","temperatureCelsius":{"min":24,"max":31},"windKt":{"min":8,"max":16},"precipExpectation":"none","precipPhenomenon":null,"severeFlag":false},
-          {"startUtc":"2026-06-10T00:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":20,"max":26},"windKt":{"min":5,"max":10},"precipExpectation":"possible","precipPhenomenon":"thunderstorm","severeFlag":false},
-          {"startUtc":"2026-06-10T06:00:00Z","skyState":"clear","obscuration":"none","temperatureCelsius":{"min":18,"max":22},"windKt":{"min":3,"max":8},"precipExpectation":"none","precipPhenomenon":null,"severeFlag":false}
+        {"schemaVersion":5,"blocks":[
+          {"startUtc":"2026-06-09T17:00:00Z","skyState":"partly_cloudy","obscuration":"none","temperatureCelsius":{"min":24,"max":31},"windKt":{"min":8,"max":16},"precipExpectation":"none","precipPhenomenon":null,"severeFlag":false},
+          {"startUtc":"2026-06-09T23:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":20,"max":26},"windKt":{"min":5,"max":10},"precipExpectation":"possible","precipPhenomenon":"thunderstorm","severeFlag":false},
+          {"startUtc":"2026-06-10T05:00:00Z","skyState":"clear","obscuration":"none","temperatureCelsius":{"min":18,"max":22},"windKt":{"min":3,"max":8},"precipExpectation":"none","precipPhenomenon":null,"severeFlag":false}
         ]}
         """;
 
     // Only Tue afternoon — nothing for "tomorrow" (beyond-horizon guard).
     private const string ClosingTodayOnlySnapshotJson = """
-        {"schemaVersion":4,"blocks":[
-          {"startUtc":"2026-06-09T18:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":24,"max":31},"windKt":{"min":8,"max":16},"precipExpectation":"possible","precipPhenomenon":"thunderstorm","severeFlag":false}
+        {"schemaVersion":5,"blocks":[
+          {"startUtc":"2026-06-09T17:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":24,"max":31},"windKt":{"min":8,"max":16},"precipExpectation":"possible","precipPhenomenon":"thunderstorm","severeFlag":false}
         ]}
         """;
 
     private static string ClosingOnlyReport(string closing) =>
-        "{\"schemaVersion\":4,\"changes\":[],\"narrative\":{\"en\":{\"changeSummary\":null,\"closing\":"
+        "{\"schemaVersion\":5,\"changes\":[],\"narrative\":{\"en\":{\"changeSummary\":null,\"closing\":"
         + JsonSerializer.Serialize(closing) + "}}}";
 
     [Fact]
@@ -1447,7 +1447,7 @@ public class ForecastReconcilerTests
     // ── helpers ─────────────────────────────────────────────────────────────
 
     // A fixed UTC-5 zone (US Central in June / CDT) used by the WX-149 prose-token
-    // tests: a {q:time} token at 12:00Z renders to 7:00 AM local — "morning", not
+    // tests: a {q:time} token at 11:00Z renders to 6:00 AM local — "morning", not
     // "afternoon". A custom fixed-offset zone keeps the test deterministic across
     // platforms (no dependency on the host's IANA/Windows time-zone database).
     private static readonly TimeZoneInfo Cdt =
@@ -1473,7 +1473,7 @@ public class ForecastReconcilerTests
             tafValidToUtc: null,
             prior: prior,
             narrativeLanguages: narrativeLanguages ?? new[] { "en" },
-            tz: tz ?? TimeZoneInfo.Utc,
+            tz: tz ?? Cdt,
             changeSeverity: ChangeSeverity.None,
             previousMetarIcao: null,
             allowSkip: allowSkip,
@@ -1486,7 +1486,7 @@ public class ForecastReconcilerTests
     {
         StationIcao = "KTEST",
         GeneratedAtUtc = new DateTime(2026, 6, 9, 18, 0, 0, DateTimeKind.Utc),
-        SchemaVersion = 4,
+        SchemaVersion = ForecastSnapshotBody.SchemaVersionCurrent,
         Body = bodyJson,
     };
 

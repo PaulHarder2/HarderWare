@@ -247,7 +247,7 @@ public sealed class ReportWorker : BackgroundService
             ? snapshot.StationIcao
             : (snapshot.TafStationIcao ?? "");
         var anchorSnapshot = await BuildProvisionalForecastSnapshotAsync(
-            snapshotKey, locality.CentroidLat, locality.CentroidLon, DateTime.UtcNow, ct);
+            snapshotKey, locality.CentroidLat, locality.CentroidLon, tz, DateTime.UtcNow, ct);
         ctx.ForecastSnapshots.Add(anchorSnapshot);
         await ctx.SaveChangesAsync(ct);
 
@@ -646,7 +646,7 @@ public sealed class ReportWorker : BackgroundService
             ? snapshot.StationIcao
             : (snapshot.TafStationIcao ?? "");
         var anchorSnapshot = await BuildProvisionalForecastSnapshotAsync(
-            snapshotKey, locality.CentroidLat, locality.CentroidLon, DateTime.UtcNow, ct);
+            snapshotKey, locality.CentroidLat, locality.CentroidLon, tz, DateTime.UtcNow, ct);
         ctx.ForecastSnapshots.Add(anchorSnapshot);
         await ctx.SaveChangesAsync(ct);
 
@@ -1118,11 +1118,12 @@ public sealed class ReportWorker : BackgroundService
     /// <param name="stationIcao">ICAO of the METAR station the snapshot anchors against.</param>
     /// <param name="lat">Recipient latitude in decimal degrees North, or <see langword="null"/> when not configured.</param>
     /// <param name="lon">Recipient longitude in decimal degrees East (negative = West), or <see langword="null"/> when not configured.</param>
+    /// <param name="tz">Locality timezone whose local day-parts anchor the GFS snapshot's 6-hour blocks (WX-155).</param>
     /// <param name="generatedAtUtc">UTC time stamp for the snapshot's unique-key column.</param>
     /// <param name="ct">Cancellation token propagated to the GFS hourly-forecast query.</param>
     /// <returns>An unattached <see cref="ForecastSnapshot"/> ready to be added to the <see cref="WeatherDataContext"/>.</returns>
     private async Task<ForecastSnapshot> BuildProvisionalForecastSnapshotAsync(
-        string stationIcao, double? lat, double? lon, DateTime generatedAtUtc, CancellationToken ct)
+        string stationIcao, double? lat, double? lon, TimeZoneInfo tz, DateTime generatedAtUtc, CancellationToken ct)
     {
         GfsHourlyForecast? hourly = null;
         if (lat.HasValue && lon.HasValue)
@@ -1131,7 +1132,7 @@ public sealed class ReportWorker : BackgroundService
         }
 
         var body = hourly is not null
-            ? GfsSnapshotBuilder.Build(hourly)
+            ? GfsSnapshotBuilder.Build(hourly, tz)
             : new ForecastSnapshotBody();
 
         return new ForecastSnapshot

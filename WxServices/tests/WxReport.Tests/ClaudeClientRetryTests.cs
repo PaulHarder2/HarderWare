@@ -213,7 +213,7 @@ public class ClaudeClientRetryTests
         });
         var client = new ClaudeClient(new HttpClient(handler), apiKey: "k", model: "claude-sonnet-4-6", personaPrefix: "persona");
 
-        using var input = JsonDocument.Parse("""{"final_snapshot":{"schemaVersion":4}}""");
+        using var input = JsonDocument.Parse("""{"final_snapshot":{"schemaVersion":5}}""");
         var corrections = new[]
         {
             new ReconciliationCorrection("toolu_prev", "submit_reconciled_report", input.RootElement.Clone(),

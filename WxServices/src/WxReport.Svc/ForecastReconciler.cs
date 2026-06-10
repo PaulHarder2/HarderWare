@@ -157,6 +157,19 @@ public sealed class ForecastReconciler
         IReadOnlyList<TriggerSource> changedSinceLastSend,
         CancellationToken ct = default)
     {
+        // WX-155: a prior snapshot from before the local-day-part rebucketing
+        // (schema < current) has UTC-aligned block boundaries that don't line up
+        // with the new local-aligned blocks, so a block-by-block comparison would
+        // read the whole forecast as changed and could fire a spurious "everything
+        // changed" blast on the deploy cycle. Drop such a prior — treat this cycle
+        // as a clean baseline (first-send semantics) for both the prompt and the
+        // deterministic prior-aware checks.
+        if (prior is not null && prior.SchemaVersion != ForecastSnapshotBody.SchemaVersionCurrent)
+        {
+            Logger.Info($"Prior snapshot is schema v{prior.SchemaVersion} (current v{ForecastSnapshotBody.SchemaVersionCurrent}); treating this cycle as a baseline reset (WX-155 local-day-part rebucketing).");
+            prior = null;
+        }
+
         var systemPrompt = BuildReconcilerSystemPrompt(
             snapshot, narrativeLanguages, changeSeverity, previousMetarIcao, allowSkip);
 
@@ -297,7 +310,7 @@ public sealed class ForecastReconciler
                 var structuredReportJson = RequireProperty(input, "structured_report").GetRawText();
                 var structuredReport = StructuredReportBody.Deserialize(structuredReportJson);
                 ValidateNarrativeContract(structuredReport, narrativeLanguages);
-                ValidateChangeSnapshotConsistency(structuredReport, finalSnapshot, priorBody);
+                ValidateChangeSnapshotConsistency(structuredReport, finalSnapshot, priorBody, tz);
                 ValidateProseHygiene(structuredReport, tz);
                 ValidateAnchoredProseTiming(structuredReport, tz);
                 ValidateClosingClaims(structuredReport, finalSnapshot, tz);
@@ -434,8 +447,8 @@ public sealed class ForecastReconciler
     // over a forecast whose only rain sat in the block the grid calls "morning").
     // The rules below all fail closed via JsonException so they route through the
     // same retry-then-fail path as the other contract checks:
-    //   1. Every change window aligns to the 6-hour block grid (00/06/12/18Z). This
-    //      forbids sub-block precision — a block-aligned window cannot claim timing
+    //   1. Every change window aligns to a snapshot block boundary (a local day-part
+    //      boundary, WX-155). This forbids sub-block precision — a block-aligned window cannot claim timing
     //      the blocks don't support, which is exactly what the 6/9 17-21Z window did.
     //   2. (WX-151, generalizing the original WX-148 new-only backing) Every precip
     //      (or standalone Severe) change must be a REAL difference versus the PRIOR
@@ -448,16 +461,16 @@ public sealed class ForecastReconciler
     //      semantics and stay prompt-governed. WX-149 adds the tier/raw-UTC/prose
     //      assertions on top of this scaffold.
     private static void ValidateChangeSnapshotConsistency(
-        StructuredReportBody report, ForecastSnapshotBody finalSnapshot, ForecastSnapshotBody? prior)
+        StructuredReportBody report, ForecastSnapshotBody finalSnapshot, ForecastSnapshotBody? prior, TimeZoneInfo tz)
     {
         foreach (var change in report.Changes)
         {
             var w = change.Window;
-            if (!IsBlockAligned(w.StartUtc) || !IsBlockAligned(w.EndUtc) || w.EndUtc <= w.StartUtc)
+            if (!IsBlockAligned(w.StartUtc, tz) || !IsBlockAligned(w.EndUtc, tz) || w.EndUtc <= w.StartUtc)
                 throw new JsonException(
                     $"structured_report change '{change.SummaryToken}' window {w.StartUtc:O}..{w.EndUtc:O} is not "
-                    + "aligned to the 6-hour block grid (00/06/12/18Z); change windows must coincide with snapshot "
-                    + "block boundaries so the narrative cannot claim timing finer than the blocks support.");
+                    + "aligned to a snapshot block boundary (a local 00/06/12/18 day-part boundary); change windows must "
+                    + "coincide with block boundaries so the narrative cannot claim timing finer than the blocks support.");
 
             // WX-151: prior-aware change verification. A change must correspond to a
             // REAL prior->new difference of its claimed direction within its window,
@@ -1085,9 +1098,14 @@ public sealed class ForecastReconciler
         return -1;
     }
 
-    // A change window endpoint must land on the 00/06/12/18Z grid the snapshot blocks use.
-    private static bool IsBlockAligned(DateTime utc) =>
-        utc is { Minute: 0, Second: 0, Millisecond: 0 } && utc.Hour % 6 == 0;
+    // A change window endpoint must land on a snapshot block boundary. Blocks are
+    // anchored to the locality's local day-parts (WX-155), so alignment is checked
+    // in LOCAL time: the endpoint must be a local 00/06/12/18 boundary.
+    private static bool IsBlockAligned(DateTime utc, TimeZoneInfo tz)
+    {
+        var local = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(utc, DateTimeKind.Utc), tz);
+        return local is { Minute: 0, Second: 0, Millisecond: 0 } && local.Hour % 6 == 0;
+    }
 
     // A 6-hour block [StartUtc, StartUtc+6h) overlaps the half-open window [start, end).
     private static bool BlockOverlapsWindow(DateTime blockStartUtc, ChangeWindow w) =>
@@ -1130,7 +1148,7 @@ public sealed class ForecastReconciler
     // window — a prior reaching only part of a multi-block window (e.g. near its
     // horizon edge) is incomplete evidence, so we treat it as uncoverable and do not
     // reject (never reject what we can't prove wrong). Window endpoints are
-    // block-aligned (validated above) and blocks sit on the 00/06/12/18Z grid.
+    // block-aligned (validated above) and blocks sit on local day-part boundaries.
     private static bool PriorFullyCoversWindow(ForecastSnapshotBody prior, ChangeWindow w)
     {
         for (var u = w.StartUtc; u < w.EndUtc; u = u.AddHours(6))
