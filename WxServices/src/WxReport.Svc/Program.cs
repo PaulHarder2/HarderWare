@@ -46,44 +46,15 @@ var host = Host.CreateDefaultBuilder(args)
             .UseSqlServer(connectionString)
             .Options;
 
-        var telemetryEnabled = ctx.Configuration.GetValue<bool>("Telemetry:Enabled", false);
-        var otlpEndpoint = ctx.Configuration["Telemetry:OtlpEndpoint"] ?? "http://localhost:4318/v1/metrics";
-
-        services.AddOpenTelemetry()
-            .WithMetrics(m =>
-            {
-                m.AddMeter("WxReport.Svc")
-                 .AddView("wxreport.cycle.duration.seconds",
-                    new ExplicitBucketHistogramConfiguration
-                    {
-                        Boundaries = [1, 2, 5, 10, 20, 30, 60, 120]
-                    })
-                 .AddView("wxreport.claude.duration.seconds",
-                    new ExplicitBucketHistogramConfiguration
-                    {
-                        // Reconciliation (WX-79) routinely runs 60-100s; the old
-                        // 60s top bucket hid that latency in overflow, masking
-                        // WX-100.  Extend past the 60s cap so the 60-100s tail is
-                        // resolvable; 360 sits above the default 300s timeout so a
-                        // timed-out call is distinguishable from a near-ceiling one.
-                        Boundaries = [1, 2, 5, 10, 20, 30, 60, 90, 120, 180, 300, 360]
-                    });
-
-                if (telemetryEnabled)
-                {
-                    m.AddOtlpExporter((o, r) =>
-                    {
-                        o.Endpoint = new Uri(otlpEndpoint);
-                        o.Protocol = OpenTelemetry.Exporter.OtlpExportProtocol.HttpProtobuf;
-                        r.PeriodicExportingMetricReaderOptions.ExportIntervalMilliseconds = 10_000;
-                    });
-                    Logger.Info($"Telemetry enabled. Exporting metrics to {otlpEndpoint}.");
-                }
-                else
-                {
-                    Logger.Info("Telemetry disabled. Set Telemetry:Enabled=true in appsettings to export metrics.");
-                }
-            });
+        services.AddWxTelemetry(ctx.Configuration, m => m
+            .AddMeter("WxReport.Svc")
+            .AddView("wxreport.cycle.duration.seconds",
+                new ExplicitBucketHistogramConfiguration { Boundaries = [1, 2, 5, 10, 20, 30, 60, 120] })
+            // Reconciliation (WX-79) routinely runs 60-100s; the old 60s top bucket hid that latency
+            // in overflow, masking WX-100. Extend past the 60s cap so the 60-100s tail is resolvable;
+            // 360 sits above the default 300s timeout so a timed-out call is distinguishable from a near-ceiling one.
+            .AddView("wxreport.claude.duration.seconds",
+                new ExplicitBucketHistogramConfiguration { Boundaries = [1, 2, 5, 10, 20, 30, 60, 90, 120, 180, 300, 360] }));
 
         services.AddSingleton(dbOptions);
         services.AddSingleton(LoadPersonaPrefix());

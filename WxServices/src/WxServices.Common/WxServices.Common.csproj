@@ -9,8 +9,18 @@
   <ItemGroup>
     <PackageReference Include="MailKit" Version="4.16.0" />
     <PackageReference Include="Microsoft.Data.SqlClient" Version="5.2.2" />
+    <!-- OTel wiring lives here (WX-159): the AddWxTelemetry helper owns AddOpenTelemetry,
+         the OTLP exporter, and the export-failure diagnostics listener for all four services. -->
+    <PackageReference Include="OpenTelemetry" Version="1.15.3" />
+    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.15.3" />
+    <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.15.3" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\WxServices.Logging\WxServices.Logging.csproj" />
+  </ItemGroup>
+  <!-- The OTel diagnostics internals (listener, throttle, source rules) are exercised from
+       the observability-themed test project. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="WxMonitor.Tests" />
   </ItemGroup>
 </Project>
