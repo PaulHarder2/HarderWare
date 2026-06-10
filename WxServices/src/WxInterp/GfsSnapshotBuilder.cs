@@ -61,8 +61,10 @@ public static class GfsSnapshotBuilder
     private const int MinHoursPerBlock = 4;
     /// <summary>Maximum number of 6-hour blocks emitted in one snapshot (six-day horizon).</summary>
     private const int MaxBlocks = 24;
-    /// <summary>Length of a snapshot block in hours.</summary>
-    private const int BlockHours = 6;
+    /// <summary>Length of a snapshot block in hours. Public so consumers that reason about a block's time
+    /// extent (e.g. the WX-156 severe subject prefix's in-window test) reference this one definition rather
+    /// than re-hardcoding the duration — single source of truth.</summary>
+    public const int BlockHours = 6;
 
     // ── public API ───────────────────────────────────────────────────────────
 

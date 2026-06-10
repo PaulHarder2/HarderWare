@@ -29,9 +29,6 @@ namespace WxReport.Svc;
 /// </summary>
 internal static class SevereSubjectPrefix
 {
-    /// <summary>Block duration in hours (matches <c>GfsSnapshotBuilder.BlockHours</c>); a block is "in window" while its end is still in the future.</summary>
-    private const int BlockHours = 6;
-
     /// <summary>The look-ahead window: a severe block must overlap <c>[now, now + 24 h]</c> to surface in the subject.</summary>
     private static readonly TimeSpan Window = TimeSpan.FromHours(24);
 
@@ -49,7 +46,7 @@ internal static class SevereSubjectPrefix
             .Where(b =>
             {
                 var startUtc = DateTime.SpecifyKind(b.StartUtc, DateTimeKind.Utc);
-                return Qualifies(b) && startUtc.AddHours(BlockHours) > nowUtc && startUtc < horizon;
+                return Qualifies(b) && startUtc.AddHours(GfsSnapshotBuilder.BlockHours) > nowUtc && startUtc < horizon;
             })
             .OrderBy(b => b.StartUtc)
             .FirstOrDefault();
