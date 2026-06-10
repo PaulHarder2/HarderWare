@@ -1267,6 +1267,153 @@ public class ForecastReconcilerTests
             await RunReconciler(responseJson, tz: Cdt, prior: PriorOf(DryPriorSnapshotJson)));
     }
 
+    // ── WX-152 closing-claim validation ──────────────────────────────────────
+    // Snapshots: first block is 2026-06-09T18:00:00Z = Tue 13:00 CDT (afternoon), so
+    // refDate = Tue 6/9; "tonight" = Tue 18:00 → Wed 06:00 local (the 00Z + 06Z blocks).
+
+    // Tue afternoon thunderstorm, then dry Tue-evening and Wed-overnight.
+    private const string ClosingStormAfternoonDrySnapshotJson = """
+        {"schemaVersion":4,"blocks":[
+          {"startUtc":"2026-06-09T18:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":24,"max":31},"windKt":{"min":8,"max":16},"precipExpectation":"possible","precipPhenomenon":"thunderstorm","severeFlag":false},
+          {"startUtc":"2026-06-10T00:00:00Z","skyState":"partly_cloudy","obscuration":"none","temperatureCelsius":{"min":20,"max":26},"windKt":{"min":5,"max":10},"precipExpectation":"none","precipPhenomenon":null,"severeFlag":false},
+          {"startUtc":"2026-06-10T06:00:00Z","skyState":"clear","obscuration":"none","temperatureCelsius":{"min":18,"max":22},"windKt":{"min":3,"max":8},"precipExpectation":"none","precipPhenomenon":null,"severeFlag":false}
+        ]}
+        """;
+
+    // Tue afternoon dry, but a Tue-evening (tonight) thunderstorm — backs a "tonight" claim.
+    private const string ClosingStormEveningSnapshotJson = """
+        {"schemaVersion":4,"blocks":[
+          {"startUtc":"2026-06-09T18:00:00Z","skyState":"partly_cloudy","obscuration":"none","temperatureCelsius":{"min":24,"max":31},"windKt":{"min":8,"max":16},"precipExpectation":"none","precipPhenomenon":null,"severeFlag":false},
+          {"startUtc":"2026-06-10T00:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":20,"max":26},"windKt":{"min":5,"max":10},"precipExpectation":"possible","precipPhenomenon":"thunderstorm","severeFlag":false},
+          {"startUtc":"2026-06-10T06:00:00Z","skyState":"clear","obscuration":"none","temperatureCelsius":{"min":18,"max":22},"windKt":{"min":3,"max":8},"precipExpectation":"none","precipPhenomenon":null,"severeFlag":false}
+        ]}
+        """;
+
+    // Only Tue afternoon — nothing for "tomorrow" (beyond-horizon guard).
+    private const string ClosingTodayOnlySnapshotJson = """
+        {"schemaVersion":4,"blocks":[
+          {"startUtc":"2026-06-09T18:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":24,"max":31},"windKt":{"min":8,"max":16},"precipExpectation":"possible","precipPhenomenon":"thunderstorm","severeFlag":false}
+        ]}
+        """;
+
+    private static string ClosingOnlyReport(string closing) =>
+        "{\"schemaVersion\":4,\"changes\":[],\"narrative\":{\"en\":{\"changeSummary\":null,\"closing\":\""
+        + closing + "\"}}}";
+
+    [Fact]
+    public async Task ClosingClaim_StormTonight_DryEveningOvernight_Degrades()
+    {
+        // The send-1995 repro: closing asserts a storm "tonight" while the snapshot is
+        // dry every block from this evening on (the lone storm is this afternoon).
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: ClosingStormAfternoonDrySnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: ClosingOnlyReport("Tonight carries a modest chance of a storm before conditions settle, with the rest of the week looking calm."));
+
+        var degraded = Assert.IsType<ReconcileResult.Degraded>(
+            await RunReconciler(responseJson, tz: Cdt));
+        Assert.Contains("entirely dry", degraded.Reason);
+    }
+
+    [Fact]
+    public async Task ClosingClaim_StaysDry_NotRejected_Succeeds()
+    {
+        // "stays mostly dry … no organized rain expected" — negated, must not be flagged.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: ClosingStormAfternoonDrySnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: ClosingOnlyReport("The week ahead stays mostly dry, with no organized rain expected through the weekend."));
+
+        Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
+    }
+
+    [Fact]
+    public async Task ClosingClaim_UntimedStorm_NotRejected_Succeeds()
+    {
+        // A storm named with no resolvable time can't be localized — residual, leans on
+        // the prompt, must not be rejected.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: ClosingStormAfternoonDrySnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: ClosingOnlyReport("Any storm that does develop this week could be lively, even if the odds of seeing one remain low."));
+
+        Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
+    }
+
+    [Fact]
+    public async Task ClosingClaim_PrecipAtCorrectTime_NotRejected_Succeeds()
+    {
+        // "a storm this afternoon" — the afternoon block carries a thunderstorm, so the
+        // claim is supported and must not be rejected.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: ClosingStormAfternoonDrySnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: ClosingOnlyReport("A storm is likely this afternoon before things quiet down."));
+
+        Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
+    }
+
+    [Fact]
+    public async Task ClosingClaim_StormTonight_EveningHasStorm_NotRejected_Succeeds()
+    {
+        // Same "storm tonight" prose, but here the snapshot's evening block backs it.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: ClosingStormEveningSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: ClosingOnlyReport("Tonight carries a modest chance of a storm before conditions settle, with the rest of the week looking calm."));
+
+        Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
+    }
+
+    [Fact]
+    public async Task ClosingClaim_BeyondHorizon_NotRejected_Succeeds()
+    {
+        // "rain tomorrow" but the snapshot has no Wednesday block — can't verify, so
+        // the check skips it (beyond-horizon guard) rather than false-rejecting.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: ClosingTodayOnlySnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: ClosingOnlyReport("Rain is likely tomorrow across the area as a wet pattern arrives."));
+
+        Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
+    }
+
+    [Fact]
+    public async Task ClosingClaim_CessationPhrasing_NotRejected_Succeeds()
+    {
+        // "Showers tapering off this evening" — the evening time word is a deadline by
+        // which precip ENDS, not where it occurs; the dry evening block is consistent,
+        // so it must NOT be rejected.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: ClosingStormAfternoonDrySnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: ClosingOnlyReport("Showers are tapering off this evening, leaving a calm and quiet night."));
+
+        Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
+    }
+
+    [Fact]
+    public async Task ClosingClaim_HedgedRainTonight_DryTonight_Degrades()
+    {
+        // "A little rain tonight" is still an assertion — a dry-tonight snapshot
+        // contradicts it. (Guards that "little" was dropped from the skip cues.)
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: ClosingStormAfternoonDrySnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: ClosingOnlyReport("A little rain is likely tonight before drier air arrives."));
+
+        var degraded = Assert.IsType<ReconcileResult.Degraded>(await RunReconciler(responseJson, tz: Cdt));
+        Assert.Contains("entirely dry", degraded.Reason);
+    }
+
     // ── helpers ─────────────────────────────────────────────────────────────
 
     // A fixed UTC-5 zone (US Central in June / CDT) used by the WX-149 prose-token
