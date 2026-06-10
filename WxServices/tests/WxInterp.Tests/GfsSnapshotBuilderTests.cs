@@ -411,7 +411,8 @@ public class GfsSnapshotBuilderTests
     // America/Chicago is CDT (UTC-5) on the May date and spans the spring-forward
     // transition on the March date. Used to prove blocks anchor to local day-parts
     // (00/06/12/18 local), not the UTC 6-hour grid.
-    private static readonly TimeZoneInfo Cdt = TimeZoneInfo.FindSystemTimeZoneById("America/Chicago");
+    private static readonly TimeZoneInfo Cdt = TimeZoneInfo.FindSystemTimeZoneById(
+        OperatingSystem.IsWindows() ? "Central Standard Time" : "America/Chicago");
 
     [Fact]
     public void Build_OffsetTimezone_BucketsByLocalDayPart()

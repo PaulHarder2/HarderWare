@@ -43,7 +43,7 @@ internal static class ReconcilerPrompts
           • provisional_snapshot — a ForecastSnapshotBody derived deterministically
             from GFS model output, plus the gfs_model_run_utc. Treat the body as
             your working memory's starting state, covering up to a six-day horizon
-            in 6-hour blocks aligned to the locality's local day-parts (00/06/12/18
+            in blocks aligned to the locality's local day-parts (00/06/12/18
             local time: overnight/morning/afternoon/evening). Each block's startUtc is
             the UTC instant of its local-day-part boundary.
           • current_observation — the most recent METAR for the station, with its
@@ -208,7 +208,7 @@ internal static class ReconcilerPrompts
         When you DO send, return all three artifacts via the submit_reconciled_report tool:
 
           • final_snapshot — your refined ForecastSnapshotBody. Same schema as
-            provisional_snapshot: schemaVersion 5, ordered 6-hour blocks aligned
+            provisional_snapshot: schemaVersion 5, ordered blocks aligned
             to the locality's local day-part boundaries (00/06/12/18 local time:
             overnight/morning/afternoon/evening), all required fields per block.
             Temperatures stay in Celsius; winds stay in knots — a deterministic

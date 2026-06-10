@@ -143,7 +143,7 @@ public class ForecastReconcilerTests
         """;
 
     // Defect 2 (send 1927): prose says "afternoon" next to a {q:time} token at
-    // 12:00Z, which renders to 7:00 AM local (CDT) — the morning, not afternoon.
+    // 11:00Z, which renders to 6:00 AM local (CDT) — the morning, not afternoon.
     private const string ProseTimeMismatchReportJson = """
         {
           "schemaVersion": 5,
@@ -157,7 +157,7 @@ public class ForecastReconcilerTests
         """;
 
     // The same shape but the prose word AGREES with the token's local rendering
-    // (12:00Z is 7:00 AM CDT — morning) — must NOT be rejected.
+    // (11:00Z is 6:00 AM CDT — morning) — must NOT be rejected.
     private const string ProseTimeAgreesReportJson = """
         {
           "schemaVersion": 5,
@@ -993,7 +993,7 @@ public class ForecastReconcilerTests
     public async Task ProseTimeWord_ContradictsTokenLocalRendering_Degrades()
     {
         // Defect 2 (Spring 6/13, send 1927): prose says "afternoon" beside a
-        // {q:time} token at 12:00Z that renders to 7:00 AM local (CDT) — morning.
+        // {q:time} token at 11:00Z that renders to 6:00 AM local (CDT) — morning.
         var responseJson = BuildClaudeResponseJson(
             finalSnapshotJson: RainBlock613SnapshotJson,
             reasoningTrace: "trace",
@@ -1008,7 +1008,7 @@ public class ForecastReconcilerTests
     public async Task ProseTimeWord_AgreesWithTokenLocalRendering_Succeeds()
     {
         // The conservative check must not false-reject: "morning" beside a token
-        // that renders to 7:00 AM local (CDT) agrees, so the report sends cleanly.
+        // that renders to 6:00 AM local (CDT) agrees, so the report sends cleanly.
         var responseJson = BuildClaudeResponseJson(
             finalSnapshotJson: RainBlockSnapshotJson,
             reasoningTrace: "trace",
@@ -1447,7 +1447,7 @@ public class ForecastReconcilerTests
     // ── helpers ─────────────────────────────────────────────────────────────
 
     // A fixed UTC-5 zone (US Central in June / CDT) used by the WX-149 prose-token
-    // tests: a {q:time} token at 12:00Z renders to 7:00 AM local — "morning", not
+    // tests: a {q:time} token at 11:00Z renders to 6:00 AM local — "morning", not
     // "afternoon". A custom fixed-offset zone keeps the test deterministic across
     // platforms (no dependency on the host's IANA/Windows time-zone database).
     private static readonly TimeZoneInfo Cdt =
