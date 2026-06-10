@@ -324,6 +324,14 @@ internal static class ReconcilerPrompts
             precip expectation or a set severeFlag as calibrated strong
             likelihood ("almost certain", "highly likely", "expect"), never as a
             guarantee ("will", "definitely", "guaranteed").
+          • The closing only SUMMARIZES the reconciled forecast (the current
+            conditions, the per-day grid, and the changes above). It must NOT
+            introduce a precipitation, storm, or hazard chance — or a timing for
+            one — that the final_snapshot blocks do not carry. If the blocks show
+            a dry evening, do not write "a chance of a storm tonight"; if a storm
+            sits only in an afternoon block, do not move it to "tonight". Speak
+            only of weather the blocks support, at the time they place it. Saying
+            a period stays dry or quiet is always fine.
 
         Always act via one of the two tools. Never return free text outside a tool call.
         """;

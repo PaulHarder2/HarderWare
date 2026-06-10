@@ -300,6 +300,7 @@ public sealed class ForecastReconciler
                 ValidateChangeSnapshotConsistency(structuredReport, finalSnapshot, priorBody);
                 ValidateProseHygiene(structuredReport, tz);
                 ValidateAnchoredProseTiming(structuredReport, tz);
+                ValidateClosingClaims(structuredReport, finalSnapshot, tz);
 
                 // WX-120 fall-safe, carried forward to the structured-report world:
                 // a present-but-near-blank narrative — e.g. Claude submitted a report
@@ -893,6 +894,195 @@ public sealed class ForecastReconciler
             parts.Add(DayPartOfHour(local.Hour));
         }
         return parts;
+    }
+
+    // WX-152: the closing ("In summary:") is the one narrative section the other
+    // checks don't reconcile against the snapshot — ValidateChangeSnapshotConsistency
+    // works on changes[], and the {q:time} / {chN}-anchored prose checks cover only the
+    // changeSummary band. So the closing can assert a precipitation/storm EVENT the
+    // final_snapshot doesn't carry (send 1995: "a modest chance of a storm tonight" over
+    // a snapshot dry on every block from this evening on). This catches the clear case:
+    // a sentence that ASSERTS a precip phenomenon (not negated) at a resolvable local
+    // time the snapshot leaves entirely dry. Conservative by design — negated ("stays
+    // dry", "no rain expected"), un-timed ("any storm that develops"), and weekday-pinned
+    // references are skipped and lean on the prompt rule (the WX-149/151 residual policy).
+    // Precip-vs-dry only: a wrong-phenomenon claim (snow vs rain) at a wet time is not
+    // caught. Distinct from WX-139 (synoptic mechanisms/fronts the schema can't carry) —
+    // here the schema CAN represent the event and the blocks contradict it. Fail-closed
+    // via JsonException → retry → tier-aware degrade.
+    //
+    // ENGLISH-ONLY by design: the phenomenon/negation/time lexicons below are English,
+    // so a non-English (es) closing matches no precipitation word and is never
+    // evaluated — safe (no false reject) but unguarded, leaning on the language-agnostic
+    // prompt rule. Deterministic Spanish parity is harder ("mañana" = tomorrow OR
+    // morning, gendered "seco/seca", "esta noche/tarde") and is the standing
+    // WX-149/151/152 multi-language residual, deferred to that work.
+    private static void ValidateClosingClaims(StructuredReportBody report, ForecastSnapshotBody finalSnapshot, TimeZoneInfo tz)
+    {
+        if (finalSnapshot.Blocks.Count == 0)
+            return;
+        // Reference local day for relative words ("tonight"/"today"): the first block's
+        // local date (≈ the cycle's "now", no separate wall-clock dependency).
+        var firstUtc = finalSnapshot.Blocks.Min(b => b.StartUtc);
+        var refDate = DateOnly.FromDateTime(
+            TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(firstUtc, DateTimeKind.Utc), tz));
+
+        foreach (var (lang, sections) in report.Narrative)
+        {
+            var prose = sections.Closing;
+            if (string.IsNullOrEmpty(prose))
+                continue;
+            // Mask {...} tokens (a {q:time} instant is the WX-149 check's job, not this one's).
+            var masked = BraceToken.Replace(prose, m => new string(' ', m.Length));
+
+            int from = 0;
+            while (from < masked.Length)
+            {
+                int end = SentenceEnd(masked, from);
+                CheckClosingSentence(lang, masked, from, end, refDate, finalSnapshot, tz);
+                from = end + 1;
+            }
+        }
+    }
+
+    private static void CheckClosingSentence(
+        string lang, string masked, int start, int end, DateOnly refDate, ForecastSnapshotBody finalSnapshot, TimeZoneInfo tz)
+    {
+        // Must assert a precipitation/storm phenomenon...
+        if (!ContainsAnyWord(masked, start, end, ClosingPrecipWords))
+            return;
+        // ...not in a negated / "stays dry" context, nor a CESSATION one where the
+        // time word is a deadline by which precip ENDS rather than where it occurs
+        // ("rain tapers off by evening", "showers ending tonight"). Both are
+        // conservative skips — a few missed catches beats a false reject of a real send.
+        if (ContainsAnyWord(masked, start, end, ClosingNegationCues)
+            || ContainsAnyWord(masked, start, end, ClosingCessationCues)
+            || masked.IndexOf("n't", start, end - start, StringComparison.OrdinalIgnoreCase) >= 0)
+            return;
+        // ...at exactly one resolvable local time reference.
+        var window = ResolveClosingTime(masked, start, end, refDate);
+        if (window is null)
+            return;
+
+        // Reject only when the snapshot HAS blocks in that window and they are ALL dry
+        // (a window past the horizon matches no blocks → can't verify → skip).
+        bool any = false, anyWet = false;
+        foreach (var b in finalSnapshot.Blocks)
+        {
+            var local = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(b.StartUtc, DateTimeKind.Utc), tz);
+            if (window(DateOnly.FromDateTime(local), local.Hour))
+            {
+                any = true;
+                if (b.PrecipExpectation != PrecipExpectation.None)
+                    anyWet = true;
+            }
+        }
+        if (any && !anyWet)
+            throw new JsonException(
+                $"structured_report narrative '{lang}' closing asserts precipitation/storm activity at a local time "
+                + "the final_snapshot leaves entirely dry; the closing summarizes the conditions, day-grid, and "
+                + "changes and must not introduce a forecast the snapshot does not carry.");
+    }
+
+    // Precipitation/storm phenomenon words the closing could assert. (A precip word
+    // in an idiom — "weather the storm", "calm before the storm" — is a rare residual:
+    // it can't be told from a literal claim deterministically, and the literal-forecast
+    // prompt makes it unlikely.)
+    private static readonly string[] ClosingPrecipWords =
+    {
+        "rain", "rains", "raining", "rainy", "shower", "showers", "thundershower", "thundershowers",
+        "storm", "storms", "stormy", "thunderstorm", "thunderstorms", "thunder", "snow", "snows",
+        "snowing", "snowy", "snowfall", "snowstorm", "snowstorms", "flurries", "flurry", "wintry",
+        "sleet", "drizzle", "hail", "downpour", "downpours",
+    };
+
+    // Sentence-level negation / "dry" cues — their presence makes the sentence too
+    // likely a "stays dry" / "no rain" statement to safely treat as an assertion.
+    private static readonly string[] ClosingNegationCues =
+    {
+        "no", "not", "without", "dry", "nothing", "none", "absent", "lacking",
+    };
+
+    // Cessation cues — the sentence describes precip ENDING ("tapers off this evening",
+    // "showers ending by tonight", "rain clears this afternoon"), so the named time is
+    // a deadline, not where the precip lives; skip rather than read it as a wet-time
+    // claim against a (correctly) dry block.
+    private static readonly string[] ClosingCessationCues =
+    {
+        "ending", "ends", "ended", "taper", "tapers", "tapering", "tapered", "clearing", "clears",
+        "cleared", "diminishing", "diminishes", "subsiding", "subsides", "departing", "exiting", "fading",
+    };
+
+    // Resolves the sentence's local time reference to a (localDate, localHour) block
+    // predicate, or null when there is none, more than one (ambiguous), or it is pinned
+    // to a specific weekday/other day (residual — lean on the prompt). refDate is "today".
+    // The hour ranges match StructuredReportRenderer.PartOf and the predicate buckets a
+    // block by its LOCAL START hour — deliberately, so the closing is checked against the
+    // very day-part the reader's grid places the block in (a block whose start hour lands
+    // in "afternoon" is the grid's afternoon even if it spills an hour into "evening").
+    private static Func<DateOnly, int, bool>? ResolveClosingTime(string masked, int start, int end, DateOnly refDate)
+    {
+        var next = refDate.AddDays(1);
+        Func<DateOnly, int, bool>? found = null;
+        int matches = 0;
+        void Take(Func<DateOnly, int, bool> p)
+        {
+            found = p;
+            matches++;
+        }
+
+        if (HasWord(masked, start, end, "tonight"))
+            Take((d, h) => (d == refDate && h >= 18) || (d == next && h < 6));
+        if (HasWord(masked, start, end, "today"))
+            Take((d, _) => d == refDate);
+        if (HasWord(masked, start, end, "tomorrow"))
+            Take((d, _) => d == next);
+        TakeDayPart(masked, start, end, "morning", refDate, 6, 12, Take);
+        TakeDayPart(masked, start, end, "afternoon", refDate, 12, 18, Take);
+        TakeDayPart(masked, start, end, "evening", refDate, 18, 24, Take);
+
+        return matches == 1 ? found : null;
+    }
+
+    // A bare day-part word maps to TODAY's bucket — unless it is pinned to a weekday or
+    // another relative day ("Saturday afternoon", "tomorrow morning"), which we can't
+    // localize confidently, so we skip it (residual).
+    private static void TakeDayPart(
+        string masked, int start, int end, string word, DateOnly refDate, int loHour, int hiHour, Action<Func<DateOnly, int, bool>> take)
+    {
+        int idx = IndexOfWord(masked, start, end, word);
+        if (idx < 0 || QualifiedByOtherDay(masked, start, idx))
+            return;
+        take((d, h) => d == refDate && h >= loHour && h < hiHour);
+    }
+
+    private static bool HasWord(string s, int start, int end, string word) => IndexOfWord(s, start, end, word) >= 0;
+
+    private static bool ContainsAnyWord(string s, int start, int end, string[] words)
+    {
+        foreach (var w in words)
+            if (IndexOfWord(s, start, end, w) >= 0)
+                return true;
+        return false;
+    }
+
+    // First whole-word, case-insensitive occurrence of word in [start, end), or -1.
+    private static int IndexOfWord(string s, int start, int end, string word)
+    {
+        int from = start;
+        while (from < end)
+        {
+            int idx = s.IndexOf(word, from, end - from, StringComparison.OrdinalIgnoreCase);
+            if (idx < 0)
+                return -1;
+            int after = idx + word.Length;
+            bool wholeWord = (idx == 0 || !char.IsLetter(s[idx - 1]))
+                && (after >= s.Length || !char.IsLetter(s[after]));
+            if (wholeWord)
+                return idx;
+            from = after;
+        }
+        return -1;
     }
 
     // A change window endpoint must land on the 00/06/12/18Z grid the snapshot blocks use.
