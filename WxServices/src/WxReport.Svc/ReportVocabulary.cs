@@ -143,6 +143,12 @@ public sealed record ReportVocabulary
     /// <summary>The IETF culture used for date/time names and number formatting. Localized to the language; number conventions stay US/period-decimal until WX-138 (so <c>es-US</c>, not <c>es-ES</c>).</summary>
     public required CultureInfo Culture { get; init; }
 
+    /// <summary>The severe lead noun: convective (<see cref="CondSevereStorms"/>, "Severe storms") for a thunderstorm,
+    /// generic (<see cref="CondSevereWeather"/>, "Severe weather") otherwise — a severe block can be a damaging-wind
+    /// event with no precip. Single source of truth for both the body hazard banner and the WX-156 subject prefix.</summary>
+    public string SevereNoun(PrecipPhenomenon? phenomenon) =>
+        phenomenon == PrecipPhenomenon.Thunderstorm ? CondSevereStorms : CondSevereWeather;
+
     private static readonly ILog Logger = LogManager.GetLogger(typeof(ReportVocabulary));
 
     /// <summary>
