@@ -246,12 +246,12 @@ internal static class Kdwh20260421Fixture
     // severe. Two 6-hour blocks spanning the 8:53 cycle's near horizon.
     internal static ForecastSnapshotBody BuildProvisionalBody() => new()
     {
-        SchemaVersion = 1,
+        SchemaVersion = ForecastSnapshotBody.SchemaVersionCurrent,
         Blocks = new[]
         {
             new ForecastSnapshotBlock
             {
-                StartUtc = new DateTime(2026, 4, 21, 12, 0, 0, DateTimeKind.Utc),
+                StartUtc = new DateTime(2026, 4, 21, 11, 0, 0, DateTimeKind.Utc),
                 SkyState = SkyState.Overcast, Obscuration = Obscuration.None,
                 TemperatureCelsius = new MinMax<double>(16.0, 20.0),
                 WindKt = new MinMax<int>(7, 12),
@@ -260,7 +260,7 @@ internal static class Kdwh20260421Fixture
             },
             new ForecastSnapshotBlock
             {
-                StartUtc = new DateTime(2026, 4, 21, 18, 0, 0, DateTimeKind.Utc),
+                StartUtc = new DateTime(2026, 4, 21, 17, 0, 0, DateTimeKind.Utc),
                 SkyState = SkyState.Overcast, Obscuration = Obscuration.None,
                 TemperatureCelsius = new MinMax<double>(17.0, 20.0),
                 WindKt = new MinMax<int>(6, 12),
@@ -281,18 +281,18 @@ internal static class Kdwh20260421Fixture
     {
         StationIcao = StationIcao,
         GeneratedAtUtc = Obs0453Utc,
-        SchemaVersion = 1,
+        SchemaVersion = ForecastSnapshotBody.SchemaVersionCurrent,
         Body = BuildPriorBody().Serialize(),
     };
 
     private static ForecastSnapshotBody BuildPriorBody() => new()
     {
-        SchemaVersion = 1,
+        SchemaVersion = ForecastSnapshotBody.SchemaVersionCurrent,
         Blocks = new[]
         {
             new ForecastSnapshotBlock
             {
-                StartUtc = new DateTime(2026, 4, 21, 6, 0, 0, DateTimeKind.Utc),
+                StartUtc = new DateTime(2026, 4, 21, 5, 0, 0, DateTimeKind.Utc),
                 SkyState = SkyState.Overcast, Obscuration = Obscuration.None,
                 TemperatureCelsius = new MinMax<double>(15.6, 18.0),
                 WindKt = new MinMax<int>(5, 8),
@@ -301,7 +301,7 @@ internal static class Kdwh20260421Fixture
             },
             new ForecastSnapshotBlock
             {
-                StartUtc = new DateTime(2026, 4, 21, 12, 0, 0, DateTimeKind.Utc),
+                StartUtc = new DateTime(2026, 4, 21, 11, 0, 0, DateTimeKind.Utc),
                 SkyState = SkyState.Overcast, Obscuration = Obscuration.None,
                 TemperatureCelsius = new MinMax<double>(16.0, 20.0),
                 WindKt = new MinMax<int>(7, 12),
@@ -313,7 +313,7 @@ internal static class Kdwh20260421Fixture
                 // The 4:53 report committed rain "throughout the day", so the
                 // committed snapshot covers the evening too — the 8:53 observed
                 // light rain confirms it rather than adding anything new.
-                StartUtc = new DateTime(2026, 4, 21, 18, 0, 0, DateTimeKind.Utc),
+                StartUtc = new DateTime(2026, 4, 21, 17, 0, 0, DateTimeKind.Utc),
                 SkyState = SkyState.Overcast, Obscuration = Obscuration.None,
                 TemperatureCelsius = new MinMax<double>(17.0, 20.0),
                 WindKt = new MinMax<int>(6, 12),

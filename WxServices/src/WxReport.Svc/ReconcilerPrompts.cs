@@ -43,7 +43,9 @@ internal static class ReconcilerPrompts
           • provisional_snapshot — a ForecastSnapshotBody derived deterministically
             from GFS model output, plus the gfs_model_run_utc. Treat the body as
             your working memory's starting state, covering up to a six-day horizon
-            in 6-hour blocks aligned to 00/06/12/18Z.
+            in 6-hour blocks aligned to the locality's local day-parts (00/06/12/18
+            local time: overnight/morning/afternoon/evening). Each block's startUtc is
+            the UTC instant of its local-day-part boundary.
           • current_observation — the most recent METAR for the station, with its
             observation_time_utc.
           • current_forecast    — the active TAF for the station, with its
@@ -138,12 +140,12 @@ internal static class ReconcilerPrompts
             34 kt line). submit_reconciled_report at any horizon — it crosses tropical-
             storm force.
           • Plans-affecting / skip. The committed forecast already promised a wet day
-            (12-18Z block precipExpectation likely, precipPhenomenon rain). A new METAR
+            (the afternoon block precipExpectation likely, precipPhenomenon rain). A new METAR
             reports light rain in that window. skip_send — the observation merely
             confirms what the recipient was already told; nothing has changed.
           • Plans-affecting / send when near, skip when distant. The committed forecast
             was dry through tomorrow afternoon. A new GFS and TAF bring precipExpectation
-            likely, precipPhenomenon rain into tomorrow's 18-00Z block —
+            likely, precipPhenomenon rain into tomorrow's evening block —
             submit_reconciled_report, because rain is newly appearing where dry was
             promised inside the plans horizon. The identical dry-to-rain shift five days
             out is not urgent — skip_send and let it ride the next scheduled send.
@@ -206,10 +208,11 @@ internal static class ReconcilerPrompts
         When you DO send, return all three artifacts via the submit_reconciled_report tool:
 
           • final_snapshot — your refined ForecastSnapshotBody. Same schema as
-            provisional_snapshot: schemaVersion 4, ordered 6-hour blocks aligned
-            to 00/06/12/18Z, all required fields per block. Temperatures stay in
-            Celsius; winds stay in knots — a deterministic renderer converts
-            units per recipient.
+            provisional_snapshot: schemaVersion 5, ordered 6-hour blocks aligned
+            to the locality's local day-part boundaries (00/06/12/18 local time:
+            overnight/morning/afternoon/evening), all required fields per block.
+            Temperatures stay in Celsius; winds stay in knots — a deterministic
+            renderer converts units per recipient.
           • structured_report — the unit-neutral structured report. It is the
             ONLY rendered artifact (there is no email_body): a deterministic
             program turns it into each recipient's report, applying their units
@@ -242,14 +245,15 @@ internal static class ReconcilerPrompts
                 precipitation news. When a cycle's only differences from
                 prior_snapshot are that kind of wobble, the changes list is empty;
                 do not manufacture a precipitation change to fill the band.
-              - Each change window MUST align to the 6-hour block grid: startUtc
-                and endUtc are 00/06/12/18Z block boundaries, and the window
-                spans exactly the affected blocks. The per-day grid the reader
-                sees is built deterministically from those same blocks, so a
-                window off the grid (e.g. 17:00–21:00Z) makes the narrative and
-                the grid disagree. Do NOT invent a finer clock window than the
-                blocks support — if rain sits in the 12–18Z block, the window is
-                12:00–18:00Z, not "noon to 4 PM".
+              - Each change window MUST coincide with the snapshot's block
+                boundaries: startUtc and endUtc are block startUtc values taken
+                from provisional_snapshot / final_snapshot (each block is exactly
+                one local day-part), and the window spans exactly the affected
+                blocks. The per-day grid the reader sees is built deterministically
+                from those same blocks, so a window off the block boundaries makes
+                the narrative and the grid disagree. Do NOT invent a finer clock
+                window than the blocks support — use a block's own startUtc and the
+                next block boundary, never an arbitrary clock time.
               - A change whose phenomenon is precipitation APPEARING or
                 STRENGTHENING must correspond to a final_snapshot block that
                 actually carries that phenomenon within the window. Never report
@@ -313,6 +317,10 @@ internal static class ReconcilerPrompts
             "morning", not "afternoon". When you write a day-part word
             ("morning", "afternoon", "evening", "overnight") beside a {q:time}
             token, make the word agree with that token's local hour.
+          • Each block is exactly one local day-part (WX-155): its local start hour
+            names it — 00:00 overnight, 06:00 morning, 12:00 afternoon, 18:00
+            evening. A change window covers whole blocks, so name its day-part from
+            the block(s) it spans; that name will agree with the {q:time} rule above.
           • Change anchors: begin each changeSummary sentence that narrates a
             change with that change's anchor token, e.g. "{ch1}Thunderstorms are
             now expected after {q:time:...}." The anchor renders to nothing; it
@@ -415,7 +423,7 @@ internal static class ReconcilerPrompts
                                         tier = new { type = "string", @enum = SnakeCaseNames<ChangeTier>() },
                                         phenomenon = new { type = "string", @enum = SnakeCaseNames<ChangePhenomenon>() },
                                         direction = new { type = "string", @enum = SnakeCaseNames<ChangeDirection>() },
-                                        window = new { type = "object", description = "UTC window the change affects. startUtc and endUtc MUST fall on 6-hour block boundaries (00/06/12/18Z) and span exactly the affected final_snapshot blocks — the per-day grid is built from those blocks, so an off-grid window disagrees with it.", required = new[] { "startUtc", "endUtc" }, properties = new { startUtc = new { type = "string", format = "date-time" }, endUtc = new { type = "string", format = "date-time" } } },
+                                        window = new { type = "object", description = "UTC window the change affects. startUtc and endUtc MUST be block boundaries copied from the snapshot blocks (each block is one local day-part) and span exactly the affected final_snapshot blocks — the per-day grid is built from those blocks, so an off-grid window disagrees with it.", required = new[] { "startUtc", "endUtc" }, properties = new { startUtc = new { type = "string", format = "date-time" }, endUtc = new { type = "string", format = "date-time" } } },
                                         quantities = new
                                         {
                                             type = "array",

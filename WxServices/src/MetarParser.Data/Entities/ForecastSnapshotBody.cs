@@ -46,8 +46,11 @@ public sealed record ForecastSnapshotBody
     /// unchanged (the envelope gained structured_report); v4 likewise leaves it
     /// unchanged — WX-130 slimmed the structured report's narrative to
     /// changeSummary + closing and dropped email_body from the envelope.
+    /// v5 (WX-155) re-anchors block boundaries from the UTC 6-hour grid to the
+    /// locality's local day-parts, so <see cref="ForecastSnapshotBlock.StartUtc"/>
+    /// values are now timezone-dependent (and incomparable across the v4→v5 line).
     /// </summary>
-    public const int SchemaVersionCurrent = 4;
+    public const int SchemaVersionCurrent = 5;
 
     /// <summary>
     /// Schema version this body conforms to.  On write, defaults to
@@ -236,7 +239,7 @@ public sealed record ForecastSnapshotBody
 /// <summary>One uniform 6-hour block within a <see cref="ForecastSnapshotBody"/>.</summary>
 public sealed record ForecastSnapshotBlock
 {
-    /// <summary>UTC start of the block, aligned to 00/06/12/18Z.  Block end is implicitly <c>StartUtc + 6h</c>.</summary>
+    /// <summary>UTC start of the block.  Since v5 (WX-155) blocks are anchored to the locality's local day-parts, so this lands on a local 00/06/12/18 boundary (a timezone-dependent UTC instant), not the UTC 6-hour grid.  Block end is implicitly <c>StartUtc + 6h</c>.</summary>
     [JsonPropertyName("startUtc")]
     public required DateTime StartUtc { get; init; }
 

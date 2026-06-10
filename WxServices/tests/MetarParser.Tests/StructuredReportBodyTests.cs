@@ -319,7 +319,7 @@ public class StructuredReportBodyTests
     {
         // Pins exactly to the current version — no legacy to tolerate (unlike
         // ForecastSnapshotBody, whose old persisted rows must keep loading).
-        var json = SampleBody().Serialize().Replace("\"schemaVersion\":4", "\"schemaVersion\":2");
+        var json = SampleBody().Serialize().Replace("\"schemaVersion\":5", "\"schemaVersion\":2");
 
         var ex = Assert.Throws<JsonException>(() => StructuredReportBody.Deserialize(json));
         Assert.Contains("schemaVersion", ex.Message);
