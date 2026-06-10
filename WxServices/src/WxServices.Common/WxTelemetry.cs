@@ -30,6 +30,8 @@ public static class WxTelemetry
         IConfiguration configuration,
         Action<MeterProviderBuilder> configureMetrics)
     {
+        ArgumentNullException.ThrowIfNull(configureMetrics);
+
         var enabled = bool.TryParse(configuration["Telemetry:Enabled"], out var e) && e;
         var endpoint = configuration["Telemetry:OtlpEndpoint"] ?? DefaultOtlpEndpoint;
 
@@ -43,9 +45,14 @@ public static class WxTelemetry
                 return;
             }
 
+            // Fail loudly and specifically on a misconfigured endpoint rather than with a bare UriFormatException.
+            if (!Uri.TryCreate(endpoint, UriKind.Absolute, out var endpointUri))
+                throw new InvalidOperationException(
+                    $"Telemetry:OtlpEndpoint is not a valid absolute URI: '{endpoint}'. Expected e.g. {DefaultOtlpEndpoint}.");
+
             m.AddOtlpExporter((o, r) =>
             {
-                o.Endpoint = new Uri(endpoint);
+                o.Endpoint = endpointUri;
                 o.Protocol = OtlpExportProtocol.HttpProtobuf;
                 r.PeriodicExportingMetricReaderOptions.ExportIntervalMilliseconds = ExportIntervalMs;
             });

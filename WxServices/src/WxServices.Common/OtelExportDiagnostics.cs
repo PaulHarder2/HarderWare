@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics.Tracing;
 
 using log4net;
@@ -26,7 +27,11 @@ internal sealed class OtelExportDiagnostics : EventListener
     private static readonly object Gate = new();
     private static OtelExportDiagnostics? _instance;
 
-    private readonly LogThrottle _exportFailureThrottle = new(ExportFailureRepeatWindow);
+    // One throttle per distinct exporter event (source + id + name), so the SAME failure repeating
+    // every ~10s collapses to an onset + heartbeat while a genuinely different exporter problem still
+    // surfaces promptly. Keys are a small fixed set (the exporter EventSource's event ids), so this
+    // stays tiny.
+    private readonly ConcurrentDictionary<string, LogThrottle> _exporterThrottles = new();
 
     private OtelExportDiagnostics() { }
 
@@ -42,9 +47,10 @@ internal sealed class OtelExportDiagnostics : EventListener
         }
     }
 
-    /// <summary>True for the OTel SDK's own internal sources, which are all named <c>OpenTelemetry-*</c>.</summary>
+    /// <summary>True for the OTel SDK's own internal sources, which are all named <c>OpenTelemetry-*</c>
+    /// — the trailing hyphen keeps us off any unrelated source that merely starts with "OpenTelemetry".</summary>
     internal static bool IsOtelSource(string sourceName) =>
-        sourceName.StartsWith("OpenTelemetry", StringComparison.Ordinal);
+        sourceName.StartsWith("OpenTelemetry-", StringComparison.Ordinal);
 
     /// <summary>True for the OTLP/exporter sources, whose failure events repeat each export interval and are throttled.</summary>
     internal static bool IsExporterSource(string sourceName) =>
@@ -75,17 +81,22 @@ internal sealed class OtelExportDiagnostics : EventListener
         if (IsExporterSource(sourceName))
         {
             // High-frequency while a collector is down: log the onset, then a heartbeat at most once
-            // per window, so we never flood our own log over a multi-hour outage.
-            if (!_exportFailureThrottle.ShouldLog(DateTime.UtcNow))
+            // per window per distinct event, so we never flood the log (or WxMonitor's inbox) over a
+            // multi-hour outage, yet a different exporter failure isn't masked by an ongoing one.
+            var key = $"{sourceName}:{e.EventId}:{e.EventName}";
+            var throttle = _exporterThrottles.GetOrAdd(key, _ => new LogThrottle(ExportFailureRepeatWindow));
+            if (!throttle.ShouldLog(DateTime.UtcNow))
                 return;
-            Log.Warn($"{line}  (further export failures suppressed for {ExportFailureRepeatWindow.TotalMinutes:N0} min)");
-            return;
+            line += $"  (further '{e.EventName}' events suppressed for {ExportFailureRepeatWindow.TotalMinutes:N0} min)";
         }
 
         // EventLevel ranks the OPPOSITE way from how we think of severity: it is ordered most-severe-first,
         // so LogAlways=0, Critical=1, Error=2, Warning=3, Informational=4, Verbose=5 — a LOWER number is MORE
-        // severe. So "Error or worse" is `<= EventLevel.Error`, not `>=`. (We only ever enable Warning and
-        // above, so anything not Error-or-worse here is a Warning.)
+        // severe. So "Error or worse" is `<= EventLevel.Error`, not `>=`. (We only enable Warning and above.)
+        //
+        // Logging at the SDK's own level is also what makes this reach a human: an unreachable collector is
+        // emitted at Error, and WxMonitor alerts (emails) on ERROR+ — a WARN would only reach the log file,
+        // which would defeat the point of WX-159 (knowing the telemetry pipeline broke).
         if (e.Level <= EventLevel.Error)
             Log.Error(line);
         else

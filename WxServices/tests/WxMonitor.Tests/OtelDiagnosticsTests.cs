@@ -34,6 +34,12 @@ public class LogThrottleTests
         Assert.False(t.ShouldLog(T0.AddMinutes(5).AddSeconds(10)));
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Ctor_NonPositiveWindow_Throws(int seconds)
+        => Assert.Throws<ArgumentOutOfRangeException>(() => new LogThrottle(TimeSpan.FromSeconds(seconds)));
+
     [Fact]
     public void EightHourOutage_AtTenSecondCadence_LogsOncePerWindow_NotEveryAttempt()
     {
@@ -54,6 +60,8 @@ public class OtelExportDiagnosticsHelperTests
     [Theory]
     [InlineData("OpenTelemetry-Exporter-OpenTelemetryProtocol", true)]
     [InlineData("OpenTelemetry-Sdk", true)]
+    [InlineData("OpenTelemetry", false)]        // no trailing hyphen — not an SDK source
+    [InlineData("OpenTelemetryFoo", false)]     // unrelated source merely starting with the word
     [InlineData("System.Runtime", false)]
     [InlineData("Microsoft-Extensions-Logging", false)]
     public void IsOtelSource_MatchesOnlyOtelSdkSources(string name, bool expected)

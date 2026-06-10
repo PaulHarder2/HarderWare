@@ -13,8 +13,15 @@ public sealed class LogThrottle
     private readonly object _gate = new();
     private DateTime _lastUtc = DateTime.MinValue;
 
-    /// <param name="window">Minimum spacing between two consecutive true results.</param>
-    public LogThrottle(TimeSpan window) => _window = window;
+    /// <param name="window">Minimum spacing between two consecutive true results; must be strictly positive
+    /// (a zero or negative window would make every call true, silently defeating the throttle).</param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="window"/> is zero or negative.</exception>
+    public LogThrottle(TimeSpan window)
+    {
+        if (window <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(window), window, "Throttle window must be strictly positive.");
+        _window = window;
+    }
 
     /// <summary>
     /// True if <paramref name="nowUtc"/> is at least <c>window</c> past the previous true result
