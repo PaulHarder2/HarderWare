@@ -1297,8 +1297,8 @@ public class ForecastReconcilerTests
         """;
 
     private static string ClosingOnlyReport(string closing) =>
-        "{\"schemaVersion\":4,\"changes\":[],\"narrative\":{\"en\":{\"changeSummary\":null,\"closing\":\""
-        + closing + "\"}}}";
+        "{\"schemaVersion\":4,\"changes\":[],\"narrative\":{\"en\":{\"changeSummary\":null,\"closing\":"
+        + JsonSerializer.Serialize(closing) + "}}}";
 
     [Fact]
     public async Task ClosingClaim_StormTonight_DryEveningOvernight_Degrades()
@@ -1412,6 +1412,36 @@ public class ForecastReconcilerTests
 
         var degraded = Assert.IsType<ReconcileResult.Degraded>(await RunReconciler(responseJson, tz: Cdt));
         Assert.Contains("entirely dry", degraded.Reason);
+    }
+
+    [Fact]
+    public async Task ClosingClaim_WeekdayPinned_NotRejected_Succeeds()
+    {
+        // "Saturday afternoon" is pinned to a specific weekday we don't localize — it
+        // must not be mis-resolved to TODAY's (dry) afternoon and rejected. (Snapshot's
+        // Tue afternoon is dry, so a mis-resolution would fire.)
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: ClosingStormEveningSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: ClosingOnlyReport("A storm is likely Saturday afternoon as the next system arrives."));
+
+        Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
+    }
+
+    [Fact]
+    public async Task ClosingClaim_MultipleTimeWords_Ambiguous_NotRejected_Succeeds()
+    {
+        // Two resolvable time words in one sentence is ambiguous (which one does the
+        // storm attach to?) — skip rather than risk a false reject. (Afternoon is dry
+        // here, so picking it would fire; the ambiguity guard prevents that.)
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: ClosingStormEveningSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: ClosingOnlyReport("A storm is possible this afternoon or this evening."));
+
+        Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────
