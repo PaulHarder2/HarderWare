@@ -30,12 +30,12 @@ public class ShouldSendTests
     public void FirstEver_Sends_First()
     {
         var state = new LocalityState { LocalityId = 1 };
-        var (send, reason, severity, allowSkip) = ReportWorker.ShouldSend(
+        var (send, reason, kind, allowSkip) = ReportWorker.ShouldSend(
             Utc, Hours(""), state, new InputIdentity("m", "none", "none"), Cfg(), new DateTime(2026, 5, 31, 9, 0, 0, DateTimeKind.Utc));
 
         Assert.True(send);
         Assert.Equal("first", reason);
-        Assert.Equal(ChangeSeverity.None, severity);
+        Assert.Equal(ReportKind.Scheduled, kind);
         Assert.False(allowSkip);
     }
 
@@ -61,7 +61,7 @@ public class ShouldSendTests
         var afterGap = ReportWorker.ShouldSend(Utc, Hours(""), state, advanced, Cfg(minGap: 60), sentAt.AddMinutes(61));
         Assert.True(afterGap.send);
         Assert.Equal("change", afterGap.reason);
-        Assert.Equal(ChangeSeverity.Update, afterGap.severity);
+        Assert.Equal(ReportKind.Unscheduled, afterGap.kind);
         Assert.True(afterGap.allowSkip);
     }
 

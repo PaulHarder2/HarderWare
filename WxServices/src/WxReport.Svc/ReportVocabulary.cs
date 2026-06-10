@@ -32,7 +32,9 @@ public sealed record ReportVocabulary
     public required string ForecastHeadingFormat { get; init; }   // {0} = locality name
     public required string WhatsChangedLabel { get; init; }
     public required string InSummaryLabel { get; init; }
-    public required string UnscheduledNote { get; init; }
+    public required string ScheduledReportLabel { get; init; }
+    public required string UnscheduledUpdateLabel { get; init; }
+    public required string DiagnosticLabel { get; init; }
     public required string NoObservationNote { get; init; }
 
     // ── first-report welcome (WX-130; standalone welcome-only email) ──────────
@@ -136,7 +138,9 @@ public sealed record ReportVocabulary
         ForecastHeadingFormat = "Forecast for {0}",
         WhatsChangedLabel = "What's changed:",
         InSummaryLabel = "In summary:",
-        UnscheduledNote = "Unscheduled update — see note below",
+        ScheduledReportLabel = "Scheduled Report",
+        UnscheduledUpdateLabel = "Unscheduled Update",
+        DiagnosticLabel = "Diagnostic",
         NoObservationNote = "No recent observation is available from any station within about 30 miles, so the report below is based on forecast model data only.",
         WelcomeSubject = "Welcome to WxReport",
         WelcomeGreeting = "Welcome to WxReport!",
@@ -211,7 +215,9 @@ public sealed record ReportVocabulary
         ForecastHeadingFormat = "Pronóstico para {0}",
         WhatsChangedLabel = "Qué ha cambiado:",
         InSummaryLabel = "En resumen:",
-        UnscheduledNote = "Actualización no programada — vea la nota a continuación",
+        ScheduledReportLabel = "Reporte programado",
+        UnscheduledUpdateLabel = "Actualización no programada",
+        DiagnosticLabel = "Diagnóstico",
         NoObservationNote = "No hay una observación reciente de ninguna estación a unos 50 km, por lo que el informe a continuación se basa únicamente en datos del modelo de pronóstico.",
         WelcomeSubject = "Bienvenido a WxReport",
         WelcomeGreeting = "¡Bienvenido a WxReport!",

@@ -135,7 +135,7 @@ public sealed class ForecastReconciler
     /// <param name="prior">Most recently committed <see cref="ForecastSnapshot"/> for this locality's station, or <see langword="null"/> on a first send.  Drives the news judgment in reconciliation step 3.</param>
     /// <param name="narrativeLanguages">ISO 639-1 codes the structured report's narrative must carry (WX-128) — the distinct set of languages across the locality's recipients.  A returned narrative missing any of these (or carrying an extra one) fails closed.</param>
     /// <param name="tz">Locality timezone, used by <see cref="SnapshotDescriber"/> when emitting the structured observation/forecast text and by Claude when reasoning about local time.</param>
-    /// <param name="changeSeverity">Severity of the trigger that caused this send (alert, update, or none).</param>
+    /// <param name="reportKind">The kind of send (scheduled, unscheduled, or diagnostic) — drives the unscheduled-update change-summary instruction; the recipient-facing label is the renderer's concern.</param>
     /// <param name="previousMetarIcao">ICAO of the previous report's station, when it differs from the current snapshot's station; <see langword="null"/> when no station change occurred.</param>
     /// <param name="allowSkip">When <see langword="true"/> (unscheduled, arrival-triggered cycles), Claude may decline to send via the <c>skip_send</c> tool, yielding a <see cref="ReconcileResult.NotNews"/>.  When <see langword="false"/> (scheduled / first / startup), the send is guaranteed and skipping is not offered.</param>
     /// <param name="changedSinceLastSend">Which inputs (METAR/TAF/GFS) are newer than they were at the last report actually delivered for this locality (WX-108).  Surfaced to Claude as <c>changed_since_last_sent_report</c> so the anti-reversal rule can bind on observation-only cycles.  Empty list means nothing advanced since the last send; treated as a first send when no prior send exists.</param>
@@ -151,7 +151,7 @@ public sealed class ForecastReconciler
         ForecastSnapshot? prior,
         IReadOnlyList<string> narrativeLanguages,
         TimeZoneInfo tz,
-        ChangeSeverity changeSeverity,
+        ReportKind reportKind,
         string? previousMetarIcao,
         bool allowSkip,
         IReadOnlyList<TriggerSource> changedSinceLastSend,
@@ -171,7 +171,7 @@ public sealed class ForecastReconciler
         }
 
         var systemPrompt = BuildReconcilerSystemPrompt(
-            snapshot, narrativeLanguages, changeSeverity, previousMetarIcao, allowSkip);
+            snapshot, narrativeLanguages, reportKind, previousMetarIcao, allowSkip);
 
         var userMessage = BuildUserMessage(
             snapshot, provisional, gfsModelRunUtc, tafIssuanceUtc, tafValidToUtc, prior, tz,
@@ -625,6 +625,15 @@ public sealed class ForecastReconciler
     // false-positive surface ("5 Zulu", a number adjacent to a Z-word).
     private static readonly Regex RawUtcBlock =
         new(@"\d{1,2}Z\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    // WX-154: internal data-source / aviation acronyms that must never appear in
+    // recipient prose. TAF/METAR/GFS/ICAO have no lowercase homograph, so they are
+    // matched case-INsensitively — a lowercased leak ("the latest metar…") is caught
+    // too, matching the sibling RawUtcBlock policy. CAPE is matched case-SENSITIVELY
+    // because "cape" the landform is a common word. Residual: an all-caps place name
+    // in prose ("CAPE COD") would trip the CAPE arm — accepted, since Claude rarely
+    // all-caps prose and locality names are injected by the renderer AFTER this check.
+    private static readonly Regex JargonToken =
+        new(@"\b((?i:TAF|METAR|GFS|ICAO)|CAPE)\b", RegexOptions.Compiled);
     // {q:time:<ISO-8601 UTC>} — the only sanctioned way to express an instant in
     // prose. Captures the inner timestamp so we can render it to a local hour.
     private static readonly Regex QTimeToken = new(@"\{q:time:([^}]+)\}", RegexOptions.Compiled);
@@ -651,6 +660,15 @@ public sealed class ForecastReconciler
                 $"structured_report narrative '{lang}' leaks raw UTC block notation "
                 + $"('{leak.Value.Trim()}') into recipient prose; express instants only as "
                 + "{q:time:...} tokens, never the internal NNZ block shorthand.");
+
+        // WX-154: internal data-source / aviation jargon must never reach the reader —
+        // name no data source (TAF/METAR/GFS/CAPE/ICAO); use plain wording ("indications").
+        var jargon = JargonToken.Match(masked);
+        if (jargon.Success)
+            throw new JsonException(
+                $"structured_report narrative '{lang}' uses the internal/aviation term "
+                + $"'{jargon.Value}' in recipient prose; never name a data source "
+                + "(TAF/METAR/GFS/CAPE/ICAO) — use plain wording such as 'the latest indications'.");
 
         // (2) Prose time-of-day word must agree with its {q:time} token's LOCAL
         // rendering (defect 2, send 1927: "...develop Saturday afternoon,
@@ -1214,7 +1232,7 @@ public sealed class ForecastReconciler
     // sections may carry.
     private static string BuildReconcilerSystemPrompt(
         WeatherSnapshot snapshot, IReadOnlyList<string> narrativeLanguages,
-        ChangeSeverity changeSeverity, string? previousMetarIcao, bool allowSkip)
+        ReportKind reportKind, string? previousMetarIcao, bool allowSkip)
     {
         var currentStationLabel = snapshot.StationMunicipality ?? snapshot.StationName ?? snapshot.StationIcao;
         var stationChangeInstruction = previousMetarIcao is not null
@@ -1227,20 +1245,11 @@ public sealed class ForecastReconciler
               + "behaviour, not a cause for concern. "
             : "";
 
-        var changeAlertInstruction = changeSeverity switch
-        {
-            ChangeSeverity.Alert =>
-                "This is an unscheduled weather alert — a significant and potentially dangerous change "
-                + "has occurred since the last report. "
-                + "For the changeSummary, write a single clear, direct sentence "
-                + "identifying what changed (e.g. 'A thunderstorm has moved into the area' or "
-                + "'Visibility has dropped sharply'). ",
-            ChangeSeverity.Update =>
-                "This is an unscheduled update — conditions have changed since the last report. "
-                + "For the changeSummary, write one or two sentences summarising "
-                + "what has changed (e.g. a forecast risk that has appeared, or a significant temperature shift). ",
-            _ => "",
-        };
+        var changeAlertInstruction = reportKind == ReportKind.Unscheduled
+            ? "This is an unscheduled update — conditions have changed since the last report. "
+              + "For the changeSummary, write one or two sentences summarising "
+              + "what has changed (e.g. a forecast risk that has appeared, or a significant temperature shift). "
+            : "";
 
         // WX-128/WX-130: the exact language set the structured report's narrative
         // must carry — the distinct languages across this locality's recipients.

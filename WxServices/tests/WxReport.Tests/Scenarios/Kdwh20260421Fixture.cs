@@ -356,7 +356,7 @@ internal static class Kdwh20260421Fixture
             prior: BuildPriorCommittedSnapshot(),
             narrativeLanguages: new[] { "en" },
             tz: CentralTz,
-            changeSeverity: ChangeSeverity.Update,
+            reportKind: ReportKind.Unscheduled,
             previousMetarIcao: null,
             allowSkip: true,
             // The 8:53 cycle is the canonical observation-only advance: a new METAR

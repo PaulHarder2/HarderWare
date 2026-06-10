@@ -311,6 +311,11 @@ internal static class ReconcilerPrompts
             engineering notation; it must NEVER reach the reader. Express every
             instant as a {q:time:...} token, which the renderer shows in the
             recipient's own local time.
+          • Never name an internal data source or use aviation jargon in prose —
+            no "TAF", "METAR", "GFS", "CAPE", "ICAO"; the reader doesn't know them.
+            Refer to the underlying data vaguely: "the latest indications", "the
+            short-term outlook". Do NOT say "the latest forecast" (that is the
+            report itself) or "guidance".
           • Prose time-of-day words must match the LOCAL time their {q:time}
             token renders to. The renderer converts each token to the locality's
             local clock, so a token at 12:00Z that is 7:00 AM locally reads as

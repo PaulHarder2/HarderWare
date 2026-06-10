@@ -976,6 +976,36 @@ public class ForecastReconcilerTests
     }
 
     [Fact]
+    public async Task JargonInProse_AviationTerm_Degrades()
+    {
+        // WX-154: naming an internal data source ("TAF") in reader-facing prose is
+        // rejected — the 2026-06-10 closing "the afternoon TAF carries a 30% chance".
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: RainBlockSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: ClosingOnlyReport("The afternoon TAF carries a 30% chance of light showers."));
+
+        var degraded = Assert.IsType<ReconcileResult.Degraded>(await RunReconciler(responseJson));
+        Assert.Contains("TAF", degraded.Reason);
+    }
+
+    [Fact]
+    public async Task JargonInProse_LowerCaseSource_Degrades()
+    {
+        // The homograph-free acronyms (taf/metar/gfs/icao) are caught case-insensitively,
+        // so a lowercased leak slips no more than an upper-cased one ("cape" stays exempt).
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: RainBlockSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: ClosingOnlyReport("The latest metar shows light rain at the field."));
+
+        var degraded = Assert.IsType<ReconcileResult.Degraded>(await RunReconciler(responseJson));
+        Assert.Contains("metar", degraded.Reason);
+    }
+
+    [Fact]
     public async Task RawUtcBlockNotation_LowerCase_InProse_Degrades()
     {
         // Case-insensitive: a lower-cased "12-18z" leak is caught too (PR #87).
@@ -1474,7 +1504,7 @@ public class ForecastReconcilerTests
             prior: prior,
             narrativeLanguages: narrativeLanguages ?? new[] { "en" },
             tz: tz ?? Cdt,
-            changeSeverity: ChangeSeverity.None,
+            reportKind: ReportKind.Scheduled,
             previousMetarIcao: null,
             allowSkip: allowSkip,
             changedSinceLastSend: Array.Empty<TriggerSource>());
