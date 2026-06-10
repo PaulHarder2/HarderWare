@@ -46,40 +46,13 @@ var host = Host.CreateDefaultBuilder(args)
             .UseSqlServer(connectionString)
             .Options;
 
-        var telemetryEnabled = ctx.Configuration.GetValue<bool>("Telemetry:Enabled", false);
-        var otlpEndpoint = ctx.Configuration["Telemetry:OtlpEndpoint"] ?? "http://localhost:4318/v1/metrics";
-
-        services.AddOpenTelemetry()
-            .WithMetrics(m =>
-            {
-                m.AddMeter("WxParser.Svc")
-                 .AddMeter("WxParser.Svc.Gfs")
-                 .AddView("wxparser.fetch.cycle.duration.seconds",
-                    new ExplicitBucketHistogramConfiguration
-                    {
-                        Boundaries = [1, 2, 5, 10, 20, 30, 60, 120]
-                    })
-                 .AddView("wxparser.gfs.cycle.duration.seconds",
-                    new ExplicitBucketHistogramConfiguration
-                    {
-                        Boundaries = [30, 60, 120, 300, 600, 900, 1800]
-                    });
-
-                if (telemetryEnabled)
-                {
-                    m.AddOtlpExporter((o, r) =>
-                    {
-                        o.Endpoint = new Uri(otlpEndpoint);
-                        o.Protocol = OpenTelemetry.Exporter.OtlpExportProtocol.HttpProtobuf;
-                        r.PeriodicExportingMetricReaderOptions.ExportIntervalMilliseconds = 10_000;
-                    });
-                    Logger.Info($"Telemetry enabled. Exporting metrics to {otlpEndpoint}.");
-                }
-                else
-                {
-                    Logger.Info("Telemetry disabled. Set Telemetry:Enabled=true in appsettings to export metrics.");
-                }
-            });
+        services.AddWxTelemetry(ctx.Configuration, m => m
+            .AddMeter("WxParser.Svc")
+            .AddMeter("WxParser.Svc.Gfs")
+            .AddView("wxparser.fetch.cycle.duration.seconds",
+                new ExplicitBucketHistogramConfiguration { Boundaries = [1, 2, 5, 10, 20, 30, 60, 120] })
+            .AddView("wxparser.gfs.cycle.duration.seconds",
+                new ExplicitBucketHistogramConfiguration { Boundaries = [30, 60, 120, 300, 600, 900, 1800] }));
 
         services.AddSingleton(dbOptions);
         services.AddHostedService<FetchWorker>();
