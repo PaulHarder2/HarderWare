@@ -1437,11 +1437,12 @@ public sealed class ReportWorker : BackgroundService
     /// Builds a localised email subject line for a weather report.
     /// The subject includes the recipient's first name, the locality name, and the local observation time.
     /// The subject word is chosen from <paramref name="kind"/> — the same source as
-    /// the rendered header label (WX-154), so subject and label cannot disagree.
-    /// Supported languages with translated subjects: Spanish, French; all others default to English.
+    /// the rendered header label (WX-154), so subject and label cannot disagree —
+    /// both read the kind→word mapping from <see cref="ReportVocabulary.GetFromReportKind"/>.
     /// </summary>
     /// <param name="snap">Snapshot providing the station ICAO, locality name, and observation time.</param>
-    /// <param name="language">Report language name (e.g. <c>"Spanish"</c>, <c>"French"</c>, <c>"English"</c>).</param>
+    /// <param name="language">Report language name (e.g. <c>"Spanish"</c>, <c>"English"</c>); unsupported
+    /// languages fall back to the English vocabulary, matching the rendered body.</param>
     /// <param name="tz">Timezone used to convert the UTC observation time for display.</param>
     /// <param name="kind">
     /// The kind of send: <see cref="ReportKind.Unscheduled"/> → "Weather Update",
@@ -1458,38 +1459,14 @@ public sealed class ReportWorker : BackgroundService
         // default(DateTime) in that case, which would render as 12:00 AM.
         var subjectTimeUtc = snap.ObservationAvailable ? snap.ObservationTimeUtc : DateTime.UtcNow;
         var localTime = TimeZoneInfo.ConvertTimeFromUtc(subjectTimeUtc, tz).ToString("h:mm tt");
-        var forName = string.IsNullOrWhiteSpace(recipientName) ? "" : $" for {recipientName}";
-        if (language.Equals("Spanish", StringComparison.OrdinalIgnoreCase))
-        {
-            var label = kind switch
-            {
-                ReportKind.Unscheduled => "Actualización del tiempo",
-                ReportKind.Diagnostic => "Diagnóstico",
-                _ => "Reporte del tiempo",
-            };
-            var paraName = string.IsNullOrWhiteSpace(recipientName) ? "" : $" para {recipientName}";
-            return $"{label}{paraName} — {snap.LocalityName} ({localTime})";
-        }
-        if (language.Equals("French", StringComparison.OrdinalIgnoreCase))
-        {
-            var label = kind switch
-            {
-                ReportKind.Unscheduled => "Mise à jour météo",
-                ReportKind.Diagnostic => "Diagnostic",
-                _ => "Bulletin météo",
-            };
-            var pourName = string.IsNullOrWhiteSpace(recipientName) ? "" : $" pour {recipientName}";
-            return $"{label}{pourName} — {snap.LocalityName} ({localTime})";
-        }
-        {
-            var label = kind switch
-            {
-                ReportKind.Unscheduled => "Weather Update",
-                ReportKind.Diagnostic => "Diagnostic",
-                _ => "Weather Report",
-            };
-            return $"{label}{forName} — {snap.LocalityName} ({localTime})";
-        }
+
+        var isoCode = LanguageHelper.ToIetfTag(language).Split('-')[0].ToLowerInvariant();
+        var vocab = ReportVocabulary.ForLanguage(isoCode);
+        var label = vocab.GetFromReportKind(kind, LabelType.Title);
+        var forName = string.IsNullOrWhiteSpace(recipientName)
+            ? ""
+            : $" {vocab.SubjectForConnective} {recipientName}";
+        return $"{label}{forName} — {snap.LocalityName} ({localTime})";
     }
 
     /// <summary>

@@ -221,12 +221,7 @@ public static class StructuredReportRenderer
             var when = local.ToString("dddd, MMMM d, h:mm tt", vocab.Culture);
             sb.Append($"<div style=\"font-size:14px;color:#c8daea;\">{HtmlText(when)}</div>");
         }
-        var typeLabel = kind switch
-        {
-            ReportKind.Unscheduled => vocab.UnscheduledUpdateLabel,
-            ReportKind.Diagnostic => vocab.DiagnosticLabel,
-            _ => vocab.ScheduledReportLabel,
-        };
+        var typeLabel = vocab.GetFromReportKind(kind, LabelType.Header);
         sb.Append($"<div style=\"font-style:italic;font-size:13px;color:#a0bcd4;\">{HtmlText(typeLabel)}</div>");
         sb.Append("</div>");
     }
