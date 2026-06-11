@@ -1516,7 +1516,7 @@ public class ForecastReconcilerTests
 
         var success = Assert.IsType<ReconcileResult.Success>(result);
         Assert.Equal(12, success.FinalSnapshot.Blocks[0].WindKt.Max);
-        Assert.True(call >= 2, "the folded-gust attempt should have forced a retry");
+        Assert.Equal(2, call);   // exactly one retry: the folded-gust attempt was rejected, the correction accepted
     }
 
     [Fact]
