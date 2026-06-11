@@ -34,8 +34,9 @@ LOG='/mnt/c/HarderWare/Logs/wxreport-svc.log'
 DEPLOY_LOG='/mnt/c/HarderWare/Logs/deploy-history.log'
 COMPONENT='WxReportSvc'                            # the service WX-160 ships in
 MIN_WINDOW_HOURS=24                                # a "full active day" of cycles must accrue before
-                                                   # PASS/FAIL is a valid call; below this the gate
-                                                   # verdict is WAIT (a quiet few hours proves nothing)
+                                                   # PASS is a valid call; below this the verdict is
+                                                   # WAIT unless a conclusive FAIL fires (a quiet few
+                                                   # hours proves nothing, but a failure still does)
 SINCE_OVERRIDE=''
 
 while [ $# -gt 0 ]; do
@@ -106,7 +107,7 @@ last_epoch=$(date -u -d "$LAST_TS UTC" +%s)  || { echo "could not parse last log
 elapsed=$(( last_epoch - since_epoch )); [ "$elapsed" -gt 0 ] || elapsed=1
 pre_start="$(date -u -d "@$(( since_epoch - elapsed ))" '+%Y-%m-%d %H:%M:%S')"
 hh=$(( elapsed / 3600 )); mm=$(( (elapsed % 3600) / 60 ))
-min_window_secs=$(( MIN_WINDOW_HOURS * 3600 ))     # PASS/FAIL not valid below this (verdict -> WAIT)
+min_window_secs=$(( MIN_WINDOW_HOURS * 3600 ))     # PASS is gated by this window; conclusive FAIL still fires earlier
 
 # ---- metrics over the post-deploy window --------------------------------------
 new_wording=$(printf '%s\n' "$POST" | cnt 'TAF-merged forecast shows no material change')
