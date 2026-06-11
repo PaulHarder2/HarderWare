@@ -664,6 +664,11 @@ public sealed class ReportWorker : BackgroundService
         var provisionalBody = ForecastSnapshotBody.Deserialize(anchorSnapshot.Body);
 
         // WX-114 deterministic significance gate (cost pre-filter, unscheduled only).
+        // WX-160: the gate compares a GFS+TAF MERGED body (TafBlockProjector overlays
+        // the parsed TAF onto the GFS provisional), so a fresh TAF that moves nothing
+        // material is now suppressed deterministically instead of bypassing the gate
+        // via the retired `taf-fresh` shortcut. Wind in the merge is sustained-only
+        // (gust touches a gate decision solely through the 50-kt severe rule).
         var gateMode = cfg.SignificanceGate.Mode;
         if (gateMode != SignificanceGateMode.Off && allowSkip && priorSnapshot is not null)
         {
@@ -671,7 +676,8 @@ public sealed class ReportWorker : BackgroundService
             try
             {
                 var priorBodyForGate = ForecastSnapshotBody.Deserialize(priorSnapshot.Body);
-                gate = SignificanceGate.Evaluate(priorBodyForGate, provisionalBody, cfg.SignificanceGate, now, tz, freshTafSinceLastSend);
+                var gateCurrentBody = TafBlockProjector.Merge(provisionalBody, snapshot.ForecastPeriods, snapshot.TafValidToUtc);
+                gate = SignificanceGate.Evaluate(priorBodyForGate, gateCurrentBody, cfg.SignificanceGate, now, tz);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -684,7 +690,7 @@ public sealed class ReportWorker : BackgroundService
                 _significanceGateSkips.Add(1, new KeyValuePair<string, object?>("mode", enforce ? "enforce" : "shadow"));
                 if (enforce)
                 {
-                    Logger.Debug($"{label}: WX-114 significance gate suppressed {triggerType} cycle — no material forecast change since last sent report; Claude not called.");
+                    Logger.Debug($"{label}: WX-114 significance gate suppressed {triggerType} cycle — TAF-merged forecast shows no material change since last sent report; Claude not called.");
                     await PersistUnsentCycleAsync(ctx, label, state, inputHash, ct);
                     return 0;
                 }

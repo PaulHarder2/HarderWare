@@ -52,11 +52,25 @@ public class SevereSubjectPrefixTests
     }
 
     [Fact]
-    public void ConvectiveBranch_OnlyPossible_NoPrefix()
+    public void SevereFlag_OnlyPossiblePrecip_Prefixes()
     {
-        // CAPE-driven severe (wind < 50) but precip only Possible → fails the convective gate, no prefix.
+        // WX-160 Option A: SevereFlag is now authoritative, so a CAPE-driven severe block
+        // (wind < 50, precip only Possible) DOES get a prefix. WX-156 originally excluded
+        // this as "mere instability", but that filter rested on a premise WX-160 broke
+        // (sub-50 sustained no longer implies CAPE-only — it can be a 50 kt gust); we now
+        // trust SevereFlag and match the body hazard banner, which keys on it directly.
         var body = Body(Block(Now.AddHours(4), severe: true, maxWindKt: 20, PrecipExpectation.Possible, PrecipPhenomenon.Thunderstorm));
-        Assert.Null(SevereSubjectPrefix.Evaluate(body, Now, ReportVocabulary.En));
+        Assert.Equal("Severe storms", SevereSubjectPrefix.Evaluate(body, Now, ReportVocabulary.En));
+    }
+
+    [Fact]
+    public void SevereFlag_DryGustSevere_Prefixes()
+    {
+        // The WX-160 case the Option-A change exists for: a gust-severe block carries
+        // SevereFlag with sustained < 50 and no precip (windKt is sustained-only, the
+        // gust drove the flag). It must still get a severe subject prefix.
+        var body = Body(Block(Now.AddHours(3), severe: true, maxWindKt: 30, PrecipExpectation.None));
+        Assert.Equal("Severe weather", SevereSubjectPrefix.Evaluate(body, Now, ReportVocabulary.En));
     }
 
     [Fact]

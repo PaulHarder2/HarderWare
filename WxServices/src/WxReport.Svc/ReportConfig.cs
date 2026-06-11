@@ -9,7 +9,15 @@ namespace WxReport.Svc;
 
 /// <summary>
 /// Root configuration model for WxReport.Svc.
-/// Bound from the <c>Report</c> section of appsettings files at runtime.
+/// <para>
+/// Every property here is a <b>default</b>. At startup <c>ReportWorker.LoadConfigsAsync</c>
+/// binds the <c>Report</c> section of <c>appsettings.shared.json</c> over a fresh instance
+/// (<c>GetSection("Report").Bind(...)</c>), so any value present in that file <b>wins</b> and
+/// these initializers apply only to keys the file omits. The shared file is the canonical
+/// source of truth (it is required at startup; a missing or unparseable file fails the host
+/// rather than silently using these defaults). Edit settings there, not here — these literals
+/// exist so the service is sensible out of the box and so each setting is self-documenting.
+/// </para>
 /// </summary>
 public class ReportConfig
 {
@@ -78,6 +86,16 @@ public enum SignificanceGateMode
     Enforce,
 }
 
+/// <summary>
+/// Tunable thresholds for the WX-114 significance gate, bound from the
+/// <c>Report:SignificanceGate</c> section of <c>appsettings.shared.json</c> (see
+/// <see cref="ReportConfig"/>). As with its parent, <b>every value below is a default
+/// overridden by that file when the corresponding key is present and the file parses</b> —
+/// the shared config is authoritative; these initializers are the fallback. Only the
+/// <em>tunable</em> knobs live here; the gate's fixed bright lines (freeze point, severe /
+/// safety wind, the windKt sustained-ceiling tolerance, the horizon-tier bounds) are
+/// compile-time constants in <see cref="WxServices.Common.WxThresholds"/>, not settings.
+/// </summary>
 public class SignificanceGateConfig
 {
     /// <summary>Operating mode.  Defaults to <see cref="SignificanceGateMode.Enforce"/> so the cost saving is live and measurable; set <see cref="SignificanceGateMode.Shadow"/> to observe the gate's decisions without suppressing, or <see cref="SignificanceGateMode.Off"/> to disable it.</summary>
@@ -94,6 +112,11 @@ public class SignificanceGateConfig
 
     /// <summary>Daily-high temperature (°F) marking the heat-advisory line; crossing it is always significant.  Fixed nationally for v1 — regionalizing it is a deferred follow-up.</summary>
     public int HeatAdvisoryDegF { get; set; } = 100;
+
+    // Fixed bright lines the gate keys off — the freeze point and the horizon-tier
+    // bounds — are not deployment-tunable, so they live as constants in
+    // WxServices.Common.WxThresholds (single source, shared across assemblies), not as
+    // settings here. Only the values above are bound from Report:SignificanceGate.
 }
 
 /// <summary>
