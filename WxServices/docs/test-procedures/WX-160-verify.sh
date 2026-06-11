@@ -37,9 +37,14 @@ SINCE_OVERRIDE=''
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --since)      SINCE_OVERRIDE="$2"; shift 2;;
-    --log)        LOG="$2";            shift 2;;
-    --deploy-log) DEPLOY_LOG="$2";     shift 2;;
+    --since|--log|--deploy-log)
+      [ $# -ge 2 ] || { echo "missing value for $1 (try --help)" >&2; exit 2; }
+      case "$1" in
+        --since)      SINCE_OVERRIDE="$2";;
+        --log)        LOG="$2";;
+        --deploy-log) DEPLOY_LOG="$2";;
+      esac
+      shift 2;;
     -h|--help) awk 'NR==1{next} /^#/{sub(/^# ?/,""); print; next} {exit}' "$0"; exit 0;;
     *) echo "unknown arg: $1 (try --help)" >&2; exit 2;;
   esac
@@ -165,7 +170,8 @@ else
 fi
 echo
 case "$verdict" in
-  PASS) echo "   ====>  PASS   sections 1-4 hold; record it and take 'PASS: Send to Done'.";;
+  PASS) echo "   ====>  PASS   taf-fresh retired + health clean. Confirm the gate-passed";
+        echo "                 reasons above are real criteria (never taf-fresh), then 'PASS: Send to Done'.";;
   FAIL) echo "   ====>  FAIL   open a Bug linked to WX-160 ('FAIL: Open bug ticket'); this ticket still completes (fix-forward).";;
   WAIT) echo "   ====>  WAIT   insufficient time elapsed for a valid test; give it a full active day, then re-run.";;
 esac
