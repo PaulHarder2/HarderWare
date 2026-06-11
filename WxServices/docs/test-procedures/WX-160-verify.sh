@@ -33,6 +33,10 @@ set -uo pipefail
 LOG='/mnt/c/HarderWare/Logs/wxreport-svc.log'
 DEPLOY_LOG='/mnt/c/HarderWare/Logs/deploy-history.log'
 COMPONENT='WxReportSvc'                            # the service WX-160 ships in
+MIN_WINDOW_HOURS=24                                # a "full active day" of cycles must accrue before
+                                                   # PASS is a valid call; below this the verdict is
+                                                   # WAIT unless a conclusive FAIL fires (a quiet few
+                                                   # hours proves nothing, but a failure still does)
 SINCE_OVERRIDE=''
 
 while [ $# -gt 0 ]; do
@@ -86,7 +90,16 @@ win() {  # a b  -> matching real log lines on stdout
 cnt() { grep -cE "$1" || true; }   # count matches on stdin, never error on 0
 
 POST="$(win "$SINCE" '')"
-[ -n "$POST" ] || { echo "No log lines at/after $SINCE in $LOG (deploy too recent, or wrong boundary/log)."; exit 0; }
+# No post-boundary lines yet: emit a WAIT verdict (one token, like every other
+# exit) rather than dropping out silently -- this is the right-after-deploy case
+# the window gate owns. If the boundary/log is actually wrong, the same re-run
+# advice applies once you correct it.
+[ -n "$POST" ] || {
+  echo " VERDICT"
+  echo "   No log lines at/after $SINCE in $LOG -- deploy too recent (or wrong boundary/log)."
+  echo "   ====>  WAIT   no cycles logged since the deploy boundary; re-run once the service has logged."
+  exit 0
+}
 
 LAST_TS="$(printf '%s\n' "$POST" | tail -1 | cut -c1-19)"
 since_epoch=$(date -u -d "$SINCE UTC" +%s)   || { echo "could not parse boundary '$SINCE'" >&2; exit 2; }
@@ -94,6 +107,7 @@ last_epoch=$(date -u -d "$LAST_TS UTC" +%s)  || { echo "could not parse last log
 elapsed=$(( last_epoch - since_epoch )); [ "$elapsed" -gt 0 ] || elapsed=1
 pre_start="$(date -u -d "@$(( since_epoch - elapsed ))" '+%Y-%m-%d %H:%M:%S')"
 hh=$(( elapsed / 3600 )); mm=$(( (elapsed % 3600) / 60 ))
+min_window_secs=$(( MIN_WINDOW_HOURS * 3600 ))     # PASS is gated by this window; conclusive FAIL still fires earlier
 
 # ---- metrics over the post-deploy window --------------------------------------
 new_wording=$(printf '%s\n' "$POST" | cnt 'TAF-merged forecast shows no material change')
@@ -148,21 +162,30 @@ printf  '   %-46s %s\n' 'Reconciliation degraded/inconsistent:'     "$degraded"
 echo
 echo    " VERDICT"
 # The section ALWAYS ends with exactly one explicit token -- PASS / FAIL / WAIT --
-# so the In Test call is unambiguous (and greppable for automation).
+# so the In Test call is unambiguous (and greppable for automation). Order matters:
+# a conclusive FAIL is reported at ANY elapsed time, but PASS is withheld until a
+# full active day of cycles has accrued (short of that the verdict is WAIT, even
+# when the gate already looks healthy -- a quiet few hours proves nothing).
 #   FAIL : taf-fresh still firing (old binary), or new ERROR / reconciliation-
-#          degraded lines since deploy. Fail-closed.
-#   WAIT : not enough signal yet -- no TAF/GFS-driven cycle has reached the gate,
-#          so there's nothing to judge. Give it a full active day and re-run.
-#   PASS : taf-fresh retired (0), the gate is making real decisions, health clean.
+#          degraded lines since deploy. Conclusive -> fail-closed at any horizon.
+#   WAIT : < MIN_WINDOW_HOURS of cycles since deploy (not yet a valid test), OR no
+#          TAF/GFS-driven cycle has reached the gate yet (nothing to judge).
+#   PASS : a full active day in, taf-fresh retired (0), the gate is making real
+#          decisions, health clean.
 if [ "$taf_fresh" -gt 0 ]; then
   verdict='FAIL'
   echo  "   'taf-fresh' still firing -> the old binary may still be running. Confirm the 1.26.0 deploy/restart."
 elif [ "$errors" -gt 0 ] || [ "$degraded" -gt 0 ]; then
   verdict='FAIL'
   echo  "   New ERROR / reconciliation-degraded lines since deploy (see HEALTH above) -- investigate before passing."
+elif [ "$elapsed" -lt "$min_window_secs" ]; then
+  verdict='WAIT'
+  echo  "   Only ${hh}h ${mm}m of cycles since deploy -- a valid test needs a full active day"
+  echo  "   (>= ${MIN_WINDOW_HOURS}h). No conclusive failure so far; re-run once the window fills."
 elif [ "$suppressed" -eq 0 ] && [ "$passed" -eq 0 ]; then
   verdict='WAIT'
-  echo  "   No TAF/GFS-driven cycle has reached the gate yet (mostly quiet pre-filter skips)."
+  echo  "   A full active day elapsed, but no TAF/GFS-driven cycle has reached the gate (only quiet"
+  echo  "   pre-filter skips) -- nothing to judge yet. Re-run after the next active weather period."
 else
   verdict='PASS'
   echo  "   taf-fresh retired (0), the TAF-merge gate is making real decisions, and no new errors."
