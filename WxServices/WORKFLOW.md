@@ -189,8 +189,8 @@ Skip this step for pure-tooling / pure-docs PRs that did not bump the version (s
 1. Delete the remote branch. GitHub's auto-delete (enabled 2026-04-15) handles this automatically; manual `git push origin --delete WX-NN-...` is only needed if auto-delete is disabled.
 2. `git checkout master && git pull` locally.
 3. Delete the local branch: `git branch -d WX-NN-...`.
-4. **Log time spent.** Add a Jira worklog entry recording combined pair-effort from grooming through merge (e.g. `45m`, to 15-minute granularity). This closes the calibration loop with the Original estimate set at grooming time. *Added 2026-04-23.*
-5. Transition the Jira ticket to **Done**.
+4. **Log time spent.** Add a Jira worklog entry recording combined pair-effort from grooming through merge (e.g. `45m`, to 15-minute granularity). This closes the calibration loop with the Original estimate set at grooming time. The dev phase ends at merge, so the worklog is booked here regardless of which transition follows. *Added 2026-04-23.*
+5. **Transition the Jira ticket.** If the change warrants functional testing (§13), move it to **In Test** (`Begin Testing`) — it reaches **Done** only once verification passes. If it's exempt (pure-docs / pure-config / pure-process — nothing functional to verify), transition straight to **Done**. *Amended 2026-06-11 (WX-161): the In Test status sits between merge and Done.*
 6. **Stop at Done — do not transition to Closed.** The Done→Closed transition is Paul's deliberate human-review checkpoint. Report back what was done and let Paul press the final button.
 
 ### Reopening a Done ticket
@@ -200,6 +200,40 @@ Skip this step for pure-tooling / pure-docs PRs that did not bump the version (s
 If a ticket already at **Done** must be reopened to rework its own scope, transition it **Done → In Review** — never jump it back to To Do or In Progress. Atlassian's cycle/lead-time statistics should record the truth: the work re-entered the reviewing phase, not the queue.
 
 Boundary: a defect discovered in *shipped* work normally gets its **own Bug ticket** (the WX-134 precedent — a race found minutes after WX-127's deploy was filed separately, and WX-127 stayed Done). The reopen rule governs only the case where the same ticket's scope is being reworked; which shape applies is a judgment call made when the defect surfaces.
+
+## 13. Functional testing (In Test)
+
+**Added 2026-06-11** (WX-161; the In Test workflow status and WX-160's post-deployment verification motivated it).
+
+Automated unit/integration tests prove the code correct *in isolation*; only verification against the **deployed** system proves it works with real config, real data, real timing, and real integrations. WX-160 was the worked example — 575 green tests, yet the behavior we actually cared about (the gate suppressing real TAF cycles in production) could only be confirmed by watching live cycles. This is the deployment-side analog of §7a's manual UI test procedures, and it has its own Jira status, **In Test** (In Progress category — a merged-but-unverified ticket is not yet Done). It is also called *post-deployment verification* or a *smoke test*; the log-fingerprint flavor we use is *verification in production*.
+
+### When it applies — and when it doesn't
+
+Functional testing is **opt-in, not mandatory**: the workflow's "Any" transitions let an exempt ticket go straight In Review → Done, so testing is never forced.
+
+- **Warranted** — any change with runtime behavior: logic, gate/threshold changes, prompt changes, schema/migrations, fetch/parse changes, the *semantics* of a config value. → at merge, transition to **In Test**.
+- **Exempt** — changes with nothing functional to verify: pure-docs (including this WORKFLOW.md edit), pure-config values, pure-process, pure-tooling that ships in no service binary. → at merge, transition straight to **Done**. Same spirit as the §7b test-run exemption.
+
+When in doubt, test — a wrongly-skipped verification is the costlier mistake.
+
+### The In Test loop
+
+- `In Review → In Test` (**Begin Testing**) — at merge, for a warranted change.
+- Run the change's verification (below). **PASS** → `In Test → Done` (**PASS: Send to Done**). **FAIL** → `In Test → Done` (**FAIL: Open bug ticket**): the change shipped its scope, so this ticket still completes (Done → Closed), and the residual defect gets its **own Bug ticket** linked back to it. We **fix forward** — a merged ticket is never reworked in place (there is no In Test → In Progress), which is the same stance §12's reopen rule takes (WX-134 precedent).
+- `Done → In Test` (**Return to Test**) — re-verify a ticket already at Done (e.g. after a later redeploy). Distinct from `Done → In Review`, which reopens a ticket to rework *its own* scope (§12).
+
+### Two tiers of verification
+
+1. **Baseline smoke (every deploy):** services came up, heartbeat current, the expected version is running (cross-check `deploy-history.log` against the release), no new ERRORs.
+2. **Change-specific verification (the warranted change):** confirm the change's *fingerprint* is present in production and the old behavior is gone. Where scriptable, script it into `Code/tools` (alongside `check-ci.sh`, outside the repo) — e.g. `wx160-verify.sh`, which reads the service log and reports `taf-fresh` → 0, the new suppressions, and health.
+
+### Author the procedure *before* review
+
+Like §7a, the functional test procedure — **and its verification script, if any** — is written **during the ticket, before the PR opens**, and rides the PR. It lives at `docs/test-procedures/WX-NN.md` (numbered steps with explicit *Expect:* outcomes), so Claude `/code-review` (§7d) and CodeRabbit (§9) both review it, and it is ready the moment the change deploys. (WX-160 was a one-time retroactive exception — written after merge because it predated this practice.) Record it in the ticket's custom fields: **Test Proc** = `docs/test-procedures/WX-NN.md`, **Test Result** = `PASS yyyy-mm-dd @ <version>` (or `FAIL …`).
+
+### Choosing the verification boundary
+
+The verification compares production behavior *before* vs *after* the deploy, so the boundary must be the **latest deploy time of the component(s) the change touches** — read from `deploy-history.log` (each line is component / version / commit / OK; a single release deploys its components at staggered times). Too *early* a boundary straddles a mixed-version window — the old binary for part of it — and yields false signals; an unrelated service redeployed in the same batch does not count. A change spanning several services keys off the latest of *their* lines. The `wx160-verify.sh` pattern auto-detects this from `deploy-history.log`, so there is no timestamp to hand-enter.
 
 ## Schema changes
 
