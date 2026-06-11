@@ -93,7 +93,11 @@ internal static class ReconcilerPrompts
             energy points to strong-to-severe storms (the snapshot's severeFlag and
             convective signals). Otherwise treat thunderstorms as plans-affecting.
             When winds of 34 kt or greater qualify, the send is warranted regardless
-            of how you describe those winds in the narrative.
+            of how you describe those winds in the narrative. Two wind rules for the
+            structured snapshot: windKt is SUSTAINED wind only (min/max) — NEVER fold a
+            gust into windKt.max; a gust belongs solely in the narrative {q:gust} token.
+            The one exception is severity: a wind of 50 kt or more, sustained OR gust, is
+            severe by definition — set severeFlag true on that block.
 
           • Plans-affecting — precipitation versus dry, notable but non-hazardous
             winds, a meaningful temperature swing, ordinary non-severe thunderstorms.
@@ -482,7 +486,7 @@ internal static class ReconcilerPrompts
                                         skyState = new { type = "string", @enum = new[] { "clear", "partly_cloudy", "mostly_cloudy", "overcast" } },
                                         obscuration = new { type = "string", @enum = new[] { "none", "fog", "haze", "smoke", "dust" } },
                                         temperatureCelsius = new { type = "object", required = new[] { "min", "max" }, properties = new { min = new { type = "number" }, max = new { type = "number" } } },
-                                        windKt = new { type = "object", required = new[] { "min", "max" }, properties = new { min = new { type = "integer" }, max = new { type = "integer" } } },
+                                        windKt = new { type = "object", required = new[] { "min", "max" }, description = "Min/max SUSTAINED wind in knots. NEVER put a gust here: max is the sustained-wind ceiling, not the gust. A gust appears only in the narrative {q:gust} token. (A gust still matters for severeFlag — see the wind-severe rule.)", properties = new { min = new { type = "integer" }, max = new { type = "integer" } } },
                                         precipExpectation = new { type = "string", @enum = new[] { "none", "possible", "likely", "certain" } },
                                         precipPhenomenon = new
                                         {

@@ -1483,21 +1483,92 @@ public class ForecastReconcilerTests
     private static readonly TimeZoneInfo Cdt =
         TimeZoneInfo.CreateCustomTimeZone("Test-CDT", TimeSpan.FromHours(-5), "Test CDT", "Test CDT");
 
+    // ── WX-160 windKt sustained-ceiling validator ─────────────────────────────
+    // windKt carries sustained wind only; a folded gust (windKt.max above every
+    // sustained source for the block) is rejected and replayed to Claude with
+    // feedback, so the contaminated max never reaches the stored baseline.
+
+    private const string WindCeilingProvisionalJson =
+        """{"schemaVersion":5,"blocks":[{"startUtc":"2026-06-09T11:00:00Z","skyState":"clear","obscuration":"none","temperatureCelsius":{"min":18,"max":26},"windKt":{"min":4,"max":12},"precipExpectation":"none","severeFlag":false}]}""";
+
+    private static string WindBlockSnapshotJson(int windMax) =>
+        $$"""{"schemaVersion":5,"blocks":[{"startUtc":"2026-06-09T11:00:00Z","skyState":"clear","obscuration":"none","temperatureCelsius":{"min":18,"max":26},"windKt":{"min":4,"max":{{windMax}}},"precipExpectation":"none","severeFlag":false}]}""";
+
+    [Fact]
+    public async Task WindKtSustained_FoldedGust_RejectedThenCorrectionAccepted()
+    {
+        // GFS forecasts sustained 12 kt for the block. Claude first folds a gust into
+        // windKt.max (20 kt), which overshoots the sustained ceiling and is rejected;
+        // the retry returns a clean sustained 12 kt and is accepted.
+        var provisional = ForecastSnapshotBody.Deserialize(WindCeilingProvisionalJson);
+        int call = 0;
+        var result = await RunReconciler(
+            _ =>
+            {
+                var snapshotJson = call++ == 0 ? WindBlockSnapshotJson(20) : WindBlockSnapshotJson(12);
+                var json = BuildClaudeResponseJson(snapshotJson, "trace", 10, 10, 0, 0);
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(json, Encoding.UTF8, "application/json"),
+                };
+            },
+            provisional: provisional);
+
+        var success = Assert.IsType<ReconcileResult.Success>(result);
+        Assert.Equal(12, success.FinalSnapshot.Blocks[0].WindKt.Max);
+        Assert.Equal(2, call);   // exactly one retry: the folded-gust attempt was rejected, the correction accepted
+    }
+
+    [Fact]
+    public async Task WindKtSustained_PersistentFold_NeverAcceptedAsSuccess()
+    {
+        // A gust folded into windKt.max on every attempt is never accepted as a clean
+        // Success — it exhausts the retries (and degrades or fails), so the
+        // contaminated max never reaches the baseline as a committed send.
+        var provisional = ForecastSnapshotBody.Deserialize(WindCeilingProvisionalJson);
+        var responseJson = BuildClaudeResponseJson(WindBlockSnapshotJson(20), "trace", 10, 10, 0, 0);
+        var result = await RunReconciler(
+            _ => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(responseJson, Encoding.UTF8, "application/json"),
+            },
+            provisional: provisional);
+
+        Assert.IsNotType<ReconcileResult.Success>(result);
+    }
+
+    [Fact]
+    public async Task WindKtSustained_WithinRoundingTolerance_Accepted()
+    {
+        // A windKt.max a couple of knots above the sustained ceiling is honest rounding,
+        // not a fold (a gust exceeds its sustained wind by far more), and is accepted.
+        var provisional = ForecastSnapshotBody.Deserialize(WindCeilingProvisionalJson);
+        var responseJson = BuildClaudeResponseJson(WindBlockSnapshotJson(14), "trace", 10, 10, 0, 0);
+        var result = await RunReconciler(
+            _ => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(responseJson, Encoding.UTF8, "application/json"),
+            },
+            provisional: provisional);
+
+        Assert.IsType<ReconcileResult.Success>(result);
+    }
+
     private static async Task<ReconcileResult> RunReconciler(string anthropicResponseJson, bool allowSkip = false, TimeZoneInfo? tz = null, ForecastSnapshot? prior = null)
         => await RunReconciler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent(anthropicResponseJson, Encoding.UTF8, "application/json"),
         }, allowSkip, tz: tz, prior: prior);
 
-    private static async Task<ReconcileResult> RunReconciler(Func<HttpRequestMessage, HttpResponseMessage> respond, bool allowSkip = false, string[]? narrativeLanguages = null, TimeZoneInfo? tz = null, ForecastSnapshot? prior = null)
+    private static async Task<ReconcileResult> RunReconciler(Func<HttpRequestMessage, HttpResponseMessage> respond, bool allowSkip = false, string[]? narrativeLanguages = null, TimeZoneInfo? tz = null, ForecastSnapshot? prior = null, ForecastSnapshotBody? provisional = null, WeatherSnapshot? snapshot = null)
     {
         var http = new HttpClient(new StubHandler(respond));
         var claude = new ClaudeClient(http, apiKey: "test-key", model: "claude-sonnet-4-6", personaPrefix: "Persona text.");
         var reconciler = new ForecastReconciler(claude);
 
         return await reconciler.ReconcileAsync(
-            snapshot: BuildSnapshot(),
-            provisional: new ForecastSnapshotBody(),
+            snapshot: snapshot ?? BuildSnapshot(),
+            provisional: provisional ?? new ForecastSnapshotBody(),
             gfsModelRunUtc: DateTime.UtcNow,
             tafIssuanceUtc: null,
             tafValidToUtc: null,

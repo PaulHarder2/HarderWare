@@ -12,12 +12,17 @@
 // mode that loses a real update, so the gate is conservative by construction and
 // is tightened later using the DEBUG skip-vs-call data it emits.
 //
-// The provisional body is built from GFS only, so the gate is blind to TAF: a
-// new/amended TAF with flat GFS would otherwise be wrongly suppressed (it dropped
-// real short-term updates in the first enforce-mode data).  The caller passes a
-// freshTafSinceLastSend flag and the gate presumes such cycles significant.
+// The `current` body the caller supplies is GFS+TAF merged (WX-160:
+// TafBlockProjector overlays the parsed TAF onto the GFS provisional), so the
+// gate sees TAF content and judges it with the same threshold table as GFS.
+// Earlier this body was GFS-only and the gate was blind to TAF, so it presumed
+// every fresh-TAF cycle significant (`taf-fresh`) — a blanket bypass that barely
+// filtered, since TAFs reissue routinely.  Feeding it a TAF-aware `current`
+// retired that bypass without touching the threshold logic.
 
 using MetarParser.Data.Entities;
+
+using WxServices.Common;
 
 namespace WxReport.Svc;
 
@@ -33,11 +38,10 @@ internal readonly record struct SignificanceResult(bool Significant, IReadOnlyLi
 /// </summary>
 internal static class SignificanceGate
 {
-    /// <summary>Horizon-tier upper bounds in hours from "now": T1 ≤ 24h, T2 ≤ 48h, T3 ≤ 72h, T4 ≤ 120h.  Blocks beyond 120h are narrative-only and never gate.</summary>
-    private static readonly int[] TierUpperBoundHours = [24, 48, 72, 120];
-
-    /// <summary>Freezing point in °F.  A day "has a freeze" when its low is strictly below this; a thaw is declared only when the low is strictly above it — 32 °F itself stays in the prior state (the latent-heat dead band, per forecaster guidance).</summary>
-    private const double FreezeDegF = 32.0;
+    // No magic numbers here: the tunable per-tier delta arrays and advisory lines live
+    // on SignificanceGateConfig (bound from appsettings), and the fixed bright lines —
+    // the freeze point and the horizon-tier bounds — live in WxThresholds (WX-160).
+    // This class holds only the criteria *logic*.
 
     /// <summary>
     /// Evaluate whether the current deterministic forecast differs materially from
@@ -51,30 +55,17 @@ internal static class SignificanceGate
     /// <param name="cfg">Tunable thresholds.</param>
     /// <param name="nowUtc">Cycle timestamp; tiers are measured from here.</param>
     /// <param name="tz">Recipient timezone, for grouping temperature into local calendar days.</param>
-    /// <param name="freshTafSinceLastSend">
-    /// True when a new/amended TAF arrived since the last sent report.  The provisional
-    /// body this gate evaluates is built from GFS only (no TAF), so a TAF change is a
-    /// signal the gate structurally cannot see; when set, the cycle is presumed
-    /// significant (routed to Claude) rather than risk suppressing a real short-term
-    /// update — consistent with the gate's err-toward-Claude design.  WX-114.
-    /// </param>
     internal static SignificanceResult Evaluate(
         ForecastSnapshotBody prior, ForecastSnapshotBody current,
-        SignificanceGateConfig cfg, DateTime nowUtc, TimeZoneInfo tz,
-        bool freshTafSinceLastSend)
+        SignificanceGateConfig cfg, DateTime nowUtc, TimeZoneInfo tz)
     {
         ArgumentNullException.ThrowIfNull(prior);
         ArgumentNullException.ThrowIfNull(current);
         ArgumentNullException.ThrowIfNull(cfg);
         ArgumentNullException.ThrowIfNull(tz);
 
-        // A fresh TAF is invisible to the GFS-only provisional body, so treat it as
-        // significant up front — the gate cannot judge a change it cannot see.
-        if (freshTafSinceLastSend)
-            return new SignificanceResult(true, ["taf-fresh"]);
-
         var fired = new List<string>();
-        var horizonEnd = nowUtc.AddHours(TierUpperBoundHours[^1]);
+        var horizonEnd = nowUtc.AddHours(WxThresholds.TierUpperBoundHours[^1]);
 
         // Disjoint horizons — an empty prior, or a last send so old its blocks no
         // longer overlap the current 120h window — are not "no change": there is a
@@ -123,7 +114,7 @@ internal static class SignificanceGate
                 fired.Add($"temp-delta@T{tier + 1}({day:yyyy-MM-dd})");
 
             // Freeze ADD (falling through freezing): prior not freezing, now strictly below 32 °F. Always significant.
-            if (pri.Lo >= FreezeDegF && cur.Lo < FreezeDegF)
+            if (pri.Lo >= WxThresholds.FreezeDegF && cur.Lo < WxThresholds.FreezeDegF)
                 fired.Add($"freeze-add({day:yyyy-MM-dd})");
 
             // Thaw (rising out of a freeze): prior freezing, now strictly above 32 °F.
@@ -131,7 +122,7 @@ internal static class SignificanceGate
             // tier — not as a lazy near-term cessation: a hard freeze breaking is
             // planning-relevant (frost protection, pipes, travel) even days out, matching
             // the agreed "frost/freeze threshold crossing = ALWAYS" row.
-            if (pri.Lo < FreezeDegF && cur.Lo > FreezeDegF)
+            if (pri.Lo < WxThresholds.FreezeDegF && cur.Lo > WxThresholds.FreezeDegF)
                 fired.Add($"thaw({day:yyyy-MM-dd})");
 
             // Heat-advisory crossing (either direction). Always significant.
@@ -254,13 +245,13 @@ internal static class SignificanceGate
     private static bool InHorizon(DateTime startUtc, DateTime nowUtc, DateTime horizonEnd) =>
         startUtc.AddHours(6) > nowUtc && startUtc < horizonEnd;
 
-    /// <summary>Horizon tier (0-based) of a block start, or -1 if beyond the 120h horizon.  A block already in progress (start before now) is tier 0.</summary>
+    /// <summary>Horizon tier (0-based) of a block start, or -1 if beyond the last <see cref="WxThresholds.TierUpperBoundHours"/> bound.  A block already in progress (start before now) is tier 0.</summary>
     private static int TierOf(DateTime startUtc, DateTime nowUtc)
     {
         double hours = (startUtc - nowUtc).TotalHours;
         if (hours < 0) return 0;
-        for (int t = 0; t < TierUpperBoundHours.Length; t++)
-            if (hours < TierUpperBoundHours[t])
+        for (int t = 0; t < WxThresholds.TierUpperBoundHours.Length; t++)
+            if (hours < WxThresholds.TierUpperBoundHours[t])
                 return t;
         return -1;
     }

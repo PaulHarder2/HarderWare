@@ -307,6 +307,10 @@ public sealed class ForecastReconciler
                 // A missing field, schema/token violation, or a requested language
                 // absent/extra all throw and route through the retry → skip/Failure
                 // path, exactly like a final_snapshot schema violation.
+                // WX-160: windKt must be sustained-only — reject a folded gust before
+                // it corrupts the baseline the significance gate compares against.
+                ValidateWindKtSustained(finalSnapshot, provisional, snapshot);
+
                 var structuredReportJson = RequireProperty(input, "structured_report").GetRawText();
                 var structuredReport = StructuredReportBody.Deserialize(structuredReportJson);
                 ValidateNarrativeContract(structuredReport, narrativeLanguages);
@@ -572,20 +576,16 @@ public sealed class ForecastReconciler
                     BlockOverlapsWindow(b.StartUtc, w)
                     && (b.SevereFlag
                         || b.PrecipPhenomenon is PrecipPhenomenon.FreezingPrecip or PrecipPhenomenon.Snow
-                        || b.WindKt.Max >= SafetyWindKt));
+                        || b.WindKt.Max >= WxThresholds.SafetyWindKt));
                 if (!safetyBacked)
                     throw new JsonException(
                         $"structured_report change '{change.SummaryToken}' is tier '{change.Tier}' "
                         + $"({change.Phenomenon}) but no final_snapshot block in its window "
                         + $"{w.StartUtc:O}..{w.EndUtc:O} carries a safety-grade signal (severeFlag, "
-                        + "freezing/snow precip, or sustained wind >= 34 kt); the tier is over-escalated.");
+                        + $"freezing/snow precip, or sustained wind >= {WxThresholds.SafetyWindKt} kt); the tier is over-escalated.");
             }
         }
     }
-
-    // Tropical-storm-force sustained wind — the significance hierarchy's safety
-    // bright line for non-thunderstorm wind (ReconcilerPrompts significance tiers).
-    private const int SafetyWindKt = 34;
 
     // True when the final_snapshot can deterministically carry a safety-grade
     // signal for this phenomenon, so a Safety-tier claim is checkable against the
@@ -597,6 +597,58 @@ public sealed class ForecastReconciler
     private static bool SafetyTierIsVerifiable(ChangePhenomenon p) => p is not (
         ChangePhenomenon.Fog or ChangePhenomenon.Haze or ChangePhenomenon.Smoke
         or ChangePhenomenon.Dust or ChangePhenomenon.Temperature);
+
+    // WX-160: windKt carries SUSTAINED wind only — a gust belongs in the narrative
+    // {q:gust} token, never in windKt. Claude has historically folded a TAF/observed
+    // gust into windKt.max ("12 kt G20 kt" → max 20), which corrupts the stored
+    // baseline and makes the significance gate's sustained-wind comparison
+    // apples-to-oranges (a GFS-sustained current vs a gust-laden prior). The ceiling
+    // each block's windKt.max is pinned to is the SAME GFS+TAF sustained merge the
+    // gate compares against (TafBlockProjector.Merge) — read off the merged body
+    // rather than re-derived here, so the validator's TAF-coverage model is identical
+    // to the gate's by construction (the two diverged when this recomputed per-period
+    // overlap while Merge uses prevailing-timeline persistence). The current
+    // observation's sustained wind raises the ceiling only for the block that contains
+    // it. An overshoot beyond ceiling + WxThresholds.SustainedCeilingToleranceKt is a
+    // folded gust (or an invented wind); it fails closed through the same retry-with-
+    // feedback path as every other contract check, with a message telling Claude to
+    // move the gust to the narrative.
+    private static void ValidateWindKtSustained(
+        ForecastSnapshotBody finalSnapshot, ForecastSnapshotBody provisional, WeatherSnapshot snapshot)
+    {
+        // The merged body's windKt.max IS the sustained ceiling per block (TAF-prevails
+        // where covered, GFS elsewhere, gust excluded), matching what the gate sees.
+        var ceilingBody = TafBlockProjector.Merge(provisional, snapshot.ForecastPeriods, snapshot.TafValidToUtc);
+        var ceilingByStart = new Dictionary<DateTime, int>(ceilingBody.Blocks.Count);
+        foreach (var b in ceilingBody.Blocks)
+            ceilingByStart[b.StartUtc] = b.WindKt.Max;
+
+        foreach (var block in finalSnapshot.Blocks)
+        {
+            int ceiling = ceilingByStart.TryGetValue(block.StartUtc, out var m) ? m : int.MinValue;
+
+            // The current observation's SUSTAINED wind (never its gust) raises the
+            // ceiling ONLY for the block containing the observation instant — Claude may
+            // legitimately track a strong obs there. Applying it to every block would let
+            // a windy "now" mask a folded gust in a far-future block.
+            if (snapshot.ObservationAvailable && snapshot.WindSpeedKt is int obsKt
+                && block.StartUtc <= snapshot.ObservationTimeUtc
+                && snapshot.ObservationTimeUtc < block.StartUtc.AddHours(GfsSnapshotBuilder.BlockHours))
+                ceiling = Math.Max(ceiling, obsKt);
+
+            // No sustained source covers this block (e.g. a far-horizon block past the
+            // GFS/TAF reach): nothing to pin against, so don't false-reject. This
+            // early-continue MUST precede the tolerance addition below — otherwise
+            // int.MinValue + tolerance underflows.
+            if (ceiling == int.MinValue) continue;
+
+            if (block.WindKt.Max > ceiling + WxThresholds.SustainedCeilingToleranceKt)
+                throw new JsonException(
+                    $"final_snapshot block {block.StartUtc:O} windKt.max is {block.WindKt.Max} kt, but the maximum "
+                    + $"SUSTAINED wind forecast for it (GFS+TAF merged, plus any in-block observation) is {ceiling} kt. "
+                    + "windKt carries sustained wind only — put the gust in the narrative {q:gust} token, not windKt.max.");
+        }
+    }
 
     // WX-149: prose hygiene over the language-keyed narrative — two reader-facing
     // faults the structured-schema and the change/snapshot consistency checks

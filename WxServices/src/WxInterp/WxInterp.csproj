@@ -7,5 +7,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\MetarParser.Data\MetarParser.Data.csproj" />
+    <ProjectReference Include="..\WxServices.Common\WxServices.Common.csproj" />
   </ItemGroup>
 </Project>

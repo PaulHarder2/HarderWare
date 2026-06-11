@@ -40,7 +40,7 @@ public class SignificanceGateTests
     private static ForecastSnapshotBody Body(params ForecastSnapshotBlock[] blocks) => new() { Blocks = blocks };
 
     private static bool Sig(ForecastSnapshotBody prior, ForecastSnapshotBody current) =>
-        SignificanceGate.Evaluate(prior, current, Cfg, Now, Utc, freshTafSinceLastSend: false).Significant;
+        SignificanceGate.Evaluate(prior, current, Cfg, Now, Utc).Significant;
 
     private static double FtoC(double f) => (f - 32.0) * 5.0 / 9.0;
 
@@ -271,27 +271,17 @@ public class SignificanceGateTests
         var minus6 = TimeZoneInfo.CreateCustomTimeZone("utc-minus-6", TimeSpan.FromHours(-6), "UTC-6", "UTC-6");
         var prior = Body(Blk(loF: 35, hiF: 45));
         var current = Body(Blk(loF: 30, hiF: 45));
-        Assert.True(SignificanceGate.Evaluate(prior, current, Cfg, Now, minus6, freshTafSinceLastSend: false).Significant);
+        Assert.True(SignificanceGate.Evaluate(prior, current, Cfg, Now, minus6).Significant);
     }
 
-    // WX-114: the provisional body is GFS-only, so a fresh/amended TAF is a change the
-    // gate cannot see in the bodies. A fresh TAF must therefore force significance
-    // (route to Claude) even when the GFS-derived bodies are byte-identical, so a
-    // real short-term update is never suppressed.
+    // WX-160: the GFS-only `taf-fresh` blanket bypass is retired — the caller now feeds
+    // the gate a GFS+TAF merged body (TafBlockProjector), so a fresh TAF that moves
+    // nothing material no longer forces significance. Identical bodies suppress
+    // regardless of TAF freshness; the TAF→block merge itself is covered in
+    // TafBlockProjectorTests.
     [Fact]
-    public void FreshTaf_ForcesSignificant_EvenWhenBodiesIdentical()
+    public void IdenticalBodies_NotSignificant_RegardlessOfTaf()
     {
-        var result = SignificanceGate.Evaluate(Body(Blk()), Body(Blk()), Cfg, Now, Utc, freshTafSinceLastSend: true);
-        Assert.True(result.Significant);
-        Assert.Contains("taf-fresh", result.FiredCriteria);
-    }
-
-    [Fact]
-    public void NoFreshTaf_IdenticalBodies_RemainsNotSignificant()
-    {
-        // The exemption is scoped to fresh-TAF cycles only: without one, identical
-        // bodies still suppress (the 94-case GFS/METAR win is preserved).
-        var result = SignificanceGate.Evaluate(Body(Blk()), Body(Blk()), Cfg, Now, Utc, freshTafSinceLastSend: false);
-        Assert.False(result.Significant);
+        Assert.False(Sig(Body(Blk()), Body(Blk())));
     }
 }

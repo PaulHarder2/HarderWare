@@ -54,25 +54,22 @@ internal static class SevereSubjectPrefix
     }
 
     /// <summary>
-    /// The WX-156 qualification rule. A block must carry <see cref="ForecastSnapshotBlock.SevereFlag"/> and then
-    /// satisfy one of two branches:
-    /// <list type="bullet">
-    /// <item><b>Wind</b> — sustained wind ≥ <see cref="GfsSnapshotBuilder.SevereWindKt"/>: qualifies standalone.</item>
-    /// <item><b>Convective</b> — wind below that threshold (so <c>SevereFlag</c> can only be CAPE-driven, since blocks
-    /// carry no CAPE): additionally requires <c>PrecipExpectation ≥ Likely</c> (storms expected, not mere instability).</item>
-    /// </list>
-    /// Excludes snow / freezing / fog / sub-severe (34–49 kt) wind — <c>SevereFlag</c> already excludes them.
+    /// The qualification rule: a block carries <see cref="ForecastSnapshotBlock.SevereFlag"/>. The flag IS the
+    /// authoritative severe signal, so the prefix trusts it directly — matching the body hazard banner, which
+    /// triggers on <c>SevereFlag</c> alone (<c>StructuredReportRenderer</c>), so subject and body never disagree.
     ///
     /// <para>
-    /// The block persists wind as a rounded <c>int</c> (<c>GfsSnapshotBuilder</c> rounds the raw max away from zero),
-    /// while <c>DeriveSevereFlag</c> set <see cref="ForecastSnapshotBlock.SevereFlag"/> from the raw float. So a
-    /// CAPE-severe block whose raw wind is 49.5–49.99 kt rounds to a stored 50 and takes the wind branch, skipping
-    /// the convective gate. The raw wind isn't available here to disambiguate; the discrepancy is a sub-1-kt band and
-    /// errs toward over-warning (the block is severe either way), which is the safe direction for a hazard signal.
+    /// History (WX-160, Option A): WX-156 originally split this into a wind branch (sustained ≥ 50 kt qualifies
+    /// standalone) and a convective branch (sub-50-kt wind — so the flag could only be CAPE-driven — additionally
+    /// requiring <c>PrecipExpectation ≥ Likely</c> to exclude mere instability). That refinement rested on the
+    /// premise "sub-50-kt sustained ⇒ SevereFlag is CAPE-driven," which WX-160 broke: a wind of 50 kt or more is
+    /// now severe whether <em>sustained or gust</em>, and a gust-severe block carries <c>SevereFlag</c> with
+    /// sustained &lt; 50 and possibly no precip — so it matched neither branch and a genuinely severe (gust)
+    /// forecast went unmarked in the subject (while the body banner still showed it). We now trust
+    /// <c>SevereFlag</c> directly. The only case this broadens is CAPE-severe with only <c>Possible</c> precip,
+    /// which WX-156 excluded as instability — acceptable, since CAPE-severe always carries precip (it requires wet
+    /// hours) and a flagged-severe block is severe either way; the safe direction for a hazard signal.
     /// </para>
     /// </summary>
-    private static bool Qualifies(ForecastSnapshotBlock b) =>
-        b.SevereFlag
-        && (b.WindKt.Max >= GfsSnapshotBuilder.SevereWindKt
-            || b.PrecipExpectation >= PrecipExpectation.Likely);
+    private static bool Qualifies(ForecastSnapshotBlock b) => b.SevereFlag;
 }
