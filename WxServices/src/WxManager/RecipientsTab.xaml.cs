@@ -162,6 +162,14 @@ public partial class RecipientsTab : UserControl
     private bool _suppressDirty;
 
     /// <summary>
+    /// Cache of the full Languages registry, loaded async on tab-load and refreshed on
+    /// tab-return (<see cref="RefreshLanguageCacheAsync"/>). The per-recipient dropdown is
+    /// built from this in-memory list (<see cref="LoadLanguageOptions"/>), so a recipient
+    /// load never blocks the UI thread on a DB query.
+    /// </summary>
+    private List<Language> _allLanguages = new();
+
+    /// <summary>
     /// True after New is clicked, until a load/cancel/idle ends the new-record
     /// editing session. Dirty-tracking only counts edits made while a record
     /// context is active (a loaded recipient or New) — without this gate, stray
@@ -222,6 +230,7 @@ public partial class RecipientsTab : UserControl
         {
             await LoadRecipientListAsync();
             await LoadLocalityComboAsync();
+            await RefreshLanguageCacheAsync();
         };
         // Localities (and recipients' memberships) can change on the Localities
         // tab while this tab is hidden — on tab-return, refresh the combo AND
@@ -231,6 +240,7 @@ public partial class RecipientsTab : UserControl
         IsVisibleChanged += async (_, e) =>
         {
             if (e.NewValue is not true) return;
+            await RefreshLanguageCacheAsync();
             await LoadLocalityComboAsync();
             if (_currentRecipientDbId is int dbId)
             {
@@ -1033,7 +1043,7 @@ public partial class RecipientsTab : UserControl
         RecipientIdBox.Text = r.RecipientId;
         NameBox.Text = r.Name;
         EmailBox.Text = r.Email;
-        LoadLanguageOptions(r.LanguageId);   // refresh enabled set; keep an assigned-but-disabled language selectable
+        LoadLanguageOptions(r.LanguageId);   // build dropdown from cache; keep an assigned-but-disabled language selectable
         LanguageBox.SelectedValue = r.LanguageId ?? 0L;   // 0 = "(service default)" sentinel
         TzBox.SelectedItem = null;  // null first: a coerced-away assignment would keep the prior selection
         TzBox.SelectedItem = r.Timezone;
@@ -1055,47 +1065,60 @@ public partial class RecipientsTab : UserControl
     }
 
     /// <summary>
-    /// Populates the Language dropdown with the enabled ("supported") languages
-    /// (WX-166), preceded by a <c>(service default)</c> sentinel (<c>Id 0</c>) that maps
-    /// to a null <see cref="Recipient.LanguageId"/> — the recipient then follows the
-    /// service's configured default language. Only the display name is shown; the ISO
-    /// code is the stored identity.
+    /// Loads the full Languages registry into <see cref="_allLanguages"/> on an async
+    /// query (so the UI thread never blocks on the DB), then rebuilds the dropdown from
+    /// it. Run on tab-load and on tab-return (<c>IsVisibleChanged</c>) so the editor
+    /// reflects enable/disable changes made on the Languages tab without a restart.
+    /// </summary>
+    private async Task RefreshLanguageCacheAsync()
+    {
+        try
+        {
+            await using var ctx = new WeatherDataContext(_dbOptions);
+            _allLanguages = await ctx.Languages.OrderBy(l => l.DisplayName).ToListAsync();
+        }
+        catch (Exception ex)
+        {
+            // The Languages table may not exist yet (pre-migration on a dev DB); keep the
+            // last cache (or empty) so the editor still loads. Surfaced, not silent.
+            Logger.Warn($"RecipientsTab: could not load languages — {ex.Message}");
+        }
+        _suppressDirty = true;
+        try
+        {
+            var keep = LanguageBox.SelectedValue;
+            LoadLanguageOptions(keep as long?);
+            LanguageBox.SelectedValue = keep;   // preserve the current selection across the rebuild
+        }
+        finally { _suppressDirty = false; }
+    }
+
+    /// <summary>
+    /// Builds the Language dropdown (in-memory, no DB) from the <see cref="_allLanguages"/>
+    /// cache: the enabled ("supported") languages, preceded by a <c>(service default)</c>
+    /// sentinel (<c>Id 0</c>) that maps to a null <see cref="Recipient.LanguageId"/> — the
+    /// recipient then follows the service's configured default language.
     /// <para>
-    /// Re-run on every recipient load so the list reflects enable/disable changes made
-    /// on the Languages tab without a restart. When <paramref name="ensureId"/> is the
-    /// id of a language that is no longer enabled but is still assigned to the recipient
-    /// being loaded, that language is appended (marked) so the dropdown can bind to it —
-    /// otherwise the field would show blank and the next Save would silently null a real
-    /// assignment.
+    /// When <paramref name="ensureId"/> is the id of a language that is no longer enabled
+    /// but is still assigned to the recipient being loaded, a marked copy is appended so
+    /// the dropdown can bind to it — otherwise the field would show blank and the next
+    /// Save would silently null a real assignment.
     /// </para>
     /// </summary>
     /// <param name="ensureId">The recipient's current <see cref="Recipient.LanguageId"/>, to keep selectable even if disabled; <see langword="null"/>/0 for none.</param>
     private void LoadLanguageOptions(long? ensureId = null)
     {
         var options = new List<Language> { new() { Id = 0, DisplayName = "(service default)" } };
-        try
-        {
-            using var ctx = new WeatherDataContext(_dbOptions);
-            options.AddRange(ctx.Languages.Where(l => l.IsEnabled).OrderBy(l => l.DisplayName).ToList());
+        options.AddRange(_allLanguages.Where(l => l.IsEnabled));   // already ordered by DisplayName
 
-            // Keep an assigned-but-now-disabled language selectable so an unrelated Save
-            // can't wipe it (WX-166 review). Rebuilt per load, so it isn't offered to
-            // other recipients.
-            if (ensureId is long id && id != 0 && options.All(l => l.Id != id))
-            {
-                var assigned = ctx.Languages.FirstOrDefault(l => l.Id == id);
-                if (assigned is not null)
-                {
-                    assigned.DisplayName = $"{assigned.DisplayName} (not enabled)";
-                    options.Add(assigned);
-                }
-            }
-        }
-        catch (Exception ex)
+        if (ensureId is long id && id != 0 && options.All(l => l.Id != id))
         {
-            // The Languages table may not exist yet (pre-migration on a dev DB); fall
-            // back to the sentinel only so the editor still loads. Surfaced, not silent.
-            Logger.Warn($"RecipientsTab: could not load language options — {ex.Message}");
+            var assigned = _allLanguages.FirstOrDefault(l => l.Id == id);
+            if (assigned is not null)
+            {
+                // A marked COPY — never mutate the shared cache entity.
+                options.Add(new Language { Id = assigned.Id, IsoCode = assigned.IsoCode, DisplayName = $"{assigned.DisplayName} (not enabled)" });
+            }
         }
         LanguageBox.ItemsSource = options;
     }
@@ -1123,7 +1146,7 @@ public partial class RecipientsTab : UserControl
         RecipientIdBox.Clear();
         NameBox.Clear();
         EmailBox.Clear();
-        LoadLanguageOptions();   // refresh enabled set (reflects Languages-tab changes without a restart)
+        LoadLanguageOptions();   // build dropdown from cache (refreshed on tab-load/return)
         LanguageBox.SelectedValue = 0L;   // new recipient follows the service default language
         TzBox.SelectedItem = App.DefaultTimezone;
         ScheduledHoursBox.Text = App.DefaultScheduledSendHour.ToString();

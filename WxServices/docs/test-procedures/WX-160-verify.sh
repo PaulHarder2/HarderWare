@@ -100,7 +100,7 @@ echo
 echo    " WINDKT VALIDATOR (new fail-closed guard)"
 printf  '   %-46s %s\n' 'Folded-gust rejections (retry-w/-feedback):' "$windkt"
 echo
-echo    " BACKGROUND HEALTH (context only -- does NOT drive the verdict; the verdict keys on taf-fresh)"
+echo    " BACKGROUND HEALTH (context only -- does NOT drive the verdict; the verdict keys on taf-fresh + WX-160 component crashes)"
 printf  '   %-46s %s\n' 'ERROR lines (before -> after):'            "$errors_before -> $errors   (new: $new_errors)"
 printf  '   %-46s %s\n' 'Reconciliation degraded (before -> after):' "$degraded_before -> $degraded   (new: $new_degraded)"
 [ "$errors"   -gt 0 ] && { echo "   --- ERROR lines in window (may include pre-existing background; see before->after) ---"; printf '%s\n' "$POST" | grep ' ERROR ' | sed 's/^/     /'; }

@@ -226,8 +226,8 @@ namespace MetarParser.Data.Migrations
 
                     b.Property<string>("IsoCode")
                         .IsRequired()
-                        .HasMaxLength(10)
-                        .HasColumnType("nvarchar(10)");
+                        .HasMaxLength(2)
+                        .HasColumnType("nvarchar(2)");
 
                     b.HasKey("Id");
 

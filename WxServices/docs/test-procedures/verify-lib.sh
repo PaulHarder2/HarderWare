@@ -25,7 +25,8 @@
 #   vl_setup_window      -> sets POST LAST_TS pre_start elapsed hh mm min_window_secs.
 #                           Emits WAIT + exits 0 when no log lines exist past SINCE.
 # Then the caller computes its metrics (win/cnt/vl_health_delta), prints sections
-# (vl_header first), decides its verdict, and ends with vl_footer TOKEN SUMMARY.
+# (vl_header first), and ends with vl_verdict REGRESSION_COUNT EXERCISED, which makes
+# the PASS/FAIL/WAIT decision and prints the verdict section.
 #
 # Shell: bash (WSL). Log timestamps are UTC (the HarderWare PC runs on UTC). The
 # caller owns 'set -uo pipefail'; this library relies on it (an unset required

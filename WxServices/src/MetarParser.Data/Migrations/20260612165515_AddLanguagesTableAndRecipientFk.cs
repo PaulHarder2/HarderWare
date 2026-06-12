@@ -17,7 +17,7 @@ namespace MetarParser.Data.Migrations
                 {
                     Id = table.Column<long>(type: "bigint", nullable: false)
                         .Annotation("SqlServer:Identity", "1, 1"),
-                    IsoCode = table.Column<string>(type: "nvarchar(10)", maxLength: 10, nullable: false),
+                    IsoCode = table.Column<string>(type: "nvarchar(2)", maxLength: 2, nullable: false),
                     DisplayName = table.Column<string>(type: "nvarchar(100)", maxLength: 100, nullable: false),
                     IsEnabled = table.Column<bool>(type: "bit", nullable: false)
                 },

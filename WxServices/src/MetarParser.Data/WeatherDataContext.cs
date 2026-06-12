@@ -339,7 +339,7 @@ public sealed class WeatherDataContext : DbContext
             e.ToTable("Languages");
             e.HasKey(x => x.Id);
 
-            e.Property(x => x.IsoCode).HasMaxLength(10).IsRequired();
+            e.Property(x => x.IsoCode).HasMaxLength(2).IsRequired();   // ISO 639-1 is exactly two letters
             e.Property(x => x.DisplayName).HasMaxLength(100).IsRequired();
             e.Property(x => x.IsEnabled).IsRequired();
 
