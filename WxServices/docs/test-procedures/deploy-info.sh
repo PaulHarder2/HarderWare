@@ -43,8 +43,10 @@
 # to the deploy that shipped its change; a same-version redeploy moves to the
 # freshest matching line (same code). Exit 4 + no output means "not deployed yet".
 #
-# It uses the latest recorded [Deploy] line per component (parity with the inline
-# lookup it replaces); it does not currently filter on the trailing OK.
+# The default (no --version) path uses the latest recorded [Deploy] line per
+# component without filtering on the trailing OK (parity with the inline lookup it
+# replaces). The --version path additionally requires the full well-formed shape
+# (... <commit> OK), so it pins to a SUCCESSFUL deploy with a real commit.
 #
 # Shell: bash (WSL on the HarderWare PC; any bash with read access to the log
 # works). Lives beside the verify scripts it serves (docs/test-procedures/)
@@ -101,13 +103,17 @@ matched_line() {  # $1 = all-flag (1=any component); $2 = space-joined component
   awk -v want="$VERSION" -v allflag="$1" -v comps="$2" '
     BEGIN { n = split(comps, a, " "); for (i = 1; i <= n; i++) set[a[i]] = 1 }
     /\[Deploy\]/ {
-      comp = ""; ver = ""; cmt = ""
-      for (i = 1; i <= NF; i++) if ($i == "[Deploy]") { comp = $(i+1); ver = $(i+2); cmt = $(i+3); break }
+      comp = ""; ver = ""; cmt = ""; status = ""
+      for (i = 1; i <= NF; i++) if ($i == "[Deploy]") { comp = $(i+1); ver = $(i+2); cmt = $(i+3); status = $(i+4); break }
       if (comp == "") next
-      # cmt != "" requires a well-formed line: a truncated record (version but no
-      # commit field) must not win and emit an empty commit -- skip it so an
-      # earlier complete line stands, or nothing matches (caller -> WAIT).
-      if (ver == want && cmt != "" && (allflag == "1" || (comp in set))) {
+      sub(/\r$/, "", status)   # deploy-history.log is PowerShell-written (CRLF): the
+                               # last field carries a trailing CR -- strip it before compare
+      # Require the full well-formed shape "[Deploy] <comp> <ver> <commit> OK": the
+      # trailing "OK" guarantees <commit> is a real commit (not a short line where
+      # "OK" lands in $(i+3) and masquerades as one) and limits the boundary to a
+      # SUCCESSFUL deploy. A short or failed line is skipped, so an earlier complete
+      # line stands, or nothing matches (caller -> WAIT).
+      if (ver == want && status == "OK" && (allflag == "1" || (comp in set))) {
         ts = substr($0, 1, 19)
         if (ts > maxts) { maxts = ts; maxcmt = cmt }
       }
