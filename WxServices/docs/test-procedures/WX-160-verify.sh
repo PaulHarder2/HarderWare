@@ -13,26 +13,35 @@
 #   - the gust-tick micro-update sends to stop
 #   - no new ERRORs; occasional windKt-validator corrections are normal
 #
-# Usage:  WX-160-verify.sh [--since 'YYYY-MM-DD HH:MM:SS'] [--log PATH] [--deploy-log PATH]
+# Usage:  WX-160-verify.sh [--since 'YYYY-MM-DD HH:MM:SS'] [--log PATH] [--deploy-log PATH] [-h]
+#         (no positional args; no arguments at all = the normal version-pinned run)
 # Shell:  bash (WSL).  Log timestamps are UTC (the HarderWare PC runs on UTC).
 # Lives in the repo beside its procedure (docs/test-procedures/WX-160.md): a
 # change-specific verification rides the same PR as the code it checks, so it is
 # reviewed and versioned with that code (WORKFLOW.md §13). Generic cross-cutting
 # workflow tools (check-ci.sh, check-cr.sh) stay in Code/tools.
 #
-# The deploy boundary defaults to the LATEST WxReportSvc entry in
-# deploy-history.log -- the authoritative deploy record (component / version /
-# commit / OK) -- so there's no timestamp to hand-type (and mis-type), and the
-# run reports exactly which version+commit it is verifying. Pass --since only to
-# override. WX-160 ships entirely in WxReportSvc, so that one component's deploy
-# IS the boundary; a change spanning several services would key off the LATEST of
-# their deploy-history lines (a batch deploys components at staggered times).
+# The deploy boundary is version-pinned: the script embeds the release VERSION it
+# tests (knowable at authoring -- the version bump ships with the change) and its
+# COMPONENTS, then asks the shared deploy-info.sh helper for the most recent
+# deploy-history.log entry matching that version among those components. It gets
+# back the boundary timestamp AND the deployed commit (for the identity check).
+# Pinning on VERSION means a later release at another version doesn't move our
+# boundary -- WX-160's window stays anchored to the deploy that shipped it, even
+# if WxReportSvc is redeployed since. Pass --since to override manually; if the
+# VERSION isn't deployed yet, the verdict is WAIT.
 
 set -uo pipefail
 
 LOG='/mnt/c/HarderWare/Logs/wxreport-svc.log'
 DEPLOY_LOG='/mnt/c/HarderWare/Logs/deploy-history.log'
-COMPONENT='WxReportSvc'                            # the service WX-160 ships in
+TICKET='WX-160'                                    # this script's ticket (self-identification)
+VERSION='1.26.0'                                   # the release VERSION under test -- the pin. Knowable at
+                                                   # authoring (the bump ships with the change), so the
+                                                   # script is review-complete; later versions won't match.
+COMPONENTS=('WxReportSvc')                          # the service(s) WX-160 ships in
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # this script's directory
+DEPLOY_TOOL="$HERE/deploy-info.sh"                  # shared deploy-boundary helper, beside us
 MIN_WINDOW_HOURS=24                                # a "full active day" of cycles must accrue before
                                                    # PASS is a valid call; below this the verdict is
                                                    # WAIT unless a conclusive FAIL fires (a quiet few
@@ -55,19 +64,29 @@ while [ $# -gt 0 ]; do
 done
 [ -r "$LOG" ] || { echo "cannot read service log: $LOG" >&2; exit 3; }
 
-# Resolve the deploy boundary: --since wins; else the latest WxReportSvc line in
-# deploy-history.log (also captures the deployed version+commit for the report).
+# Resolve the deploy boundary + identity. --since wins (manual override, no
+# identity); else ask the shared helper for the most recent deploy of our VERSION
+# among our COMPONENTS, which returns "<timestamp>\t<commit>". A miss (helper
+# exit 4) means VERSION isn't in deploy-history.log yet -> not deployed -> WAIT.
 DEPLOY_INFO=''
+COMMIT=''
 if [ -n "$SINCE_OVERRIDE" ]; then
   SINCE="${SINCE_OVERRIDE:0:19}"
   BOUNDARY_SRC='--since override'
+elif out="$(bash "$DEPLOY_TOOL" --version "$VERSION" "${COMPONENTS[@]}" --deploy-log "$DEPLOY_LOG")"; then
+  IFS=$'\t' read -r SINCE COMMIT <<<"$out"
+  [ -n "$COMMIT" ] || { echo "deploy-info.sh returned no commit for version $VERSION (malformed deploy line?)" >&2; exit 3; }
+  DEPLOY_INFO="$VERSION (commit $COMMIT)"
+  BOUNDARY_SRC="deploy-history.log (version $VERSION)"
 else
-  [ -r "$DEPLOY_LOG" ] || { echo "cannot read deploy log: $DEPLOY_LOG (pass --since instead)" >&2; exit 3; }
-  dline="$(grep -E "\[Deploy\] +${COMPONENT} " "$DEPLOY_LOG" | tail -1)"
-  [ -n "$dline" ] || { echo "no ${COMPONENT} deploy found in $DEPLOY_LOG (pass --since instead)" >&2; exit 3; }
-  SINCE="${dline:0:19}"
-  DEPLOY_INFO="$(printf '%s' "$dline" | sed -E 's/.*\[Deploy\] +[^ ]+ +([^ ]+) +([^ ]+) +.*/\1 (commit \2)/')"
-  BOUNDARY_SRC="deploy-history.log (latest ${COMPONENT})"
+  rc=$?
+  if [ "$rc" -eq 4 ]; then
+    echo " VERDICT"
+    echo "   Version $VERSION is not in $DEPLOY_LOG yet -- $TICKET not deployed (or the deploy failed)."
+    echo "   ====>  WAIT   version $VERSION not deployed yet; deploy, then re-run."
+    exit 0
+  fi
+  exit "$rc"   # 2 usage / 3 environment from the helper -- propagate
 fi
 
 # SINCE must be a full 'YYYY-MM-DD HH:MM:SS'. The win() lexical compare and the
@@ -124,11 +143,21 @@ degraded=$(   printf '%s\n' "$POST" | cnt 'reconciliation degraded|could not pro
 
 taf_fresh_before=$(win "$pre_start" "$SINCE" | cnt 'fired: taf-fresh')
 
+# Health is scoped to NEW problems: count ERROR / degraded lines over the equal-
+# length pre-deploy window too, and fail only on an INCREASE. A steady background
+# of unrelated reconciler degradations (e.g. WX-165 time-of-day contradictions)
+# appears in both windows and cancels out, so it no longer FAILs WX-160's gate
+# test; only errors this deploy actually introduced push the after-count up.
+errors_before=$(  win "$pre_start" "$SINCE" | cnt ' ERROR ')
+degraded_before=$(win "$pre_start" "$SINCE" | cnt 'reconciliation degraded|could not produce a self-consistent')
+new_errors=$((   errors   - errors_before ));   [ "$new_errors"   -gt 0 ] || new_errors=0
+new_degraded=$(( degraded - degraded_before )); [ "$new_degraded" -gt 0 ] || new_degraded=0
+
 echo    "============================================================"
 echo    " WX-160 post-deploy verification (TAF-aware significance gate)"
 echo    "============================================================"
 echo    " Deploy boundary : $SINCE UTC   ($BOUNDARY_SRC)"
-[ -n "$DEPLOY_INFO" ] && echo " Deployed        : $COMPONENT $DEPLOY_INFO"
+[ -n "$DEPLOY_INFO" ] && echo " Deployed        : ${COMPONENTS[*]} $DEPLOY_INFO"
 echo    " Window analysed : $SINCE  ->  $LAST_TS   (${hh}h ${mm}m of cycles)"
 echo    " Service log     : $LOG"
 echo
@@ -151,10 +180,10 @@ echo
 echo    " WINDKT VALIDATOR (new fail-closed guard)"
 printf  '   %-46s %s\n' 'Folded-gust rejections (retry-w/-feedback):' "$windkt"
 echo
-echo    " HEALTH"
-printf  '   %-46s %s\n' 'ERROR lines since deploy:'                 "$errors"
-printf  '   %-46s %s\n' 'Reconciliation degraded/inconsistent:'     "$degraded"
-[ "$errors"   -gt 0 ] && { echo "   --- ERROR lines ---"; printf '%s\n' "$POST" | grep ' ERROR ' | sed 's/^/     /'; }
+echo    " HEALTH (failing signal = NEW vs the equal-length pre-deploy window)"
+printf  '   %-46s %s\n' 'ERROR lines (before -> after):'            "$errors_before -> $errors   (new: $new_errors)"
+printf  '   %-46s %s\n' 'Reconciliation degraded (before -> after):' "$degraded_before -> $degraded   (new: $new_degraded)"
+[ "$errors"   -gt 0 ] && { echo "   --- ERROR lines in window (may include pre-existing background; see before->after) ---"; printf '%s\n' "$POST" | grep ' ERROR ' | sed 's/^/     /'; }
 [ "$passed"   -gt 0 ] && { echo; echo "   gate-passed 'fired:' reasons (should be REAL criteria, never taf-fresh):";
                            printf '%s\n' "$POST" | grep -oE 'fired: .*' | sort | uniq -c | sort -rn | sed 's/^/     /'; }
 [ "$suppressed" -gt 0 ] && { echo; echo "   sample suppressions:";
@@ -166,18 +195,23 @@ echo    " VERDICT"
 # a conclusive FAIL is reported at ANY elapsed time, but PASS is withheld until a
 # full active day of cycles has accrued (short of that the verdict is WAIT, even
 # when the gate already looks healthy -- a quiet few hours proves nothing).
-#   FAIL : taf-fresh still firing (old binary), or new ERROR / reconciliation-
-#          degraded lines since deploy. Conclusive -> fail-closed at any horizon.
+#   FAIL : taf-fresh still firing (old binary), or NEW ERROR / reconciliation-
+#          degraded lines vs the equal-length pre-deploy window. Conclusive ->
+#          fail-closed at any horizon. (Background errors that also occur BEFORE
+#          the deploy cancel in the before/after comparison and do NOT fail --
+#          this deploy's verdict is about what IT introduced, not pre-existing
+#          noise like the WX-165 time-of-day degradations.)
 #   WAIT : < MIN_WINDOW_HOURS of cycles since deploy (not yet a valid test), OR no
 #          TAF/GFS-driven cycle has reached the gate yet (nothing to judge).
 #   PASS : a full active day in, taf-fresh retired (0), the gate is making real
-#          decisions, health clean.
+#          decisions, no NEW errors.
 if [ "$taf_fresh" -gt 0 ]; then
   verdict='FAIL'
   echo  "   'taf-fresh' still firing -> the old binary may still be running. Confirm the 1.26.0 deploy/restart."
-elif [ "$errors" -gt 0 ] || [ "$degraded" -gt 0 ]; then
+elif [ "$new_errors" -gt 0 ] || [ "$new_degraded" -gt 0 ]; then
   verdict='FAIL'
-  echo  "   New ERROR / reconciliation-degraded lines since deploy (see HEALTH above) -- investigate before passing."
+  echo  "   $new_errors new ERROR / $new_degraded new degraded line(s) since deploy, above the pre-deploy"
+  echo  "   baseline (see HEALTH above) -- investigate before passing."
 elif [ "$elapsed" -lt "$min_window_secs" ]; then
   verdict='WAIT'
   echo  "   Only ${hh}h ${mm}m of cycles since deploy -- a valid test needs a full active day"
