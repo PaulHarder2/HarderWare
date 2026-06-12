@@ -33,10 +33,20 @@ public class Recipient
     public string Name { get; set; } = "";
 
     /// <summary>
-    /// Language for generated reports (e.g. <c>"English"</c>, <c>"Spanish"</c>).
-    /// <see langword="null"/> falls back to the service default.
+    /// Foreign key to the <see cref="Entities.Language"/> used for generated reports,
+    /// or <see langword="null"/> to fall back to the service default language. The
+    /// WxManager recipient editor constrains this to enabled ("supported") languages
+    /// (WX-166); it replaced a free-text language name.
     /// </summary>
-    public string? Language { get; set; }
+    public long? LanguageId { get; set; }
+
+    /// <summary>
+    /// Navigation to the recipient's language; <see langword="null"/> when the
+    /// recipient uses the service default. Carries
+    /// <see cref="Entities.Language.IsoCode"/> (which drives the renderer) and
+    /// <see cref="Entities.Language.DisplayName"/>.
+    /// </summary>
+    public Language? Language { get; set; }
 
     /// <summary>
     /// IANA timezone name (e.g. <c>"America/Chicago"</c>). Defaults to UTC.

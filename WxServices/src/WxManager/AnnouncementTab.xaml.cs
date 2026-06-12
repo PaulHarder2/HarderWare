@@ -97,11 +97,13 @@ public partial class AnnouncementTab : UserControl
 
         GlobalSettings? gs;
         List<Recipient> recipients;
+        Dictionary<long, string> langNameById;
         try
         {
             using var db = new WeatherDataContext(App.DbOptions);
             gs = await db.GlobalSettings.FindAsync(1);
             recipients = await db.Recipients.OrderBy(r => r.Name).ToListAsync();
+            langNameById = await db.Languages.ToDictionaryAsync(l => l.Id, l => l.DisplayName);
         }
         catch (Exception ex)
         {
@@ -153,8 +155,10 @@ public partial class AnnouncementTab : UserControl
         var emailer = new SmtpSender(smtpConfig, "WxAnnounce");
         var defaultLang = App.DefaultLanguage;
 
+        // Resolve each recipient's language to its display name via the Languages
+        // registry (WX-166); the FK nav isn't loaded, so resolve from the id map.
         var languageGroups = recipients.GroupBy(
-            r => r.Language ?? defaultLang,
+            r => r.LanguageId is long lid && langNameById.TryGetValue(lid, out var name) ? name : defaultLang,
             StringComparer.OrdinalIgnoreCase);
 
         Logger.Info($"Announcement send started: {recipients.Count} recipient(s), {languageGroups.Count()} language group(s).");

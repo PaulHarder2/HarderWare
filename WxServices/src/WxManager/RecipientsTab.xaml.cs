@@ -189,6 +189,9 @@ public partial class RecipientsTab : UserControl
         WindUnitBox.ItemsSource = new[] { "mph", "kph" };
         PrecipUnitBox.ItemsSource = new[] { "in", "mm" };
         TzBox.ItemsSource = IanaTimeZones.All();
+        // Language options are loaded per-pane (ClearRightPane below for new, and
+        // LoadRecipientFieldsCore for an existing recipient) so they always reflect the
+        // current enabled set and keep an assigned-but-disabled language selectable.
 
         // Capture the mirrored fields' XAML tooltips once, so the locality lock
         // can swap in its hint and restore the originals reliably.
@@ -718,7 +721,7 @@ public partial class RecipientsTab : UserControl
             r.RecipientId = recipientId;
             r.Name = name;
             r.Email = email;
-            r.Language = NullIfEmpty(LanguageBox.Text);
+            r.LanguageId = LanguageBox.SelectedValue is long lid && lid != 0 ? lid : null;
             r.Timezone = TzBox.Text.Trim().Length > 0 ? TzBox.Text.Trim() : "UTC";
             r.ScheduledSendHours = NullIfEmpty(ScheduledHoursBox.Text);
             r.Address = NullIfEmpty(AddressBox.Text);
@@ -1030,7 +1033,8 @@ public partial class RecipientsTab : UserControl
         RecipientIdBox.Text = r.RecipientId;
         NameBox.Text = r.Name;
         EmailBox.Text = r.Email;
-        LanguageBox.Text = r.Language ?? "";
+        LoadLanguageOptions(r.LanguageId);   // refresh enabled set; keep an assigned-but-disabled language selectable
+        LanguageBox.SelectedValue = r.LanguageId ?? 0L;   // 0 = "(service default)" sentinel
         TzBox.SelectedItem = null;  // null first: a coerced-away assignment would keep the prior selection
         TzBox.SelectedItem = r.Timezone;
         if (TzBox.SelectedItem is null) TzBox.Text = r.Timezone;  // preserve unknown values
@@ -1048,6 +1052,52 @@ public partial class RecipientsTab : UserControl
         PressureUnitBox.SelectedItem = r.PressureUnit;
         WindUnitBox.SelectedItem = r.WindSpeedUnit;
         PrecipUnitBox.SelectedItem = r.PrecipUnit;
+    }
+
+    /// <summary>
+    /// Populates the Language dropdown with the enabled ("supported") languages
+    /// (WX-166), preceded by a <c>(service default)</c> sentinel (<c>Id 0</c>) that maps
+    /// to a null <see cref="Recipient.LanguageId"/> — the recipient then follows the
+    /// service's configured default language. Only the display name is shown; the ISO
+    /// code is the stored identity.
+    /// <para>
+    /// Re-run on every recipient load so the list reflects enable/disable changes made
+    /// on the Languages tab without a restart. When <paramref name="ensureId"/> is the
+    /// id of a language that is no longer enabled but is still assigned to the recipient
+    /// being loaded, that language is appended (marked) so the dropdown can bind to it —
+    /// otherwise the field would show blank and the next Save would silently null a real
+    /// assignment.
+    /// </para>
+    /// </summary>
+    /// <param name="ensureId">The recipient's current <see cref="Recipient.LanguageId"/>, to keep selectable even if disabled; <see langword="null"/>/0 for none.</param>
+    private void LoadLanguageOptions(long? ensureId = null)
+    {
+        var options = new List<Language> { new() { Id = 0, DisplayName = "(service default)" } };
+        try
+        {
+            using var ctx = new WeatherDataContext(_dbOptions);
+            options.AddRange(ctx.Languages.Where(l => l.IsEnabled).OrderBy(l => l.DisplayName).ToList());
+
+            // Keep an assigned-but-now-disabled language selectable so an unrelated Save
+            // can't wipe it (WX-166 review). Rebuilt per load, so it isn't offered to
+            // other recipients.
+            if (ensureId is long id && id != 0 && options.All(l => l.Id != id))
+            {
+                var assigned = ctx.Languages.FirstOrDefault(l => l.Id == id);
+                if (assigned is not null)
+                {
+                    assigned.DisplayName = $"{assigned.DisplayName} (not enabled)";
+                    options.Add(assigned);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            // The Languages table may not exist yet (pre-migration on a dev DB); fall
+            // back to the sentinel only so the editor still loads. Surfaced, not silent.
+            Logger.Warn($"RecipientsTab: could not load language options — {ex.Message}");
+        }
+        LanguageBox.ItemsSource = options;
     }
 
     /// <summary>
@@ -1073,7 +1123,8 @@ public partial class RecipientsTab : UserControl
         RecipientIdBox.Clear();
         NameBox.Clear();
         EmailBox.Clear();
-        LanguageBox.Text = App.DefaultLanguage;
+        LoadLanguageOptions();   // refresh enabled set (reflects Languages-tab changes without a restart)
+        LanguageBox.SelectedValue = 0L;   // new recipient follows the service default language
         TzBox.SelectedItem = App.DefaultTimezone;
         ScheduledHoursBox.Text = App.DefaultScheduledSendHour.ToString();
         AddressBox.Clear();
@@ -1122,7 +1173,7 @@ public partial class RecipientsTab : UserControl
         RecipientIdBox.Clear();
         NameBox.Clear();
         EmailBox.Clear();
-        LanguageBox.Clear();
+        LanguageBox.SelectedIndex = -1;
         TzBox.SelectedItem = null;
         TzBox.Text = "";
         ScheduledHoursBox.Clear();

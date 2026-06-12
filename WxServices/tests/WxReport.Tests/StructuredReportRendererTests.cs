@@ -24,7 +24,6 @@ public class StructuredReportRendererTests
         RecipientId = "t-en",
         Name = "Test",
         Email = "t@example.com",
-        Language = "English",
         TempUnit = "F",
         PressureUnit = "inHg",
         WindSpeedUnit = "mph",
@@ -36,7 +35,6 @@ public class StructuredReportRendererTests
         RecipientId = "t-m",
         Name = "Test",
         Email = "t@example.com",
-        Language = "English",
         TempUnit = "C",
         PressureUnit = "kPa",
         WindSpeedUnit = "kph",
@@ -48,7 +46,6 @@ public class StructuredReportRendererTests
         RecipientId = "t-es",
         Name = "Prueba",
         Email = "t@example.com",
-        Language = "Spanish",
         TempUnit = "C",
         PressureUnit = "kPa",
         WindSpeedUnit = "kph",
@@ -136,8 +133,8 @@ public class StructuredReportRendererTests
     [Fact]
     public void SameInput_ImperialVsMetric_DiffersOnlyByUnits()
     {
-        var en = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), Utc, ReportKind.Scheduled);
-        var me = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Metric(), Utc, ReportKind.Scheduled);
+        var en = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled);
+        var me = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Metric(), "en", Utc, ReportKind.Scheduled);
 
         // Imperial conversions from canonical °C / kt / hPa / mm.
         Assert.Contains("92°F", en);          // 33.5°C
@@ -159,14 +156,14 @@ public class StructuredReportRendererTests
     [Fact]
     public void TimeToken_RendersInLocalityTimeAndLocale()
     {
-        var en = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), Utc, ReportKind.Scheduled);
+        var en = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled);
         Assert.Contains("9:00 PM", en);  // 21:00Z in UTC locality
     }
 
     [Fact]
     public void ExtendedForecast_OneRowPerLocalDay_WithDailyHiLo()
     {
-        var en = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), Utc, ReportKind.Scheduled);
+        var en = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled);
 
         // Two local days → two High/Low pairs.
         Assert.Equal(2, CountOccurrences(en, "High:"));
@@ -181,7 +178,7 @@ public class StructuredReportRendererTests
     [Fact]
     public void Conditions_SplitDayIntoEpisodes_NotCollapsedToPeak()
     {
-        var en = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), Utc, ReportKind.Scheduled);
+        var en = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled);
         // WX-148 Class 2: Day 1 has two episodes — a thunderstorm at 12Z (afternoon)
         // then rain at 18Z (evening) — and BOTH must surface as labeled lines rather
         // than collapse to the single highest-expectation one.
@@ -197,7 +194,7 @@ public class StructuredReportRendererTests
     {
         // A severe day breaks the labeled-line rhythm into a single sentence: the
         // severe clause leads with its timing, the secondary episode joined by "then".
-        var en = StructuredReportRenderer.Render(Body(), SevereForecast(), Observation(), Imperial(), Utc, ReportKind.Scheduled);
+        var en = StructuredReportRenderer.Render(Body(), SevereForecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled);
         Assert.Contains("Severe storms likely in the afternoon, then rain in the evening", en);
     }
 
@@ -207,7 +204,7 @@ public class StructuredReportRendererTests
         // Regression guard: a severe block with no precipitation forms no episode, but
         // must not collapse to a benign sky phrase — the day-level severe path leads
         // with a generic hazard line timed by the severe block.
-        var en = StructuredReportRenderer.Render(Body(), SevereNoPrecipForecast(), Observation(), Imperial(), Utc, ReportKind.Scheduled);
+        var en = StructuredReportRenderer.Render(Body(), SevereNoPrecipForecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled);
         // Generic "Severe weather" — not storm-specific — because the severe block carries no precip (a wind event).
         Assert.Contains("Severe weather likely in the afternoon", en);
     }
@@ -217,7 +214,7 @@ public class StructuredReportRendererTests
     {
         // A single rain episode spanning the 06Z and 12Z blocks crosses the
         // morning/afternoon boundary, so it is timed as a range, not one bucket.
-        var en = StructuredReportRenderer.Render(Body(), SpanningForecast(), Observation(), Imperial(), Utc, ReportKind.Scheduled);
+        var en = StructuredReportRenderer.Render(Body(), SpanningForecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled);
         Assert.Contains("Morning–afternoon — rain likely", en);
     }
 
@@ -228,7 +225,7 @@ public class StructuredReportRendererTests
         // banner + conditions + grid, with NO What's-changed band and NO summary
         // (a summary we cannot deliver is left out, not apologized for).
         var nowUtc = new DateTime(2026, 6, 8, 12, 0, 0, DateTimeKind.Utc);  // within the 12–18Z severe block
-        var en = StructuredReportRenderer.RenderDegraded(SevereForecast(), Observation(), Imperial(), Utc, nowUtc);
+        var en = StructuredReportRenderer.RenderDegraded(SevereForecast(), Observation(), Imperial(), "en", Utc, nowUtc);
         // Full deterministic banner (SevereForecast is convective → "Severe storms"); weekday
         // computed so the assertion can't drift, and "in your forecast" is banner-specific
         // (the grid cell says "Severe storms likely …", never "in your forecast").
@@ -258,14 +255,14 @@ public class StructuredReportRendererTests
             ],
             TemperatureCelsius = 20.0,
         };
-        var en = StructuredReportRenderer.Render(Body(), Forecast(), snap, Imperial(), Utc, ReportKind.Scheduled);
+        var en = StructuredReportRenderer.Render(Body(), Forecast(), snap, Imperial(), "en", Utc, ReportKind.Scheduled);
         Assert.Contains("Low mostly cloudy", en);  // Broken@4000 ft → Low prefix; NSC ignored
     }
 
     [Fact]
     public void CurrentConditions_TableFromObservation()
     {
-        var en = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), Utc, ReportKind.Scheduled);
+        var en = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled);
         Assert.Contains("Current Conditions", en);
         Assert.Contains("Low overcast", en);          // overcast at 3000 ft
         Assert.Contains("S at 14 mph, gusting 25 mph", en);  // 180°, 12 kt→14 mph, gust 22 kt→25 mph
@@ -277,7 +274,7 @@ public class StructuredReportRendererTests
     [Fact]
     public void Spanish_UsesEsNarrativeAndLabels()
     {
-        var es = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Spanish(), Utc, ReportKind.Scheduled);
+        var es = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Spanish(), "es", Utc, ReportKind.Scheduled);
         Assert.Contains("Condiciones actuales", es);
         Assert.Contains("En resumen:", es);
         Assert.Contains("Pronóstico para Spring", es);
@@ -288,13 +285,13 @@ public class StructuredReportRendererTests
     [Fact]
     public void ChangeBand_RendersOnlyWhenNarrativeCarriesOne()
     {
-        var scheduled = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), Utc, ReportKind.Scheduled);
+        var scheduled = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled);
         Assert.DoesNotContain("What's changed:", scheduled);
         Assert.DoesNotContain("Unscheduled Update", scheduled);
         Assert.Contains("Scheduled Report", scheduled);   // the type label is always shown (WX-154)
 
         var unscheduled = StructuredReportRenderer.Render(
-            Body("{ch1}Thunderstorms now expected this afternoon."), Forecast(), Observation(), Imperial(), Utc, ReportKind.Unscheduled);
+            Body("{ch1}Thunderstorms now expected this afternoon."), Forecast(), Observation(), Imperial(), "en", Utc, ReportKind.Unscheduled);
         Assert.Contains("What's changed:", unscheduled);
         Assert.Contains("Thunderstorms now expected this afternoon.", unscheduled);
         Assert.Contains("Unscheduled Update", unscheduled);
@@ -309,7 +306,7 @@ public class StructuredReportRendererTests
             ObservationUnavailableNote = "No recent observation from any nearby station.",
             LocalityName = "Spring",
         };
-        var en = StructuredReportRenderer.Render(Body(), Forecast(), snap, Imperial(), Utc, ReportKind.Scheduled);
+        var en = StructuredReportRenderer.Render(Body(), Forecast(), snap, Imperial(), "en", Utc, ReportKind.Scheduled);
 
         Assert.Contains("No recent observation from any nearby station.", en);
         Assert.DoesNotContain("Relative Humidity", en);  // CC table omitted
@@ -319,7 +316,7 @@ public class StructuredReportRendererTests
     [Fact]
     public void RenderWelcome_IsWelcomeOnly_NamesLocalityAndScheduleTimes_NoWeather()
     {
-        var welcome = StructuredReportRenderer.RenderWelcome(Imperial(), "Spring", Utc, new[] { 7, 12 });
+        var welcome = StructuredReportRenderer.RenderWelcome(Imperial(), "en", "Spring", Utc, new[] { 7, 12 });
 
         Assert.Contains("Welcome to WxReport!", welcome);
         Assert.Contains("Spring", welcome);             // locality named
@@ -333,7 +330,7 @@ public class StructuredReportRendererTests
     [Fact]
     public void RenderWelcome_LocalizesToSpanish()
     {
-        var welcome = StructuredReportRenderer.RenderWelcome(Spanish(), "Spring", Utc, new[] { 7 });
+        var welcome = StructuredReportRenderer.RenderWelcome(Spanish(), "es", "Spring", Utc, new[] { 7 });
         Assert.Contains("¡Bienvenido a WxReport!", welcome);
         Assert.Contains("Spring", welcome);
         Assert.DoesNotContain("Welcome to WxReport!", welcome);
@@ -342,7 +339,7 @@ public class StructuredReportRendererTests
     [Fact]
     public void WelcomePlainText_MatchesVocabularyAndNamesLocality()
     {
-        var plain = StructuredReportRenderer.WelcomePlainText(Imperial(), "Spring", new[] { 7 });
+        var plain = StructuredReportRenderer.WelcomePlainText(Imperial(), "en", "Spring", new[] { 7 });
         Assert.Contains("Welcome to WxReport!", plain);
         Assert.Contains("Spring", plain);
         Assert.DoesNotContain("<", plain);  // plain text, no markup
@@ -367,12 +364,12 @@ public class StructuredReportRendererTests
             TemperatureCelsius = 31.0,
         };
         var en = StructuredReportRenderer.Render(
-            Body(), Forecast(), snap, Imperial(), Utc, ReportKind.Scheduled);
+            Body(), Forecast(), snap, Imperial(), "en", Utc, ReportKind.Scheduled);
         Assert.Contains("at Houston, George Bush Intercontinental Airport", en);
 
         // No subtitle when the station has no distinct municipality/name (default Observation()).
         var plain = StructuredReportRenderer.Render(
-            Body(), Forecast(), Observation(), Imperial(), Utc, ReportKind.Scheduled);
+            Body(), Forecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled);
         Assert.DoesNotContain(" at ", plain.Replace("S at 14 mph", "", StringComparison.Ordinal));
     }
 
