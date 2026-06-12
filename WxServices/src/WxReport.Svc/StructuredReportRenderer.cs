@@ -5,7 +5,6 @@ using MetarParser.Data.Entities;
 
 using WxInterp;
 
-using WxServices.Common;
 using WxServices.Logging;
 
 namespace WxReport.Svc;
@@ -57,14 +56,15 @@ public static class StructuredReportRenderer
         ForecastSnapshotBody finalSnapshot,
         WeatherSnapshot observation,
         Recipient recipient,
+        string langCode,
         TimeZoneInfo localityTz,
         ReportKind kind)
     {
-        // The narrative map and ReportVocabulary key on ISO 639-1 (en, es).
-        // ToIetfTag already collapses to the two-letter code, but normalize
-        // defensively so a future regional tag (e.g. "es-419") can't silently
-        // miss the narrative and fall back.
-        var lang = LanguageHelper.ToIetfTag(recipient.Language).Split('-')[0].ToLowerInvariant();
+        // langCode is the recipient's resolved ISO 639-1 code (en, es), resolved by
+        // the caller from the Languages registry (WX-166). The narrative map and
+        // ReportVocabulary key on it; normalize defensively so a future regional tag
+        // (e.g. "es-419") can't silently miss the narrative and fall back.
+        var lang = NormalizeLang(langCode);
         var sections = SelectNarrative(report, lang);
         var vocab = ReportVocabulary.ForLanguage(lang);
 
@@ -103,10 +103,11 @@ public static class StructuredReportRenderer
         ForecastSnapshotBody finalSnapshot,
         WeatherSnapshot observation,
         Recipient recipient,
+        string langCode,
         TimeZoneInfo localityTz,
         DateTime nowUtc)
     {
-        var lang = LanguageHelper.ToIetfTag(recipient.Language).Split('-')[0].ToLowerInvariant();
+        var lang = NormalizeLang(langCode);
         var vocab = ReportVocabulary.ForLanguage(lang);
 
         var sb = new StringBuilder();
@@ -155,11 +156,12 @@ public static class StructuredReportRenderer
     /// </summary>
     public static string RenderWelcome(
         Recipient recipient,
+        string langCode,
         string localityName,
         TimeZoneInfo localityTz,
         IReadOnlyList<int> scheduledHours)
     {
-        var lang = LanguageHelper.ToIetfTag(recipient.Language).Split('-')[0].ToLowerInvariant();
+        var lang = NormalizeLang(langCode);
         var vocab = ReportVocabulary.ForLanguage(lang);
         var body = string.Format(vocab.Culture, vocab.WelcomeFormat, localityName, FormatScheduleTimes(scheduledHours, vocab));
 
@@ -176,13 +178,22 @@ public static class StructuredReportRenderer
     }
 
     /// <summary>Plain-text form of the welcome email (the SMTP fallback), sharing the same vocabulary + schedule formatting as <see cref="RenderWelcome"/> so the two cannot drift.</summary>
-    public static string WelcomePlainText(Recipient recipient, string localityName, IReadOnlyList<int> scheduledHours)
+    public static string WelcomePlainText(Recipient recipient, string langCode, string localityName, IReadOnlyList<int> scheduledHours)
     {
-        var lang = LanguageHelper.ToIetfTag(recipient.Language).Split('-')[0].ToLowerInvariant();
+        var lang = NormalizeLang(langCode);
         var vocab = ReportVocabulary.ForLanguage(lang);
         return $"{vocab.WelcomeGreeting} "
             + string.Format(vocab.Culture, vocab.WelcomeFormat, localityName, FormatScheduleTimes(scheduledHours, vocab));
     }
+
+    /// <summary>
+    /// Normalizes a resolved language code to the bare lower-case ISO 639-1 part the
+    /// narrative map and <see cref="ReportVocabulary"/> key on — dropping any regional
+    /// suffix (e.g. <c>"es-419"</c> → <c>"es"</c>) so a future regional tag can't
+    /// silently miss the narrative and fall back. Single source so the render entry
+    /// points can't drift.
+    /// </summary>
+    private static string NormalizeLang(string langCode) => langCode.Split('-')[0].ToLowerInvariant();
 
     /// <summary>Localized "6 AM and 12 PM" list of the recipient's daily send hours, joined with the language's conjunction. Empty when no hours are configured.</summary>
     private static string FormatScheduleTimes(IReadOnlyList<int> hours, ReportVocabulary vocab)

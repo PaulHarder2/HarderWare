@@ -27,6 +27,7 @@ public partial class MainWindow : Window
         ConfigureTabItem.IsEnabled = true;
         RecipientsTabItem.IsEnabled = true;
         LocalitiesTabItem.IsEnabled = true;
+        LanguagesTabItem.IsEnabled = true;
         AnnouncementTabItem.IsEnabled = true;
     }
 
@@ -36,6 +37,7 @@ public partial class MainWindow : Window
         // in case the user changed paths or connection strings.
         RecipientsTabItem.IsEnabled = false;
         LocalitiesTabItem.IsEnabled = false;
+        LanguagesTabItem.IsEnabled = false;
         AnnouncementTabItem.IsEnabled = false;
         ConfigureTabItem.IsEnabled = false;
         MainTabs.SelectedIndex = 0; // switch to Setup tab

@@ -151,10 +151,11 @@
                         <TextBlock Grid.Row="2"  Grid.Column="0" Text="Email" VerticalAlignment="Center" Margin="0,3"/>
                         <TextBox   Grid.Row="2"  Grid.Column="1" x:Name="EmailBox" Margin="0,3"/>
 
-                        <!-- Language -->
+                        <!-- Language (WX-166: enabled languages only; "(service default)" follows the configured default) -->
                         <TextBlock Grid.Row="3"  Grid.Column="0" Text="Language" VerticalAlignment="Center" Margin="0,3"/>
-                        <TextBox   Grid.Row="3"  Grid.Column="1" x:Name="LanguageBox" Margin="0,3"
-                                   ToolTip="e.g. English, Spanish"/>
+                        <ComboBox  Grid.Row="3"  Grid.Column="1" x:Name="LanguageBox" Margin="0,3"
+                                   DisplayMemberPath="DisplayName" SelectedValuePath="Id"
+                                   ToolTip="Report language — only enabled (supported) languages are listed; manage them on the Languages tab."/>
 
                         <!-- Timezone -->
                         <TextBlock Grid.Row="4"  Grid.Column="0" Text="Timezone" VerticalAlignment="Center" Margin="0,3"/>

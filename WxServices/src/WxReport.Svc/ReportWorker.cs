@@ -260,8 +260,9 @@ public sealed class ReportWorker : BackgroundService
             .FirstOrDefaultAsync(ct);
 
         var provisionalBody = ForecastSnapshotBody.Deserialize(anchorSnapshot.Body);
+        var langById = await ctx.Languages.ToDictionaryAsync(l => l.Id, ct);
         var narrativeLanguages = members
-            .Select(m => LanguageHelper.ToIetfTag(m.Language ?? cfg.DefaultLanguage))
+            .Select(m => ResolveLanguageCode(m, langById, cfg.DefaultLanguage))
             .Distinct(StringComparer.Ordinal)
             .ToList();
 
@@ -323,10 +324,10 @@ public sealed class ReportWorker : BackgroundService
         {
             try
             {
-                var memberLang = member.Language ?? cfg.DefaultLanguage;
+                var langCode = ResolveLanguageCode(member, langById, cfg.DefaultLanguage);
                 var innerBody = StructuredReportRenderer.Render(
-                    success.StructuredReport, success.FinalSnapshot, snapshot, member, tz, ReportKind.Diagnostic);
-                var report = WrapAsEmailHtml(innerBody, memberLang, snapshot, tz);
+                    success.StructuredReport, success.FinalSnapshot, snapshot, member, langCode, tz, ReportKind.Diagnostic);
+                var report = WrapAsEmailHtml(innerBody, langCode, snapshot, tz);
 
                 var committedSend = new CommittedSend
                 {
@@ -341,7 +342,7 @@ public sealed class ReportWorker : BackgroundService
                 ctx.CommittedSends.Add(committedSend);
                 await ctx.SaveChangesAsync(ct);
 
-                var subject = BuildSubject(snapshot, memberLang, tz, ReportKind.Diagnostic, recipientName: member.Name, severeBody: success.FinalSnapshot);
+                var subject = BuildSubject(snapshot, langCode, tz, ReportKind.Diagnostic, recipientName: member.Name, severeBody: success.FinalSnapshot);
                 var plainFallback = SnapshotDescriber.Describe(snapshot, tz, ToUnitPreferences(member));
 
                 var meteogramPath = FindMeteogramAbbrevPath(
@@ -441,6 +442,10 @@ public sealed class ReportWorker : BackgroundService
                 .Where(l => membersByLocality.Keys.Contains(l.Id))
                 .ToDictionaryAsync(l => l.Id, ct);
 
+            // The Languages registry is cycle-invariant; load it once here and resolve
+            // every recipient's FK from it (WX-166), rather than re-querying per locality.
+            var langById = await ctx.Languages.ToDictionaryAsync(l => l.Id, ct);
+
             var reconciler = new ForecastReconciler(
                 new ClaudeClient(_claudeHttpClient, claude_cfg.ApiKey, claude_cfg.Model, _persona.Text));
             var emailer = new SmtpSender(smtp, "WxReport");
@@ -455,7 +460,7 @@ public sealed class ReportWorker : BackgroundService
                     continue;
                 }
 
-                reportsSent += await ProcessLocalityAsync(ctx, locality, members, reconciler, emailer, cfg, now, ct);
+                reportsSent += await ProcessLocalityAsync(ctx, locality, members, reconciler, emailer, cfg, langById, now, ct);
             }
 
             Logger.Info(reportsSent > 0
@@ -514,7 +519,8 @@ public sealed class ReportWorker : BackgroundService
     /// </summary>
     private async Task<int> ProcessLocalityAsync(
         WeatherDataContext ctx, Locality locality, List<Recipient> members,
-        ForecastReconciler reconciler, SmtpSender emailer, ReportConfig cfg, DateTime now, CancellationToken ct)
+        ForecastReconciler reconciler, SmtpSender emailer, ReportConfig cfg,
+        IReadOnlyDictionary<long, Language> langById, DateTime now, CancellationToken ct)
     {
         var label = $"locality '{locality.Name}' (Id={locality.Id})";
 
@@ -609,7 +615,7 @@ public sealed class ReportWorker : BackgroundService
             // (a !shouldSend locality has sent before, so that baseline exists).
             var unwelcomed = members.Where(m => !servedIds.Contains(m.RecipientId)).ToList();
             var welcomed = unwelcomed.Count > 0
-                ? await WelcomeNewMembersAsync(ctx, emailer, locality, unwelcomed, memberIds, tz, scheduledHours, cfg, ct)
+                ? await WelcomeNewMembersAsync(ctx, emailer, locality, unwelcomed, memberIds, tz, scheduledHours, cfg, langById, ct)
                 : 0;
             if (reason == "prefilter-skip" && welcomed == 0)
             {
@@ -704,7 +710,7 @@ public sealed class ReportWorker : BackgroundService
 
         // The narrative must carry every language the locality's members read.
         var narrativeLanguages = members
-            .Select(m => LanguageHelper.ToIetfTag(m.Language ?? cfg.DefaultLanguage))
+            .Select(m => ResolveLanguageCode(m, langById, cfg.DefaultLanguage))
             .Distinct(StringComparer.Ordinal)
             .ToList();
 
@@ -776,10 +782,10 @@ public sealed class ReportWorker : BackgroundService
                     continue;  // brand-new members are onboarded on a normal cycle, not via a degraded alert
                 try
                 {
-                    var memberLang = member.Language ?? cfg.DefaultLanguage;
-                    var innerBody = StructuredReportRenderer.RenderDegraded(degraded.FinalSnapshot, snapshot, member, tz, now);
+                    var langCode = ResolveLanguageCode(member, langById, cfg.DefaultLanguage);
+                    var innerBody = StructuredReportRenderer.RenderDegraded(degraded.FinalSnapshot, snapshot, member, langCode, tz, now);
                     if (await DeliverWeatherReportAsync(
-                            ctx, emailer, member, memberLang, degradedSnapshot, innerBody,
+                            ctx, emailer, member, langCode, degradedSnapshot, innerBody,
                             structuredReportJson: null, reasoningTrace: $"DEGRADED: {degraded.Reason}",
                             snapshot, locality, tz, preferredIcaos, degradedPlotsDir, ReportKind.Unscheduled, label,
                             degraded.FinalSnapshot, ct))
@@ -857,18 +863,18 @@ public sealed class ReportWorker : BackgroundService
         {
             try
             {
+                var langCode = ResolveLanguageCode(member, langById, cfg.DefaultLanguage);
                 if (!servedIds.Contains(member.RecipientId))
                 {
-                    if (await SendWelcomeAsync(ctx, emailer, member, locality, reconciledSnapshot, tz, scheduledHours, cfg, ct))
+                    if (await SendWelcomeAsync(ctx, emailer, member, langCode, locality, reconciledSnapshot, tz, scheduledHours, ct))
                         welcomeSent++;
                     continue;
                 }
 
-                var memberLang = member.Language ?? cfg.DefaultLanguage;
                 var innerBody = StructuredReportRenderer.Render(
-                    success.StructuredReport, success.FinalSnapshot, snapshot, member, tz, kind);
+                    success.StructuredReport, success.FinalSnapshot, snapshot, member, langCode, tz, kind);
                 if (await DeliverWeatherReportAsync(
-                        ctx, emailer, member, memberLang, reconciledSnapshot, innerBody,
+                        ctx, emailer, member, langCode, reconciledSnapshot, innerBody,
                         structuredReportJson, success.ReasoningTrace, snapshot, locality, tz,
                         preferredIcaos, plotsDir, kind, label, success.FinalSnapshot, ct))
                     weatherSent++;
@@ -937,14 +943,14 @@ public sealed class ReportWorker : BackgroundService
     /// degraded, narrative-less send). Returns true iff the email was accepted.
     /// </summary>
     private async Task<bool> DeliverWeatherReportAsync(
-        WeatherDataContext ctx, SmtpSender emailer, Recipient member, string memberLang,
+        WeatherDataContext ctx, SmtpSender emailer, Recipient member, string langCode,
         ForecastSnapshot reconciledSnapshot, string innerBody,
         string? structuredReportJson, string? reasoningTrace,
         WeatherSnapshot snapshot, Locality locality, TimeZoneInfo tz,
         IReadOnlyList<string> preferredIcaos, string plotsDir, ReportKind kind, string label,
         ForecastSnapshotBody finalBody, CancellationToken ct)
     {
-        var report = WrapAsEmailHtml(innerBody, memberLang, snapshot, tz);
+        var report = WrapAsEmailHtml(innerBody, langCode, snapshot, tz);
 
         var committedSend = new CommittedSend
         {
@@ -958,7 +964,7 @@ public sealed class ReportWorker : BackgroundService
         ctx.CommittedSends.Add(committedSend);
         await ctx.SaveChangesAsync(ct);
 
-        var subject = BuildSubject(snapshot, memberLang, tz, kind, recipientName: member.Name, severeBody: finalBody);
+        var subject = BuildSubject(snapshot, langCode, tz, kind, recipientName: member.Name, severeBody: finalBody);
         var plainFallback = SnapshotDescriber.Describe(snapshot, tz, ToUnitPreferences(member));
 
         var meteogramPath = FindMeteogramAbbrevPath(
@@ -991,7 +997,8 @@ public sealed class ReportWorker : BackgroundService
 
     private async Task<int> WelcomeNewMembersAsync(
         WeatherDataContext ctx, SmtpSender emailer, Locality locality, List<Recipient> newMembers,
-        List<string> memberIds, TimeZoneInfo tz, IReadOnlyList<int> scheduledHours, ReportConfig cfg, CancellationToken ct)
+        List<string> memberIds, TimeZoneInfo tz, IReadOnlyList<int> scheduledHours, ReportConfig cfg,
+        IReadOnlyDictionary<long, Language> langById, CancellationToken ct)
     {
         var anchor = await ctx.CommittedSends
             .Where(cs => memberIds.Contains(cs.RecipientId) && cs.SentAtUtc.HasValue && !cs.IsDiagnostic)
@@ -1006,7 +1013,7 @@ public sealed class ReportWorker : BackgroundService
         {
             try
             {
-                if (await SendWelcomeAsync(ctx, emailer, member, locality, anchor, tz, scheduledHours, cfg, ct))
+                if (await SendWelcomeAsync(ctx, emailer, member, ResolveLanguageCode(member, langById, cfg.DefaultLanguage), locality, anchor, tz, scheduledHours, ct))
                     sent++;
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -1025,13 +1032,12 @@ public sealed class ReportWorker : BackgroundService
     /// send succeeded.  The welcome carries no meteogram.
     /// </summary>
     private async Task<bool> SendWelcomeAsync(
-        WeatherDataContext ctx, SmtpSender emailer, Recipient member, Locality locality,
+        WeatherDataContext ctx, SmtpSender emailer, Recipient member, string langCode, Locality locality,
         ForecastSnapshot anchorSnapshot, TimeZoneInfo tz, IReadOnlyList<int> scheduledHours,
-        ReportConfig cfg, CancellationToken ct)
+        CancellationToken ct)
     {
-        var memberLang = member.Language ?? cfg.DefaultLanguage;
-        var innerBody = StructuredReportRenderer.RenderWelcome(member, locality.Name, tz, scheduledHours);
-        var report = WrapWelcomeAsEmailHtml(innerBody, memberLang);
+        var innerBody = StructuredReportRenderer.RenderWelcome(member, langCode, locality.Name, tz, scheduledHours);
+        var report = WrapWelcomeAsEmailHtml(innerBody, langCode);
 
         var committedSend = new CommittedSend
         {
@@ -1045,9 +1051,8 @@ public sealed class ReportWorker : BackgroundService
         ctx.CommittedSends.Add(committedSend);
         await ctx.SaveChangesAsync(ct);
 
-        var lang = LanguageHelper.ToIetfTag(memberLang).Split('-')[0].ToLowerInvariant();
-        var subject = $"{ReportVocabulary.ForLanguage(lang).WelcomeSubject} — {locality.Name}";
-        var plainFallback = StructuredReportRenderer.WelcomePlainText(member, locality.Name, scheduledHours);
+        var subject = $"{ReportVocabulary.ForLanguage(langCode).WelcomeSubject} — {locality.Name}";
+        var plainFallback = StructuredReportRenderer.WelcomePlainText(member, langCode, locality.Name, scheduledHours);
 
         var sent = await emailer.SendAsync(
             member.Email, subject, plainFallback,
@@ -1163,14 +1168,13 @@ public sealed class ReportWorker : BackgroundService
     /// immediately after, before SMTP send.
     /// </summary>
     /// <param name="innerBodyHtml">Inner content of the <c>&lt;body&gt;</c> tag from the renderer (no doctype, no html/body wrappers, no markdown).</param>
-    /// <param name="language">Natural-language name of the recipient's language; used to derive the <c>lang</c> attribute via <see cref="LanguageHelper.ToIetfTag"/>.</param>
+    /// <param name="langCode">Recipient's resolved ISO 639-1 code (WX-166), used directly as the <c>lang</c> attribute — the canonical language identity, not re-derived from a display name.</param>
     /// <param name="snapshot">Weather snapshot supplying station + observation time + GFS run for the footer line.</param>
     /// <param name="tz">Recipient's timezone (presently unused — footer timestamps are UTC by Paul's request — but reserved for future per-recipient footer localisation).</param>
     /// <returns>The fully wrapped HTML ready for meteogram replacement and SMTP delivery.</returns>
-    private static string WrapAsEmailHtml(string innerBodyHtml, string language, WeatherSnapshot snapshot, TimeZoneInfo tz)
+    private static string WrapAsEmailHtml(string innerBodyHtml, string langCode, WeatherSnapshot snapshot, TimeZoneInfo tz)
     {
         _ = tz;
-        var langCode = LanguageHelper.ToIetfTag(language);
         var footer = BuildFooterHtml(snapshot);
 
         return $"""
@@ -1193,9 +1197,8 @@ public sealed class ReportWorker : BackgroundService
     /// minimal footer — just the product version, no observation/GFS line and no
     /// meteogram, since a first-contact welcome carries no weather data.
     /// </summary>
-    private static string WrapWelcomeAsEmailHtml(string innerBodyHtml, string language)
+    private static string WrapWelcomeAsEmailHtml(string innerBodyHtml, string langCode)
     {
-        var langCode = LanguageHelper.ToIetfTag(language);
         return $"""
             <!DOCTYPE html>
             <html lang="{langCode}">
@@ -1461,7 +1464,7 @@ public sealed class ReportWorker : BackgroundService
     /// hazard (WX-156): if the rule holds, a front-loaded severe noun is prepended to the subject. Null skips the check.</param>
     /// <returns>A localised subject string, e.g. <c>"Weather Report for Paul — The Woodlands (7:05 AM)"</c>,
     /// or with a WX-156 hazard prefix <c>"Severe storms — Weather Update for Paul — The Woodlands (7:05 AM)"</c>.</returns>
-    private static string BuildSubject(WeatherSnapshot snap, string language, TimeZoneInfo tz,
+    private static string BuildSubject(WeatherSnapshot snap, string langCode, TimeZoneInfo tz,
         ReportKind kind, string recipientName = "", ForecastSnapshotBody? severeBody = null)
     {
         // Use send-time when no observation is available; ObservationTimeUtc is
@@ -1469,8 +1472,7 @@ public sealed class ReportWorker : BackgroundService
         var subjectTimeUtc = snap.ObservationAvailable ? snap.ObservationTimeUtc : DateTime.UtcNow;
         var localTime = TimeZoneInfo.ConvertTimeFromUtc(subjectTimeUtc, tz).ToString("h:mm tt");
 
-        var isoCode = LanguageHelper.ToIetfTag(language).Split('-')[0].ToLowerInvariant();
-        var vocab = ReportVocabulary.ForLanguage(isoCode);
+        var vocab = ReportVocabulary.ForLanguage(langCode);
         var label = vocab.GetFromReportKind(kind, LabelType.Title);
         var forName = string.IsNullOrWhiteSpace(recipientName)
             ? ""
@@ -1537,7 +1539,12 @@ public sealed class ReportWorker : BackgroundService
 
         var dbRecipients = await ctx.Recipients.OrderBy(r => r.Id).ToListAsync(ct);
         if (dbRecipients.Count > 0)
-            report.Recipients = dbRecipients.Select(ToConfig).ToList();
+        {
+            var langById = await ctx.Languages.ToDictionaryAsync(l => l.Id, ct);
+            report.Recipients = dbRecipients
+                .Select(r => ToConfig(r, r.LanguageId is long id && langById.TryGetValue(id, out var l) ? l.DisplayName : null))
+                .ToList();
+        }
 
         var smtp = new SmtpConfig();
         _config.GetSection("Smtp").Bind(smtp);
@@ -1642,17 +1649,40 @@ public sealed class ReportWorker : BackgroundService
     }
 
     /// <summary>
+    /// Resolves a recipient's <see cref="Recipient.LanguageId"/> FK to its ISO 639-1
+    /// code via the cycle's <paramref name="langById"/> map (the codebase's dict-lookup
+    /// FK convention — no navigation load). A null FK (or a dangling id) falls back to
+    /// the service <paramref name="defaultName"/>, converted once.
+    /// <para>
+    /// The code is the canonical internal language identity (WX-166): every lookup,
+    /// narrative/vocabulary selection, the <c>html lang</c> attribute, and the subject
+    /// key on it; <see cref="Language.DisplayName"/> is for human display only. The lone
+    /// name→code conversion is this default bootstrap, because the service default is a
+    /// configured name. Passing the resolved code (not the entity) keeps every consumer
+    /// compile-checked: a missed site is a build error, never a silent English default.
+    /// </para>
+    /// </summary>
+    private static string ResolveLanguageCode(
+        Recipient member, IReadOnlyDictionary<long, Language> langById, string defaultName)
+        => member.LanguageId is long id && langById.TryGetValue(id, out var lang)
+            ? lang.IsoCode
+            : LanguageHelper.ToIetfTag(defaultName);
+
+    /// <summary>
     /// Converts a <see cref="Recipient"/> database entity to the <see cref="RecipientConfig"/>
-    /// view model used throughout the report worker.
+    /// view model used throughout the report worker. <paramref name="languageName"/> is
+    /// the recipient's resolved language display name (WX-166), or <see langword="null"/>
+    /// when the recipient uses the service default.
     /// </summary>
     /// <param name="r">The database recipient entity to convert.</param>
+    /// <param name="languageName">Resolved language display name, or <see langword="null"/> for the service default.</param>
     /// <returns>A populated <see cref="RecipientConfig"/> instance.</returns>
-    private static RecipientConfig ToConfig(Recipient r) => new()
+    private static RecipientConfig ToConfig(Recipient r, string? languageName) => new()
     {
         Id = r.RecipientId,
         Email = r.Email,
         Name = r.Name,
-        Language = r.Language,
+        Language = languageName,
         Timezone = r.Timezone,
         ScheduledSendHours = r.ScheduledSendHours,
         Address = r.Address,

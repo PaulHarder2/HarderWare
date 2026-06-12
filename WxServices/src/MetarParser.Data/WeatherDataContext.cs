@@ -64,6 +64,9 @@ public sealed class WeatherDataContext : DbContext
     /// <summary>The <c>Recipients</c> table — one row per weather report subscriber, holding profile, resolved location, and unit preferences.</summary>
     public DbSet<Recipient> Recipients => Set<Recipient>();
 
+    /// <summary>The <c>Languages</c> table — ISO 639-1 registry; enabled rows are the supported languages a recipient may be assigned (WX-166).</summary>
+    public DbSet<Language> Languages => Set<Language>();
+
     /// <summary>The <c>Localities</c> table — one row per curated locality grouping co-located recipients for batched report generation (WX-123).</summary>
     public DbSet<Locality> Localities => Set<Locality>();
 
@@ -294,7 +297,6 @@ public sealed class WeatherDataContext : DbContext
             e.Property(x => x.RecipientId).HasMaxLength(100).IsRequired();
             e.Property(x => x.Email).HasMaxLength(200).IsRequired();
             e.Property(x => x.Name).HasMaxLength(200).IsRequired();
-            e.Property(x => x.Language).HasMaxLength(50);
             e.Property(x => x.Timezone).HasMaxLength(100).IsRequired();
             e.Property(x => x.ScheduledSendHours).HasMaxLength(50);
             e.Property(x => x.Address).HasMaxLength(500);
@@ -320,6 +322,30 @@ public sealed class WeatherDataContext : DbContext
              .WithMany()
              .HasForeignKey(x => x.LocalityId)
              .OnDelete(DeleteBehavior.Restrict);
+
+            // Language FK (WX-166). RESTRICT mirrors the disable-while-assigned rule:
+            // a language cannot be removed while recipients still reference it. Null
+            // LanguageId means "use the service default language".
+            e.HasOne(x => x.Language)
+             .WithMany()
+             .HasForeignKey(x => x.LanguageId)
+             .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // ── Languages ────────────────────────────────────────────────────────
+
+        modelBuilder.Entity<Language>(e =>
+        {
+            e.ToTable("Languages");
+            e.HasKey(x => x.Id);
+
+            e.Property(x => x.IsoCode).HasMaxLength(2).IsRequired();   // ISO 639-1 is exactly two letters
+            e.Property(x => x.DisplayName).HasMaxLength(100).IsRequired();
+            e.Property(x => x.IsEnabled).IsRequired();
+
+            e.HasIndex(x => x.IsoCode)
+             .IsUnique()
+             .HasDatabaseName("UX_Languages_IsoCode");
         });
 
         // ── Localities ───────────────────────────────────────────────────────

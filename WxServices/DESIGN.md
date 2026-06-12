@@ -900,7 +900,7 @@ erDiagram
         string RecipientId UK
         string Email
         string Name
-        string Language
+        bigint LanguageId FK "nullable"
         string Timezone
         string ScheduledSendHours
         string Address
@@ -915,6 +915,13 @@ erDiagram
         string PrecipUnit
         string NumberFormat "nullable"
         bigint LocalityId FK "nullable"
+    }
+
+    Languages {
+        bigint Id PK
+        string IsoCode UK
+        string DisplayName
+        bool IsEnabled
     }
 
     Localities {
@@ -1024,6 +1031,7 @@ erDiagram
     GfsModelRuns ||--o{ GfsGrid : "has"
     ForecastSnapshots ||--o{ CommittedSends : "anchored by"
     Localities ||--o{ Recipients : "groups"
+    Languages ||--o{ Recipients : "assigned to"
     Localities ||--o| LocalityStates : "tracked by"
 ```
 
