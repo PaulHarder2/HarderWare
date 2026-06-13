@@ -59,6 +59,23 @@ var host = Host.CreateDefaultBuilder(args)
         services.AddSingleton(dbOptions);
         services.AddSingleton(LoadPersonaPrefix());
 
+        // WX-171: the localized-template cache the renderer rewire will read phrases from.
+        // Registered here and injected later; a short-lived context per (re)load mirrors
+        // the rest of the service's DbContextOptions pattern. Warmed eagerly at startup
+        // (below) once the schema is ensured.
+        services.AddSingleton(sp =>
+        {
+            var opts = sp.GetRequiredService<DbContextOptions<WeatherDataContext>>();
+            return new LanguageTemplateStore(() =>
+            {
+                using var ctx = new WeatherDataContext(opts);
+                return ctx.LanguageTemplates
+                    .Include(t => t.Language)
+                    .AsNoTracking()
+                    .ToList();
+            });
+        });
+
         // Geocoding + airport-lookup client. Keeps the 100s HttpClient default so a
         // stalled upstream lookup fails fast; the Claude timeout below must not bleed
         // into this path (WX-100 code-review finding).
@@ -103,6 +120,20 @@ try
     Logger.Info("Database ready.");
 
     await ValidateConfigAsync(dbOptions);
+
+    // WX-171: warm the localized-template cache now the schema exists (the store loads in
+    // its constructor on first resolution). Nothing consumes it yet — the renderer rewire
+    // is the next step — so a load failure is logged, never fatal: it must not block sends
+    // that still render from the built-in vocabulary.
+    try
+    {
+        var templates = host.Services.GetRequiredService<LanguageTemplateStore>();
+        Logger.Info($"Language templates loaded for: {string.Join(", ", templates.LoadedLanguages.OrderBy(c => c, StringComparer.Ordinal))}.");
+    }
+    catch (Exception ex)
+    {
+        Logger.Warn("Language template load failed at startup; the renderer will fall back to built-in vocabulary until resolved.", ex);
+    }
 
     await PrerequisiteChecker.LogPrerequisitesAsync(
         PrerequisiteChecker.Requires.SqlServer,
