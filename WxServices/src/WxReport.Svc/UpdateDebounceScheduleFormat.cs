@@ -31,8 +31,16 @@ public static class UpdateDebounceScheduleFormat
         if (string.IsNullOrWhiteSpace(raw))
             throw new FormatException("UpdateDebounceSchedule is empty; expected e.g. \"1:6,3:12\".");
 
-        var steps = new List<Step>();
-        foreach (var token in raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        // Do NOT use RemoveEmptyEntries: an empty token (stray/double/trailing comma,
+        // or a bare ",") must fail strict/fail-closed as a FormatException, not be
+        // silently dropped — and ',' alone would otherwise split to nothing and make
+        // steps[0] below throw IndexOutOfRangeException, which ReportWorker doesn't catch.
+        var tokens = raw.Split(',', StringSplitOptions.TrimEntries);
+        if (tokens.Any(static t => t.Length == 0))
+            throw new FormatException("UpdateDebounceSchedule contains an empty token (stray/double/trailing comma); expected 'day:hours,day:hours,…'.");
+
+        var steps = new List<Step>(tokens.Length);
+        foreach (var token in tokens)
         {
             var parts = token.Split(':', StringSplitOptions.TrimEntries);
             if (parts.Length != 2 || !int.TryParse(parts[0], out var day) || !int.TryParse(parts[1], out var hours))
@@ -43,6 +51,9 @@ public static class UpdateDebounceScheduleFormat
                 throw new FormatException($"UpdateDebounceSchedule hours must be >= 0 (token '{token}').");
             steps.Add(new Step(day, hours));
         }
+
+        if (steps.Count == 0)
+            throw new FormatException("UpdateDebounceSchedule is empty; expected e.g. \"1:6,3:12\".");
 
         if (steps[0].FromDay != 1)
             throw new FormatException($"UpdateDebounceSchedule must start at day 1; first step is day {steps[0].FromDay}.");

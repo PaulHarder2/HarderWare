@@ -56,6 +56,9 @@ public class UpdateDebounceScheduleFormatTests
     [InlineData("1:6,3:12,3:5")]  // duplicate later day
     [InlineData("0:6")]           // day < 1
     [InlineData("1:-6")]          // negative hours
+    [InlineData(",")]             // bare comma -> empty tokens (was IndexOutOfRange)
+    [InlineData("1:6,,3:12")]     // double comma -> empty middle token
+    [InlineData("1:6,")]          // trailing comma -> empty token
     [InlineData("1")]             // missing ':hours'
     [InlineData("1:6:9")]         // too many parts
     [InlineData("1:x")]           // non-integer hours
