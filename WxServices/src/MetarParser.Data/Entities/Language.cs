@@ -29,4 +29,29 @@ public class Language
     /// disabling is refused while any recipient is still assigned to it.
     /// </summary>
     public bool IsEnabled { get; set; }
+
+    /// <summary>
+    /// IETF culture tag used for date/time names and number formatting of this
+    /// language's reports (e.g. <c>"en-US"</c>, <c>"es-US"</c>). Per-language, not
+    /// per-token, so it lives here rather than on <see cref="LanguageTemplate"/>.
+    /// Null until the language is enabled/populated (WX-167).
+    /// </summary>
+    public string? CultureName { get; set; }
+
+    /// <summary>
+    /// When this language's templates were last (re)generated, UTC. Null = never
+    /// generated (the PENDING state once enabled). Set by the WX-172 generator.
+    /// </summary>
+    public DateTime? GeneratedAtUtc { get; set; }
+
+    /// <summary>
+    /// Why the language is not ready, if generation could not produce a usable set
+    /// — e.g. a token Claude flagged as not representable by simple substitution
+    /// (BLOCKED-needs-code). Null = no blocking problem. Set by the WX-172 generator;
+    /// a BLOCKED language is not auto-retried (the renderer assembly is the problem).
+    /// </summary>
+    public string? GenerationError { get; set; }
+
+    /// <summary>The localized templates that render this language's reports (WX-167).</summary>
+    public ICollection<LanguageTemplate> Templates { get; set; } = new List<LanguageTemplate>();
 }

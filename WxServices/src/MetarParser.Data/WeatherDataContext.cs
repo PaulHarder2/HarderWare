@@ -67,6 +67,9 @@ public sealed class WeatherDataContext : DbContext
     /// <summary>The <c>Languages</c> table — ISO 639-1 registry; enabled rows are the supported languages a recipient may be assigned (WX-166).</summary>
     public DbSet<Language> Languages => Set<Language>();
 
+    /// <summary>The <c>LanguageTemplates</c> table — token-keyed localized report strings; supersedes the interim hard-coded <c>ReportVocabulary</c> (WX-167).</summary>
+    public DbSet<LanguageTemplate> LanguageTemplates => Set<LanguageTemplate>();
+
     /// <summary>The <c>Localities</c> table — one row per curated locality grouping co-located recipients for batched report generation (WX-123).</summary>
     public DbSet<Locality> Localities => Set<Locality>();
 
@@ -346,6 +349,39 @@ public sealed class WeatherDataContext : DbContext
             e.HasIndex(x => x.IsoCode)
              .IsUnique()
              .HasDatabaseName("UX_Languages_IsoCode");
+
+            e.Property(x => x.CultureName).HasMaxLength(20);       // IETF tag, e.g. "es-US"
+            e.Property(x => x.GenerationError).HasMaxLength(1000); // BLOCKED reason (WX-172)
+        });
+
+        // ── LanguageTemplates (WX-167) ───────────────────────────────────────
+
+        modelBuilder.Entity<LanguageTemplate>(e =>
+        {
+            e.ToTable("LanguageTemplates");
+            e.HasKey(x => x.Id);
+
+            e.Property(x => x.Token).HasMaxLength(60).IsRequired();
+            e.Property(x => x.Phrase).HasMaxLength(500).IsRequired();
+            e.Property(x => x.ContextInfo).HasMaxLength(1000).IsRequired();
+            e.Property(x => x.ContextKind)
+             .HasConversion<string>()      // store the enum name ("Example"/"Hint"), not its ordinal
+             .HasMaxLength(10)
+             .IsRequired();
+            e.Property(x => x.Note).HasMaxLength(1000);
+            e.Property(x => x.Representable).IsRequired();
+            e.Property(x => x.ReviewedBy).HasMaxLength(100);
+
+            // One phrase per (language, token). RESTRICT on delete mirrors Languages:
+            // a language row carrying templates can't be deleted out from under them.
+            e.HasOne(x => x.Language)
+             .WithMany(l => l.Templates)
+             .HasForeignKey(x => x.LanguageId)
+             .OnDelete(DeleteBehavior.Restrict);
+
+            e.HasIndex(x => new { x.LanguageId, x.Token })
+             .IsUnique()
+             .HasDatabaseName("UX_LanguageTemplates_LanguageId_Token");
         });
 
         // ── Localities ───────────────────────────────────────────────────────
