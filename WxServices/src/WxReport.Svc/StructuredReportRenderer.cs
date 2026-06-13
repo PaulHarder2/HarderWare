@@ -131,10 +131,7 @@ public static class StructuredReportRenderer
     /// </summary>
     private static void AppendHazardBanner(StringBuilder sb, ForecastSnapshotBody body, TimeZoneInfo tz, ReportVocabulary vocab, DateTime nowUtc)
     {
-        var severe = body.Blocks
-            .Where(b => b.SevereFlag && DateTime.SpecifyKind(b.StartUtc, DateTimeKind.Utc).AddHours(6) > nowUtc)
-            .OrderBy(b => b.StartUtc)
-            .FirstOrDefault();
+        var severe = SevereBlocks.EarliestActive(body, nowUtc);
         if (severe is null)
             return;
         var local = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(severe.StartUtc, DateTimeKind.Utc), tz);

@@ -52,6 +52,7 @@ public sealed class ReportWorker : BackgroundService
     private readonly Counter<long> _redundantSuppressed;
     private readonly Counter<long> _severeFlipSuppressed;
     private readonly Counter<long> _significanceGateSkips;
+    private readonly Counter<long> _debounceSuppressed;
     private readonly Histogram<double> _cycleDuration;
     private readonly Histogram<double> _claudeDuration;
 
@@ -95,6 +96,7 @@ public sealed class ReportWorker : BackgroundService
         _redundantSuppressed = _meter.CreateCounter<long>("wxreport.suppressed.redundant.total", description: "WX-108: unscheduled sends suppressed because the reconciled snapshot was materially identical to the last sent report.");
         _severeFlipSuppressed = _meter.CreateCounter<long>("wxreport.suppressed.severe_flip.total", description: "WX-108: unscheduled sends suppressed because the only change was a severe-flag flip on an observation-only advance with no newer GFS run or TAF.");
         _significanceGateSkips = _meter.CreateCounter<long>("wxreport.suppressed.significance_gate.total", description: "WX-114: cycles the deterministic significance gate found unchanged since the last sent report, tagged by mode (enforce = Claude call skipped; shadow = would-skip but Claude still called).");
+        _debounceSuppressed = _meter.CreateCounter<long>("wxreport.suppressed.debounce.total", description: "WX-181: significant unscheduled cycles suppressed by the day-banded debounce (the change's day-band min-gap had not elapsed since the last unscheduled send), tagged by mode (enforce = Claude call skipped; shadow = would-skip but Claude still called).");
         _cycleDuration = _meter.CreateHistogram<double>("wxreport.cycle.duration.seconds", unit: "s", description: "Duration of each report cycle.");
         _claudeDuration = _meter.CreateHistogram<double>("wxreport.claude.duration.seconds", unit: "s", description: "Duration of each Claude API call.");
     }
@@ -538,11 +540,12 @@ public sealed class ReportWorker : BackgroundService
             // LocalityStates table while recipients already have prior per-recipient
             // deliveries — without this, ShouldSend would see all-null cadence and
             // treat every established locality as "first", forcing an off-cadence send
-            // to everyone on the first post-deploy cycle. Seed both cadence timestamps
-            // from the most-recent real delivery (so a scheduled slot the old system
-            // already served this cycle isn't re-sent) plus the last station. The
+            // to everyone on the first post-deploy cycle. Seed the scheduled-cadence
+            // timestamp from the most-recent real delivery (so a scheduled slot the old
+            // system already served this cycle isn't re-sent) plus the last station. The
             // last-sent input hash stays null: the first cycle reconciles once against
-            // the historical prior snapshot to establish it.
+            // the historical prior snapshot to establish it. (LastUnscheduledSentUtc is
+            // intentionally left null here — see the state initializer below.)
             var lastDelivered = await ctx.CommittedSends
                 .Where(cs => memberIds.Contains(cs.RecipientId) && cs.SentAtUtc.HasValue && !cs.IsDiagnostic)
                 .OrderByDescending(cs => cs.SentAtUtc)
@@ -553,7 +556,12 @@ public sealed class ReportWorker : BackgroundService
             {
                 LocalityId = locality.Id,
                 LastScheduledSentUtc = lastDelivered?.SentAtUtc,
-                LastUnscheduledSentUtc = lastDelivered?.SentAtUtc,
+                // WX-181: left null rather than seeded from lastDelivered — that delivery may
+                // have been a SCHEDULED send, and the day-banded debounce keys specifically on
+                // the last *unscheduled* send, so seeding it would over-suppress a genuine
+                // update on the first post-deploy cycle. The min-gap is unaffected: it uses
+                // Max(scheduled, unscheduled), which still sees LastScheduledSentUtc.
+                LastUnscheduledSentUtc = null,
                 LastMetarIcao = lastDelivered?.StationIcao,
             };
             ctx.LocalityStates.Add(state);
@@ -704,6 +712,35 @@ public sealed class ReportWorker : BackgroundService
             }
             else if (gate is { Significant: true } passed)
             {
+                // WX-181 day-banded debounce: a significant but non-severe-onset change whose
+                // day-band's minimum gap has not elapsed since the last unscheduled send is
+                // suppressed (cost) — its content rides the next cycle or scheduled report. A
+                // not-severe→severe onset punches through; the 90-min MinGapMinutes floor was
+                // already enforced in ShouldSend. Honors the same enforce/shadow mode as the gate.
+                IReadOnlyList<UpdateDebounceScheduleFormat.Step>? debounceSchedule = null;
+                try
+                {
+                    debounceSchedule = UpdateDebounceScheduleFormat.Parse(cfg.UpdateDebounceSchedule);
+                }
+                catch (FormatException ex)
+                {
+                    Logger.Warn($"{label}: invalid UpdateDebounceSchedule '{cfg.UpdateDebounceSchedule}' — debounce disabled this cycle: {ex.Message}");
+                }
+
+                if (debounceSchedule is not null
+                    && ShouldDebounceUpdate(passed, state.LastUnscheduledSentUtc, debounceSchedule, now, tz, out var debounceReason))
+                {
+                    bool enforce = gateMode == SignificanceGateMode.Enforce;
+                    _debounceSuppressed.Add(1, new KeyValuePair<string, object?>("mode", enforce ? "enforce" : "shadow"));
+                    if (enforce)
+                    {
+                        Logger.Debug($"{label}: WX-181 debounce suppressed {triggerType} cycle — {debounceReason}; Claude not called.");
+                        await PersistUnsentCycleAsync(ctx, label, state, inputHash, ct);
+                        return 0;
+                    }
+                    Logger.Debug($"{label}: WX-181 debounce (shadow) WOULD suppress {triggerType} — {debounceReason}; calling Claude anyway.");
+                }
+
                 Logger.Debug($"{label}: WX-114 significance gate passed ({gateMode}, {triggerType}) — fired: {string.Join(", ", passed.FiredCriteria)}.");
             }
         }
@@ -753,8 +790,7 @@ public sealed class ReportWorker : BackgroundService
         {
             AddClaudeTokens(degraded.Tokens);
             LogClaudeTokens(label, degraded.Tokens, $"{triggerType}/degraded");
-            bool hazardSoon = degraded.FinalSnapshot.Blocks.Any(b =>
-                b.SevereFlag && b.StartUtc.AddHours(6) > now && b.StartUtc <= now.Add(DegradeHazardHorizon));
+            bool hazardSoon = SevereBlocks.AnyActiveWithin(degraded.FinalSnapshot, now, DegradeHazardHorizon);
             if (!hazardSoon)
             {
                 _claudeMalformedOutput.Add(1);
@@ -1349,6 +1385,40 @@ public sealed class ReportWorker : BackgroundService
             return (false, "prefilter-skip", ReportKind.Scheduled, false);
 
         return (true, "change", ReportKind.Unscheduled, true);
+    }
+
+    /// <summary>
+    /// WX-181 day-banded update debounce decision (pure). Returns true when a *significant*
+    /// unscheduled change should be SUPPRESSED because its day-band's minimum gap has not
+    /// elapsed since the last unscheduled send. Sends (returns false) when: the change is a
+    /// not-severe→severe onset (<paramref name="gate"/>.SevereEntered — punches through), the
+    /// change is uncharacterized (no <c>EarliestChangedDayLocal</c>, e.g. disjoint horizon),
+    /// or the locality has never sent an unscheduled update. The <see cref="ReportConfig.MinGapMinutes"/>
+    /// floor is enforced separately (ShouldSend), so this only adds the longer day-banded window.
+    /// </summary>
+    internal static bool ShouldDebounceUpdate(
+        SignificanceResult gate, DateTime? lastUnscheduledSentUtc,
+        IReadOnlyList<UpdateDebounceScheduleFormat.Step> schedule,
+        DateTime nowUtc, TimeZoneInfo tz, out string reason)
+    {
+        reason = "";
+        if (gate.SevereEntered) return false;
+        if (gate.EarliestChangedDayLocal is not DateOnly changedDay) return false;
+        if (lastUnscheduledSentUtc is not DateTime lastUnscheduled) return false;
+
+        // 1-based day from the recipient's "today": today = 1, tomorrow = 2, … A change to a
+        // past day (shouldn't occur — the gate only reports in-horizon blocks) floors at 1.
+        var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(nowUtc, tz));
+        int dayNumber = Math.Max(1, changedDay.DayNumber - today.DayNumber + 1);
+        int minHours = UpdateDebounceScheduleFormat.MinHoursForDay(schedule, dayNumber);
+
+        var sinceLast = nowUtc - lastUnscheduled;
+        if (sinceLast < TimeSpan.FromHours(minHours))
+        {
+            reason = $"change reaches local day {dayNumber} (min gap {minHours}h); last unscheduled send {sinceLast.TotalMinutes:0} min ago";
+            return true;
+        }
+        return false;
     }
 
     /// <summary>
