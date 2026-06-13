@@ -16,7 +16,10 @@
 #   TITLE            one-line description for the header
 #   LOG              service log path           (default below if unset)
 #   DEPLOY_LOG       deploy-history.log path    (default below if unset)
-#   MIN_WINDOW_HOURS PASS-gating window         (default 24 if unset)
+#   RESULTS_LOG      append-only verify audit log (default below; --results-log)
+#   MIN_WINDOW_MINUTES PASS-gating window in MINUTES (default 1440 = 24h). Use this for
+#                    sub-hour waits (e.g. 5). MIN_WINDOW_HOURS is still honored as a
+#                    fallback when MINUTES is unset, so older scripts need no change.
 # and calls, in order:
 #   vl_parse_args "$@"   -> sets SINCE_OVERRIDE / LOG / DEPLOY_LOG; -h prints the
 #                           caller's header comment block; unknown arg -> exit 2.
@@ -26,7 +29,9 @@
 #                           Emits WAIT + exits 0 when no log lines exist past SINCE.
 # Then the caller computes its metrics (win/cnt/vl_health_delta), prints sections
 # (vl_header first), and ends with vl_verdict REGRESSION_COUNT EXERCISED, which makes
-# the PASS/FAIL/WAIT decision and prints the verdict section.
+# the PASS/FAIL/WAIT decision and prints the verdict section. Every run -- including the
+# early WAIT exits below -- appends one line to RESULTS_LOG (an append-only audit trail),
+# and vl_verdict prints a ready-to-paste Jira Test Result string for PASS/FAIL (WX-170).
 #
 # Shell: bash (WSL). Log timestamps are UTC (the HarderWare PC runs on UTC). The
 # caller owns 'set -uo pipefail'; this library relies on it (an unset required
@@ -34,8 +39,32 @@
 
 : "${LOG:=/mnt/c/HarderWare/Logs/wxreport-svc.log}"
 : "${DEPLOY_LOG:=/mnt/c/HarderWare/Logs/deploy-history.log}"
-: "${MIN_WINDOW_HOURS:=24}"
+: "${RESULTS_LOG:=/mnt/c/HarderWare/Logs/verify-results.log}"
 SINCE_OVERRIDE=''
+
+# PASS-gating window, in minutes. New scripts set MIN_WINDOW_MINUTES (allows sub-hour
+# waits); older scripts set MIN_WINDOW_HOURS, still honored as a fallback; default 24h.
+# Resolved here at source time -- the caller sets either var BEFORE sourcing, as the
+# contract requires for the rest.
+if [ -z "${MIN_WINDOW_MINUTES:-}" ]; then
+  if [ -n "${MIN_WINDOW_HOURS:-}" ]; then
+    case "$MIN_WINDOW_HOURS" in ''|*[!0-9]*) echo "MIN_WINDOW_HOURS must be a non-negative integer (got '$MIN_WINDOW_HOURS')" >&2; exit 2;; esac
+    MIN_WINDOW_MINUTES=$(( MIN_WINDOW_HOURS * 60 ))
+  else
+    MIN_WINDOW_MINUTES=1440
+  fi
+fi
+# Fail fast on a non-positive / non-numeric window: min_window_secs would be <= 0, the
+# elapsed-<-window WAIT branch could never fire, and the gate would PASS immediately --
+# a fail-OPEN gate, the exact failure this library exists to prevent (WX-170, CR #104).
+case "$MIN_WINDOW_MINUTES" in ''|*[!0-9]*) echo "MIN_WINDOW_MINUTES must be a positive integer (got '$MIN_WINDOW_MINUTES')" >&2; exit 2;; esac
+[ "$MIN_WINDOW_MINUTES" -gt 0 ] || { echo "MIN_WINDOW_MINUTES must be > 0 (got '$MIN_WINDOW_MINUTES')" >&2; exit 2; }
+# Human label for the verdict text: whole hours read as "Nh", otherwise "Nm".
+if [ "$MIN_WINDOW_MINUTES" -ge 60 ] && [ $(( MIN_WINDOW_MINUTES % 60 )) -eq 0 ]; then
+  MIN_WINDOW_LABEL="$(( MIN_WINDOW_MINUTES / 60 ))h"
+else
+  MIN_WINDOW_LABEL="${MIN_WINDOW_MINUTES}m"
+fi
 
 # Timestamped log lines (ignoring multi-line trace continuations) in [a,b).
 # Timestamps are "YYYY-MM-DD HH:MM:SS..." so the leading 19 chars sort lexically.
@@ -48,16 +77,18 @@ win() {  # a b  -> matching real log lines on stdout
 }
 cnt() { grep -cE "$1" || true; }   # count matches on stdin, never error on 0
 
-# Standard arg parsing: --since (manual boundary override), --log, --deploy-log, -h.
+# Standard arg parsing: --since (manual boundary override), --log, --deploy-log,
+# --results-log, -h.
 vl_parse_args() {  # "$@"
   while [ $# -gt 0 ]; do
     case "$1" in
-      --since|--log|--deploy-log)
+      --since|--log|--deploy-log|--results-log)
         [ $# -ge 2 ] || { echo "missing value for $1 (try --help)" >&2; exit 2; }
         case "$1" in
-          --since)      SINCE_OVERRIDE="$2";;
-          --log)        LOG="$2";;
-          --deploy-log) DEPLOY_LOG="$2";;
+          --since)       SINCE_OVERRIDE="$2";;
+          --log)         LOG="$2";;
+          --deploy-log)  DEPLOY_LOG="$2";;
+          --results-log) RESULTS_LOG="$2";;
         esac
         shift 2;;
       -h|--help) awk 'NR==1{next} /^#/{sub(/^# ?/,""); print; next} {exit}' "$SELF"; exit 0;;
@@ -81,8 +112,16 @@ vl_resolve_boundary() {
   local here tool out rc
   here="$(cd "$(dirname "$SELF")" && pwd)"
   tool="$here/deploy-info.sh"
+  # Reset ALL window/identity globals up front so a re-run in the same sourced shell
+  # (or an early exit before they're computed) never logs a previous run's window via
+  # vl_log -- vl_log's ${SINCE:-}/${LAST_TS:-}/${hh:-0} fallbacks then mean "this run
+  # hasn't set it", not "stale from last time" (CR #104).
   DEPLOY_INFO=''
   COMMIT=''
+  SINCE=''
+  LAST_TS=''
+  hh=''
+  mm=''
   if [ -n "$SINCE_OVERRIDE" ]; then
     SINCE="${SINCE_OVERRIDE:0:19}"
     BOUNDARY_SRC='--since override'
@@ -97,6 +136,7 @@ vl_resolve_boundary() {
       echo " VERDICT"
       echo "   Version $VERSION is not in $DEPLOY_LOG yet -- $TICKET not deployed (or the deploy failed)."
       echo "   ====>  WAIT   version $VERSION not deployed yet; deploy, then re-run."
+      vl_log WAIT
       exit 0
     fi
     exit "$rc"   # 2 usage / 3 environment from the helper -- propagate
@@ -116,6 +156,7 @@ vl_setup_window() {
     echo " VERDICT"
     echo "   No log lines at/after $SINCE in $LOG -- deploy too recent (or wrong boundary/log)."
     echo "   ====>  WAIT   no cycles logged since the deploy boundary; re-run once the service has logged."
+    vl_log WAIT
     exit 0
   }
   LAST_TS="$(printf '%s\n' "$POST" | tail -1 | cut -c1-19)"
@@ -125,7 +166,7 @@ vl_setup_window() {
   elapsed=$(( last_epoch - since_epoch )); [ "$elapsed" -gt 0 ] || elapsed=1
   pre_start="$(date -u -d "@$(( since_epoch - elapsed ))" '+%Y-%m-%d %H:%M:%S')"
   hh=$(( elapsed / 3600 )); mm=$(( (elapsed % 3600) / 60 ))
-  min_window_secs=$(( MIN_WINDOW_HOURS * 3600 ))
+  min_window_secs=$(( MIN_WINDOW_MINUTES * 60 ))
 }
 
 # Health helper: count PATTERN over the post window and the equal-length pre-deploy
@@ -152,12 +193,35 @@ vl_header() {
   echo " Service log     : $LOG"
 }
 
-# vl_verdict REGRESSION_COUNT EXERCISED [FAIL_HINT] [PASS_NOTE] -- the reusable PASS/
-# FAIL/WAIT decision, keyed on a CHANGE-SPECIFIC failure signature rather than a blanket
-# ERROR count. This is the crux: a verify script attests to ITS change, so it fails
-# only on lines that appear IFF the change is broken -- unrelated background noise (a
-# coincident reconciler-degradation spike, an unrelated outage) must not fail it and
-# mis-point at this ticket.
+# WX-170: append one line per verification run to the append-only RESULTS_LOG -- when it
+# ran (UTC), the ticket, the version under test, the deployed commit, the verdict, and
+# the window analysed. Called at EVERY exit (the two early WAITs and vl_verdict) so each
+# run leaves a durable, timestamped record and the Jira Test Result becomes a copy, not a
+# recollection. set -u-safe: fields not yet known at an early exit fall back to '-'.
+# Never fails the run -- an unwritable log warns to stderr and is skipped.
+vl_log() {  # VERDICT
+  local verdict="$1" now commit since last window line
+  now="$(date -u '+%Y-%m-%d %H:%M:%S')"
+  commit="${COMMIT:-}"; [ -n "$commit" ] || commit='-'
+  since="${SINCE:-}"; last="${LAST_TS:-}"
+  if [ -n "$since" ]; then
+    window="${since} -> ${last:-?} (${hh:-0}h ${mm:-0}m)"
+  else
+    window='(boundary not resolved)'
+  fi
+  line="$now  [Verify] ${TICKET}  ${VERSION}  ${commit}  ${verdict}  window ${window}"
+  # Brace group so a failed log-open (unwritable path) is suppressed too, not just
+  # printf's stderr; the run never fails on a logging problem -- it only warns.
+  { printf '%s\n' "$line" >> "$RESULTS_LOG"; } 2>/dev/null \
+    || echo "  (note: could not write results log $RESULTS_LOG)" >&2
+}
+
+# vl_verdict REGRESSION_COUNT EXERCISED [FAIL_HINT] [PASS_NOTE] [PRECONDITION] [PRECOND_DESC]
+# -- the reusable PASS/FAIL/WAIT decision, keyed on a CHANGE-SPECIFIC failure signature
+# rather than a blanket ERROR count. This is the crux: a verify script attests to ITS
+# change, so it fails only on lines that appear IFF the change is broken -- unrelated
+# background noise (a coincident reconciler-degradation spike, an unrelated outage) must
+# not fail it and mis-point at this ticket.
 #   REGRESSION_COUNT : how many of this change's failure-signature lines are in the
 #                      window. The CALLER computes this ONCE -- scoped exactly as its
 #                      signature needs (e.g. WX-166 only within ERROR/FATAL lines) -- and
@@ -171,11 +235,18 @@ vl_header() {
 #                      the path hasn't run yet => WAIT (nothing to judge).
 #   FAIL_HINT        : optional remediation line appended to a FAIL.
 #   PASS_NOTE        : optional confirmation/next-step line appended to a PASS.
-# Prints the " VERDICT" section + the boxed PASS|FAIL|WAIT token and sets VERDICT.
-# Conclusive FAIL fires at any elapsed time; PASS is withheld until a full active day
-# (MIN_WINDOW_HOURS) AND >=1 exercised line. Callers print their own metric/context
-# sections (including the matched failure-signature lines, and the informational
-# background-error health) BEFORE calling this.
+#   PRECONDITION     : optional count of REQUIRED-precondition lines the caller found in
+#                      the window -- log lines that MUST be present before the failure
+#                      signature is even meaningful (e.g. "a reconciliation actually
+#                      ran"). When given and <= 0, the verdict is WAIT regardless of the
+#                      signature: the test is not yet applicable. Omit (or leave empty)
+#                      and there is no precondition gate (existing scripts unaffected).
+#   PRECOND_DESC     : optional human phrase naming that precondition, for the WAIT text.
+# Prints the " VERDICT" section + the boxed PASS|FAIL|WAIT token and sets VERDICT. Order:
+# a missing precondition -> WAIT first (test not applicable); then a conclusive FAIL at
+# any elapsed time; then PASS, withheld until the MIN_WINDOW_MINUTES window AND >=1
+# exercised line. Callers print their own metric/context sections (the matched failure-
+# signature lines, any precondition count, the background-error health) BEFORE calling.
 #
 # NOTE on the signature: a clean (no-signature) result means "this change's KNOWN
 # failure modes didn't fire", not "the change is proven correct" -- a crash in a path
@@ -185,31 +256,44 @@ vl_header() {
 # deep checks the log can't express.
 vl_verdict() {
   local n="$1" exercised="$2" fail_hint="${3:-}" pass_note="${4:-}"
+  local precond="${5:-}" precond_desc="${6:-required precondition lines}"
   echo " VERDICT"
-  if [ "$n" -gt 0 ]; then
+  if [ -n "$precond" ] && [ "$precond" -le 0 ]; then
+    VERDICT='WAIT'
+    echo "   The precondition for this test is not present yet ($precond_desc) -- the"
+    echo "   failure-signature check is not applicable until it appears. Re-run once it does."
+  elif [ "$n" -gt 0 ]; then
     VERDICT='FAIL'
     echo "   $n line(s) match this change's failure signature since the deploy (shown in the"
     echo "   section above) -- the change is not working as intended."
     [ -n "$fail_hint" ] && echo "   $fail_hint"
   elif [ "$elapsed" -lt "$min_window_secs" ]; then
     VERDICT='WAIT'
-    echo "   Only ${hh}h ${mm}m of cycles since deploy -- a valid test needs a full active day"
-    echo "   (>= ${MIN_WINDOW_HOURS}h). No failure signature so far; re-run once the window fills."
+    echo "   Only ${hh}h ${mm}m of cycles since deploy -- a valid test needs at least"
+    echo "   ${MIN_WINDOW_LABEL}. No failure signature so far; re-run once the window fills."
   elif [ "$exercised" -le 0 ]; then
     VERDICT='WAIT'
-    echo "   A full active day elapsed, but the change's code path has not run yet (nothing to"
-    echo "   judge). Re-run after the next active cycle."
+    echo "   The ${MIN_WINDOW_LABEL} window elapsed, but the change's code path has not run"
+    echo "   yet (nothing to judge). Re-run after the next active cycle."
   else
     VERDICT='PASS'
-    echo "   A full active day in, the change's code path ran $exercised time(s), and no"
-    echo "   failure-signature line appeared. The change is live and behaving."
+    echo "   Past the ${MIN_WINDOW_LABEL} window, the change's code path ran $exercised time(s),"
+    echo "   and no failure-signature line appeared. The change is live and behaving."
     [ -n "$pass_note" ] && echo "   $pass_note"
   fi
   echo
   case "$VERDICT" in
     PASS) echo "   ====>  PASS   $TICKET verified live: no failure signature, change exercised.";;
     FAIL) echo "   ====>  FAIL   open a Bug linked to $TICKET; this ticket still completes (fix-forward).";;
-    WAIT) echo "   ====>  WAIT   insufficient evidence for a valid test; give it a full active day, then re-run.";;
+    WAIT) echo "   ====>  WAIT   insufficient evidence for a valid test yet; re-run once the condition above is met.";;
   esac
+  # WX-170: record the run, and hand back a ready-to-paste Jira Test Result. WAIT is
+  # logged (an inconclusive check is useful history) but has no Test Result to paste --
+  # the field per WORKFLOW §7a is PASS/FAIL only.
+  vl_log "$VERDICT"
+  if [ "$VERDICT" != 'WAIT' ]; then
+    echo
+    echo "   Test Result (paste into Jira): $VERDICT $(date -u '+%Y-%m-%d') @ $VERSION"
+  fi
   echo "============================================================"
 }
