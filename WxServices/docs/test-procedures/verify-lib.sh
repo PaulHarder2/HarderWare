@@ -48,11 +48,17 @@ SINCE_OVERRIDE=''
 # contract requires for the rest.
 if [ -z "${MIN_WINDOW_MINUTES:-}" ]; then
   if [ -n "${MIN_WINDOW_HOURS:-}" ]; then
+    case "$MIN_WINDOW_HOURS" in ''|*[!0-9]*) echo "MIN_WINDOW_HOURS must be a non-negative integer (got '$MIN_WINDOW_HOURS')" >&2; exit 2;; esac
     MIN_WINDOW_MINUTES=$(( MIN_WINDOW_HOURS * 60 ))
   else
     MIN_WINDOW_MINUTES=1440
   fi
 fi
+# Fail fast on a non-positive / non-numeric window: min_window_secs would be <= 0, the
+# elapsed-<-window WAIT branch could never fire, and the gate would PASS immediately --
+# a fail-OPEN gate, the exact failure this library exists to prevent (WX-170, CR #104).
+case "$MIN_WINDOW_MINUTES" in ''|*[!0-9]*) echo "MIN_WINDOW_MINUTES must be a positive integer (got '$MIN_WINDOW_MINUTES')" >&2; exit 2;; esac
+[ "$MIN_WINDOW_MINUTES" -gt 0 ] || { echo "MIN_WINDOW_MINUTES must be > 0 (got '$MIN_WINDOW_MINUTES')" >&2; exit 2; }
 # Human label for the verdict text: whole hours read as "Nh", otherwise "Nm".
 if [ "$MIN_WINDOW_MINUTES" -ge 60 ] && [ $(( MIN_WINDOW_MINUTES % 60 )) -eq 0 ]; then
   MIN_WINDOW_LABEL="$(( MIN_WINDOW_MINUTES / 60 ))h"
@@ -106,8 +112,16 @@ vl_resolve_boundary() {
   local here tool out rc
   here="$(cd "$(dirname "$SELF")" && pwd)"
   tool="$here/deploy-info.sh"
+  # Reset ALL window/identity globals up front so a re-run in the same sourced shell
+  # (or an early exit before they're computed) never logs a previous run's window via
+  # vl_log -- vl_log's ${SINCE:-}/${LAST_TS:-}/${hh:-0} fallbacks then mean "this run
+  # hasn't set it", not "stale from last time" (CR #104).
   DEPLOY_INFO=''
   COMMIT=''
+  SINCE=''
+  LAST_TS=''
+  hh=''
+  mm=''
   if [ -n "$SINCE_OVERRIDE" ]; then
     SINCE="${SINCE_OVERRIDE:0:19}"
     BOUNDARY_SRC='--since override'
