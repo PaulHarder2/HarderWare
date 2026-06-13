@@ -37,6 +37,17 @@ public class ReportConfig
     /// </summary>
     public int MinGapMinutes { get; set; } = 90;
 
+    /// <summary>
+    /// WX-181 day-banded debounce for *unscheduled* updates: a step schedule
+    /// <c>"day:hours,…"</c> setting the minimum gap since the last unscheduled send as a
+    /// function of how far out (recipient-local days, 1 = today) the change reaches.
+    /// Default <c>"1:6,3:12"</c> — a change touching today/tomorrow needs 6 h, one that
+    /// only reaches day 3+ needs 12 h. Parsed by <see cref="UpdateDebounceScheduleFormat"/>
+    /// (strict: first day must be 1, days ascending). A not-severe→severe change punches
+    /// through; <see cref="MinGapMinutes"/> remains a hard floor beneath this.
+    /// </summary>
+    public string UpdateDebounceSchedule { get; set; } = "1:6,3:12";
+
     /// <summary>Check interval; loaded from appsettings.json (service-specific).</summary>
     public int IntervalMinutes { get; set; } = 5;
 

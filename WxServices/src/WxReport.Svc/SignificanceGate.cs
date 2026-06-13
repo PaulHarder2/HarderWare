@@ -29,7 +29,10 @@ namespace WxReport.Svc;
 /// <summary>Outcome of a <see cref="SignificanceGate"/> evaluation.</summary>
 /// <param name="Significant">True when at least one criterion tripped (Claude should be called).</param>
 /// <param name="FiredCriteria">Human-readable names of the criteria that tripped, for the DEBUG log.  Empty when not significant.</param>
-internal readonly record struct SignificanceResult(bool Significant, IReadOnlyList<string> FiredCriteria);
+/// <param name="EarliestChangedDayLocal">WX-181: the recipient-local day of the earliest block/day that tripped a criterion — the day-banded update debounce keys its band on this. Null when not significant, or significant-but-uncharacterized (disjoint horizon → no debounce, send).</param>
+/// <param name="SevereEntered">WX-181: true when a not-severe→severe onset tripped (severe-add) — lets the change punch through the debounce schedule.</param>
+internal readonly record struct SignificanceResult(
+    bool Significant, IReadOnlyList<string> FiredCriteria, DateOnly? EarliestChangedDayLocal, bool SevereEntered);
 
 /// <summary>
 /// Deterministic significance evaluator for WX-114.  Pure function: no I/O, no
@@ -65,6 +68,7 @@ internal static class SignificanceGate
         ArgumentNullException.ThrowIfNull(tz);
 
         var fired = new List<string>();
+        var stats = new ChangeStats();
         var horizonEnd = nowUtc.AddHours(WxThresholds.TierUpperBoundHours[^1]);
 
         // Disjoint horizons — an empty prior, or a last send so old its blocks no
@@ -75,12 +79,31 @@ internal static class SignificanceGate
         // "there are in-horizon current blocks" so a forecast whose only blocks are
         // beyond 120h (nothing to gate on) is still ignored, not forced significant.
         if (AnyInHorizon(current, nowUtc, horizonEnd) && !HasOverlap(prior, current, nowUtc, horizonEnd))
-            return new SignificanceResult(true, ["disjoint-horizon"]);
+            return new SignificanceResult(true, ["disjoint-horizon"], null, false);
 
-        EvaluateDailyTemperature(prior, current, cfg, nowUtc, horizonEnd, tz, fired);
-        EvaluatePerBlockEvents(prior, current, cfg, nowUtc, horizonEnd, fired);
+        EvaluateDailyTemperature(prior, current, cfg, nowUtc, horizonEnd, tz, fired, stats);
+        EvaluatePerBlockEvents(prior, current, cfg, nowUtc, horizonEnd, tz, fired, stats);
 
-        return new SignificanceResult(fired.Count > 0, fired);
+        return new SignificanceResult(fired.Count > 0, fired, stats.EarliestDayLocal, stats.SevereEntered);
+    }
+
+    /// <summary>
+    /// WX-181 accumulator: the earliest recipient-local day among the blocks/days that
+    /// tripped a criterion, plus whether a severe onset (not-severe→severe) was one of
+    /// them. Drives the day-banded update debounce + its severe punch-through.
+    /// </summary>
+    private sealed class ChangeStats
+    {
+        public DateOnly? EarliestDayLocal { get; private set; }
+        public bool SevereEntered { get; private set; }
+
+        public void Note(DateOnly dayLocal)
+        {
+            if (EarliestDayLocal is null || dayLocal < EarliestDayLocal.Value)
+                EarliestDayLocal = dayLocal;
+        }
+
+        public void NoteSevereEntered() => SevereEntered = true;
     }
 
     // ── Per-day temperature: daily high/low magnitude, freeze/thaw, heat crossing ──
@@ -90,7 +113,7 @@ internal static class SignificanceGate
     private static void EvaluateDailyTemperature(
         ForecastSnapshotBody prior, ForecastSnapshotBody current,
         SignificanceGateConfig cfg, DateTime nowUtc, DateTime horizonEnd, TimeZoneInfo tz,
-        List<string> fired)
+        List<string> fired, ChangeStats stats)
     {
         var curDays = DailyHiLoDegF(current, nowUtc, horizonEnd, tz);
         var priDays = DailyHiLoDegF(prior, nowUtc, horizonEnd, tz);
@@ -107,6 +130,8 @@ internal static class SignificanceGate
             int tier = TierOf(cur.FirstStartUtc, nowUtc);
             if (tier < 0)
                 continue;
+
+            int before = fired.Count;
 
             // Daily high/low magnitude change.
             int delta = PerTier(cfg.TempDeltaDegF, tier);
@@ -130,14 +155,17 @@ internal static class SignificanceGate
             bool curHeat = cur.Hi >= cfg.HeatAdvisoryDegF;
             if (priHeat != curHeat)
                 fired.Add($"heat-cross({day:yyyy-MM-dd})");
+
+            if (fired.Count > before)
+                stats.Note(day);
         }
     }
 
     // ── Per-block events: precip occurrence/type, severe, wind advisory + magnitude ──
     private static void EvaluatePerBlockEvents(
         ForecastSnapshotBody prior, ForecastSnapshotBody current,
-        SignificanceGateConfig cfg, DateTime nowUtc, DateTime horizonEnd,
-        List<string> fired)
+        SignificanceGateConfig cfg, DateTime nowUtc, DateTime horizonEnd, TimeZoneInfo tz,
+        List<string> fired, ChangeStats stats)
     {
         var priorByStart = new Dictionary<DateTime, ForecastSnapshotBlock>(prior.Blocks.Count);
         foreach (var b in prior.Blocks)
@@ -154,6 +182,7 @@ internal static class SignificanceGate
             if (tier < 0)
                 continue;
             string at = $"@T{tier + 1}({cur.StartUtc:MM-dd HH}Z)";
+            int before = fired.Count;
 
             bool priWet = pri.PrecipExpectation != PrecipExpectation.None;
             bool curWet = cur.PrecipExpectation != PrecipExpectation.None;
@@ -174,7 +203,10 @@ internal static class SignificanceGate
 
             // Severe ADD (onset): safety floor, all tiers.
             if (!pri.SevereFlag && cur.SevereFlag)
+            {
                 fired.Add($"severe-add{at}");
+                stats.NoteSevereEntered();
+            }
             // Severe REMOVE (cleared): T1–T3 (T4 is info-only, does not gate).
             if (pri.SevereFlag && !cur.SevereFlag && tier <= 2)
                 fired.Add($"severe-remove{at}");
@@ -188,6 +220,9 @@ internal static class SignificanceGate
             // Sustained-wind magnitude change: per-tier threshold, all tiers.
             if (Math.Abs(cur.WindKt.Max - pri.WindKt.Max) >= PerTier(cfg.WindDeltaKt, tier))
                 fired.Add($"wind-delta{at}");
+
+            if (fired.Count > before)
+                stats.Note(DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(cur.StartUtc, DateTimeKind.Utc), tz)));
         }
     }
 
