@@ -1483,10 +1483,11 @@ public class ForecastReconcilerTests
     private static readonly TimeZoneInfo Cdt =
         TimeZoneInfo.CreateCustomTimeZone("Test-CDT", TimeSpan.FromHours(-5), "Test CDT", "Test CDT");
 
-    // ── WX-160 windKt sustained-ceiling validator ─────────────────────────────
+    // ── WX-160 windKt sustained-ceiling normalizer (clamp; WX-180) ────────────
     // windKt carries sustained wind only; a folded gust (windKt.max above every
-    // sustained source for the block) is rejected and replayed to Claude with
-    // feedback, so the contaminated max never reaches the stored baseline.
+    // sustained source for the block) is CLAMPED down to the ceiling (WX-180; was a
+    // reject → retry → degrade under WX-160), so the contaminated max never reaches
+    // the stored baseline AND a gusty forecast no longer degrades every cycle.
 
     private const string WindCeilingProvisionalJson =
         """{"schemaVersion":5,"blocks":[{"startUtc":"2026-06-09T11:00:00Z","skyState":"clear","obscuration":"none","temperatureCelsius":{"min":18,"max":26},"windKt":{"min":4,"max":12},"precipExpectation":"none","severeFlag":false}]}""";
@@ -1494,19 +1495,24 @@ public class ForecastReconcilerTests
     private static string WindBlockSnapshotJson(int windMax) =>
         $$"""{"schemaVersion":5,"blocks":[{"startUtc":"2026-06-09T11:00:00Z","skyState":"clear","obscuration":"none","temperatureCelsius":{"min":18,"max":26},"windKt":{"min":4,"max":{{windMax}}},"precipExpectation":"none","severeFlag":false}]}""";
 
+    private static string WindBlockMinMaxSnapshotJson(int windMin, int windMax) =>
+        $$"""{"schemaVersion":5,"blocks":[{"startUtc":"2026-06-09T11:00:00Z","skyState":"clear","obscuration":"none","temperatureCelsius":{"min":18,"max":26},"windKt":{"min":{{windMin}},"max":{{windMax}}},"precipExpectation":"none","severeFlag":false}]}""";
+
     [Fact]
-    public async Task WindKtSustained_FoldedGust_RejectedThenCorrectionAccepted()
+    public async Task WindKtSustained_FoldedGust_ClampedToCeiling_NoRetry()
     {
-        // GFS forecasts sustained 12 kt for the block. Claude first folds a gust into
-        // windKt.max (20 kt), which overshoots the sustained ceiling and is rejected;
-        // the retry returns a clean sustained 12 kt and is accepted.
+        // GFS forecasts sustained 12 kt for the block. Claude folds a gust into
+        // windKt.max (20 kt), overshooting the sustained ceiling. WX-180: rather than
+        // rejecting and retrying (which on a gusty forecast never converged and degraded
+        // every cycle — the cost incident), the reconciler clamps windKt.max down to the
+        // ceiling (12 kt) on the FIRST attempt — no retry, no degrade.
         var provisional = ForecastSnapshotBody.Deserialize(WindCeilingProvisionalJson);
         int call = 0;
         var result = await RunReconciler(
             _ =>
             {
-                var snapshotJson = call++ == 0 ? WindBlockSnapshotJson(20) : WindBlockSnapshotJson(12);
-                var json = BuildClaudeResponseJson(snapshotJson, "trace", 10, 10, 0, 0);
+                call++;
+                var json = BuildClaudeResponseJson(WindBlockSnapshotJson(20), "trace", 10, 10, 0, 0);
                 return new HttpResponseMessage(HttpStatusCode.OK)
                 {
                     Content = new StringContent(json, Encoding.UTF8, "application/json"),
@@ -1515,16 +1521,16 @@ public class ForecastReconcilerTests
             provisional: provisional);
 
         var success = Assert.IsType<ReconcileResult.Success>(result);
-        Assert.Equal(12, success.FinalSnapshot.Blocks[0].WindKt.Max);
-        Assert.Equal(2, call);   // exactly one retry: the folded-gust attempt was rejected, the correction accepted
+        Assert.Equal(12, success.FinalSnapshot.Blocks[0].WindKt.Max);  // folded gust clamped out
+        Assert.Equal(1, call);   // corrected in place on the first attempt — no retry
     }
 
     [Fact]
-    public async Task WindKtSustained_PersistentFold_NeverAcceptedAsSuccess()
+    public async Task WindKtSustained_PersistentFold_ClampedAndAccepted()
     {
-        // A gust folded into windKt.max on every attempt is never accepted as a clean
-        // Success — it exhausts the retries (and degrades or fails), so the
-        // contaminated max never reaches the baseline as a committed send.
+        // Even if Claude folds the gust on every attempt, WX-180 clamps windKt.max to the
+        // sustained ceiling and accepts the result: the contaminated max never reaches the
+        // baseline, and there is no degrade loop (the failure mode behind the cost incident).
         var provisional = ForecastSnapshotBody.Deserialize(WindCeilingProvisionalJson);
         var responseJson = BuildClaudeResponseJson(WindBlockSnapshotJson(20), "trace", 10, 10, 0, 0);
         var result = await RunReconciler(
@@ -1534,7 +1540,30 @@ public class ForecastReconcilerTests
             },
             provisional: provisional);
 
-        Assert.IsNotType<ReconcileResult.Success>(result);
+        var success = Assert.IsType<ReconcileResult.Success>(result);
+        Assert.Equal(12, success.FinalSnapshot.Blocks[0].WindKt.Max);
+    }
+
+    [Fact]
+    public async Task WindKtSustained_FoldWithInflatedMin_ClampDoesNotInvertBand()
+    {
+        // Claude folds a gust AND reports an inflated sustained min (windKt {min:15,max:20})
+        // for a block whose sustained ceiling is 12 kt. Clamping max down to 12 must also
+        // lower min, so the band never inverts (min must stay <= max) — an inverted band
+        // would corrupt the significance-gate baseline and ship on degrade.
+        var provisional = ForecastSnapshotBody.Deserialize(WindCeilingProvisionalJson);
+        var responseJson = BuildClaudeResponseJson(WindBlockMinMaxSnapshotJson(15, 20), "trace", 10, 10, 0, 0);
+        var result = await RunReconciler(
+            _ => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(responseJson, Encoding.UTF8, "application/json"),
+            },
+            provisional: provisional);
+
+        var success = Assert.IsType<ReconcileResult.Success>(result);
+        var wind = success.FinalSnapshot.Blocks[0].WindKt;
+        Assert.Equal(12, wind.Max);
+        Assert.True(wind.Min <= wind.Max, $"band inverted: min={wind.Min} max={wind.Max}");
     }
 
     [Fact]

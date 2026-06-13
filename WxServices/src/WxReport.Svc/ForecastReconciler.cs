@@ -307,9 +307,14 @@ public sealed class ForecastReconciler
                 // A missing field, schema/token violation, or a requested language
                 // absent/extra all throw and route through the retry → skip/Failure
                 // path, exactly like a final_snapshot schema violation.
-                // WX-160: windKt must be sustained-only — reject a folded gust before
-                // it corrupts the baseline the significance gate compares against.
-                ValidateWindKtSustained(finalSnapshot, provisional, snapshot);
+                // WX-180: windKt must be sustained-only — CLAMP a folded gust out of
+                // windKt.max (rather than reject → retry → degrade, which on a gusty
+                // forecast never converged and degraded every cycle: the ~$45/day cost
+                // incident) before it corrupts the baseline the significance gate compares
+                // against. lastParsedSnapshot is refreshed so a later degrade uses the
+                // corrected windKt too.
+                finalSnapshot = NormalizeWindKtSustained(finalSnapshot, provisional, snapshot);
+                lastParsedSnapshot = finalSnapshot;
 
                 var structuredReportJson = RequireProperty(input, "structured_report").GetRawText();
                 var structuredReport = StructuredReportBody.Deserialize(structuredReportJson);
@@ -613,7 +618,24 @@ public sealed class ForecastReconciler
     // folded gust (or an invented wind); it fails closed through the same retry-with-
     // feedback path as every other contract check, with a message telling Claude to
     // move the gust to the narrative.
-    private static void ValidateWindKtSustained(
+    /// <summary>
+    /// WX-180: enforce the windKt-is-sustained-only invariant by <b>clamping</b> a
+    /// folded gust out of <c>windKt.max</c>, rather than rejecting it. The merged
+    /// GFS+TAF body's <c>windKt.max</c> (plus any in-block observation's sustained
+    /// wind) is the per-block sustained ceiling; whenever Claude returns a
+    /// <c>windKt.max</c> above that ceiling (a folded gust), it is corrected down to
+    /// the ceiling.
+    /// <para>
+    /// WX-160 originally <em>rejected</em> a folded gust (throw → retry → degrade). On
+    /// a gusty forecast Claude could not converge across the attempts, so the locality
+    /// degraded every cycle and re-burned reconciliations — the ~$45/day cost incident
+    /// (WX-180). The ceiling IS the correct sustained value, so clamping yields the
+    /// same invariant deterministically with no retry. The gust still belongs in the
+    /// narrative <c>{q:gust}</c> token; clamping never touches the narrative.
+    /// </para>
+    /// Returns the (possibly corrected) body — the same reference when nothing was clamped.
+    /// </summary>
+    private static ForecastSnapshotBody NormalizeWindKtSustained(
         ForecastSnapshotBody finalSnapshot, ForecastSnapshotBody provisional, WeatherSnapshot snapshot)
     {
         // The merged body's windKt.max IS the sustained ceiling per block (TAF-prevails
@@ -623,8 +645,10 @@ public sealed class ForecastReconciler
         foreach (var b in ceilingBody.Blocks)
             ceilingByStart[b.StartUtc] = b.WindKt.Max;
 
-        foreach (var block in finalSnapshot.Blocks)
+        List<ForecastSnapshotBlock>? corrected = null;
+        for (int i = 0; i < finalSnapshot.Blocks.Count; i++)
         {
+            var block = finalSnapshot.Blocks[i];
             int ceiling = ceilingByStart.TryGetValue(block.StartUtc, out var m) ? m : int.MinValue;
 
             // The current observation's SUSTAINED wind (never its gust) raises the
@@ -637,17 +661,26 @@ public sealed class ForecastReconciler
                 ceiling = Math.Max(ceiling, obsKt);
 
             // No sustained source covers this block (e.g. a far-horizon block past the
-            // GFS/TAF reach): nothing to pin against, so don't false-reject. This
-            // early-continue MUST precede the tolerance addition below — otherwise
-            // int.MinValue + tolerance underflows.
+            // GFS/TAF reach): nothing to pin against, so leave it. This guard MUST
+            // precede the tolerance addition below — otherwise int.MinValue + tolerance
+            // underflows.
             if (ceiling == int.MinValue) continue;
 
             if (block.WindKt.Max > ceiling + WxThresholds.SustainedCeilingToleranceKt)
-                throw new JsonException(
-                    $"final_snapshot block {block.StartUtc:O} windKt.max is {block.WindKt.Max} kt, but the maximum "
-                    + $"SUSTAINED wind forecast for it (GFS+TAF merged, plus any in-block observation) is {ceiling} kt. "
-                    + "windKt carries sustained wind only — put the gust in the narrative {q:gust} token, not windKt.max.");
+            {
+                Logger.Debug(
+                    $"windKt.max {block.WindKt.Max} kt exceeds the sustained ceiling {ceiling} kt for block "
+                    + $"{block.StartUtc:O} (folded gust); clamping windKt.max to {ceiling} kt (WX-180). "
+                    + "The gust belongs in the narrative {q:gust} token.");
+                corrected ??= [.. finalSnapshot.Blocks];
+                // Lower Min too if it sits above the new ceiling, so the clamp can never
+                // invert the band (Min > Max) — downstream (the significance gate compares
+                // both endpoints, Serialize, and the degrade artifact) assumes Min <= Max.
+                corrected[i] = block with { WindKt = block.WindKt with { Min = Math.Min(block.WindKt.Min, ceiling), Max = ceiling } };
+            }
         }
+
+        return corrected is null ? finalSnapshot : finalSnapshot with { Blocks = corrected };
     }
 
     // WX-149: prose hygiene over the language-keyed narrative — two reader-facing
