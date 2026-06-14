@@ -41,6 +41,20 @@ public class LocalityState
     public string? LastSentInputHash { get; set; }
 
     /// <summary>
+    /// Serialised <c>InputIdentity</c> of the most recent reconcile that
+    /// <em>degraded-to-no-send</em> (a non-hazard degrade — Claude could not produce a
+    /// self-consistent narrative and there was no near-term severe block).  The WX-182
+    /// degrade circuit-breaker reads this: when the current input hash equals it, a
+    /// re-reconcile would deterministically degrade again, so the Claude call is skipped
+    /// — a due scheduled slot is served from the last good snapshot instead.  Set only
+    /// on a degrade-to-no-send; cleared on any genuine Claude-reconciled send (the
+    /// cached re-send deliberately leaves it set, so successive scheduled slots on the
+    /// same stuck input all serve from cache at zero Claude cost).  <see langword="null"/>
+    /// until the first such degrade.
+    /// </summary>
+    public string? LastDegradedInputHash { get; set; }
+
+    /// <summary>
     /// ICAO of the METAR station behind the locality's most recent report.  Detects
     /// station switches within the locality's priority-ordered hierarchy (the primary
     /// had no recent data).  Only captured when an observation was available.
