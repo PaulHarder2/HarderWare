@@ -373,6 +373,36 @@ public class StructuredReportRendererTests
         Assert.DoesNotContain(" at ", plain.Replace("S at 14 mph", "", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void WithoutChangeBand_SuppressesBand_KeepsClosing()
+    {
+        // A change summary normally renders the "What's changed:" band...
+        var withBand = StructuredReportRenderer.Render(
+            Body("{ch1}Storms moving in."), Forecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled);
+        Assert.Contains("What's changed:", withBand);
+
+        // ...WX-182's band-free copy (a cached scheduled re-send narrates no change) drops
+        // the band but keeps the closing prose.
+        var bandFree = ReportWorker.WithoutChangeBand(Body("{ch1}Storms moving in."));
+        var rendered = StructuredReportRenderer.Render(
+            bandFree, Forecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled);
+        Assert.DoesNotContain("What's changed:", rendered);
+        Assert.Contains("92°F", rendered);  // closing prose still rendered (Highs near 33.5°C → 92°F)
+    }
+
+    [Fact]
+    public void WithoutChangeBand_EmptiesChangesAndSummary_StaysSerializable()
+    {
+        var bandFree = ReportWorker.WithoutChangeBand(Body("{ch1}Storms moving in."));
+        Assert.Empty(bandFree.Changes);
+        Assert.All(bandFree.Narrative.Values, n => Assert.Null(n.ChangeSummary));
+        Assert.All(bandFree.Narrative.Values, n => Assert.False(string.IsNullOrWhiteSpace(n.Closing)));
+        // Empty changes → no anchors required → blank changeSummary is valid; the band-free
+        // body still serializes (it's what the cached send persists as its audit).
+        var roundTrip = StructuredReportBody.Deserialize(bandFree.Serialize());
+        Assert.Empty(roundTrip.Changes);
+    }
+
     private static int CountOccurrences(string haystack, string needle)
     {
         int count = 0, i = 0;

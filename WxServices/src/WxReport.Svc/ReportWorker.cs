@@ -54,6 +54,7 @@ public sealed class ReportWorker : BackgroundService
     private readonly Counter<long> _significanceGateSkips;
     private readonly Counter<long> _debounceSuppressed;
     private readonly Counter<long> _quietWindowSuppressed;
+    private readonly Counter<long> _degradeBreaker;
     private readonly Histogram<double> _cycleDuration;
     private readonly Histogram<double> _claudeDuration;
 
@@ -99,6 +100,7 @@ public sealed class ReportWorker : BackgroundService
         _significanceGateSkips = _meter.CreateCounter<long>("wxreport.suppressed.significance_gate.total", description: "WX-114: cycles the deterministic significance gate found unchanged since the last sent report, tagged by mode (enforce = Claude call skipped; shadow = would-skip but Claude still called).");
         _debounceSuppressed = _meter.CreateCounter<long>("wxreport.suppressed.debounce.total", description: "WX-181: significant unscheduled cycles suppressed by the day-banded debounce (the change's day-band min-gap had not elapsed since the last unscheduled send), tagged by mode (enforce = Claude call skipped; shadow = would-skip but Claude still called).");
         _quietWindowSuppressed = _meter.CreateCounter<long>("wxreport.suppressed.quietwindow.total", description: "WX-157: significant unscheduled cycles suppressed by the day-banded pre-scheduled quiet window (the next scheduled slot fell within the change's day-band quiet window; content rides the scheduled report), tagged by mode (enforce = Claude call skipped; shadow = would-skip but Claude still called).");
+        _degradeBreaker = _meter.CreateCounter<long>("wxreport.degrade_breaker.total", description: "WX-182: due scheduled/first cycles where the degrade circuit-breaker skipped the Claude reconcile because the input is identical to the last degrade-to-no-send, tagged by outcome (cached_send = scheduled report re-issued from the last good snapshot, no Claude call; skip = no usable cached snapshot, slot deferred to self-heal on the next input change).");
         _cycleDuration = _meter.CreateHistogram<double>("wxreport.cycle.duration.seconds", unit: "s", description: "Duration of each report cycle.");
         _claudeDuration = _meter.CreateHistogram<double>("wxreport.claude.duration.seconds", unit: "s", description: "Duration of each Claude API call.");
     }
@@ -635,6 +637,25 @@ public sealed class ReportWorker : BackgroundService
             return welcomed;
         }
 
+        // WX-182 degrade circuit-breaker: we already degraded-to-no-send on this exact
+        // input, so a re-reconcile would deterministically degrade again. On the
+        // guaranteed scheduled/first path (which bypasses the pre-filter), re-issue the
+        // last good report from cache with no Claude call — or, if there is no usable
+        // cached snapshot, skip and self-heal when the input next changes. The unscheduled
+        // "change" path cannot reach here (its pre-filter already skips an identical
+        // input). Strict equality keeps this orthogonal to the WX-157 quiet window: it
+        // can never fire on an advanced input. A null return means a severe block has
+        // crossed into the hazard horizon on this stuck input — fall through to a normal
+        // reconcile so the WX-148 degrade-hazard path can send the banner (safety > cost).
+        if ((reason is "scheduled" or "first") && state.LastDegradedInputHash == inputHash)
+        {
+            var cachedSent = await SendScheduledFromCacheAsync(
+                ctx, emailer, locality, members, memberIds, servedIds, state, snapshot,
+                preferredIcaos, inputHash, reason, tz, langById, cfg, now, label, ct);
+            if (cachedSent is int sent)
+                return sent;
+        }
+
         var triggerType = reason == "change"
             ? ArrivalLabel(inputIdentity.ChangedSourcesSince(state.LastClaudeInputHash))
             : reason;
@@ -788,8 +809,13 @@ public sealed class ReportWorker : BackgroundService
             if (!hazardSoon)
             {
                 _claudeMalformedOutput.Add(1);
+                // WX-182: arm the degrade circuit-breaker — record the input we just
+                // degraded on so an identical next cycle skips the (deterministically
+                // wasteful) re-reconcile. PersistUnsentCycleAsync saves both this and
+                // LastClaudeInputHash in one write.
+                state.LastDegradedInputHash = inputHash;
                 await PersistUnsentCycleAsync(ctx, label, state, inputHash, ct);
-                Logger.Warn($"{label}: reconciliation degraded ({degraded.Reason}); no near-term severe block, summary omitted and no send — self-heal next cycle.");
+                Logger.Warn($"{label}: reconciliation degraded ({degraded.Reason}); no near-term severe block, summary omitted and no send — self-heal next cycle (WX-182 breaker armed for this input).");
                 return 0;
             }
 
@@ -935,7 +961,7 @@ public sealed class ReportWorker : BackgroundService
     /// </summary>
     private async Task AdvanceBaselineAfterSendAsync(
         WeatherDataContext ctx, LocalityState state, string reason, DateTime now, string inputHash,
-        WeatherSnapshot snapshot, string label, CancellationToken ct)
+        WeatherSnapshot snapshot, string label, CancellationToken ct, bool clearDegraded = true)
     {
         if (reason is "scheduled" or "first")
             state.LastScheduledSentUtc = now;
@@ -943,6 +969,11 @@ public sealed class ReportWorker : BackgroundService
             state.LastUnscheduledSentUtc = now;
         state.LastClaudeInputHash = inputHash;
         state.LastSentInputHash = inputHash;
+        // WX-182: a genuine Claude-reconciled send resets the degrade breaker; the cached
+        // re-send (clearDegraded:false) leaves it armed so further scheduled slots on the
+        // same stuck input stay cost-0.
+        if (clearDegraded)
+            state.LastDegradedInputHash = null;
         if (snapshot.ObservationAvailable)
             state.LastMetarIcao = snapshot.StationIcao;
 
@@ -953,6 +984,126 @@ public sealed class ReportWorker : BackgroundService
             Logger.Error($"{label}: failed to save locality state after sends — baseline did not advance; next cycle may resend.", ex);
         }
     }
+
+    /// <summary>
+    /// WX-182 degrade circuit-breaker delivery: a due scheduled/first slot whose input is
+    /// identical to the last degrade-to-no-send. Re-issues the locality's last good report
+    /// from cache — the last reconciled snapshot + its narrative (change band suppressed) +
+    /// the live current conditions — with NO Claude call, and returns the number sent.
+    /// Returns <c>0</c> (skip; self-heal on the next input change) when there is no usable
+    /// cached snapshot (e.g. a locality whose first-ever reconcile degraded). Returns
+    /// <see langword="null"/> to tell the caller to fall through to a normal reconcile: a
+    /// severe block fixed in the cached forecast has crossed into the hazard horizon as the
+    /// clock advanced, so the WX-148 degrade-hazard path must run (safety over cost) — the
+    /// breaker only ever arms on a non-hazard degrade, so a clock-advance is the sole way
+    /// severe can surface here. Delivers to served members only (new members onboard on a
+    /// normal reconciling cycle).
+    /// </summary>
+    private async Task<int?> SendScheduledFromCacheAsync(
+        WeatherDataContext ctx, SmtpSender emailer, Locality locality, List<Recipient> members,
+        List<string> memberIds, IReadOnlySet<string> servedIds, LocalityState state,
+        WeatherSnapshot snapshot, IReadOnlyList<string> preferredIcaos, string inputHash, string reason,
+        TimeZoneInfo tz, IReadOnlyDictionary<long, Language> langById, ReportConfig cfg, DateTime now,
+        string label, CancellationToken ct)
+    {
+        int Skip(string why)
+        {
+            _degradeBreaker.Add(1, new KeyValuePair<string, object?>("outcome", "skip"));
+            Logger.Warn($"{label}: WX-182 degrade circuit-breaker — {why}; {reason} report deferred until the input changes (self-heal).");
+            return 0;
+        }
+
+        // The locality's last DELIVERED reconciled report: its snapshot + narrative. Keyed
+        // on a non-null StructuredReport so a prior narrative-less degraded-hazard send is
+        // not picked as the cache source.
+        var lastGood = await ctx.CommittedSends
+            .Where(cs => memberIds.Contains(cs.RecipientId) && cs.SentAtUtc.HasValue
+                && !cs.IsDiagnostic && cs.StructuredReport != null)
+            .OrderByDescending(cs => cs.ForecastSnapshot.GeneratedAtUtc)
+            .Select(cs => new { cs.StructuredReport, cs.ForecastSnapshot })
+            .FirstOrDefaultAsync(ct);
+
+        ForecastSnapshotBody cachedBody;
+        StructuredReportBody bandFree;
+        string bandFreeJson;
+        if (lastGood?.ForecastSnapshot is not { } cachedSnapshot
+            || cachedSnapshot.SchemaVersion != ForecastSnapshotBody.SchemaVersionCurrent
+            || lastGood.StructuredReport is null)
+            return Skip("degraded on identical input and no usable cached snapshot");
+        try
+        {
+            // Band-free: a cached scheduled re-send narrates no change (input unchanged
+            // since the degrade), so strip the stale "What's changed" band before rendering.
+            bandFree = WithoutChangeBand(StructuredReportBody.Deserialize(lastGood.StructuredReport));
+            cachedBody = ForecastSnapshotBody.Deserialize(cachedSnapshot.Body);
+            bandFreeJson = bandFree.Serialize();
+        }
+        catch (JsonException ex)
+        {
+            return Skip($"cached snapshot/report unusable ({ex.Message})");
+        }
+
+        // Safety re-check (WX-182 acceptance: severe is unaffected). The breaker armed on a
+        // non-hazard degrade, but a severe block fixed in the cached forecast can cross into
+        // the hazard horizon as the clock advances on a stuck input. If one now falls within
+        // it, do NOT serve a routine cached report — return null so the caller reconciles and
+        // the WX-148 degrade-hazard path delivers the banner (safety over cost).
+        if (SevereBlocks.AnyActiveWithin(cachedBody, now, DegradeHazardHorizon))
+        {
+            Logger.Info($"{label}: WX-182 degrade circuit-breaker — a severe block in the cached forecast is now within the hazard horizon; reconciling so the hazard path can send (not serving from cache).");
+            return null;
+        }
+
+        Logger.Info($"{label}: WX-182 degrade circuit-breaker — re-issuing the {reason} report from the last good snapshot (no Claude call).");
+        var plotsDir = new WxPaths(_config["InstallRoot"]).PlotsDir;
+        var sent = 0;
+        foreach (var member in members)
+        {
+            if (!servedIds.Contains(member.RecipientId))
+                continue;  // brand-new members onboard on a normal reconciling cycle, not a cached re-send
+            try
+            {
+                var langCode = ResolveLanguageCode(member, langById, cfg.DefaultLanguage);
+                var innerBody = StructuredReportRenderer.Render(
+                    bandFree, cachedBody, snapshot, member, langCode, tz, ReportKind.Scheduled);
+                if (await DeliverWeatherReportAsync(
+                        ctx, emailer, member, langCode, cachedSnapshot, innerBody,
+                        bandFreeJson, reasoningTrace: "WX-182 cached re-send (degrade circuit-breaker); no Claude call",
+                        snapshot, locality, tz, preferredIcaos, plotsDir, ReportKind.Scheduled, label,
+                        cachedBody, ct))
+                    sent++;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Logger.Error($"{member.RecipientId} {member.Email} ({member.Name}): failed to render or send cached scheduled report for {label}.", ex);
+            }
+        }
+
+        if (sent > 0)
+        {
+            _degradeBreaker.Add(1, new KeyValuePair<string, object?>("outcome", "cached_send"));
+            // clearDegraded:false — keep the breaker armed so further scheduled slots on this
+            // same stuck input also serve from cache (zero Claude cost) until the input changes.
+            await AdvanceBaselineAfterSendAsync(ctx, state, reason, now, inputHash, snapshot, label, ct, clearDegraded: false);
+        }
+        return sent;
+    }
+
+    /// <summary>
+    /// WX-182: a copy of <paramref name="report"/> with the "What's changed" band removed —
+    /// empty <see cref="StructuredReportBody.Changes"/> and a null
+    /// <see cref="NarrativeSections.ChangeSummary"/> in every language, keeping each
+    /// language's closing. A cached scheduled re-send narrates no change (the input is
+    /// unchanged since the degrade; scheduled reports narrate only severe-onset, which would
+    /// have sent via the degrade-hazard path), so the stale band must not render.
+    /// </summary>
+    internal static StructuredReportBody WithoutChangeBand(StructuredReportBody report) =>
+        report with
+        {
+            Changes = [],
+            Narrative = report.Narrative.ToDictionary(
+                kv => kv.Key, kv => kv.Value with { ChangeSummary = null }, StringComparer.Ordinal),
+        };
 
     /// <summary>
     /// Onboards never-contacted members of a locality whose cycle is NOT sending this
