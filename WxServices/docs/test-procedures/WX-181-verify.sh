@@ -4,8 +4,9 @@
 #
 # WX-181 added a day-banded, severity-aware debounce on *unscheduled* updates: a
 # significant but non-severe-onset change is suppressed when its day-band's minimum
-# gap (schedule "1:6,3:12" -> days 1-2 need 6h, day 3+ need 12h since the last
-# unscheduled send) has not elapsed. A not-severe->severe onset punches through, and
+# gap (schedule "1:360,3:720" -> days 1-2 need 360 min/6h, day 3+ need 720 min/12h
+# since the last unscheduled send; minutes-encoded as of WX-157, same durations) has
+# not elapsed. A not-severe->severe onset punches through, and
 # the service-wide 90-minute MinGap remains a hard floor. This trims the residual
 # update-churn cost left after WX-180.
 #

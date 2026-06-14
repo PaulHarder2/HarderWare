@@ -29,24 +29,43 @@ public class ReportConfig
 
     /// <summary>
     /// Minimum minutes that must elapse between any two reports sent to the same
-    /// recipient.  Raised from 60 to 90 in WX-110: send-gap analysis showed 61% of
-    /// per-recipient gaps clustered at the 60-minute floor — the rate limit, not the
-    /// weather, was setting the cadence — so the gate was effectively sending hourly.
-    /// 90 caps that without materially delaying genuine updates (it does, however,
-    /// defer a rapid-onset hazard update by up to 90 min vs 60; revisit if that bites).
+    /// recipient.  Raised from 60 to 90 in WX-110.  As of WX-157/WX-181 this is the
+    /// <em>hard floor of last resort</em>, not the primary limiter: the scheduled path
+    /// is exempt (a due slot fires on time, WX-157), and the common significant
+    /// non-severe unscheduled path is governed by the longer
+    /// <see cref="UpdateDebounceSchedule"/> (post-send) and
+    /// <see cref="PreScheduledQuietSchedule"/> (pre-slot) day-banded windows.  This
+    /// floor still binds where neither does: (1) a not-severe→severe onset, which
+    /// punches through both day-banded windows — the floor is then the only limiter
+    /// preventing two severe sends inside 90 min; and (2) when the significance gate is
+    /// Off or a day-banded schedule fails to parse (both day-banded windows live inside
+    /// the gate stage).  Do not remove.
     /// </summary>
     public int MinGapMinutes { get; set; } = 90;
 
     /// <summary>
-    /// WX-181 day-banded debounce for *unscheduled* updates: a step schedule
-    /// <c>"day:hours,…"</c> setting the minimum gap since the last unscheduled send as a
-    /// function of how far out (recipient-local days, 1 = today) the change reaches.
-    /// Default <c>"1:6,3:12"</c> — a change touching today/tomorrow needs 6 h, one that
-    /// only reaches day 3+ needs 12 h. Parsed by <see cref="UpdateDebounceScheduleFormat"/>
-    /// (strict: first day must be 1, days ascending). A not-severe→severe change punches
-    /// through; <see cref="MinGapMinutes"/> remains a hard floor beneath this.
+    /// WX-181 day-banded debounce for *unscheduled* updates: the minimum gap since the
+    /// last unscheduled send as a step function of how far out (recipient-local days,
+    /// 1 = today) the change reaches.  Default <c>"1:360,3:720"</c> — a change touching
+    /// today/tomorrow needs 360 min (6 h), one that only reaches day 3+ needs 720 min
+    /// (12 h).  Parsed by <see cref="DayBandedSchedule"/> (strict: first day must be 1,
+    /// days ascending; value in minutes).  A not-severe→severe change punches through;
+    /// <see cref="MinGapMinutes"/> remains a hard floor beneath this.
     /// </summary>
-    public string UpdateDebounceSchedule { get; set; } = "1:6,3:12";
+    public string UpdateDebounceSchedule { get; set; } = "1:360,3:720";
+
+    /// <summary>
+    /// WX-157 day-banded pre-scheduled quiet window: how long *before* the next
+    /// scheduled slot a significant, non-severe-onset unscheduled update is held back —
+    /// its content rides the upcoming scheduled report (which renders "What's changed")
+    /// — as a step function of how far out (recipient-local days, 1 = today) the change
+    /// reaches.  Default <c>"1:90,3:180"</c> — a near-term (today/tomorrow) change is
+    /// quieted only in the 90 min before the slot, a day-3+ change in the 180 min
+    /// before it (a far-out change can wait for the digest).  Parsed by
+    /// <see cref="DayBandedSchedule"/> (strict; value in minutes).  A not-severe→severe
+    /// onset punches through; <see cref="MinGapMinutes"/> remains a hard floor beneath.
+    /// </summary>
+    public string PreScheduledQuietSchedule { get; set; } = "1:90,3:180";
 
     /// <summary>Check interval; loaded from appsettings.json (service-specific).</summary>
     public int IntervalMinutes { get; set; } = 5;

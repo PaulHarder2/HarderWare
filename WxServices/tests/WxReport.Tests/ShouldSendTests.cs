@@ -10,7 +10,8 @@ namespace WxReport.Tests;
 // Decision-table tests for ReportWorker.ShouldSend — the unified WX-80 trigger,
 // now keyed on the LOCALITY (WX-130): the decision is per locality, against the
 // shared LocalityState and the locality's timezone + send hours. Exercises the
-// priority order (first -> gap -> scheduled -> arrival pre-filter) and the two
+// priority order (first -> scheduled -> gap -> arrival pre-filter; WX-157 moved
+// scheduled above the gap so a due slot is never deferred by a preceding send) and the two
 // behaviours the review and acceptance criteria care about most: the post-gap
 // arrival send (finding #1) and the once-per-slot scheduled cadence.
 
@@ -143,5 +144,29 @@ public class ShouldSendTests
 
         Assert.False(send);
         Assert.Equal("gap", reason);
+    }
+
+    [Fact]
+    public void ScheduledSlot_FiresOnTime_DespitePrecedingUnscheduledWithinGap()
+    {
+        // WX-157 late-scheduled fix (the (a) repro): an unscheduled send 30 min before the
+        // 07:00 slot must NOT defer the scheduled report. The old order checked the min-gap
+        // first and returned "gap" (30 < 90); scheduled now precedes the gap and fires.
+        var state = new LocalityState
+        {
+            LocalityId = 1,
+            LastUnscheduledSentUtc = new DateTime(2026, 5, 31, 6, 30, 0, DateTimeKind.Utc), // 30 min before the slot
+            LastScheduledSentUtc = new DateTime(2026, 5, 30, 7, 5, 0, DateTimeKind.Utc),    // yesterday's slot served
+            LastClaudeInputHash = Hash("m"),
+        };
+
+        var (send, reason, kind, allowSkip) = ReportWorker.ShouldSend(
+            Utc, Hours("7"), state, new InputIdentity("m", "none", "none"), Cfg(minGap: 90),
+            new DateTime(2026, 5, 31, 7, 0, 0, DateTimeKind.Utc));
+
+        Assert.True(send);
+        Assert.Equal("scheduled", reason);
+        Assert.Equal(ReportKind.Scheduled, kind);
+        Assert.False(allowSkip);
     }
 }
