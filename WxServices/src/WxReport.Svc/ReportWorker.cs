@@ -53,6 +53,7 @@ public sealed class ReportWorker : BackgroundService
     private readonly Counter<long> _severeFlipSuppressed;
     private readonly Counter<long> _significanceGateSkips;
     private readonly Counter<long> _debounceSuppressed;
+    private readonly Counter<long> _quietWindowSuppressed;
     private readonly Histogram<double> _cycleDuration;
     private readonly Histogram<double> _claudeDuration;
 
@@ -97,6 +98,7 @@ public sealed class ReportWorker : BackgroundService
         _severeFlipSuppressed = _meter.CreateCounter<long>("wxreport.suppressed.severe_flip.total", description: "WX-108: unscheduled sends suppressed because the only change was a severe-flag flip on an observation-only advance with no newer GFS run or TAF.");
         _significanceGateSkips = _meter.CreateCounter<long>("wxreport.suppressed.significance_gate.total", description: "WX-114: cycles the deterministic significance gate found unchanged since the last sent report, tagged by mode (enforce = Claude call skipped; shadow = would-skip but Claude still called).");
         _debounceSuppressed = _meter.CreateCounter<long>("wxreport.suppressed.debounce.total", description: "WX-181: significant unscheduled cycles suppressed by the day-banded debounce (the change's day-band min-gap had not elapsed since the last unscheduled send), tagged by mode (enforce = Claude call skipped; shadow = would-skip but Claude still called).");
+        _quietWindowSuppressed = _meter.CreateCounter<long>("wxreport.suppressed.quietwindow.total", description: "WX-157: significant unscheduled cycles suppressed by the day-banded pre-scheduled quiet window (the next scheduled slot fell within the change's day-band quiet window; content rides the scheduled report), tagged by mode (enforce = Claude call skipped; shadow = would-skip but Claude still called).");
         _cycleDuration = _meter.CreateHistogram<double>("wxreport.cycle.duration.seconds", unit: "s", description: "Duration of each report cycle.");
         _claudeDuration = _meter.CreateHistogram<double>("wxreport.claude.duration.seconds", unit: "s", description: "Duration of each Claude API call.");
     }
@@ -712,34 +714,26 @@ public sealed class ReportWorker : BackgroundService
             }
             else if (gate is { Significant: true } passed)
             {
-                // WX-181 day-banded debounce: a significant but non-severe-onset change whose
-                // day-band's minimum gap has not elapsed since the last unscheduled send is
-                // suppressed (cost) — its content rides the next cycle or scheduled report. A
-                // not-severe→severe onset punches through; the 90-min MinGapMinutes floor was
-                // already enforced in ShouldSend. Honors the same enforce/shadow mode as the gate.
-                IReadOnlyList<UpdateDebounceScheduleFormat.Step>? debounceSchedule = null;
-                try
-                {
-                    debounceSchedule = UpdateDebounceScheduleFormat.Parse(cfg.UpdateDebounceSchedule);
-                }
-                catch (FormatException ex)
-                {
-                    Logger.Warn($"{label}: invalid UpdateDebounceSchedule '{cfg.UpdateDebounceSchedule}' — debounce disabled this cycle: {ex.Message}");
-                }
+                // Two day-banded admission-control suppressors, evaluated before the Claude
+                // call: WX-181 post-send debounce, then the WX-157 pre-scheduled quiet window.
+                // Each folds a significant, non-severe-onset unscheduled change away (its
+                // content rides the next cycle / the scheduled report); a not-severe→severe
+                // onset punches through both (inside the decision fns); the 90-min
+                // MinGapMinutes floor was already enforced in ShouldSend. Both honor the gate's
+                // enforce/shadow mode; the scheduled report itself is never quieted (ShouldSend
+                // fires it on its slot). Debounce wins ties (checked first), matching its
+                // longer window.
+                if (await ApplyDayBandedSuppressorAsync(
+                        ctx, state, inputHash, label, gateMode, triggerType,
+                        cfg.UpdateDebounceSchedule, "UpdateDebounceSchedule", "WX-181 debounce", _debounceSuppressed,
+                        sch => (ShouldDebounceUpdate(passed, state.LastUnscheduledSentUtc, sch, now, tz, out var r), r), ct))
+                    return 0;
 
-                if (debounceSchedule is not null
-                    && ShouldDebounceUpdate(passed, state.LastUnscheduledSentUtc, debounceSchedule, now, tz, out var debounceReason))
-                {
-                    bool enforce = gateMode == SignificanceGateMode.Enforce;
-                    _debounceSuppressed.Add(1, new KeyValuePair<string, object?>("mode", enforce ? "enforce" : "shadow"));
-                    if (enforce)
-                    {
-                        Logger.Debug($"{label}: WX-181 debounce suppressed {triggerType} cycle — {debounceReason}; Claude not called.");
-                        await PersistUnsentCycleAsync(ctx, label, state, inputHash, ct);
-                        return 0;
-                    }
-                    Logger.Debug($"{label}: WX-181 debounce (shadow) WOULD suppress {triggerType} — {debounceReason}; calling Claude anyway.");
-                }
+                if (await ApplyDayBandedSuppressorAsync(
+                        ctx, state, inputHash, label, gateMode, triggerType,
+                        cfg.PreScheduledQuietSchedule, "PreScheduledQuietSchedule", "WX-157 quiet window", _quietWindowSuppressed,
+                        sch => (ShouldQuietBeforeSlot(passed, scheduledHours, sch, now, tz, out var r), r), ct))
+                    return 0;
 
                 Logger.Debug($"{label}: WX-114 significance gate passed ({gateMode}, {triggerType}) — fired: {string.Join(", ", passed.FiredCriteria)}.");
             }
@@ -1132,6 +1126,52 @@ public sealed class ReportWorker : BackgroundService
     };
 
     /// <summary>
+    /// Shared admission-control suppressor for the two day-banded send-timing rate-limits
+    /// (WX-181 post-send debounce, WX-157 pre-scheduled quiet window). Parses
+    /// <paramref name="scheduleRaw"/> fail-closed (a malformed schedule is logged and the
+    /// limiter disabled this cycle — never throws), runs <paramref name="decide"/>, and on a
+    /// suppress decision bumps <paramref name="counter"/> (mode-tagged). In Enforce mode it
+    /// persists the unsent cycle and returns <see langword="true"/> so the caller skips the
+    /// Claude call; in Shadow mode it logs the would-suppress and returns
+    /// <see langword="false"/> so the cycle proceeds. <paramref name="ticketLabel"/> drives the
+    /// Debug-log prefix the §13 verify scripts grep ("WX-181 debounce", "WX-157 quiet window");
+    /// <paramref name="configName"/> drives the fail-closed Warn ("invalid {configName}").
+    /// </summary>
+    private async Task<bool> ApplyDayBandedSuppressorAsync(
+        WeatherDataContext ctx, LocalityState state, string inputHash, string label,
+        SignificanceGateMode gateMode, string triggerType,
+        string scheduleRaw, string configName, string ticketLabel, Counter<long> counter,
+        Func<IReadOnlyList<DayBandedSchedule.Step>, (bool suppress, string reason)> decide,
+        CancellationToken ct)
+    {
+        IReadOnlyList<DayBandedSchedule.Step> schedule;
+        try
+        {
+            schedule = DayBandedSchedule.Parse(scheduleRaw);
+        }
+        catch (FormatException ex)
+        {
+            Logger.Warn($"{label}: invalid {configName} '{scheduleRaw}' — disabled this cycle: {ex.Message}");
+            return false;
+        }
+
+        var (suppress, reason) = decide(schedule);
+        if (!suppress)
+            return false;
+
+        bool enforce = gateMode == SignificanceGateMode.Enforce;
+        counter.Add(1, new KeyValuePair<string, object?>("mode", enforce ? "enforce" : "shadow"));
+        if (enforce)
+        {
+            Logger.Debug($"{label}: {ticketLabel} suppressed {triggerType} cycle — {reason}; Claude not called.");
+            await PersistUnsentCycleAsync(ctx, label, state, inputHash, ct);
+            return true;
+        }
+        Logger.Debug($"{label}: {ticketLabel} (shadow) WOULD suppress {triggerType} — {reason}; calling Claude anyway.");
+        return false;
+    }
+
+    /// <summary>
     /// Persists the "called Claude but not sending this cycle" locality state shared
     /// by the WX-80 not-news gate, the WX-108 suppression backstop, and the WX-114
     /// significance gate: records the input hash on the <see cref="LocalityState"/>
@@ -1332,25 +1372,12 @@ public sealed class ReportWorker : BackgroundService
         if (!state.LastScheduledSentUtc.HasValue && !state.LastUnscheduledSentUtc.HasValue)
             return (true, "first", ReportKind.Scheduled, false);
 
-        var minGap = TimeSpan.FromMinutes(cfg.MinGapMinutes);
-
-        // Last time any report was sent to this recipient.  Use Max (which
-        // ignores nulls) rather than a nullable `>` ternary: `a > b` is false
-        // whenever either operand is null, so the old ternary returned the null
-        // side when only one timestamp was set — skipping the gap check after a
-        // scheduled-only send and letting an arrival fire with no rate limit.
-        var lastSentUtc = new[] { state.LastScheduledSentUtc, state.LastUnscheduledSentUtc }.Max();
-
-        // Enforce minimum gap.  Note: LastClaudeInputHash is deliberately NOT
-        // touched on this path — an input that advanced during the gap must still
-        // read as "changed" once the gap clears, so the deferred send fires on the
-        // next eligible cycle.  A future refactor must not move the hash update
-        // into the gap path, or post-gap arrival sends would be silently swallowed
-        // (covered by ShouldSendTests.PostGap_AdvancedInput_SendsOnceGapClears).
-        if (lastSentUtc.HasValue && (nowUtc - lastSentUtc.Value) < minGap)
-            return (false, "gap", ReportKind.Scheduled, false);
-
-        // ── Scheduled send (always sends; bypasses the pre-filter) ────────────
+        // ── Scheduled send (WX-157: takes precedence) ─────────────────────────
+        // Evaluated BEFORE the min-gap and bypassing the pre-filter, so a preceding
+        // unscheduled send can never defer a due scheduled report — a "7 AM report"
+        // arrives at 7, not up to MinGapMinutes later (the late-scheduled deferral bug).
+        // The pre-scheduled quiet window (WX-157, in the gate stage) is what keeps
+        // unscheduled churn from landing right before the slot in the first place.
 
         var localNow = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, tz);
 
@@ -1372,6 +1399,26 @@ public sealed class ReportWorker : BackgroundService
             if (!sentAfterSlotStart)
                 return (true, "scheduled", ReportKind.Scheduled, false);
         }
+
+        // ── Minimum gap (unscheduled/arrival path only; scheduled is exempt above) ──
+
+        var minGap = TimeSpan.FromMinutes(cfg.MinGapMinutes);
+
+        // Last time any report was sent to this recipient.  Use Max (which
+        // ignores nulls) rather than a nullable `>` ternary: `a > b` is false
+        // whenever either operand is null, so the old ternary returned the null
+        // side when only one timestamp was set — skipping the gap check after a
+        // scheduled-only send and letting an arrival fire with no rate limit.
+        var lastSentUtc = new[] { state.LastScheduledSentUtc, state.LastUnscheduledSentUtc }.Max();
+
+        // Enforce minimum gap.  Note: LastClaudeInputHash is deliberately NOT
+        // touched on this path — an input that advanced during the gap must still
+        // read as "changed" once the gap clears, so the deferred send fires on the
+        // next eligible cycle.  A future refactor must not move the hash update
+        // into the gap path, or post-gap arrival sends would be silently swallowed
+        // (covered by ShouldSendTests.PostGap_AdvancedInput_SendsOnceGapClears).
+        if (lastSentUtc.HasValue && (nowUtc - lastSentUtc.Value) < minGap)
+            return (false, "gap", ReportKind.Scheduled, false);
 
         // ── Arrival pre-filter (WX-80) ────────────────────────────────────────
 
@@ -1398,7 +1445,7 @@ public sealed class ReportWorker : BackgroundService
     /// </summary>
     internal static bool ShouldDebounceUpdate(
         SignificanceResult gate, DateTime? lastUnscheduledSentUtc,
-        IReadOnlyList<UpdateDebounceScheduleFormat.Step> schedule,
+        IReadOnlyList<DayBandedSchedule.Step> schedule,
         DateTime nowUtc, TimeZoneInfo tz, out string reason)
     {
         reason = "";
@@ -1410,12 +1457,67 @@ public sealed class ReportWorker : BackgroundService
         // past day (shouldn't occur — the gate only reports in-horizon blocks) floors at 1.
         var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(nowUtc, tz));
         int dayNumber = Math.Max(1, changedDay.DayNumber - today.DayNumber + 1);
-        int minHours = UpdateDebounceScheduleFormat.MinHoursForDay(schedule, dayNumber);
+        int minMinutes = DayBandedSchedule.MinMinutesForDay(schedule, dayNumber);
 
         var sinceLast = nowUtc - lastUnscheduled;
-        if (sinceLast < TimeSpan.FromHours(minHours))
+        if (sinceLast < TimeSpan.FromMinutes(minMinutes))
         {
-            reason = $"change reaches local day {dayNumber} (min gap {minHours}h); last unscheduled send {sinceLast.TotalMinutes:0} min ago";
+            reason = $"change reaches local day {dayNumber} (min gap {minMinutes} min); last unscheduled send {sinceLast.TotalMinutes:0} min ago";
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// WX-157 day-banded pre-scheduled quiet window decision (pure). Returns true when a
+    /// *significant* unscheduled change should be SUPPRESSED because the next upcoming
+    /// scheduled slot falls within the change's day-band quiet window — its content will
+    /// ride the scheduled report (which renders "What's changed"). Sends (returns false)
+    /// when: the change is a not-severe→severe onset (<paramref name="gate"/>.SevereEntered
+    /// — punches through), the change is uncharacterized (no <c>EarliestChangedDayLocal</c>,
+    /// e.g. disjoint horizon), the locality has no scheduled hours, or the next slot is
+    /// further off than the quiet window. The scheduled report itself is never quieted
+    /// (ShouldSend fires it on its slot); <see cref="ReportConfig.MinGapMinutes"/> remains a
+    /// hard floor. Parallels <see cref="ShouldDebounceUpdate"/>.
+    /// </summary>
+    internal static bool ShouldQuietBeforeSlot(
+        SignificanceResult gate, IReadOnlyList<int> scheduledHours,
+        IReadOnlyList<DayBandedSchedule.Step> schedule,
+        DateTime nowUtc, TimeZoneInfo tz, out string reason)
+    {
+        reason = "";
+        if (gate.SevereEntered) return false;
+        if (gate.EarliestChangedDayLocal is not DateOnly changedDay) return false;
+        if (scheduledHours.Count == 0) return false;
+
+        // Nearest upcoming scheduled slot (strictly after now), handling multiple hours,
+        // day rollover, and tz/DST via ConvertTimeToUtc. Scheduled hours are ascending
+        // (ScheduledSendHoursFormat.Parse), matching ShouldSend's lastPassedHour scan.
+        var localNow = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, tz);
+        DateTime nextSlotLocal = default;
+        bool found = false;
+        foreach (var h in scheduledHours)
+        {
+            var slot = new DateTime(localNow.Year, localNow.Month, localNow.Day, h, 0, 0, DateTimeKind.Unspecified);
+            if (slot > localNow) { nextSlotLocal = slot; found = true; break; }
+        }
+        if (!found)
+        {
+            // All of today's slots have passed — the next is the earliest hour tomorrow.
+            var firstHour = scheduledHours[0];
+            nextSlotLocal = new DateTime(localNow.Year, localNow.Month, localNow.Day, firstHour, 0, 0, DateTimeKind.Unspecified).AddDays(1);
+        }
+        var nextSlotUtc = TimeZoneInfo.ConvertTimeToUtc(nextSlotLocal, tz);
+        var untilSlot = nextSlotUtc - nowUtc;
+
+        // 1-based day from the recipient's "today": today = 1, tomorrow = 2, …
+        var today = DateOnly.FromDateTime(localNow);
+        int dayNumber = Math.Max(1, changedDay.DayNumber - today.DayNumber + 1);
+        int quietMinutes = DayBandedSchedule.MinMinutesForDay(schedule, dayNumber);
+
+        if (untilSlot <= TimeSpan.FromMinutes(quietMinutes))
+        {
+            reason = $"next scheduled slot in {untilSlot.TotalMinutes:0} min <= quiet window {quietMinutes} min (change reaches local day {dayNumber}); content rides the scheduled report";
             return true;
         }
         return false;
