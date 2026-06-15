@@ -19,6 +19,11 @@ public class StructuredReportRendererTests
     private static readonly DateTime AnchorUtc = new(2026, 6, 8, 18, 0, 0, DateTimeKind.Utc);
     private static readonly TimeZoneInfo Utc = TimeZoneInfo.Utc;
 
+    // Send instant for the renderer's WX-188 day-trim. Set before every fixture's earliest
+    // block (06:00Z Jun 8) so the full grid renders with no day trimmed — existing assertions
+    // are unaffected; the trim itself is exercised by the dedicated tests at the bottom.
+    private static readonly DateTime RenderNow = new(2026, 6, 8, 0, 0, 0, DateTimeKind.Utc);
+
     private static Recipient Imperial() => new()
     {
         RecipientId = "t-en",
@@ -133,8 +138,8 @@ public class StructuredReportRendererTests
     [Fact]
     public void SameInput_ImperialVsMetric_DiffersOnlyByUnits()
     {
-        var en = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled);
-        var me = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Metric(), "en", Utc, ReportKind.Scheduled);
+        var en = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled, RenderNow);
+        var me = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Metric(), "en", Utc, ReportKind.Scheduled, RenderNow);
 
         // Imperial conversions from canonical °C / kt / hPa / mm.
         Assert.Contains("92°F", en);          // 33.5°C
@@ -156,14 +161,14 @@ public class StructuredReportRendererTests
     [Fact]
     public void TimeToken_RendersInLocalityTimeAndLocale()
     {
-        var en = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled);
+        var en = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled, RenderNow);
         Assert.Contains("9:00 PM", en);  // 21:00Z in UTC locality
     }
 
     [Fact]
     public void ExtendedForecast_OneRowPerLocalDay_WithDailyHiLo()
     {
-        var en = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled);
+        var en = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled, RenderNow);
 
         // Two local days → two High/Low pairs.
         Assert.Equal(2, CountOccurrences(en, "High:"));
@@ -178,7 +183,7 @@ public class StructuredReportRendererTests
     [Fact]
     public void Conditions_SplitDayIntoEpisodes_NotCollapsedToPeak()
     {
-        var en = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled);
+        var en = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled, RenderNow);
         // WX-148 Class 2: Day 1 has two episodes — a thunderstorm at 12Z (afternoon)
         // then rain at 18Z (evening) — and BOTH must surface as labeled lines rather
         // than collapse to the single highest-expectation one.
@@ -194,7 +199,7 @@ public class StructuredReportRendererTests
     {
         // A severe day breaks the labeled-line rhythm into a single sentence: the
         // severe clause leads with its timing, the secondary episode joined by "then".
-        var en = StructuredReportRenderer.Render(Body(), SevereForecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled);
+        var en = StructuredReportRenderer.Render(Body(), SevereForecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled, RenderNow);
         Assert.Contains("Severe storms likely in the afternoon, then rain in the evening", en);
     }
 
@@ -204,7 +209,7 @@ public class StructuredReportRendererTests
         // Regression guard: a severe block with no precipitation forms no episode, but
         // must not collapse to a benign sky phrase — the day-level severe path leads
         // with a generic hazard line timed by the severe block.
-        var en = StructuredReportRenderer.Render(Body(), SevereNoPrecipForecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled);
+        var en = StructuredReportRenderer.Render(Body(), SevereNoPrecipForecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled, RenderNow);
         // Generic "Severe weather" — not storm-specific — because the severe block carries no precip (a wind event).
         Assert.Contains("Severe weather likely in the afternoon", en);
     }
@@ -214,7 +219,7 @@ public class StructuredReportRendererTests
     {
         // A single rain episode spanning the 06Z and 12Z blocks crosses the
         // morning/afternoon boundary, so it is timed as a range, not one bucket.
-        var en = StructuredReportRenderer.Render(Body(), SpanningForecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled);
+        var en = StructuredReportRenderer.Render(Body(), SpanningForecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled, RenderNow);
         Assert.Contains("Morning–afternoon — rain likely", en);
     }
 
@@ -255,14 +260,14 @@ public class StructuredReportRendererTests
             ],
             TemperatureCelsius = 20.0,
         };
-        var en = StructuredReportRenderer.Render(Body(), Forecast(), snap, Imperial(), "en", Utc, ReportKind.Scheduled);
+        var en = StructuredReportRenderer.Render(Body(), Forecast(), snap, Imperial(), "en", Utc, ReportKind.Scheduled, RenderNow);
         Assert.Contains("Low mostly cloudy", en);  // Broken@4000 ft → Low prefix; NSC ignored
     }
 
     [Fact]
     public void CurrentConditions_TableFromObservation()
     {
-        var en = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled);
+        var en = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled, RenderNow);
         Assert.Contains("Current Conditions", en);
         Assert.Contains("Low overcast", en);          // overcast at 3000 ft
         Assert.Contains("S at 14 mph, gusting 25 mph", en);  // 180°, 12 kt→14 mph, gust 22 kt→25 mph
@@ -274,7 +279,7 @@ public class StructuredReportRendererTests
     [Fact]
     public void Spanish_UsesEsNarrativeAndLabels()
     {
-        var es = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Spanish(), "es", Utc, ReportKind.Scheduled);
+        var es = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Spanish(), "es", Utc, ReportKind.Scheduled, RenderNow);
         Assert.Contains("Condiciones actuales", es);
         Assert.Contains("En resumen:", es);
         Assert.Contains("Pronóstico para Spring", es);
@@ -285,13 +290,13 @@ public class StructuredReportRendererTests
     [Fact]
     public void ChangeBand_RendersOnlyWhenNarrativeCarriesOne()
     {
-        var scheduled = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled);
+        var scheduled = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled, RenderNow);
         Assert.DoesNotContain("What's changed:", scheduled);
         Assert.DoesNotContain("Unscheduled Update", scheduled);
         Assert.Contains("Scheduled Report", scheduled);   // the type label is always shown (WX-154)
 
         var unscheduled = StructuredReportRenderer.Render(
-            Body("{ch1}Thunderstorms now expected this afternoon."), Forecast(), Observation(), Imperial(), "en", Utc, ReportKind.Unscheduled);
+            Body("{ch1}Thunderstorms now expected this afternoon."), Forecast(), Observation(), Imperial(), "en", Utc, ReportKind.Unscheduled, RenderNow);
         Assert.Contains("What's changed:", unscheduled);
         Assert.Contains("Thunderstorms now expected this afternoon.", unscheduled);
         Assert.Contains("Unscheduled Update", unscheduled);
@@ -306,7 +311,7 @@ public class StructuredReportRendererTests
             ObservationUnavailableNote = "No recent observation from any nearby station.",
             LocalityName = "Spring",
         };
-        var en = StructuredReportRenderer.Render(Body(), Forecast(), snap, Imperial(), "en", Utc, ReportKind.Scheduled);
+        var en = StructuredReportRenderer.Render(Body(), Forecast(), snap, Imperial(), "en", Utc, ReportKind.Scheduled, RenderNow);
 
         Assert.Contains("No recent observation from any nearby station.", en);
         Assert.DoesNotContain("Relative Humidity", en);  // CC table omitted
@@ -364,12 +369,12 @@ public class StructuredReportRendererTests
             TemperatureCelsius = 31.0,
         };
         var en = StructuredReportRenderer.Render(
-            Body(), Forecast(), snap, Imperial(), "en", Utc, ReportKind.Scheduled);
+            Body(), Forecast(), snap, Imperial(), "en", Utc, ReportKind.Scheduled, RenderNow);
         Assert.Contains("at Houston, George Bush Intercontinental Airport", en);
 
         // No subtitle when the station has no distinct municipality/name (default Observation()).
         var plain = StructuredReportRenderer.Render(
-            Body(), Forecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled);
+            Body(), Forecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled, RenderNow);
         Assert.DoesNotContain(" at ", plain.Replace("S at 14 mph", "", StringComparison.Ordinal));
     }
 
@@ -378,14 +383,14 @@ public class StructuredReportRendererTests
     {
         // A change summary normally renders the "What's changed:" band...
         var withBand = StructuredReportRenderer.Render(
-            Body("{ch1}Storms moving in."), Forecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled);
+            Body("{ch1}Storms moving in."), Forecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled, RenderNow);
         Assert.Contains("What's changed:", withBand);
 
         // ...WX-182's band-free copy (a cached scheduled re-send narrates no change) drops
         // the band but keeps the closing prose.
         var bandFree = ReportWorker.WithoutChangeBand(Body("{ch1}Storms moving in."));
         var rendered = StructuredReportRenderer.Render(
-            bandFree, Forecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled);
+            bandFree, Forecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled, RenderNow);
         Assert.DoesNotContain("What's changed:", rendered);
         Assert.Contains("92°F", rendered);  // closing prose still rendered (Highs near 33.5°C → 92°F)
     }
@@ -401,6 +406,69 @@ public class StructuredReportRendererTests
         // body still serializes (it's what the cached send persists as its audit).
         var roundTrip = StructuredReportBody.Deserialize(bandFree.Serialize());
         Assert.Empty(roundTrip.Changes);
+    }
+
+    // ── WX-188: the Extended Forecast grid drops calendar days wholly past at send time ──
+
+    // Two local days (UTC locality → local day = UTC day): a Jun 8 evening block that ends
+    // at 00:00Z Jun 9, plus a full Jun 9. Mirrors the 2270 shape — a 00Z-run snapshot whose
+    // first local day is the prior evening, wholly past once the report is built after midnight.
+    private static ForecastSnapshotBody TwoLocalDayForecast() => new()
+    {
+        Blocks =
+        [
+            new() { StartUtc = new(2026, 6, 8, 18, 0, 0, DateTimeKind.Utc), SkyState = SkyState.Overcast, Obscuration = Obscuration.None, TemperatureCelsius = new(26, 33), WindKt = new(8, 15), PrecipExpectation = PrecipExpectation.Certain, PrecipPhenomenon = PrecipPhenomenon.Thunderstorm, SevereFlag = false },
+            new() { StartUtc = new(2026, 6, 9, 0, 0, 0, DateTimeKind.Utc), SkyState = SkyState.PartlyCloudy, Obscuration = Obscuration.None, TemperatureCelsius = new(22, 28), WindKt = new(3, 8), PrecipExpectation = PrecipExpectation.None, PrecipPhenomenon = null, SevereFlag = false },
+            new() { StartUtc = new(2026, 6, 9, 6, 0, 0, DateTimeKind.Utc), SkyState = SkyState.Clear, Obscuration = Obscuration.None, TemperatureCelsius = new(21, 27), WindKt = new(2, 6), PrecipExpectation = PrecipExpectation.None, PrecipPhenomenon = null, SevereFlag = false },
+        ],
+    };
+
+    [Fact]
+    public void Grid_DropsWhollyPastDay_LeadsWithCurrentDay()
+    {
+        // Built at 01:00Z Jun 9 (after local midnight): the Jun 8 evening block ended at
+        // 00:00Z Jun 9, so Jun 8 is wholly past and must not appear; the grid leads with Jun 9.
+        var nowUtc = new DateTime(2026, 6, 9, 1, 0, 0, DateTimeKind.Utc);
+        var en = StructuredReportRenderer.Render(Body(), TwoLocalDayForecast(), Observation(), Imperial(), "en", Utc, ReportKind.Unscheduled, nowUtc);
+
+        Assert.Contains("Jun 9", en);
+        Assert.DoesNotContain("Jun 8", en);   // wholly-past day gone (the full-month "June 8" header is not a "Jun 8" substring)
+        // Exactly one day row survives (one "High:" per grid row): dropping the leading day
+        // leaves no empty/placeholder row, and the retained day is whole.
+        Assert.Equal(1, CountOccurrences(en, "High:"));
+    }
+
+    [Fact]
+    public void Grid_RetainedDay_HighLowSpanWholeCalendarDay_IncludingElapsedBlocks()
+    {
+        // A current day whose HOT block (33°C) is the already-elapsed morning, with cooler blocks
+        // remaining. The day is retained (the afternoon block is still active); its High must be
+        // the whole-day max (33°C → 91°F), NOT a remaining-blocks-only 28°C → 82°F. This guards
+        // the rule "don't change the period over which a retained day's max/min are computed."
+        var forecast = new ForecastSnapshotBody
+        {
+            Blocks =
+            [
+                new() { StartUtc = new(2026, 6, 9, 6, 0, 0, DateTimeKind.Utc), SkyState = SkyState.Clear, Obscuration = Obscuration.None, TemperatureCelsius = new(24, 33), WindKt = new(3, 8), PrecipExpectation = PrecipExpectation.None, PrecipPhenomenon = null, SevereFlag = false },
+                new() { StartUtc = new(2026, 6, 9, 12, 0, 0, DateTimeKind.Utc), SkyState = SkyState.PartlyCloudy, Obscuration = Obscuration.None, TemperatureCelsius = new(23, 28), WindKt = new(4, 9), PrecipExpectation = PrecipExpectation.None, PrecipPhenomenon = null, SevereFlag = false },
+                new() { StartUtc = new(2026, 6, 9, 18, 0, 0, DateTimeKind.Utc), SkyState = SkyState.Clear, Obscuration = Obscuration.None, TemperatureCelsius = new(22, 26), WindKt = new(2, 6), PrecipExpectation = PrecipExpectation.None, PrecipPhenomenon = null, SevereFlag = false },
+            ],
+        };
+        var nowUtc = new DateTime(2026, 6, 9, 13, 0, 0, DateTimeKind.Utc);  // the morning block (ends 12:00Z) has already elapsed
+        var en = StructuredReportRenderer.Render(Body(), forecast, Observation(), Imperial(), "en", Utc, ReportKind.Scheduled, nowUtc);
+
+        Assert.Contains("High: 91°F", en);        // whole-day max, drawn from the elapsed morning block
+        Assert.DoesNotContain("High: 82°F", en);  // not a remaining-blocks-only max (that would be the bug)
+    }
+
+    [Fact]
+    public void Grid_OmittedEntirely_WhenEveryDayIsWhollyPast()
+    {
+        // Every block fully elapsed → no day survives → the section is omitted (no header-only grid).
+        var nowUtc = new DateTime(2026, 6, 10, 0, 0, 0, DateTimeKind.Utc);
+        var en = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled, nowUtc);
+
+        Assert.DoesNotContain("Forecast for Spring", en);
     }
 
     private static int CountOccurrences(string haystack, string needle)
