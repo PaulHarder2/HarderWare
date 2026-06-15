@@ -122,6 +122,12 @@ vl_resolve_boundary() {
   LAST_TS=''
   hh=''
   mm=''
+  # WX-187: verdict-explanation fields vl_log appends. Reset for the same reason as the
+  # window globals above -- a re-run in the same sourced shell must not log stale values.
+  VERDICT_REASON=''
+  VERDICT_METRICS=''
+  VERDICT_RERUN=''
+  VERDICT_TESTRESULT=''
   if [ -n "$SINCE_OVERRIDE" ]; then
     SINCE="${SINCE_OVERRIDE:0:19}"
     BOUNDARY_SRC='--since override'
@@ -136,6 +142,8 @@ vl_resolve_boundary() {
       echo " VERDICT"
       echo "   Version $VERSION is not in $DEPLOY_LOG yet -- $TICKET not deployed (or the deploy failed)."
       echo "   ====>  WAIT   version $VERSION not deployed yet; deploy, then re-run."
+      VERDICT_REASON='not-deployed'
+      VERDICT_RERUN="after version $VERSION deploys"
       vl_log WAIT
       exit 0
     fi
@@ -156,6 +164,8 @@ vl_setup_window() {
     echo " VERDICT"
     echo "   No log lines at/after $SINCE in $LOG -- deploy too recent (or wrong boundary/log)."
     echo "   ====>  WAIT   no cycles logged since the deploy boundary; re-run once the service has logged."
+    VERDICT_REASON='no-cycles-since-boundary'
+    VERDICT_RERUN='after the service logs a cycle past the boundary'
     vl_log WAIT
     exit 0
   }
@@ -197,19 +207,35 @@ vl_header() {
 # ran (UTC), the ticket, the version under test, the deployed commit, the verdict, and
 # the window analysed. Called at EVERY exit (the two early WAITs and vl_verdict) so each
 # run leaves a durable, timestamped record and the Jira Test Result becomes a copy, not a
-# recollection. set -u-safe: fields not yet known at an early exit fall back to '-'.
-# Never fails the run -- an unwritable log warns to stderr and is skipped.
+# recollection. set -u-safe: an unresolved commit logs as a same-width hyphen placeholder
+# (an abbreviated hash is 7 chars) so the column stays aligned, the window as
+# '(boundary not resolved)'. Never fails the run -- an unwritable log warns to stderr and is skipped.
+#
+# WX-187: the line also carries the verdict's EXPLANATION so a bare token isn't ambiguous
+# days later, via four optional globals each exit point sets before calling (reset in
+# vl_resolve_boundary): VERDICT_REASON (why this verdict), VERDICT_METRICS (the decision
+# counts, e.g. "exercised=2 regression=0"), VERDICT_RERUN (when a definitive verdict is
+# possible -- a concrete UTC time when the window is the blocker, else the awaited
+# condition), and VERDICT_TESTRESULT (the paste-ready Jira Test Result on PASS/FAIL; empty
+# on WAIT). Each is appended only when set, so an early exit that knows fewer of them still
+# logs cleanly.
 vl_log() {  # VERDICT
   local verdict="$1" now commit since last window line
   now="$(date -u '+%Y-%m-%d %H:%M:%S')"
-  commit="${COMMIT:-}"; [ -n "$commit" ] || commit='-'
+  commit="${COMMIT:-}"; [ -n "$commit" ] || commit='-------'   # same width as an abbreviated hash (not deployed/resolved)
   since="${SINCE:-}"; last="${LAST_TS:-}"
   if [ -n "$since" ]; then
     window="${since} -> ${last:-?} (${hh:-0}h ${mm:-0}m)"
   else
     window='(boundary not resolved)'
   fi
-  line="$now  [Verify] ${TICKET}  ${VERSION}  ${commit}  ${verdict}  window ${window}"
+  # Fields are single-space separated (values that contain spaces -- the timestamp, the
+  # window, the metrics group -- keep their internal spaces).
+  line="$now [Verify] ${TICKET} ${VERSION} ${commit} ${verdict} window ${window}"
+  [ -n "${VERDICT_REASON:-}" ]     && line="${line} reason=${VERDICT_REASON}"
+  [ -n "${VERDICT_METRICS:-}" ]    && line="${line} ${VERDICT_METRICS}"
+  [ -n "${VERDICT_RERUN:-}" ]      && line="${line} rerun=\"${VERDICT_RERUN}\""
+  [ -n "${VERDICT_TESTRESULT:-}" ] && line="${line} test-result=\"${VERDICT_TESTRESULT}\""
   # Brace group so a failed log-open (unwritable path) is suppressed too, not just
   # printf's stderr; the run never fails on a logging problem -- it only warns.
   { printf '%s\n' "$line" >> "$RESULTS_LOG"; } 2>/dev/null \
@@ -257,26 +283,40 @@ vl_log() {  # VERDICT
 vl_verdict() {
   local n="$1" exercised="$2" fail_hint="${3:-}" pass_note="${4:-}"
   local precond="${5:-}" precond_desc="${6:-required precondition lines}"
+  local today rerun_ts
+  today="$(date -u '+%Y-%m-%d')"
+  # WX-187: decision metrics + per-branch reason / rerun / test-result for the run log.
+  VERDICT_METRICS="exercised=$exercised regression=$n"
+  [ -n "$precond" ] && VERDICT_METRICS="$VERDICT_METRICS precond=$precond"
+  VERDICT_REASON=''; VERDICT_RERUN=''; VERDICT_TESTRESULT=''
   echo " VERDICT"
   if [ -n "$precond" ] && [ "$precond" -le 0 ]; then
-    VERDICT='WAIT'
+    VERDICT='WAIT'; VERDICT_REASON='precondition-absent'
+    VERDICT_RERUN="after $precond_desc"
     echo "   The precondition for this test is not present yet ($precond_desc) -- the"
     echo "   failure-signature check is not applicable until it appears. Re-run once it does."
   elif [ "$n" -gt 0 ]; then
-    VERDICT='FAIL'
+    VERDICT='FAIL'; VERDICT_REASON='failure-signature'
+    VERDICT_TESTRESULT="FAIL $today @ $VERSION"
     echo "   $n line(s) match this change's failure signature since the deploy (shown in the"
     echo "   section above) -- the change is not working as intended."
     [ -n "$fail_hint" ] && echo "   $fail_hint"
   elif [ "$elapsed" -lt "$min_window_secs" ]; then
-    VERDICT='WAIT'
+    VERDICT='WAIT'; VERDICT_REASON='window-too-short'
+    # Earliest re-run for a window-VALID verdict: deploy boundary + the gating window.
+    # (A re-run then still WAITs if the path hasn't been exercised by that point.)
+    rerun_ts="$(date -u -d "$SINCE UTC +${MIN_WINDOW_MINUTES} minutes" '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
+    [ -n "$rerun_ts" ] && VERDICT_RERUN="${rerun_ts}Z" || VERDICT_RERUN="after the ${MIN_WINDOW_LABEL} window fills"
     echo "   Only ${hh}h ${mm}m of cycles since deploy -- a valid test needs at least"
-    echo "   ${MIN_WINDOW_LABEL}. No failure signature so far; re-run once the window fills."
+    echo "   ${MIN_WINDOW_LABEL}. No failure signature so far; earliest window-valid re-run: ${VERDICT_RERUN}."
   elif [ "$exercised" -le 0 ]; then
-    VERDICT='WAIT'
+    VERDICT='WAIT'; VERDICT_REASON='not-exercised'
+    VERDICT_RERUN="after the change's code path next runs"
     echo "   The ${MIN_WINDOW_LABEL} window elapsed, but the change's code path has not run"
     echo "   yet (nothing to judge). Re-run after the next active cycle."
   else
-    VERDICT='PASS'
+    VERDICT='PASS'; VERDICT_REASON='exercised'
+    VERDICT_TESTRESULT="PASS $today @ $VERSION"
     echo "   Past the ${MIN_WINDOW_LABEL} window, the change's code path ran $exercised time(s),"
     echo "   and no failure-signature line appeared. The change is live and behaving."
     [ -n "$pass_note" ] && echo "   $pass_note"
@@ -287,13 +327,12 @@ vl_verdict() {
     FAIL) echo "   ====>  FAIL   open a Bug linked to $TICKET; this ticket still completes (fix-forward).";;
     WAIT) echo "   ====>  WAIT   insufficient evidence for a valid test yet; re-run once the condition above is met.";;
   esac
-  # WX-170: record the run, and hand back a ready-to-paste Jira Test Result. WAIT is
-  # logged (an inconclusive check is useful history) but has no Test Result to paste --
-  # the field per WORKFLOW §7a is PASS/FAIL only.
+  # WX-170: record the run + a ready-to-paste Jira Test Result (PASS/FAIL only; WX-187 also
+  # writes it into the run-log line). WAIT has none -- the field per WORKFLOW §7a is PASS/FAIL.
   vl_log "$VERDICT"
-  if [ "$VERDICT" != 'WAIT' ]; then
+  if [ -n "$VERDICT_TESTRESULT" ]; then
     echo
-    echo "   Test Result (paste into Jira): $VERDICT $(date -u '+%Y-%m-%d') @ $VERSION"
+    echo "   Test Result (paste into Jira): $VERDICT_TESTRESULT"
   fi
   echo "============================================================"
 }
