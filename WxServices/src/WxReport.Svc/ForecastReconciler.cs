@@ -1330,11 +1330,24 @@ public sealed class ForecastReconciler
               + "behaviour, not a cause for concern. "
             : "";
 
-        var changeAlertInstruction = reportKind == ReportKind.Unscheduled
-            ? "This is an unscheduled update — conditions have changed since the last report. "
-              + "For the changeSummary, write one or two sentences summarising "
-              + "what has changed (e.g. a forecast risk that has appeared, or a significant temperature shift). "
-            : "";
+        var changeAlertInstruction = reportKind switch
+        {
+            ReportKind.Unscheduled =>
+                "This is an unscheduled update — conditions have changed since the last report. "
+                + "For the changeSummary, write one or two sentences summarising "
+                + "what has changed (e.g. a forecast risk that has appeared, or a significant temperature shift). ",
+            // WX-178: a scheduled report's "What's changed" band rides ONLY a newly-appearing
+            // near-term severe hazard; everything else belongs in the grid + closing, not a band.
+            ReportKind.Scheduled =>
+                "This is a scheduled report. Show a \"What's changed\" band ONLY when a NEW severe hazard "
+                + "appears in the near term — a block that was not previously severe becoming severe within "
+                + "the next three local days (today through the day after tomorrow). In that case emit the "
+                + "change(s) and a one- or two-sentence changeSummary naming the hazard and its timing. For "
+                + "every other case — ordinary or non-severe changes, or nothing material — emit an EMPTY "
+                + "changes array and a null changeSummary; that context belongs in the per-day grid and the "
+                + "closing, not a change band. ",
+            _ => "",
+        };
 
         // WX-128/WX-130: the exact language set the structured report's narrative
         // must carry — the distinct languages across this locality's recipients.

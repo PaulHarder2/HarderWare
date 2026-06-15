@@ -193,7 +193,18 @@ public sealed record ForecastSnapshotBody
     /// 348→363 drop); the *arrival* of a new severe hazard is always news worth
     /// sending, even on a bare observation (directional asymmetry).
     /// </summary>
-    public bool HasSevereEscalationOver(ForecastSnapshotBody prior)
+    public bool HasSevereEscalationOver(ForecastSnapshotBody prior) =>
+        HasSevereEscalationOver(prior, DateTime.MaxValue);
+
+    /// <summary>
+    /// As <see cref="HasSevereEscalationOver(ForecastSnapshotBody)"/>, but only considering
+    /// blocks that start before <paramref name="onlyBlocksStartingBeforeUtc"/>.  The WX-178
+    /// near-term scope: a scheduled report keeps its "What's changed" band only for a severe
+    /// hazard newly appearing within the next few local days, so the caller passes the start
+    /// of local Day 4 (today + 3 local days) as the cutoff.  Comparison is on the UTC instant
+    /// (<see cref="ForecastSnapshotBlock.StartUtc"/>), Kind-agnostic.
+    /// </summary>
+    public bool HasSevereEscalationOver(ForecastSnapshotBody prior, DateTime onlyBlocksStartingBeforeUtc)
     {
         ArgumentNullException.ThrowIfNull(prior);
         var priorBlocks = new Dictionary<DateTime, ForecastSnapshotBlock>(prior.Blocks.Count);
@@ -201,7 +212,8 @@ public sealed record ForecastSnapshotBody
             priorBlocks[b.StartUtc] = b;
 
         foreach (var b in Blocks)
-            if (b.SevereFlag && (!priorBlocks.TryGetValue(b.StartUtc, out var p) || !p.SevereFlag))
+            if (b.StartUtc < onlyBlocksStartingBeforeUtc
+                && b.SevereFlag && (!priorBlocks.TryGetValue(b.StartUtc, out var p) || !p.SevereFlag))
                 return true;
         return false;
     }
