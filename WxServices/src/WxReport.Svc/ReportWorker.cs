@@ -1129,8 +1129,9 @@ public sealed class ReportWorker : BackgroundService
     /// within local Day 1-3 (today through the day after tomorrow). For any other change the band
     /// reads as an unscheduled update and is stripped (<see cref="WithoutChangeBand"/>). Pure and
     /// deterministic — the reconciler prompt steers the LLM the same way and this is the backstop
-    /// that guarantees it. Never suppresses for a non-scheduled kind, a bandless report, or a first
-    /// send (no prior snapshot).  The horizon (local Day 1-3) is deliberately its own thing, not the
+    /// that guarantees it. Never suppresses for a non-scheduled kind or a bandless report; a first
+    /// send (no prior snapshot) that nonetheless carries a band IS suppressed — with no prior there
+    /// is no onset to establish.  The horizon (local Day 1-3) is deliberately its own thing, not the
     /// <c>DegradeHazardHorizon</c> (~36 h, which governs sending a narrative-less hazard alert now).
     /// </summary>
     internal static bool SuppressesScheduledChangeBand(
@@ -1138,8 +1139,11 @@ public sealed class ReportWorker : BackgroundService
         ForecastSnapshotBody? priorBody, DateTime nowUtc, TimeZoneInfo tz)
     {
         if (kind != ReportKind.Scheduled) return false;
-        if (priorBody is null) return false;                  // first send: nothing to compare, no band anyway
         if (!ReportCarriesChangeBand(report)) return false;   // nothing to suppress
+        // First send (no prior): a severe ONSET can't be established against nothing, so a
+        // "What's changed" band is meaningless — suppress it. (Severe still shows in the grid,
+        // the WX-156 subject, and the closing.)
+        if (priorBody is null) return true;
         return !finalSnapshot.HasSevereEscalationOver(priorBody, NearTermCutoffUtc(nowUtc, tz));
     }
 

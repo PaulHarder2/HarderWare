@@ -90,11 +90,19 @@ public class ScheduledChangeBandTests
     }
 
     [Fact]
-    public void Scheduled_NoPriorSnapshot_NeverSuppresses()
+    public void Scheduled_FirstSend_WithBand_SuppressesBand()
     {
-        // First send: nothing to compare against (and no real band anyway) → never suppress.
-        Assert.False(ReportWorker.SuppressesScheduledChangeBand(
+        // First send (no prior): a severe onset can't be established against nothing, so a
+        // "What's changed" band is meaningless → suppress (the severe still shows elsewhere).
+        Assert.True(ReportWorker.SuppressesScheduledChangeBand(
             ReportKind.Scheduled, Report(withBand: true), Calm(), priorBody: null, Now, Utc));
+    }
+
+    [Fact]
+    public void Scheduled_FirstSend_NoBand_NothingToSuppress()
+    {
+        Assert.False(ReportWorker.SuppressesScheduledChangeBand(
+            ReportKind.Scheduled, Report(withBand: false), Calm(), priorBody: null, Now, Utc));
     }
 
     [Fact]
