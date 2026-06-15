@@ -326,13 +326,14 @@ public sealed class ReportWorker : BackgroundService
         // Render + send a diagnostic email for each member. No LocalityState update
         // (IsDiagnostic rows never advance the baseline). Welcome is suppressed —
         // a deploy verification is not a recipient's genuine first report.
+        var nowUtc = DateTime.UtcNow;   // one send instant for the whole fan-out (WX-188 grid trim)
         foreach (var member in members)
         {
             try
             {
                 var langCode = ResolveLanguageCode(member, langById, cfg.DefaultLanguage);
                 var innerBody = StructuredReportRenderer.Render(
-                    success.StructuredReport, success.FinalSnapshot, snapshot, member, langCode, tz, ReportKind.Diagnostic);
+                    success.StructuredReport, success.FinalSnapshot, snapshot, member, langCode, tz, ReportKind.Diagnostic, nowUtc);
                 var report = WrapAsEmailHtml(innerBody, langCode, snapshot, tz);
 
                 var committedSend = new CommittedSend
@@ -928,7 +929,7 @@ public sealed class ReportWorker : BackgroundService
                 }
 
                 var innerBody = StructuredReportRenderer.Render(
-                    success.StructuredReport, success.FinalSnapshot, snapshot, member, langCode, tz, kind);
+                    success.StructuredReport, success.FinalSnapshot, snapshot, member, langCode, tz, kind, now);
                 if (await DeliverWeatherReportAsync(
                         ctx, emailer, member, langCode, reconciledSnapshot, innerBody,
                         structuredReportJson, success.ReasoningTrace, snapshot, locality, tz,
@@ -1065,7 +1066,7 @@ public sealed class ReportWorker : BackgroundService
             {
                 var langCode = ResolveLanguageCode(member, langById, cfg.DefaultLanguage);
                 var innerBody = StructuredReportRenderer.Render(
-                    bandFree, cachedBody, snapshot, member, langCode, tz, ReportKind.Scheduled);
+                    bandFree, cachedBody, snapshot, member, langCode, tz, ReportKind.Scheduled, now);
                 if (await DeliverWeatherReportAsync(
                         ctx, emailer, member, langCode, cachedSnapshot, innerBody,
                         bandFreeJson, reasoningTrace: "WX-182 cached re-send (degrade circuit-breaker); no Claude call",

@@ -49,7 +49,9 @@ public static class StructuredReportRenderer
     /// (always shown); the change-summary band itself renders whenever the
     /// narrative carries one — independent of the kind.  (A recipient's first contact is a separate
     /// welcome-only email — see <see cref="RenderWelcome"/>; this method always
-    /// renders a weather report.)
+    /// renders a weather report.)  <paramref name="nowUtc"/> is the send instant: the
+    /// Extended Forecast grid drops any local day whose every 6-hour block has fully
+    /// elapsed by then (WX-188), so it never leads with a wholly-past day.
     /// </summary>
     public static string Render(
         StructuredReportBody report,
@@ -58,7 +60,8 @@ public static class StructuredReportRenderer
         Recipient recipient,
         string langCode,
         TimeZoneInfo localityTz,
-        ReportKind kind)
+        ReportKind kind,
+        DateTime nowUtc)
     {
         // langCode is the recipient's resolved ISO 639-1 code (en, es), resolved by
         // the caller from the Languages registry (WX-166). The narrative map and
@@ -82,7 +85,7 @@ public static class StructuredReportRenderer
             AppendChangeBand(sb, vocab, RenderProse(sections.ChangeSummary!));
 
         AppendCurrentConditions(sb, observation, recipient, vocab);
-        AppendExtendedForecast(sb, finalSnapshot, observation.LocalityName, recipient, localityTz, vocab);
+        AppendExtendedForecast(sb, finalSnapshot, observation.LocalityName, recipient, localityTz, vocab, nowUtc);
         AppendClosing(sb, vocab, RenderProse(sections.Closing));
 
         sb.Append("</div>");
@@ -115,7 +118,7 @@ public static class StructuredReportRenderer
         AppendHeader(sb, observation, localityTz, vocab, ReportKind.Unscheduled);
         AppendHazardBanner(sb, finalSnapshot, localityTz, vocab, nowUtc);
         AppendCurrentConditions(sb, observation, recipient, vocab);
-        AppendExtendedForecast(sb, finalSnapshot, observation.LocalityName, recipient, localityTz, vocab);
+        AppendExtendedForecast(sb, finalSnapshot, observation.LocalityName, recipient, localityTz, vocab, nowUtc);
         sb.Append("</div>");
         return sb.ToString();
     }
@@ -330,9 +333,9 @@ public static class StructuredReportRenderer
     // ── extended forecast grid ────────────────────────────────────────────────
 
     private static void AppendExtendedForecast(
-        StringBuilder sb, ForecastSnapshotBody body, string locationName, Recipient recipient, TimeZoneInfo tz, ReportVocabulary vocab)
+        StringBuilder sb, ForecastSnapshotBody body, string locationName, Recipient recipient, TimeZoneInfo tz, ReportVocabulary vocab, DateTime nowUtc)
     {
-        var days = AggregateDays(body, tz).ToList();
+        var days = AggregateDays(body, tz, nowUtc).ToList();
         if (days.Count == 0)
             return;  // no forecast blocks → omit the section entirely rather than emit a header-only grid
 
@@ -411,9 +414,14 @@ public static class StructuredReportRenderer
     /// into <see cref="Episode"/>s (a run of consecutive blocks sharing a phenomenon)
     /// rather than collapsed to a single peak — so a day with, say, morning rain and
     /// afternoon storms surfaces both instead of dropping one (WX-148, Class 2).
-    /// Days are returned in chronological order; the first is today.
+    /// Days whose every block has fully elapsed at <paramref name="nowUtc"/> are dropped
+    /// (WX-188), so the first day returned is the one containing the send instant, never a
+    /// wholly-past "yesterday".  A retained day keeps ALL its blocks — including any already
+    /// elapsed — so its high/low/wind span the whole calendar day regardless of how much of
+    /// the day remains (a 1 PM report still reports this morning's low as today's low).
+    /// Days are returned in chronological order.
     /// </summary>
-    private static IEnumerable<DaySummary> AggregateDays(ForecastSnapshotBody body, TimeZoneInfo tz)
+    private static IEnumerable<DaySummary> AggregateDays(ForecastSnapshotBody body, TimeZoneInfo tz, DateTime nowUtc)
     {
         var byDay = new Dictionary<DateOnly, List<(int Hour, ForecastSnapshotBlock Block)>>();
         var order = new List<DateOnly>();
@@ -437,6 +445,13 @@ public static class StructuredReportRenderer
         foreach (var day in order)
         {
             var blocks = byDay[day];  // sorted by StartUtc above
+
+            // WX-188: drop a day only when every one of its blocks has fully elapsed at
+            // nowUtc (a wholly-past "yesterday"). A day with any still-active block — the
+            // current day always has one — is kept whole, so its high/low/wind cover the
+            // entire calendar day, not just the unelapsed remainder.
+            if (!blocks.Any(x => SevereBlocks.NotFullyElapsed(x.Block, nowUtc)))
+                continue;
             // Day-level severe is the OR of every block's flag — independent of precip,
             // so a severe block with no precipitation (e.g. a damaging-wind event) still
             // marks the day severe and is timed by the earliest such block.
