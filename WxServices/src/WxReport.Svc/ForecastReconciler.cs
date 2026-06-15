@@ -351,20 +351,9 @@ public sealed class ForecastReconciler
                     // WX-148: replay this rejected attempt to Claude on the next call with
                     // the reason, so the retry corrects the specific fault rather than
                     // blindly resampling (a no-op for the semantic faults this catches).
-                    // WX-165: for a change-consistency rejection, name the offending change
-                    // and instruct correct-OR-remove (with empty-changes[] as the right answer
-                    // when nothing real changed) and "do not replace it with a different
-                    // change" — so a low-temperature retry converges instead of inventing a
-                    // fresh phantom each attempt.
-                    var feedback = ex is ChangeConsistencyException cce
-                        ? $"Your previous report's \"What's changed\" item '{cce.SummaryToken}' was rejected: {ex.Message} "
-                          + $"Do NOT replace it with a different change. Either correct '{cce.SummaryToken}' so it matches the "
-                          + $"snapshot data exactly, or REMOVE it from the changes array and delete the narrative sentence "
-                          + $"anchored by its '{cce.SummaryToken}' token. When no real near-term change exists, an EMPTY changes "
-                          + "array with a null changeSummary is the correct answer. Then resubmit via the tool."
-                        : $"Your previous {apiResult.ToolName} was rejected ({ex.Message}). Fix only that and resubmit via the tool.";
                     corrections.Add(new ReconciliationCorrection(
-                        apiResult.ToolUseId, apiResult.ToolName, apiResult.ToolUseInput, feedback));
+                        apiResult.ToolUseId, apiResult.ToolName, apiResult.ToolUseInput,
+                        $"Your previous {apiResult.ToolName} was rejected ({ex.Message}). Fix only that and resubmit via the tool."));
                     Logger.Warn($"Reconciliation tool_use input {what} (attempt {attempt}/{maxAttempts}); retrying with feedback.");
                     continue;
                 }
@@ -436,22 +425,6 @@ public sealed class ForecastReconciler
             : base($"missing required field '{field}'") { }
     }
 
-    // WX-165: a change-consistency / change-anchored-prose rejection — the report
-    // asserted a "What's changed" item (a changes[] entry) the snapshot data does not
-    // support, or narrated one against the wrong window. Distinct from a bare
-    // JsonException so the retry feedback can NAME the offending change and tell Claude
-    // to correct-or-remove THAT change rather than re-author a fresh (often equally
-    // invented) one — the fix for the "three different phantoms in three attempts"
-    // non-convergence. Still a JsonException, so it routes through the identical
-    // retry-then-degrade path as every other contract check; only the feedback differs.
-    private sealed class ChangeConsistencyException : JsonException
-    {
-        public ChangeConsistencyException(string summaryToken, string message)
-            : base(message) => SummaryToken = summaryToken;
-
-        public string SummaryToken { get; }
-    }
-
     // WX-128/WX-130: per-call contract checks the body's intrinsic Validate()
     // cannot perform because they depend on what THIS cycle requested — the exact
     // set of languages the locality's recipients need. Every requested language
@@ -503,7 +476,7 @@ public sealed class ForecastReconciler
         {
             var w = change.Window;
             if (!IsBlockAligned(w.StartUtc, tz) || !IsBlockAligned(w.EndUtc, tz) || w.EndUtc <= w.StartUtc)
-                throw new ChangeConsistencyException(change.SummaryToken,
+                throw new JsonException(
                     $"structured_report change '{change.SummaryToken}' window {w.StartUtc:O}..{w.EndUtc:O} is not "
                     + "aligned to a snapshot block boundary (a local 00/06/12/18 day-part boundary); change windows must "
                     + "coincide with block boundaries so the narrative cannot claim timing finer than the blocks support.");
@@ -553,7 +526,7 @@ public sealed class ForecastReconciler
                     _ => true,  // Shifting (WX-111 wind vector) is not a precip-intensity change; prompt-governed
                 };
                 if (!real)
-                    throw new ChangeConsistencyException(change.SummaryToken,
+                    throw new JsonException(
                         $"structured_report change '{change.SummaryToken}' ({change.Phenomenon} {change.Direction}, "
                         + $"window {w.StartUtc:O}..{w.EndUtc:O}) is not a real change versus prior_snapshot: in-window "
                         + $"{precip} expectation moved prior->{(PrecipExpectation)priorE}->new->{(PrecipExpectation)newE} "
@@ -573,7 +546,7 @@ public sealed class ForecastReconciler
                     _ => true,
                 };
                 if (!real)
-                    throw new ChangeConsistencyException(change.SummaryToken,
+                    throw new JsonException(
                         $"structured_report change '{change.SummaryToken}' (Severe {change.Direction}, "
                         + $"window {w.StartUtc:O}..{w.EndUtc:O}) is not a real change versus prior_snapshot: in-window "
                         + $"severeFlag is prior={priorSevere}, new={newSevere}, which does not support '{change.Direction}'. "
@@ -610,7 +583,7 @@ public sealed class ForecastReconciler
                         || b.PrecipPhenomenon is PrecipPhenomenon.FreezingPrecip or PrecipPhenomenon.Snow
                         || b.WindKt.Max >= WxThresholds.SafetyWindKt));
                 if (!safetyBacked)
-                    throw new ChangeConsistencyException(change.SummaryToken,
+                    throw new JsonException(
                         $"structured_report change '{change.SummaryToken}' is tier '{change.Tier}' "
                         + $"({change.Phenomenon}) but no final_snapshot block in its window "
                         + $"{w.StartUtc:O}..{w.EndUtc:O} carries a safety-grade signal (severeFlag, "
@@ -963,7 +936,7 @@ public sealed class ForecastReconciler
                 int sentEnd = SentenceEnd(masked, ai + anchor.Length);
                 var found = SentenceDayPartWords(masked, sentStart, sentEnd);
                 if (found.Count > 0 && !found.Any(f => windowParts.Contains(f.Part)))
-                    throw new ChangeConsistencyException(change.SummaryToken,
+                    throw new JsonException(
                         $"structured_report change '{change.SummaryToken}' narrative '{lang}' times it \"{found[0].Word}\" "
                         + $"but the change's window {change.Window.StartUtc:O}..{change.Window.EndUtc:O} is the "
                         + $"{string.Join("/", windowParts.OrderBy(p => p).Select(DayPartName))} locally; the prose "
@@ -1365,16 +1338,8 @@ public sealed class ForecastReconciler
                 + "what has changed (e.g. a forecast risk that has appeared, or a significant temperature shift). ",
             // WX-178: a scheduled report's "What's changed" band rides ONLY a newly-appearing
             // near-term severe hazard; everything else belongs in the grid + closing, not a band.
-            // WX-165: the Diagnostic (startup verification) kind gets the SAME suppression — it
-            // previously fell through to the empty default below, the one report kind that never
-            // received this "an empty changes array is the correct answer" coaching, so against a
-            // stale prior it filled the band and the resulting phantom degraded the send (and a
-            // diagnostic degrade is a hard abort, suppressing the deploy verification entirely).
-            ReportKind.Scheduled or ReportKind.Diagnostic =>
-                (reportKind == ReportKind.Diagnostic
-                    ? "This is a diagnostic (startup verification) report. "
-                    : "This is a scheduled report. ")
-                + "Show a \"What's changed\" band ONLY when a NEW severe hazard "
+            ReportKind.Scheduled =>
+                "This is a scheduled report. Show a \"What's changed\" band ONLY when a NEW severe hazard "
                 + "appears in the near term — a block that was not previously severe becoming severe within "
                 + "the next three local days (today through the day after tomorrow). In that case emit the "
                 + "change(s) and a one- or two-sentence changeSummary naming the hazard and its timing. For "
