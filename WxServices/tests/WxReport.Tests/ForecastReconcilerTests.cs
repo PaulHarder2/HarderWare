@@ -1474,6 +1474,97 @@ public class ForecastReconcilerTests
         Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
     }
 
+    // ── WX-165: generation-side invention reduction ──────────────────────────
+    // Three coordinated fixes that attack invented "What's changed" items at the
+    // source rather than only catching them downstream: a low sampling temperature,
+    // the diagnostic report kind getting the WX-178 severe-onset band rule (it had
+    // fallen through to an empty instruction), and prescriptive retry feedback that
+    // names the offending change and says correct-or-remove (don't invent a new one).
+
+    [Fact]
+    public async Task ReconcilerRequest_PinsSamplingTemperatureLow()
+    {
+        // The call had been running at the Anthropic default (1.0); WX-165 pins it low
+        // so the structural sampler is tight and retries converge instead of rolling a
+        // fresh phantom each attempt.
+        var (_, requests) = await RunReconcilerCapturing(
+            _ => BuildClaudeResponseJson("""{"schemaVersion":5,"blocks":[]}""", "trace", 10, 10, 0, 0));
+
+        Assert.Single(requests);
+        Assert.Contains("\"temperature\":0.25", requests[0]);
+    }
+
+    [Fact]
+    public async Task DiagnosticKind_ReceivesNearTermSevereOnsetBandInstruction()
+    {
+        // The Diagnostic kind previously fell through changeAlertInstruction's empty
+        // default — the one report kind never given "an empty changes array is the
+        // correct answer" coaching — so it filled the band against a stale prior and
+        // the phantom degraded the (hard-aborting) startup verification. It now gets
+        // the same near-term-severe-onset rule as a scheduled report.
+        var (result, requests) = await RunReconcilerCapturing(
+            _ => BuildClaudeResponseJson("""{"schemaVersion":5,"blocks":[]}""", "trace", 10, 10, 0, 0),
+            reportKind: ReportKind.Diagnostic);
+
+        Assert.IsType<ReconcileResult.Success>(result);
+        Assert.Contains("diagnostic (startup verification) report", requests[0]);
+        Assert.Contains("a NEW severe hazard", requests[0]);
+        Assert.Contains("emit an EMPTY changes array", requests[0]);
+    }
+
+    [Fact]
+    public async Task ScheduledKind_KeepsScheduledLeadIn_NotDiagnostic()
+    {
+        // The shared band rule is the same, but each kind keeps its own accurate
+        // lead-in — a scheduled report must not be told it is a diagnostic.
+        var (_, requests) = await RunReconcilerCapturing(
+            _ => BuildClaudeResponseJson("""{"schemaVersion":5,"blocks":[]}""", "trace", 10, 10, 0, 0),
+            reportKind: ReportKind.Scheduled);
+
+        Assert.Contains("This is a scheduled report.", requests[0]);
+        Assert.DoesNotContain("diagnostic (startup verification) report", requests[0]);
+    }
+
+    [Fact]
+    public async Task ChangeConsistencyRejection_RetryFeedback_IsPrescriptiveAndNamesChange()
+    {
+        // Prior and new carry the SAME in-window rain, so "rain appearing" is a phantom
+        // (a ChangeConsistencyException naming change 'ch1'). The replayed correction
+        // must name that change and instruct correct-OR-remove with "do not replace it
+        // with a different change" — so a low-temperature retry converges instead of
+        // inventing a fresh phantom (the 6/15 three-different-phantoms signature).
+        var (result, requests) = await RunReconcilerCapturing(
+            _ => BuildClaudeResponseJson(RainBlockSnapshotJson, "trace", 10, 10, 0, 0, RainAppearingAlignedReportJson),
+            prior: PriorOf(RainBlockSnapshotJson));
+
+        var degraded = Assert.IsType<ReconcileResult.Degraded>(result);
+        Assert.Contains("did not occur", degraded.Reason);
+        Assert.Equal(3, requests.Count);                                        // exhausted, then degraded
+        Assert.DoesNotContain("REMOVE it from the changes array", requests[0]);  // first call: no correction yet
+        Assert.Contains("REMOVE it from the changes array", requests[1]);        // retry: prescriptive
+        Assert.Contains("Do NOT replace it with a different change", requests[1]);
+        // The feedback wraps the token in apostrophes ('ch1'); System.Text.Json's default
+        // (HTML-safe) encoder escapes the apostrophe, so the body carries 'ch1'.
+        // Match that escaped form — it appears only in the feedback (the replayed report
+        // uses "summaryToken":"ch1" / "{ch1}"), so it proves the feedback NAMES the change.
+        Assert.Contains("\\u0027ch1\\u0027", requests[1]);
+    }
+
+    [Fact]
+    public async Task NonChangeRejection_RetryFeedback_StaysGeneric()
+    {
+        // A raw-UTC-block leak in the closing is NOT change-anchored, so the retry
+        // feedback stays the generic "fix only that" line — the prescriptive
+        // change-removal text is scoped to change-consistency rejections only.
+        var (result, requests) = await RunReconcilerCapturing(
+            _ => BuildClaudeResponseJson(RainBlockSnapshotJson, "trace", 10, 10, 0, 0, RawUtcLeakReportJson));
+
+        Assert.IsType<ReconcileResult.Degraded>(result);
+        Assert.Equal(3, requests.Count);
+        Assert.Contains("Fix only that and resubmit", requests[1]);
+        Assert.DoesNotContain("REMOVE it from the changes array", requests[1]);
+    }
+
     // ── helpers ─────────────────────────────────────────────────────────────
 
     // A fixed UTC-5 zone (US Central in June / CDT) used by the WX-149 prose-token
@@ -1589,7 +1680,7 @@ public class ForecastReconcilerTests
             Content = new StringContent(anthropicResponseJson, Encoding.UTF8, "application/json"),
         }, allowSkip, tz: tz, prior: prior);
 
-    private static async Task<ReconcileResult> RunReconciler(Func<HttpRequestMessage, HttpResponseMessage> respond, bool allowSkip = false, string[]? narrativeLanguages = null, TimeZoneInfo? tz = null, ForecastSnapshot? prior = null, ForecastSnapshotBody? provisional = null, WeatherSnapshot? snapshot = null)
+    private static async Task<ReconcileResult> RunReconciler(Func<HttpRequestMessage, HttpResponseMessage> respond, bool allowSkip = false, string[]? narrativeLanguages = null, TimeZoneInfo? tz = null, ForecastSnapshot? prior = null, ForecastSnapshotBody? provisional = null, WeatherSnapshot? snapshot = null, ReportKind reportKind = ReportKind.Scheduled)
     {
         var http = new HttpClient(new StubHandler(respond));
         var claude = new ClaudeClient(http, apiKey: "test-key", model: "claude-sonnet-4-6", personaPrefix: "Persona text.");
@@ -1604,10 +1695,38 @@ public class ForecastReconcilerTests
             prior: prior,
             narrativeLanguages: narrativeLanguages ?? new[] { "en" },
             tz: tz ?? Cdt,
-            reportKind: ReportKind.Scheduled,
+            reportKind: reportKind,
             previousMetarIcao: null,
             allowSkip: allowSkip,
             changedSinceLastSend: Array.Empty<TriggerSource>());
+    }
+
+    // WX-165: like RunReconciler, but captures each outbound request body (the JSON
+    // POSTed to the Messages API) so a test can assert on the system prompt and the
+    // replayed retry corrections. Delegates to RunReconciler with a capturing respond
+    // callback so the harness setup lives in one place. responsePerCall is keyed by the
+    // 1-based attempt number.
+    private static async Task<(ReconcileResult Result, List<string> Requests)> RunReconcilerCapturing(
+        Func<int, string> responsePerCall,
+        ReportKind reportKind = ReportKind.Scheduled,
+        ForecastSnapshot? prior = null,
+        TimeZoneInfo? tz = null)
+    {
+        var requests = new List<string>();
+        int call = 0;
+        var result = await RunReconciler(
+            req =>
+            {
+                call++;
+                requests.Add(req.Content!.ReadAsStringAsync().GetAwaiter().GetResult());
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(responsePerCall(call), Encoding.UTF8, "application/json"),
+                };
+            },
+            tz: tz, prior: prior, reportKind: reportKind);
+
+        return (result, requests);
     }
 
     // WX-151: wrap a final_snapshot JSON as a prior ForecastSnapshot for the
