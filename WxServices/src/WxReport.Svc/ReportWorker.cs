@@ -907,7 +907,23 @@ public sealed class ReportWorker : BackgroundService
         ctx.ForecastSnapshots.Add(reconciledSnapshot);
         await ctx.SaveChangesAsync(ct);
 
-        var structuredReportJson = success.StructuredReport.Serialize();
+        // WX-178: a scheduled report shows "What's changed" only for a near-term severe onset;
+        // otherwise strip the band deterministically (the reconciler prompt steers the LLM the
+        // same way; this guarantees it). Decided once here — the report is shared across members.
+        var outboundReport = success.StructuredReport;
+        if (kind == ReportKind.Scheduled)
+        {
+            // Deserialize the prior baseline only on a scheduled cycle — the only kind that gates
+            // the band; an unscheduled cycle would never use it.
+            var priorBandBody = priorSnapshot is null ? null : ForecastSnapshotBody.Deserialize(priorSnapshot.Body);
+            if (SuppressesScheduledChangeBand(kind, outboundReport, success.FinalSnapshot, priorBandBody, now, tz))
+            {
+                outboundReport = WithoutChangeBand(outboundReport);
+                Logger.Debug($"{label}: WX-178 scheduled \"What's changed\" band suppressed — no near-term severe onset.");
+            }
+        }
+
+        var structuredReportJson = outboundReport.Serialize();
         var plotsDir = new WxPaths(_config["InstallRoot"]).PlotsDir;
         var weatherSent = 0;   // weather reports delivered — drives the baseline/cadence advance
         var welcomeSent = 0;   // first-contact welcome-only emails delivered
@@ -929,7 +945,7 @@ public sealed class ReportWorker : BackgroundService
                 }
 
                 var innerBody = StructuredReportRenderer.Render(
-                    success.StructuredReport, success.FinalSnapshot, snapshot, member, langCode, tz, kind, now);
+                    outboundReport, success.FinalSnapshot, snapshot, member, langCode, tz, kind, now);
                 if (await DeliverWeatherReportAsync(
                         ctx, emailer, member, langCode, reconciledSnapshot, innerBody,
                         structuredReportJson, success.ReasoningTrace, snapshot, locality, tz,
@@ -1105,6 +1121,54 @@ public sealed class ReportWorker : BackgroundService
             Narrative = report.Narrative.ToDictionary(
                 kv => kv.Key, kv => kv.Value with { ChangeSummary = null }, StringComparer.Ordinal),
         };
+
+    /// <summary>
+    /// WX-178: whether a SCHEDULED report's "What's changed" band must be suppressed. A scheduled
+    /// report carries the band ONLY for a newly-appearing near-term severe hazard — a block going
+    /// <see cref="ForecastSnapshotBlock.SevereFlag"/> false→true versus the prior committed snapshot,
+    /// within local Day 1-3 (today through the day after tomorrow). For any other change the band
+    /// reads as an unscheduled update and is stripped (<see cref="WithoutChangeBand"/>). Pure and
+    /// deterministic — the reconciler prompt steers the LLM the same way and this is the backstop
+    /// that guarantees it. Never suppresses for a non-scheduled kind or a bandless report; a first
+    /// send (no prior snapshot) that nonetheless carries a band IS suppressed — with no prior there
+    /// is no onset to establish.  The horizon (local Day 1-3) is deliberately its own thing, not the
+    /// <c>DegradeHazardHorizon</c> (~36 h, which governs sending a narrative-less hazard alert now).
+    /// </summary>
+    internal static bool SuppressesScheduledChangeBand(
+        ReportKind kind, StructuredReportBody report, ForecastSnapshotBody finalSnapshot,
+        ForecastSnapshotBody? priorBody, DateTime nowUtc, TimeZoneInfo tz)
+    {
+        if (kind != ReportKind.Scheduled) return false;
+        if (!ReportCarriesChangeBand(report)) return false;   // nothing to suppress
+        // First send (no prior): a severe ONSET can't be established against nothing, so a
+        // "What's changed" band is meaningless — suppress it. (Severe still shows in the grid,
+        // the WX-156 subject, and the closing.)
+        if (priorBody is null) return true;
+        return !finalSnapshot.HasSevereEscalationOver(priorBody, NearTermCutoffUtc(nowUtc, tz));
+    }
+
+    /// <summary>True when <paramref name="report"/> carries change content the band strip would clear — a non-empty changes array or any non-blank changeSummary. (The rendered band itself is driven by changeSummary; changes is included so a strip leaves a consistent band-free body. Validation keeps the two coupled.)</summary>
+    private static bool ReportCarriesChangeBand(StructuredReportBody report) =>
+        report.Changes.Count > 0
+        || report.Narrative.Values.Any(n => !string.IsNullOrWhiteSpace(n.ChangeSummary));
+
+    /// <summary>
+    /// The UTC instant at the start of local Day 4 (today + 3 local days, at local midnight):
+    /// a block starting before it falls on local Day 1-3, the WX-178 near-term window. DST-correct
+    /// via <see cref="TimeZoneInfo"/>.
+    /// </summary>
+    private static DateTime NearTermCutoffUtc(DateTime nowUtc, TimeZoneInfo tz)
+    {
+        var localNow = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(nowUtc, DateTimeKind.Utc), tz);
+        var day4LocalStart = DateTime.SpecifyKind(localNow.Date.AddDays(3), DateTimeKind.Unspecified);
+        // WX-185 guard: in a midnight-transition timezone, local midnight on a spring-forward day
+        // is a non-existent wall-clock time and ConvertTimeToUtc would throw, aborting the cycle.
+        // Roll forward an hour (mirrors GfsSnapshotBuilder.FloorToLocalDayPartStart); a ~1 h shift
+        // of a day-granular cutoff is immaterial to the near-term decision.
+        if (tz.IsInvalidTime(day4LocalStart))
+            day4LocalStart = day4LocalStart.AddHours(1);
+        return TimeZoneInfo.ConvertTimeToUtc(day4LocalStart, tz);
+    }
 
     /// <summary>
     /// Onboards never-contacted members of a locality whose cycle is NOT sending this
