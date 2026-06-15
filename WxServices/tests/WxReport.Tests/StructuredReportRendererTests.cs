@@ -471,6 +471,20 @@ public class StructuredReportRendererTests
         Assert.DoesNotContain("Forecast for Spring", en);
     }
 
+    [Fact]
+    public void Grid_DayWhoseLastBlockEndsExactlyAtNow_IsDropped()
+    {
+        // Exact boundary: the Jun 8 evening block ends at 00:00:00Z Jun 9. With nowUtc set to
+        // that instant, StartUtc + 6h == nowUtc, which the strict `> nowUtc` active-window test
+        // (SevereBlocks.NotFullyElapsed) treats as fully elapsed → Jun 8 is dropped and the grid
+        // leads with Jun 9 (the block whose window closes exactly at the send instant is past).
+        var nowUtc = new DateTime(2026, 6, 9, 0, 0, 0, DateTimeKind.Utc);
+        var en = StructuredReportRenderer.Render(Body(), TwoLocalDayForecast(), Observation(), Imperial(), "en", Utc, ReportKind.Unscheduled, nowUtc);
+
+        Assert.DoesNotContain("Jun 8", en);
+        Assert.Contains("Jun 9", en);
+    }
+
     private static int CountOccurrences(string haystack, string needle)
     {
         int count = 0, i = 0;

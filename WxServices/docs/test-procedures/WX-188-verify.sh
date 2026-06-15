@@ -60,11 +60,16 @@ sqlbody() {  # Id -> EmailBody on stdout
     "sqlcmd -S $DB_SERVER -d $DB_NAME -E -C -y 0 -Q \"SET NOCOUNT ON; SELECT EmailBody FROM CommittedSends WHERE Id=$1\"" 2>/dev/null | tr -d '\r'
 }
 
-# Month abbreviation -> number, for parsing the grid's "ddd MMM d" date cell.
-mon_num() { case "$1" in
-  Jan) echo 01;; Feb) echo 02;; Mar) echo 03;; Apr) echo 04;; May) echo 05;; Jun) echo 06;;
-  Jul) echo 07;; Aug) echo 08;; Sep) echo 09;; Oct) echo 10;; Nov) echo 11;; Dec) echo 12;;
-  *) echo 00;; esac; }
+# Month abbreviation -> number, for parsing the grid's localized "ddd MMM d" date cell.
+# The renderer localizes the date, so accept English AND Spanish abbreviations, case- and
+# trailing-period-insensitive. Unknown -> 00 (the caller treats that as unparseable).
+mon_num() {
+  case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -d '.')" in
+    jan|ene) echo 01;; feb) echo 02;; mar) echo 03;; apr|abr) echo 04;;
+    may) echo 05;; jun) echo 06;; jul) echo 07;; aug|ago) echo 08;;
+    sep|set) echo 09;; oct) echo 10;; nov) echo 11;; dec|dic) echo 12;;
+    *) echo 00;; esac
+}
 
 vl_parse_args "$@"
 # vl_resolve_boundary also requires a readable service log (a shared-lib precondition) even
@@ -77,12 +82,14 @@ vl_resolve_boundary     # sets SINCE / COMMIT / BOUNDARY_SRC / DEPLOY_INFO (WAIT
 CANDIDATES="$(sqlq "SET NOCOUNT ON; SELECT cs.Id, CONVERT(varchar(19), cs.CreatedAtUtc, 120), r.Timezone FROM CommittedSends cs JOIN Recipients r ON cs.RecipientId = r.RecipientId WHERE cs.IsDiagnostic = 0 AND cs.SentAtUtc IS NOT NULL AND cs.CreatedAtUtc >= '$SINCE' ORDER BY cs.Id")"
 
 since_epoch=$(date -u -d "$SINCE UTC" +%s)
-inspected=0      # reports genuinely evaluated (resolvable tz + parseable timestamps + a grid)
-skipped=0        # reports skipped for an unresolvable/empty recipient timezone (counted, never silent)
-early=0          # early-morning reports (00:00-05:59 local) -- the window the bug surfaces in
-regression=0     # reports whose grid leads with a day before the local build date
+inspected=0       # evaluable rows (resolvable tz + parseable timestamps)
+checked=0         # reports whose grid date was actually parsed + compared (the real coverage)
+early_checked=0   # checked reports built 00:00-05:59 local -- the window the bug surfaces in
+regression=0      # checked reports whose grid leads with a day before the local build date
+unparsed=0        # reports with no parseable grid (degraded/obs-less, or unrecognized locale) -- visible
+skipped=0         # reports skipped for an unresolvable/empty recipient timezone
 LAST_TS="$SINCE"; last_epoch=$since_epoch
-VIOLATIONS=''; SKIPPED=''
+VIOLATIONS=''; SKIPPED=''; UNPARSED=''
 
 while IFS='|' read -r id created tz; do
   id="$(printf '%s' "${id:-}" | tr -d '[:space:]')"
@@ -110,22 +117,39 @@ while IFS='|' read -r id created tz; do
   build_day=$(TZ="$tz" date -d "$created UTC" +%Y-%m-%d 2>/dev/null || echo "")
   build_hour=$(TZ="$tz" date -d "$created UTC" +%H 2>/dev/null || echo "")
   [ -n "$build_day" ] && [ -n "$build_hour" ] || continue
-  inspected=$(( inspected + 1 ))                      # counted only once the row is genuinely evaluable
-  [ "$((10#$build_hour))" -lt 6 ] && early=$(( early + 1 ))   # 10# strips the leading zero (no octal surprise)
+  inspected=$(( inspected + 1 ))                      # an evaluable row (resolvable tz + timestamps)
+  bh=$((10#$build_hour))                              # local build hour; 10# strips the leading zero
 
-  # Parse the FIRST grid date cell from the rendered body (the inner HTML is one long line;
-  # date cells are ">ddd MMM d<"). Guard on "Forecast for" first: a degraded / obs-less
-  # report omits the grid, and ${body#...} is a no-op on no match, so without the guard a
-  # date-shaped cell elsewhere in the HTML could be mistaken for the grid's first day.
+  # First grid date cell from the rendered body. Match EITHER language's forecast heading
+  # ("Forecast for" / "Pronostico para"); a degraded / obs-less report omits the grid, and
+  # ${body#...} is a no-op on no match, so guard explicitly and count a miss (never silent).
+  # The Date cell is the first data-row <td> after the heading (the column headers use <th>,
+  # not <td>); its text is localized ("Mon Jun 15" / "lun jun 15"), so take month + day and
+  # ignore the weekday word -- mon_num accepts both languages.
   body="$(sqlbody "$id")"
-  case "$body" in *"Forecast for"*) ;; *) continue;; esac
-  after="${body#*Forecast for}"
-  cell="$(printf '%s' "$after" | grep -oE '>[A-Z][a-z][a-z] [A-Z][a-z][a-z] [0-9]{1,2}<' | head -1)"
-  [ -n "$cell" ] || continue                          # forecast heading present but no date cell parsed
-  cell="${cell#>}"; cell="${cell%<}"                 # "Mon Jun 15"
-  g_mon="$(mon_num "$(printf '%s' "$cell" | awk '{print $2}')")"
-  g_day="$(printf '%s' "$cell" | awk '{print $3}')"
-  case "$g_day" in ''|*[!0-9]*) continue;; esac
+  case "$body" in
+    *"Forecast for"*)    after="${body#*Forecast for}";;
+    *"Pron"*"stico para"*) after="${body#*stico para}";;   # es "Pronostico para" (accented o, match around it)
+    *) unparsed=$(( unparsed + 1 )); UNPARSED="${UNPARSED}   send $id ($tz): no forecast grid in body"$'\n'; continue;;
+  esac
+  celltext="$(printf '%s' "$after" \
+    | grep -oE '<td style="padding:6px 10px;">[^<]+</td>' | head -1 \
+    | sed -E 's/<[^>]+>//g')"
+  set -f; set -- $celltext; set +f                    # word-split (globbing off): $1 weekday, $2 month, $3 day
+  g_mon="$(mon_num "${2:-}")"
+  g_day="$(printf '%s' "${3:-}" | tr -cd '0-9')"
+  if [ "$g_mon" = "00" ] || [ -z "$g_day" ]; then
+    unparsed=$(( unparsed + 1 ))
+    UNPARSED="${UNPARSED}   send $id ($tz): unrecognized grid date cell '${celltext:-<empty>}'"$'\n'
+    continue
+  fi
+
+  # The grid was actually parsed -> this report counts toward coverage. A clean PASS requires
+  # an early-morning report we genuinely parsed (early_checked), so an unparseable early
+  # report can't satisfy the gate.
+  checked=$(( checked + 1 ))
+  [ "$bh" -lt 6 ] && early_checked=$(( early_checked + 1 ))
+
   grid_iso="$(printf '%s-%s-%02d' "${build_day%%-*}" "$g_mon" "$g_day")"
   g_epoch=$(date -u -d "$grid_iso" +%s 2>/dev/null || echo "")
   b_epoch=$(date -u -d "$build_day" +%s 2>/dev/null || echo "")
@@ -137,7 +161,7 @@ while IFS='|' read -r id created tz; do
 
   if [ "$g_epoch" -lt "$b_epoch" ]; then
     regression=$(( regression + 1 ))
-    VIOLATIONS="${VIOLATIONS}   send $id ($tz): grid leads with \"$cell\" but built local $build_day  ($created UTC)"$'\n'
+    VIOLATIONS="${VIOLATIONS}   send $id ($tz): grid leads with \"$celltext\" but built local $build_day  ($created UTC)"$'\n'
   fi
 done <<< "$CANDIDATES"
 
@@ -149,14 +173,21 @@ min_window_secs=$(( MIN_WINDOW_MINUTES * 60 ))
 vl_header
 echo
 echo " WX-188 FINGERPRINT  (reports persisted since the deploy boundary)"
-echo "   reports evaluated (CommittedSends)             : $inspected"
-echo "   early-morning reports (00:00-05:59 local)      : $early   (the bug's window; a PASS needs >=1)"
-echo "   grid-leads-with-a-past-day violations          : $regression   (expect 0 -- the failure signature)"
-[ "$skipped" -gt 0 ] && echo "   skipped (unresolvable recipient timezone)      : $skipped"
+echo "   reports evaluated (resolvable tz + timestamps)  : $inspected"
+echo "   reports whose forecast grid was checked         : $checked"
+echo "   early-morning checked (00:00-05:59 local)       : $early_checked   (a PASS needs >=1)"
+echo "   grid-leads-with-a-past-day violations           : $regression   (expect 0 -- the failure signature)"
+[ "$unparsed" -gt 0 ] && echo "   no parseable grid (degraded / unknown locale)   : $unparsed"
+[ "$skipped" -gt 0 ]  && echo "   skipped (unresolvable recipient timezone)       : $skipped"
 if [ "$regression" -gt 0 ]; then
   echo
   echo " FAILURE-SIGNATURE LINES"
   printf '%s' "$VIOLATIONS"
+fi
+if [ "$unparsed" -gt 0 ]; then
+  echo
+  echo " NO PARSEABLE GRID (not checked -- investigate if unexpectedly high)"
+  printf '%s' "$UNPARSED"
 fi
 if [ "$skipped" -gt 0 ]; then
   echo
@@ -167,10 +198,11 @@ echo
 
 # Verdict. A grid-leads-with-a-past-day violation is the failure signature and FAILs at any
 # horizon -- vl_verdict tests the regression count before the exercised/window gates, so a
-# real violation is never masked. `early` is passed as the "exercised" count so a clean PASS
-# requires at least one early-morning report (the window the bug actually surfaces in); a
-# quiet stretch with none WAITs rather than PASSing on untested evidence. (Deliberately NOT
-# passed as vl_verdict's precondition arg, which is checked FIRST and would mask a real FAIL.)
-vl_verdict "$regression" "$early" \
+# real violation is never masked. `early_checked` is passed as the "exercised" count, so a
+# clean PASS requires at least one early-morning report whose grid we ACTUALLY parsed and
+# verified -- not merely an early build we counted but couldn't read (a Spanish-only or
+# degraded report). A quiet stretch, or one with only unparseable early reports, WAITs
+# rather than PASSing on untested evidence.
+vl_verdict "$regression" "$early_checked" \
   "a report still rendered its forecast grid leading with a day before its local build date -- check AggregateDays' nowUtc trim and the Render/RenderDegraded call sites." \
-  "every report since the deploy leads its grid with the send-instant local day; the 'leads with yesterday' regression is gone."
+  "every checked report leads its grid with the send-instant local day; the 'leads with yesterday' regression is gone."
