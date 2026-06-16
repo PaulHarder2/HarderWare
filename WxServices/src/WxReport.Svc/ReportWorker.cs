@@ -285,6 +285,8 @@ public sealed class ReportWorker : BackgroundService
             previousMetarIcao: null,
             allowSkip: false, // startup is an unconditional verification send — never skippable
             changedSinceLastSend: Array.Empty<TriggerSource>(), // unused on a guaranteed send
+            significanceCfg: cfg.SignificanceGate,
+            nowUtc: DateTime.UtcNow,
             ct: ct);
 
         // allowSkip:false, so ReconcileAsync never returns NotNews — a stray
@@ -778,6 +780,8 @@ public sealed class ReportWorker : BackgroundService
             previousMetarIcao: previousMetarIcao,
             allowSkip: allowSkip,
             changedSinceLastSend: changedSinceLastSend,
+            significanceCfg: cfg.SignificanceGate,
+            nowUtc: now,
             ct: ct);
         _claudeDuration.Record(claudeSw.Elapsed.TotalSeconds);
         _claudeCalls.Add(1);
@@ -1057,7 +1061,14 @@ public sealed class ReportWorker : BackgroundService
         }
         catch (JsonException ex)
         {
-            return Skip($"cached snapshot/report unusable ({ex.Message})");
+            // A cached body that no longer deserializes must NOT defer the guaranteed
+            // scheduled report. This is reachable across a release boundary when the body's
+            // validation rules tighten — e.g. WX-189 forbade the {chN} anchors that older
+            // persisted reports still carry. Fall through to a normal reconcile (null) so the
+            // report is delivered on time and a fresh, current-schema body replaces the stale
+            // one; the breaker self-heals (costs one Claude call this once, not a missed send).
+            Logger.Warn($"{label}: WX-182 degrade circuit-breaker — cached report unusable ({ex.Message}); reconciling so the {reason} report is still delivered.");
+            return null;
         }
 
         // Safety re-check (WX-182 acceptance: severe is unaffected). The breaker armed on a

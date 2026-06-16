@@ -11,9 +11,10 @@ namespace MetarParser.Tests;
 /// <summary>
 /// Tests for the WX-128 structured-report body type.  Pins down the canonical
 /// JSON form (camelCase properties, snake_case enums, language-keyed
-/// narrative), round-trip fidelity, the token grammar (quantity, time, and
-/// change-anchor tokens), and the cross-referencing invariants between the
-/// changes array and each language's changeSummary.  These tests describe the
+/// narrative), round-trip fidelity, and the token grammar (quantity and time
+/// tokens).  Since WX-189 the change set is computed deterministically, not
+/// authored by Claude, so {chN} anchors are forbidden in either prose section
+/// (the old anchor↔change correspondence is retired).  These tests describe the
 /// contract the Claude reconciliation writes against and the WX-129
 /// deterministic renderer will consume.
 /// </summary>
@@ -47,8 +48,8 @@ public class StructuredReportBodyTests
         Changes = [SampleChange()],
         Narrative = new Dictionary<string, NarrativeSections>
         {
-            ["en"] = SampleSections("{ch1}Thunderstorms are now expected after {q:time:2026-06-08T21:00:00Z}, with gusts to {q:gust:30} possible."),
-            ["es"] = SampleSections("{ch1}Ahora se esperan tormentas después de las {q:time:2026-06-08T21:00:00Z}, con ráfagas de hasta {q:gust:30}."),
+            ["en"] = SampleSections("Thunderstorms are now expected after {q:time:2026-06-08T21:00:00Z}, with gusts to {q:gust:30} possible."),
+            ["es"] = SampleSections("Ahora se esperan tormentas después de las {q:time:2026-06-08T21:00:00Z}, con ráfagas de hasta {q:gust:30}."),
         },
     };
 
@@ -236,57 +237,42 @@ public class StructuredReportBodyTests
     // ── Change-anchor cross-references ───────────────────────────────────────
 
     [Fact]
-    public void ChangeNotNarratedInEveryLanguage_IsRejected()
+    public void AnchorInChangeSummary_IsRejected()
     {
-        // The Spanish changeSummary drops the {ch1} anchor: the "no change goes
-        // unnarrated, in any language" guarantee must reject the body.
+        // WX-189: the change set is computed deterministically, not narrated by
+        // anchors, so a {chN} anchor in the changeSummary is now rejected outright
+        // (the old "every change narrated / no dangling anchor" correspondence is
+        // retired with the anchoring scheme).
         var body = SampleBody() with
         {
             Narrative = new Dictionary<string, NarrativeSections>
             {
                 ["en"] = SampleSections("{ch1}Thunderstorms are now expected."),
-                ["es"] = SampleSections("Ahora se esperan tormentas."),
+                ["es"] = SampleSections("{ch1}Ahora se esperan tormentas."),
             },
         };
 
         var ex = Assert.Throws<JsonException>(() => body.Serialize());
-        Assert.Contains("es", ex.Message);
         Assert.Contains("ch1", ex.Message);
-    }
-
-    [Fact]
-    public void DanglingAnchor_IsRejected()
-    {
-        var body = SampleBody() with
-        {
-            Narrative = new Dictionary<string, NarrativeSections>
-            {
-                ["en"] = SampleSections("{ch1}Storms expected. {ch2}Also this anchor references nothing."),
-                ["es"] = SampleSections("{ch1}Se esperan tormentas. {ch2}Sin cambio correspondiente."),
-            },
-        };
-
-        var ex = Assert.Throws<JsonException>(() => body.Serialize());
-        Assert.Contains("ch2", ex.Message);
-    }
-
-    [Fact]
-    public void AnchorOutsideChangeSummary_IsRejected()
-    {
-        var body = SampleBody() with
-        {
-            Narrative = new Dictionary<string, NarrativeSections>
-            {
-                ["en"] = SampleSections("{ch1}Storms expected.") with
-                {
-                    Closing = "{ch1}Anchors do not belong here.",
-                },
-                ["es"] = SampleSections("{ch1}Se esperan tormentas."),
-            },
-        };
-
-        var ex = Assert.Throws<JsonException>(() => body.Serialize());
         Assert.Contains("changeSummary", ex.Message);
+    }
+
+    [Fact]
+    public void AnchorInClosing_IsRejected()
+    {
+        // WX-189: anchors are forbidden in the closing too (they were always
+        // forbidden there; now they are forbidden in the changeSummary as well).
+        var body = SampleBody() with
+        {
+            Narrative = new Dictionary<string, NarrativeSections>
+            {
+                ["en"] = SampleSections("Storms expected.") with { Closing = "{ch1}Anchors do not belong here." },
+                ["es"] = SampleSections("Se esperan tormentas."),
+            },
+        };
+
+        var ex = Assert.Throws<JsonException>(() => body.Serialize());
+        Assert.Contains("closing", ex.Message);
     }
 
     [Fact]

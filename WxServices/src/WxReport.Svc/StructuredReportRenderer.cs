@@ -81,8 +81,17 @@ public static class StructuredReportRenderer
 
         AppendHeader(sb, observation, localityTz, vocab, kind);
 
+        // WX-189: the band shows whenever one is warranted — Claude's changeSummary
+        // prose when present, else a deterministic line from the computed changes.
+        // Band PRESENCE is already decided upstream: ReportWorker strips the band
+        // (changeSummary + changes both cleared) on a scheduled report with no
+        // near-term severe onset (WX-178), and never strips an unscheduled one. So a
+        // non-empty Changes here means the band must show; the fallback covers the
+        // case where the model's prose was rejected or absent.
         if (!string.IsNullOrWhiteSpace(sections.ChangeSummary))
             AppendChangeBand(sb, vocab, RenderProse(sections.ChangeSummary!));
+        else if (report.Changes.Count > 0)
+            AppendChangeBand(sb, vocab, HtmlText(RenderFallbackBand(report.Changes, vocab, localityTz)));
 
         AppendCurrentConditions(sb, observation, recipient, vocab);
         AppendExtendedForecast(sb, finalSnapshot, observation.LocalityName, recipient, localityTz, vocab, nowUtc);
@@ -144,6 +153,73 @@ public static class StructuredReportRenderer
         sb.Append(HtmlText(text));
         sb.Append("</div>");
     }
+
+    // ── WX-189 deterministic change-band fallback ─────────────────────────────
+
+    /// <summary>
+    /// Deterministic "What's changed" band, reached only when a band is warranted
+    /// (an unscheduled report, or a scheduled one with a near-term severe onset) but
+    /// Claude's changeSummary prose was rejected or absent. Renders the top one or two
+    /// already-salience-ranked changes as terse, label-style localized lines
+    /// ("Severe storms — Saturday afternoon"). Plain and correct by design — this path
+    /// is hit only when the model's own prose failed — and always names the calendar
+    /// day explicitly (never a bare "overnight"; see WX-190).
+    /// </summary>
+    private static string RenderFallbackBand(
+        IReadOnlyList<ReportChange> changes, ReportVocabulary vocab, TimeZoneInfo tz)
+    {
+        var lines = changes.Take(2).Select(c =>
+        {
+            var dir = DirectionWord(c, vocab);
+            var timing = ChangeTiming(c.Window.StartUtc, vocab, tz);
+            return dir.Length == 0
+                ? $"{ChangeNoun(c, vocab)} — {timing}."
+                : $"{ChangeNoun(c, vocab)} {dir} — {timing}.";
+        });
+        return string.Join(" ", lines);
+    }
+
+    // Localized direction gerund for a precip/severe change ("Rain easing", "Snow ending")
+    // — without it a clearing/weakening change reads as arriving. Temperature and wind
+    // nouns are already direction-neutral ("Temperature change"), so they take no word;
+    // Shifting (WX-191) has none yet.
+    private static string DirectionWord(ReportChange c, ReportVocabulary vocab) =>
+        c.Phenomenon is ChangePhenomenon.Temperature or ChangePhenomenon.Wind or ChangePhenomenon.WindShift
+            ? string.Empty
+            : c.Direction switch
+            {
+                ChangeDirection.Appearing => vocab.DirAppearing,
+                ChangeDirection.Strengthening => vocab.DirStrengthening,
+                ChangeDirection.Weakening => vocab.DirWeakening,
+                ChangeDirection.Clearing => vocab.DirClearing,
+                _ => string.Empty,
+            };
+
+    // Localized "{weekday} {day-part}" for a change window's start ("Saturday afternoon"),
+    // mirroring AppendHazardBanner so the fallback reads like the rest of the report.
+    private static string ChangeTiming(DateTime startUtc, ReportVocabulary vocab, TimeZoneInfo tz)
+    {
+        var local = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(startUtc, DateTimeKind.Utc), tz);
+        return $"{local.ToString("dddd", vocab.Culture)} {Lower(PartLabel(PartOf(local.Hour), vocab))}";
+    }
+
+    // Localized, capitalized noun phrase for a computed change. Precipitation and severe
+    // reuse the grid's weather vocabulary — a Safety-tier convective change uses the
+    // severe lead, matching the hazard banner and the WX-156 subject — while freezing
+    // precip, temperature, and wind use their own brief nouns (WX-191's WindShift never
+    // reaches here yet).
+    private static string ChangeNoun(ReportChange c, ReportVocabulary vocab) => Capitalize(c.Phenomenon switch
+    {
+        ChangePhenomenon.Rain => vocab.WxRain,
+        ChangePhenomenon.Thunderstorm => c.Tier == ChangeTier.Safety ? vocab.CondSevereStorms : vocab.WxThunderstorm,
+        ChangePhenomenon.Snow => vocab.WxSnow,
+        ChangePhenomenon.Mixed => vocab.WxMixed,
+        ChangePhenomenon.FreezingPrecip => vocab.ChangeFreezingRain,
+        ChangePhenomenon.Severe => vocab.CondSevereWeather,
+        ChangePhenomenon.Temperature => vocab.ChangeTempNoun,
+        ChangePhenomenon.Wind => vocab.ChangeWindNoun,
+        _ => vocab.ChangeWindNoun,
+    });
 
     // ── first-contact welcome (WX-130; standalone welcome-only email) ──────────
 
