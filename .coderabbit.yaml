@@ -18,6 +18,14 @@ reviews:
   # friction we explicitly designed the routine to avoid.
   path_filters:
     - "!landscape-scans/**"
+    # WX-196: skip review of VERSIONS.md. The WORKFLOW §10 hash-fill is a mandatory
+    # extra push that changes only this file's commit-hash column (a one-character
+    # diff); reviewing it spends review-frequency quota for no value. Excluding the
+    # file means a hash-fill-only push has nothing reviewable, so CodeRabbit skips it.
+    # Trade-off: the release-summary prose added in the main commit is no longer
+    # reviewed either, but the **/*.md cross-consistency guideline still catches stale
+    # references from the DESIGN.md side (the two are cross-referenced).
+    - "!WxServices/VERSIONS.md"
 
   # "assertive" gives more comprehensive feedback than the default
   # "chill" profile. Trade-off: more findings per PR, including some
