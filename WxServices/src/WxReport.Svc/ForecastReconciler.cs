@@ -432,6 +432,25 @@ public sealed class ForecastReconciler
                 {
                     var changes = DeterministicChangeDetector.Detect(priorBody, lastParsedSnapshot, significanceCfg, nowUtc, tz);
                     var cleaned = DropProseSection(lastParsedReport, npe.Section) with { Changes = changes };
+                    try
+                    {
+                        // Re-validate the cleaned report's SURVIVING content: the first prose
+                        // fault short-circuited the validators, so the section we KEPT may never
+                        // have been checked, and the success-path consistency check was skipped.
+                        // If the surviving section is also faulty (a double-section fault), fall
+                        // through to a wholesale degrade rather than ship it. The WX-120
+                        // degeneracy floor is deliberately NOT applied here — a section degrade
+                        // intentionally reduces the narrative, and the closing is always non-blank
+                        // (schema-required), so a thin-but-valid survivor must still send.
+                        ValidateProseHygiene(cleaned, tz);
+                        ValidateClosingClaims(cleaned, lastParsedSnapshot, tz);
+                        ValidateChangeSnapshotConsistency(cleaned, lastParsedSnapshot, priorBody, tz);
+                    }
+                    catch (Exception cleanEx) when (cleanEx is JsonException or InvalidOperationException)
+                    {
+                        Logger.Error($"Reconciliation section degrade left an invalid report ({cleanEx.Message}); degrading to the parsed snapshot, narrative dropped.");
+                        return new ReconcileResult.Degraded(lastParsedSnapshot, tokens, cleanEx.Message);
+                    }
                     Logger.Error($"Reconciliation could not make the {npe.Section} prose self-consistent after {maxAttempts} attempts ({ex.Message}); dropping that section only and sending the rest (WX-189 independent-section degrade).");
                     return new ReconcileResult.Success(lastParsedSnapshot, cleaned, lastReasoningTrace ?? string.Empty, tokens);
                 }

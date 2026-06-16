@@ -168,11 +168,32 @@ public static class StructuredReportRenderer
     private static string RenderFallbackBand(
         IReadOnlyList<ReportChange> changes, ReportVocabulary vocab, TimeZoneInfo tz)
     {
-        var lines = changes
-            .Take(2)
-            .Select(c => $"{ChangeNoun(c, vocab)} — {ChangeTiming(c.Window.StartUtc, vocab, tz)}.");
+        var lines = changes.Take(2).Select(c =>
+        {
+            var dir = DirectionWord(c, vocab);
+            var timing = ChangeTiming(c.Window.StartUtc, vocab, tz);
+            return dir.Length == 0
+                ? $"{ChangeNoun(c, vocab)} — {timing}."
+                : $"{ChangeNoun(c, vocab)} {dir} — {timing}.";
+        });
         return string.Join(" ", lines);
     }
+
+    // Localized direction gerund for a precip/severe change ("Rain easing", "Snow ending")
+    // — without it a clearing/weakening change reads as arriving. Temperature and wind
+    // nouns are already direction-neutral ("Temperature change"), so they take no word;
+    // Shifting (WX-191) has none yet.
+    private static string DirectionWord(ReportChange c, ReportVocabulary vocab) =>
+        c.Phenomenon is ChangePhenomenon.Temperature or ChangePhenomenon.Wind or ChangePhenomenon.WindShift
+            ? string.Empty
+            : c.Direction switch
+            {
+                ChangeDirection.Appearing => vocab.DirAppearing,
+                ChangeDirection.Strengthening => vocab.DirStrengthening,
+                ChangeDirection.Weakening => vocab.DirWeakening,
+                ChangeDirection.Clearing => vocab.DirClearing,
+                _ => string.Empty,
+            };
 
     // Localized "{weekday} {day-part}" for a change window's start ("Saturday afternoon"),
     // mirroring AppendHazardBanner so the fallback reads like the rest of the report.

@@ -159,6 +159,34 @@ public class StructuredReportRendererTests
     }
 
     [Fact]
+    public void FallbackBand_IsDirectionAware_WhenChangeSummaryAbsent()
+    {
+        // WX-189 (CodeRabbit #3): when the band must show (unscheduled) but the model's
+        // changeSummary prose is absent/rejected, the deterministic fallback names each
+        // computed change direction-aware — a CLEARING change reads as ending, not arriving.
+        var report = new StructuredReportBody
+        {
+            Changes =
+            [
+                new ReportChange { Tier = ChangeTier.Safety, Phenomenon = ChangePhenomenon.Thunderstorm, Direction = ChangeDirection.Appearing, Window = new(AnchorUtc, AnchorUtc.AddHours(6)), Quantities = [], SummaryToken = "ch1" },
+                new ReportChange { Tier = ChangeTier.Plans, Phenomenon = ChangePhenomenon.Rain, Direction = ChangeDirection.Clearing, Window = new(AnchorUtc, AnchorUtc.AddHours(6)), Quantities = [], SummaryToken = "ch2" },
+            ],
+            Narrative = new Dictionary<string, NarrativeSections>
+            {
+                ["en"] = new() { ChangeSummary = null, Closing = "Quiet weather ahead." },
+                ["es"] = new() { ChangeSummary = null, Closing = "Tiempo tranquilo." },
+            },
+        };
+
+        var en = StructuredReportRenderer.Render(report, Forecast(), Observation(), Imperial(), "en", Utc, ReportKind.Unscheduled, RenderNow);
+        Assert.Contains("Severe storms developing", en);  // Safety-tier convective → severe lead + appearing gerund
+        Assert.Contains("Rain ending", en);               // clearing reads as ending, not a bare "Rain —"
+
+        var es = StructuredReportRenderer.Render(report, Forecast(), Observation(), Spanish(), "es", Utc, ReportKind.Unscheduled, RenderNow);
+        Assert.Contains("terminando", es);                // es clearing gerund (invariant — no gender/number agreement)
+    }
+
+    [Fact]
     public void TimeToken_RendersInLocalityTimeAndLocale()
     {
         var en = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled, RenderNow);
