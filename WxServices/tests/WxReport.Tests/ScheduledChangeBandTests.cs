@@ -8,7 +8,8 @@ namespace WxReport.Tests;
 
 // WX-178: a SCHEDULED report carries the "What's changed" band ONLY for a newly-appearing
 // near-term (local Day 1-3) severe hazard; everything else is suppressed so the band can't
-// make a scheduled report read as an unscheduled update. These cover the deterministic
+// make a scheduled report read as an unscheduled update. WX-193 extends the same rule to
+// DIAGNOSTIC (deploy-verification) reports. These cover the deterministic
 // decision (ReportWorker.SuppressesScheduledChangeBand) + the near-term cutoff overload on
 // ForecastSnapshotBody.HasSevereEscalationOver. Locality timezone = UTC, so local day = UTC day.
 public class ScheduledChangeBandTests
@@ -118,6 +119,32 @@ public class ScheduledChangeBandTests
         // The gate is scheduled-only; unscheduled updates keep narrating non-severe change.
         Assert.False(ReportWorker.SuppressesScheduledChangeBand(
             ReportKind.Unscheduled, Report(withBand: true), Calm(), Calm(), Now, Utc));
+    }
+
+    // ── WX-193: a diagnostic report follows the same rule as a scheduled one ──────
+
+    [Fact]
+    public void Diagnostic_NonSevereChange_SuppressesBand()
+    {
+        // A deploy-verification (diagnostic) report with an ordinary non-severe change must
+        // strip the band, exactly like a scheduled report — the WX-189 regression this fixes.
+        Assert.True(ReportWorker.SuppressesScheduledChangeBand(
+            ReportKind.Diagnostic, Report(withBand: true), Calm(), Calm(), Now, Utc));
+    }
+
+    [Fact]
+    public void Diagnostic_NearTermSevereOnset_KeepsBand()
+    {
+        // A near-term severe onset is the one case a diagnostic still surfaces the band.
+        Assert.False(ReportWorker.SuppressesScheduledChangeBand(
+            ReportKind.Diagnostic, Report(withBand: true), SevereOn(1), Calm(), Now, Utc));
+    }
+
+    [Fact]
+    public void Diagnostic_ReportHasNoBand_NothingToSuppress()
+    {
+        Assert.False(ReportWorker.SuppressesScheduledChangeBand(
+            ReportKind.Diagnostic, Report(withBand: false), Calm(), Calm(), Now, Utc));
     }
 
     // ── the near-term cutoff overload ──────────────────────────────────────────

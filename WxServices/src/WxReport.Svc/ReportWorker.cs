@@ -321,21 +321,30 @@ public sealed class ReportWorker : BackgroundService
         ctx.ForecastSnapshots.Add(reconciledSnapshot);
         await ctx.SaveChangesAsync(ct);
 
-        var structuredReportJson = success.StructuredReport.Serialize();
+        var nowUtc = DateTime.UtcNow;   // one send instant for the whole fan-out (WX-188 grid trim)
+
+        // WX-193: a diagnostic report follows the same band rule as a scheduled one — it carries the
+        // "What's changed" band only for a near-term severe onset. WX-189 made the change set
+        // deterministic, so the band renders from the computed changes[] via the fallback even when
+        // Claude wrote no changeSummary; without this strip a diagnostic surfaced a band for ordinary
+        // non-severe changes. Decided once here — the report is shared across members.
+        var outboundReport = StripChangeBandUnlessSevereOnset(
+            success.StructuredReport, success.FinalSnapshot, priorSnapshot, ReportKind.Diagnostic, nowUtc, tz, label);
+
+        var structuredReportJson = outboundReport.Serialize();
         var emailer = new SmtpSender(smtp, "WxReport");
         var plotsDir = new WxPaths(_config["InstallRoot"]).PlotsDir;
 
         // Render + send a diagnostic email for each member. No LocalityState update
         // (IsDiagnostic rows never advance the baseline). Welcome is suppressed —
         // a deploy verification is not a recipient's genuine first report.
-        var nowUtc = DateTime.UtcNow;   // one send instant for the whole fan-out (WX-188 grid trim)
         foreach (var member in members)
         {
             try
             {
                 var langCode = ResolveLanguageCode(member, langById, cfg.DefaultLanguage);
                 var innerBody = StructuredReportRenderer.Render(
-                    success.StructuredReport, success.FinalSnapshot, snapshot, member, langCode, tz, ReportKind.Diagnostic, nowUtc);
+                    outboundReport, success.FinalSnapshot, snapshot, member, langCode, tz, ReportKind.Diagnostic, nowUtc);
                 var report = WrapAsEmailHtml(innerBody, langCode, snapshot, tz);
 
                 var committedSend = new CommittedSend
@@ -914,18 +923,9 @@ public sealed class ReportWorker : BackgroundService
         // WX-178: a scheduled report shows "What's changed" only for a near-term severe onset;
         // otherwise strip the band deterministically (the reconciler prompt steers the LLM the
         // same way; this guarantees it). Decided once here — the report is shared across members.
-        var outboundReport = success.StructuredReport;
-        if (kind == ReportKind.Scheduled)
-        {
-            // Deserialize the prior baseline only on a scheduled cycle — the only kind that gates
-            // the band; an unscheduled cycle would never use it.
-            var priorBandBody = priorSnapshot is null ? null : ForecastSnapshotBody.Deserialize(priorSnapshot.Body);
-            if (SuppressesScheduledChangeBand(kind, outboundReport, success.FinalSnapshot, priorBandBody, now, tz))
-            {
-                outboundReport = WithoutChangeBand(outboundReport);
-                Logger.Debug($"{label}: WX-178 scheduled \"What's changed\" band suppressed — no near-term severe onset.");
-            }
-        }
+        // The shared strip is a no-op on a non-gating (unscheduled) kind.
+        var outboundReport = StripChangeBandUnlessSevereOnset(
+            success.StructuredReport, success.FinalSnapshot, priorSnapshot, kind, now, tz, label);
 
         var structuredReportJson = outboundReport.Serialize();
         var plotsDir = new WxPaths(_config["InstallRoot"]).PlotsDir;
@@ -1118,6 +1118,29 @@ public sealed class ReportWorker : BackgroundService
     }
 
     /// <summary>
+    /// WX-178/WX-193: the single "What's changed" band-strip decision shared by every send path
+    /// that gates the band. Returns <paramref name="report"/> stripped (<see cref="WithoutChangeBand"/>)
+    /// when <see cref="SuppressesScheduledChangeBand"/> says a scheduled or diagnostic report carries
+    /// no near-term severe onset; otherwise returns it unchanged. Centralizing this is the deeper fix
+    /// behind WX-193 — the regression existed because the strip lived inline in the scheduled path and
+    /// was simply absent from the diagnostic one; one shared call keeps the two from drifting again. The
+    /// prior baseline is deserialized only when <paramref name="kind"/> actually gates the band (an
+    /// unscheduled cycle never needs it), and the suppression is logged with the kind for operability.
+    /// </summary>
+    private StructuredReportBody StripChangeBandUnlessSevereOnset(
+        StructuredReportBody report, ForecastSnapshotBody finalSnapshot,
+        ForecastSnapshot? priorSnapshot, ReportKind kind, DateTime nowUtc, TimeZoneInfo tz, string label)
+    {
+        // SuppressesScheduledChangeBand returns false for any non-gating kind; skip the prior
+        // deserialize entirely for those rather than pay for a baseline the gate won't read.
+        if (kind is not (ReportKind.Scheduled or ReportKind.Diagnostic)) return report;
+        var priorBandBody = priorSnapshot is null ? null : ForecastSnapshotBody.Deserialize(priorSnapshot.Body);
+        if (!SuppressesScheduledChangeBand(kind, report, finalSnapshot, priorBandBody, nowUtc, tz)) return report;
+        Logger.Debug($"{label}: {kind} \"What's changed\" band suppressed — no near-term severe onset (WX-178/WX-193).");
+        return WithoutChangeBand(report);
+    }
+
+    /// <summary>
     /// WX-182: a copy of <paramref name="report"/> with the "What's changed" band removed —
     /// empty <see cref="StructuredReportBody.Changes"/> and a null
     /// <see cref="NarrativeSections.ChangeSummary"/> in every language, keeping each
@@ -1134,13 +1157,14 @@ public sealed class ReportWorker : BackgroundService
         };
 
     /// <summary>
-    /// WX-178: whether a SCHEDULED report's "What's changed" band must be suppressed. A scheduled
-    /// report carries the band ONLY for a newly-appearing near-term severe hazard — a block going
+    /// WX-178 (extended to Diagnostic by WX-193): whether a scheduled or diagnostic report's
+    /// "What's changed" band must be suppressed. Such a report carries the band ONLY for a
+    /// newly-appearing near-term severe hazard — a block going
     /// <see cref="ForecastSnapshotBlock.SevereFlag"/> false→true versus the prior committed snapshot,
     /// within local Day 1-3 (today through the day after tomorrow). For any other change the band
     /// reads as an unscheduled update and is stripped (<see cref="WithoutChangeBand"/>). Pure and
     /// deterministic — the reconciler prompt steers the LLM the same way and this is the backstop
-    /// that guarantees it. Never suppresses for a non-scheduled kind or a bandless report; a first
+    /// that guarantees it. Never suppresses for an unscheduled kind or a bandless report; a first
     /// send (no prior snapshot) that nonetheless carries a band IS suppressed — with no prior there
     /// is no onset to establish.  The horizon (local Day 1-3) is deliberately its own thing, not the
     /// <c>DegradeHazardHorizon</c> (~36 h, which governs sending a narrative-less hazard alert now).
@@ -1149,7 +1173,7 @@ public sealed class ReportWorker : BackgroundService
         ReportKind kind, StructuredReportBody report, ForecastSnapshotBody finalSnapshot,
         ForecastSnapshotBody? priorBody, DateTime nowUtc, TimeZoneInfo tz)
     {
-        if (kind != ReportKind.Scheduled) return false;
+        if (kind is not (ReportKind.Scheduled or ReportKind.Diagnostic)) return false;
         if (!ReportCarriesChangeBand(report)) return false;   // nothing to suppress
         // First send (no prior): a severe ONSET can't be established against nothing, so a
         // "What's changed" band is meaningless — suppress it. (Severe still shows in the grid,
