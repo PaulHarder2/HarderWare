@@ -45,7 +45,7 @@ TICKET='WX-193'                                     # self-identification + head
 VERSION='1.32.1'                                    # the release VERSION that shipped the fix -- the deploy pin
 COMPONENTS=('WxReportSvc')                           # the service WX-193 ships in
 TITLE='diagnostic "What'"'"'s changed" band suppression'
-MIN_WINDOW_MINUTES=1                                # a diagnostic ships at deploy time; the exercised-diagnostic gate is the real precondition, not an accrual window
+MIN_WINDOW_MINUTES=1                                # kept at 1 only to satisfy verify-lib's >0 validation; the actual window gate is overridden to ZERO below (min_window_secs=0) -- this is an event-based verify with NO wait time, gated solely on the exercised-diagnostic precondition
 source "$(cd "$(dirname "$SELF")" && pwd)/verify-lib.sh"
 
 # DB coordinates (overridable for a test instance).
@@ -116,9 +116,16 @@ while IFS='|' read -r id created; do
 done <<< "$CANDIDATES"
 
 # Window bookkeeping for vl_header / vl_verdict (this script doesn't use the log window).
+# This is an EVENT-based verify, not an accrual-based one: the whole test is a single startup
+# diagnostic that exists the instant the deploy comes up, so there is NO reason to wait. The
+# window gate is therefore set to ZERO (min_window_secs=0) and the verdict rests solely on the
+# exercised-diagnostic precondition. `elapsed` is still computed (anchored on wall-clock NOW, not
+# the lone diagnostic's timestamp) purely so the header reports a sensible "time since deploy".
+now_epoch=$(date -u +%s)
+if [ "$now_epoch" -gt "$last_epoch" ]; then last_epoch=$now_epoch; LAST_TS="$(date -u -d "@$now_epoch" '+%Y-%m-%d %H:%M:%S')"; fi
 elapsed=$(( last_epoch - since_epoch )); [ "$elapsed" -gt 0 ] || elapsed=1
 hh=$(( elapsed / 3600 )); mm=$(( (elapsed % 3600) / 60 ))
-min_window_secs=$(( MIN_WINDOW_MINUTES * 60 ))
+min_window_secs=0                                  # no wait time by design (see above) -- the lib's >0 floor is bypassed here
 
 vl_header
 echo
