@@ -84,21 +84,21 @@ public sealed record StructuredReportBody
     /// <item>at least one narrative language; keys are ISO 639-1 codes;</item>
     /// <item>each language has a non-blank closing section (the only required section since v4);</item>
     /// <item>change summaryTokens are well-formed (<c>ch1</c>, <c>ch2</c>, …) and unique;</item>
-    /// <item>every change's anchor appears in every language's changeSummary, and no
-    /// changeSummary anchor dangles (references a change that doesn't exist) — the
-    /// structural "no change goes unnarrated, in any language" guarantee;</item>
-    /// <item>anchors appear only in changeSummary, and every brace token in every
-    /// section parses per the <see cref="ReportTokens"/> grammar.</item>
+    /// <item>since WX-189 the change set is computed deterministically rather than narrated
+    /// by anchors, so <c>{chN}</c> anchors are forbidden in BOTH prose sections (the earlier
+    /// "every change narrated / no dangling anchor" correspondence is retired); every brace
+    /// token in every section still parses per the <see cref="ReportTokens"/> grammar.</item>
     /// </list>
     /// </summary>
     private void Validate()
     {
-        // Only freshly-produced reports are ever deserialized+validated (the
-        // baseline lookup reads final_snapshot, never a persisted structured
-        // report), so there is no legacy to tolerate and the version pins
-        // exactly.  Claude copying the prior snapshot's older version digit fails
-        // closed here.  (Born at v3 in WX-128; bumped to v4 in WX-130 lockstep
-        // when the narrative slimmed to changeSummary + closing.)
+        // The version pins exactly: a freshly-produced report must carry the current
+        // version (Claude copying the prior snapshot's older version digit fails closed
+        // here).  Persisted reports ARE re-deserialized in one place — the WX-182 cached
+        // re-send — so a release that tightens these rules (e.g. WX-189 forbidding {chN}
+        // anchors older bodies carry) can reject a legacy persisted body; that path treats
+        // a deserialize failure as "reconcile instead of re-send", so it self-heals.
+        // (Born at v3 in WX-128; bumped to v4 in WX-130; v5 in WX-155.)
         if (SchemaVersion != SchemaVersionCurrent)
             throw new JsonException(
                 $"Structured report schemaVersion {SchemaVersion} is not the supported version {SchemaVersionCurrent}.");
@@ -127,20 +127,14 @@ public sealed record StructuredReportBody
 
             RequireSection(lang, "closing", sections.Closing);
 
-            // changeSummary is the only section where {chN} anchors may appear,
-            // and there they must match the changes list exactly — every change
-            // narrated, no anchor dangling.
-            var summaryAnchors = ReportTokens.ValidateAndCollectAnchors(
-                sections.ChangeSummary ?? "", $"narrative.{lang}.changeSummary");
-            foreach (var token in changeTokens)
-                if (!summaryAnchors.Contains(token))
-                    throw new JsonException(
-                        $"narrative.{lang}.changeSummary does not narrate change '{token}'; every change must appear in every language.");
-            foreach (var anchor in summaryAnchors)
-                if (!changeTokens.Contains(anchor))
-                    throw new JsonException(
-                        $"narrative.{lang}.changeSummary references anchor '{anchor}' but no change carries that summaryToken.");
-
+            // WX-189: the change set is computed deterministically from
+            // (prior, final_snapshot) after the reconciliation call, not narrated
+            // by {chN} anchors, so neither prose section carries anchors. Both are
+            // still validated for token grammar ({q:...}); a stray anchor in either
+            // is now an error (it would render to nothing and tie to nothing). The
+            // earlier "every change narrated / no dangling anchor" correspondence is
+            // retired with the anchoring scheme.
+            ForbidAnchors(lang, "changeSummary", sections.ChangeSummary ?? "");
             ForbidAnchors(lang, "closing", sections.Closing);
         }
     }
@@ -156,7 +150,7 @@ public sealed record StructuredReportBody
         var anchors = ReportTokens.ValidateAndCollectAnchors(value, $"narrative.{lang}.{name}");
         if (anchors.Count > 0)
             throw new JsonException(
-                $"narrative.{lang}.{name} contains change anchor '{anchors.First()}'; anchors are permitted only in changeSummary.");
+                $"narrative.{lang}.{name} contains change anchor '{anchors.First()}'; change anchors are no longer used (WX-189 — the change set is computed deterministically) — write plain prose.");
     }
 }
 

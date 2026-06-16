@@ -363,6 +363,8 @@ internal static class Kdwh20260421Fixture
             // over the 4:53 prior, no fresh TAF/GFS — exactly what WX-108's
             // anti-reversal context describes.
             changedSinceLastSend: new[] { TriggerSource.Metar },
+            significanceCfg: new SignificanceGateConfig(),
+            nowUtc: Obs0853Utc,
             ct: ct);
     }
 }

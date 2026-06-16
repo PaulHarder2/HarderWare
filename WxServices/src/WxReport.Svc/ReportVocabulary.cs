@@ -139,6 +139,15 @@ public sealed record ReportVocabulary
     public required string CondThen { get; init; }          // joins the two clauses of a severe day: "then"
     public required string Storms { get; init; }            // generic "storms"
     public required string HazardBannerFormat { get; init; } // degraded safety send: {0} = severe phrase, {1} = "Saturday afternoon"
+    // WX-189 deterministic change-band fallback nouns — used only when Claude's band
+    // prose is rejected/absent. Most families reuse the grid weather words (WxRain,
+    // CondSevereStorms, …); these three have no reusable grid noun.
+    public required string ChangeFreezingRain { get; init; } // "Freezing rain"
+    public required string ChangeTempNoun { get; init; }     // "Temperature change"
+    public required string ChangeWindNoun { get; init; }     // "Wind change"
+    // WX-189 independent-section degrade: a short, snapshot-safe closing used when the
+    // model's own closing prose can't be made self-consistent across retries.
+    public required string ClosingFallback { get; init; }
 
     /// <summary>The IETF culture used for date/time names and number formatting. Localized to the language; number conventions stay US/period-decimal until WX-138 (so <c>es-US</c>, not <c>es-ES</c>).</summary>
     public required CultureInfo Culture { get; init; }
@@ -267,6 +276,10 @@ public sealed record ReportVocabulary
         CondThen = "then",
         Storms = "storms",
         HazardBannerFormat = "{0} in your forecast — {1}.",
+        ChangeFreezingRain = "Freezing rain",
+        ChangeTempNoun = "Temperature change",
+        ChangeWindNoun = "Wind change",
+        ClosingFallback = "See the forecast above for the full outlook.",
         Culture = SafeCulture("en-US"),
     };
 
@@ -348,6 +361,10 @@ public sealed record ReportVocabulary
         CondThen = "luego",
         Storms = "tormentas",
         HazardBannerFormat = "{0} en su pronóstico — {1}.",
+        ChangeFreezingRain = "Lluvia helada",
+        ChangeTempNoun = "Cambio de temperatura",
+        ChangeWindNoun = "Cambio de viento",
+        ClosingFallback = "Consulte el pronóstico anterior para ver el panorama completo.",
         Culture = SafeCulture("es-US"),
     };
 
