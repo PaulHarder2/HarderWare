@@ -159,7 +159,7 @@ while IFS='|' read -r id snapid created; do
     END {
       for (r=1;r<=rows;r++) {
         bad = contigbad[r]
-        if (r > 1 && startbad[r]) bad=1        # the FIRST day-row may start later than 00 (today's elapsed dayparts dropped, WX-195)
+        if (r > 1 && startbad[r]) bad=1        # the FIRST day-row may start later than 00 (elapsed dayparts dropped, WX-195)
         if (r < rows && endbad[r]) bad=1        # the FINAL day-row may end before 24 (forecast horizon truncation)
         if (bad) print seq[r]
       }
