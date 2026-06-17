@@ -43,9 +43,9 @@ internal static class ReconcilerPrompts
           • provisional_snapshot — a ForecastSnapshotBody derived deterministically
             from GFS model output, plus the gfs_model_run_utc. Treat the body as
             your working memory's starting state, covering up to a six-day horizon
-            in blocks aligned to the locality's local day-parts (00/06/12/18
-            local time: overnight/morning/afternoon/evening). Each block's startUtc is
-            the UTC instant of its local-day-part boundary.
+            in blocks aligned to the locality's local clock-band boundaries (00/06/12/18
+            local time: 00-06 / 06-12 / 12-18 / 18-24). Each block's startUtc is
+            the UTC instant of its local clock-band boundary.
           • current_observation — the most recent METAR for the station, with its
             observation_time_utc.
           • current_forecast    — the active TAF for the station, with its
@@ -213,8 +213,8 @@ internal static class ReconcilerPrompts
 
           • final_snapshot — your refined ForecastSnapshotBody. Same schema as
             provisional_snapshot: schemaVersion 5, ordered blocks aligned
-            to the locality's local day-part boundaries (00/06/12/18 local time:
-            overnight/morning/afternoon/evening), all required fields per block.
+            to the locality's local clock-band boundaries (00/06/12/18 local time:
+            00-06 / 06-12 / 12-18 / 18-24), all required fields per block.
             Temperatures stay in Celsius; winds stay in knots — a deterministic
             renderer converts units per recipient.
           • structured_report — the unit-neutral structured report. It is the
@@ -303,12 +303,20 @@ internal static class ReconcilerPrompts
             token renders to. The renderer converts each token to the locality's
             local clock, so a token at 12:00Z that is 7:00 AM locally reads as
             "morning", not "afternoon". When you write a day-part word
-            ("morning", "afternoon", "evening", "overnight") beside a {q:time}
-            token, make the word agree with that token's local hour.
+            ("morning", "afternoon", "evening") beside a {q:time} token, make the
+            word agree with that token's local hour.
+          • The 00:00-06:00 pre-dawn block has NO safe day-part word: "overnight"
+            and "{weekday} night" both float to the WRONG calendar day for a US
+            reader, who hears "Saturday night" as the night that FOLLOWS Saturday,
+            not its first six hours. Never use them for this block. Bind it to its
+            day explicitly and without a night-word — e.g. "the early hours of
+            Saturday" or "Saturday, shortly after midnight" — beside the {q:time}
+            token, which renders the exact local time.
           • Each block is exactly one local day-part (WX-155): its local start hour
-            names it — 00:00 overnight, 06:00 morning, 12:00 afternoon, 18:00
-            evening. A change window covers whole blocks, so name its day-part from
-            the block(s) it spans; that name will agree with the {q:time} rule above.
+            names it — 06:00 morning, 12:00 afternoon, 18:00 evening, and 00:00 the
+            pre-dawn block (bound to its day per the rule above, never "overnight").
+            A change window covers whole blocks, so name its day-part from the
+            block(s) it spans; that name will agree with the {q:time} rule above.
           • Hedged certainty: never state weather as flatly certain, in any
             language — no forecast is ever 100% sure. Render even a "certain"
             precip expectation or a set severeFlag as calibrated strong
