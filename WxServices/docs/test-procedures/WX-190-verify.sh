@@ -215,18 +215,18 @@ if [ "$overnight" -gt 0 ]; then
 fi
 echo
 
-# Verdict. PASS is gated on >= MIN_CYCLES report-issuing cycles; until then -> WAIT. The TRUE
-# cycle count is reported as `exercised` (so the run log reads truthfully), and the >= MIN_CYCLES
-# requirement is the `precondition` -- a 1/0 flag (met / not-yet). verify-lib checks the
-# precondition before the failure signature, so below the threshold the verdict is WAIT even if a
-# signature is present -- but that signature is always printed in the FINGERPRINT section above
-# (never hidden) and converts to a hard FAIL once >= MIN_CYCLES cycles have issued.
+# Verdict. A clean PASS is gated on >= MIN_CYCLES report-issuing cycles; until then -> WAIT. The
+# TRUE cycle count is reported as `exercised` (so the run log reads truthfully), and the gate is the
+# `precondition` 1/0 flag. verify-lib checks the precondition BEFORE the failure-signature count, so
+# to keep a real signature fail-fast (not deferred to WAIT below the cycle threshold) the flag is
+# also set when regression > 0 -- a failure then passes the precondition gate and is reported as a
+# hard FAIL immediately, at any cycle count.
 # Either signature is a failure: a grid-bearing report missing the legend (old/broken renderer) OR
 # a day-row that doesn't cover its expected span (a daypart-coverage gap -- interior days must be
 # full 00-24; the first day may start late and the final day end early, WX-195/WX-190; a gap
 # tracing to a missing snapshot block is a linked Bug per fix-forward).
 regression=$(( missing + gaps ))
-precond=$(( cycles >= MIN_CYCLES ? 1 : 0 ))
+precond=$(( (cycles >= MIN_CYCLES || regression > 0) ? 1 : 0 ))
 vl_verdict "$regression" "$cycles" \
   "a grid-bearing report either rendered without the 24-hour-clock legend (old binary still running, or the legend regressed) or showed a day whose clock bands do not cover its expected span (a daypart-coverage gap -- first/final days are exempted; a gap from a missing snapshot block is a linked Bug per fix-forward)." \
   "the clock-band grid + legend are present and every day covers its expected span (first day from the current daypart, interior days full 00-24, final day to the horizon) across $cycles cycle(s); any \"Overnight\" rows above still need the WX-190.md prose-vs-label confirmation." \

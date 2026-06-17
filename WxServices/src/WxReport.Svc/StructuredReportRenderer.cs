@@ -464,9 +464,10 @@ public static class StructuredReportRenderer
     // ── per-day aggregation ───────────────────────────────────────────────────
 
     /// <summary>
-    /// One local calendar day's forecast.  High/low/wind span the whole day; <see cref="Bands"/>
-    /// carries the day's 6-hour blocks in chronological order (one per local day-part, WX-155),
-    /// from which the Conditions cell tiles the day into clock bands (WX-190).
+    /// One local calendar day's forecast.  High/low/wind span the whole day (computed from ALL
+    /// blocks); <see cref="Bands"/> carries only the day's still-live 6-hour blocks in chronological
+    /// order (one per local day-part, WX-155; fully-elapsed blocks dropped per WX-195), from which
+    /// the Conditions cell tiles the remaining clock bands (WX-190).
     /// </summary>
     private sealed record DaySummary(
         DateOnly Date,
