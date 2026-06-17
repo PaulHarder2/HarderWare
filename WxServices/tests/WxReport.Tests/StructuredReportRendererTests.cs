@@ -118,6 +118,41 @@ public class StructuredReportRendererTests
         ],
     };
 
+    // A day with a MISSING interior block: 00Z and 12Z present (both rain), 06Z absent. The two
+    // same-phrase bands must NOT merge across the gap, or the label would fabricate coverage of
+    // the 06-12 window the snapshot has no block for (WX-190 review).
+    private static ForecastSnapshotBody GappedForecast() => new()
+    {
+        Blocks =
+        [
+            new() { StartUtc = new(2026, 6, 8, 0, 0, 0, DateTimeKind.Utc), SkyState = SkyState.Overcast, Obscuration = Obscuration.None, TemperatureCelsius = new(20, 26), WindKt = new(3, 8), PrecipExpectation = PrecipExpectation.Likely, PrecipPhenomenon = PrecipPhenomenon.Rain, SevereFlag = false },
+            new() { StartUtc = new(2026, 6, 8, 12, 0, 0, DateTimeKind.Utc), SkyState = SkyState.Overcast, Obscuration = Obscuration.None, TemperatureCelsius = new(24, 30), WindKt = new(4, 10), PrecipExpectation = PrecipExpectation.Likely, PrecipPhenomenon = PrecipPhenomenon.Rain, SevereFlag = false },
+        ],
+    };
+
+    // A full local day (all four 6-hour blocks) of clear, dry weather — every band shares
+    // one phrase, so the cell must collapse to a single whole-day "00-24" line (WX-190).
+    private static ForecastSnapshotBody UniformClearForecast() => new()
+    {
+        Blocks =
+        [
+            new() { StartUtc = new(2026, 6, 8, 0, 0, 0, DateTimeKind.Utc), SkyState = SkyState.Clear, Obscuration = Obscuration.None, TemperatureCelsius = new(18, 24), WindKt = new(2, 6), PrecipExpectation = PrecipExpectation.None, PrecipPhenomenon = null, SevereFlag = false },
+            new() { StartUtc = new(2026, 6, 8, 6, 0, 0, DateTimeKind.Utc), SkyState = SkyState.Clear, Obscuration = Obscuration.None, TemperatureCelsius = new(20, 27), WindKt = new(3, 7), PrecipExpectation = PrecipExpectation.None, PrecipPhenomenon = null, SevereFlag = false },
+            new() { StartUtc = new(2026, 6, 8, 12, 0, 0, DateTimeKind.Utc), SkyState = SkyState.Clear, Obscuration = Obscuration.None, TemperatureCelsius = new(24, 31), WindKt = new(4, 9), PrecipExpectation = PrecipExpectation.None, PrecipPhenomenon = null, SevereFlag = false },
+            new() { StartUtc = new(2026, 6, 8, 18, 0, 0, DateTimeKind.Utc), SkyState = SkyState.Clear, Obscuration = Obscuration.None, TemperatureCelsius = new(21, 28), WindKt = new(2, 6), PrecipExpectation = PrecipExpectation.None, PrecipPhenomenon = null, SevereFlag = false },
+        ],
+    };
+
+    // A severe thunderstorm in the 00-06 pre-dawn band — exercises the prose day-binding
+    // (banner must read "{weekday} 00-06", never a floating "overnight"; WX-190).
+    private static ForecastSnapshotBody SevereOvernightForecast() => new()
+    {
+        Blocks =
+        [
+            new() { StartUtc = new(2026, 6, 8, 0, 0, 0, DateTimeKind.Utc), SkyState = SkyState.Overcast, Obscuration = Obscuration.None, TemperatureCelsius = new(20, 26), WindKt = new(10, 25), PrecipExpectation = PrecipExpectation.Likely, PrecipPhenomenon = PrecipPhenomenon.Thunderstorm, SevereFlag = true },
+        ],
+    };
+
     // Closing prose carries one of every quantity-token kind + a time token; no
     // unit words adjacent (the renderer appends units).
     private const string ClosingTokens =
@@ -209,46 +244,103 @@ public class StructuredReportRendererTests
     }
 
     [Fact]
-    public void Conditions_SplitDayIntoEpisodes_NotCollapsedToPeak()
+    public void Conditions_TilesDayIntoClockBands_NotCollapsedToPeak()
     {
         var en = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled, RenderNow);
-        // WX-148 Class 2: Day 1 has two episodes — a thunderstorm at 12Z (afternoon)
-        // then rain at 18Z (evening) — and BOTH must surface as labeled lines rather
-        // than collapse to the single highest-expectation one.
-        Assert.Contains("Afternoon — storms likely", en);
-        Assert.Contains("Evening — rain expected", en);
-        // Day 2: PartlyCloudy, no precip → just the sky phrase, not the clear-day "and dry".
-        Assert.Contains("Partly cloudy", en);
-        Assert.DoesNotContain("Partly cloudy and dry", en);
+        // WX-148 Class 2 / WX-190: Day 1 tiles into its two present bands — a thunderstorm
+        // at 12Z (12-18) then rain at 18Z (18-24) — each its own clock-band line, rather
+        // than collapsing to the single highest-expectation one.
+        Assert.Contains("12-18 — Storms likely", en);
+        Assert.Contains("18-24 — Rain expected", en);
+        // Day 2: 00Z PartlyCloudy (no precip) → sky phrase; 06Z Clear → "Clear and dry".
+        Assert.Contains("00-06 — Partly cloudy", en);
+        Assert.Contains("06-12 — Clear and dry", en);
+        Assert.DoesNotContain("Partly cloudy and dry", en);  // PartlyCloudy is not the clear-day "and dry"
     }
 
     [Fact]
-    public void Conditions_SevereDay_TimedSentenceWithSecondaryEpisode()
+    public void Conditions_SevereBand_IsEmphasizedAndClockBound()
     {
-        // A severe day breaks the labeled-line rhythm into a single sentence: the
-        // severe clause leads with its timing, the secondary episode joined by "then".
+        // WX-190: a severe band is bold and labeled by its clock range; the grid row's
+        // date binds the hazard to its calendar day, so no floating "overnight" is used.
         var en = StructuredReportRenderer.Render(Body(), SevereForecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled, RenderNow);
-        Assert.Contains("Severe storms likely in the afternoon, then rain in the evening", en);
+        Assert.Contains("<strong>12-18 — Severe storms likely</strong>", en);
+        Assert.Contains("18-24 — Rain expected", en);
     }
 
     [Fact]
     public void Conditions_SevereWithoutPrecip_StillSurfacesHazard()
     {
-        // Regression guard: a severe block with no precipitation forms no episode, but
-        // must not collapse to a benign sky phrase — the day-level severe path leads
-        // with a generic hazard line timed by the severe block.
+        // Regression guard: a severe block with no precipitation must not collapse to a
+        // benign sky phrase — its band leads with the generic "Severe weather" hazard.
         var en = StructuredReportRenderer.Render(Body(), SevereNoPrecipForecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled, RenderNow);
         // Generic "Severe weather" — not storm-specific — because the severe block carries no precip (a wind event).
-        Assert.Contains("Severe weather likely in the afternoon", en);
+        Assert.Contains("<strong>12-18 — Severe weather likely</strong>", en);
     }
 
     [Fact]
-    public void Conditions_EpisodeSpanningBuckets_RendersRangeLabel()
+    public void Conditions_AdjacentBandsSharingConditions_Merge()
     {
-        // A single rain episode spanning the 06Z and 12Z blocks crosses the
-        // morning/afternoon boundary, so it is timed as a range, not one bucket.
+        // WX-190: rain in both the 06Z (06-12) and 12Z (12-18) bands shares one phrase,
+        // so the two adjacent bands merge into a single "06-18" line.
         var en = StructuredReportRenderer.Render(Body(), SpanningForecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled, RenderNow);
-        Assert.Contains("Morning–afternoon — rain likely", en);
+        Assert.Contains("06-18 — Rain likely", en);
+    }
+
+    [Fact]
+    public void Conditions_MissingInteriorBlock_DoesNotMergeAcrossGap()
+    {
+        // WX-190 (review): two same-phrase bands separated by a missing interior block must render
+        // as separate clock-band lines, never merged into a span that fabricates coverage of the gap.
+        var en = StructuredReportRenderer.Render(Body(), GappedForecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled, RenderNow);
+        Assert.Contains("00-06 — Rain likely", en);
+        Assert.Contains("12-18 — Rain likely", en);
+        Assert.DoesNotContain("00-18", en);   // the 06-12 gap must not be bridged
+    }
+
+    [Fact]
+    public void Conditions_UniformDay_CollapsesToWholeDayBand()
+    {
+        // WX-190: when every band of a day shares one condition, the four bands merge into
+        // a single whole-day "00-24" line rather than four identical rows.
+        var en = StructuredReportRenderer.Render(Body(), UniformClearForecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled, RenderNow);
+        Assert.Contains("00-24 — Clear and dry", en);
+        Assert.DoesNotContain("06-12", en);  // no intermediate band labels survive the merge
+    }
+
+    [Fact]
+    public void Grid_RendersTwentyFourHourClockLegend()
+    {
+        // WX-190: the legend sits directly beneath the grid so a reader meeting an
+        // unfamiliar band label has the 24-hour-clock key one glance away.
+        var en = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled, RenderNow);
+        Assert.Contains("Times use a 24-hour clock: 00 = midnight, 12 = noon, 24 = midnight.", en);
+        Assert.DoesNotContain("12 AM", en);  // the banned contradictory anchors never appear
+        Assert.DoesNotContain("12 PM", en);
+    }
+
+    [Fact]
+    public void Conditions_PreDawnBand_UsesClockLabel_NeverOvernight()
+    {
+        // WX-190: the 00-06 pre-dawn block is labeled by its clock range in the grid,
+        // never the floating "Overnight"/"overnight" daypart word.
+        var en = StructuredReportRenderer.Render(Body(), SevereOvernightForecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled, RenderNow);
+        Assert.Contains("<strong>00-06 — Severe storms likely</strong>", en);
+        Assert.DoesNotContain("Overnight", en);
+        Assert.DoesNotContain("overnight", en);
+    }
+
+    [Fact]
+    public void HazardBanner_PreDawnBlock_BoundByClockRangeNotOvernight()
+    {
+        // WX-190: the degraded hazard banner is prose with no grid row to bind the day,
+        // so the pre-dawn block is bound by its clock range ("{weekday} 00-06"), never a
+        // floating "overnight"/"{weekday} night" that a US reader hears as the next day.
+        var nowUtc = new DateTime(2026, 6, 8, 2, 0, 0, DateTimeKind.Utc);  // within the 00-06Z severe block
+        var en = StructuredReportRenderer.RenderDegraded(SevereOvernightForecast(), Observation(), Imperial(), "en", Utc, nowUtc);
+        var expectedDay = nowUtc.ToString("dddd", System.Globalization.CultureInfo.GetCultureInfo("en-US"));
+        Assert.Contains($"Severe storms in your forecast — {expectedDay} 00-06.", en);
+        Assert.DoesNotContain("overnight", en);
     }
 
     [Fact]

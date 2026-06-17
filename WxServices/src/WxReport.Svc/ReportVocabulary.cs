@@ -82,6 +82,7 @@ public sealed record ReportVocabulary
     public required string ColConditions { get; init; }
     public required string HighLabel { get; init; }
     public required string LowLabel { get; init; }
+    public required string GridTimeLegend { get; init; }   // 24-hour clock legend rendered beneath the forecast grid (WX-190)
 
     // ── sky coverage + height prefixes ──────────────────────────────────────
     public required string SkyClear { get; init; }
@@ -119,24 +120,20 @@ public sealed record ReportVocabulary
     public required string WxSmoke { get; init; }
     public required string WxMixed { get; init; }       // wintry mix / sleet
 
-    // ── per-day conditions: day-part labels, when-adverbials, outlook, connectives ─
-    public required string CondAndDry { get; init; }        // dry day: "{sky} and dry" when clear, else just the sky word
-    // Capitalized day-part LABELS for the per-day conditions grid lines ("Afternoon — rain likely").
+    // ── per-day conditions: day-part words, outlook, severe leads ─
+    public required string CondAndDry { get; init; }        // dry band: "{sky} and dry" when clear, else just the sky word
+    // Day-part words for PROSE timing only — the hazard banner and the WX-189 fallback band
+    // ("Saturday afternoon"). The 00-06 pre-dawn block is bound by its clock range instead of
+    // a floating night-word (WX-190); the grid's Conditions cell uses language-neutral XX-YY
+    // clock bands, not these words.
     public required string PartMorning { get; init; }
     public required string PartAfternoon { get; init; }
     public required string PartEvening { get; init; }
-    public required string PartOvernight { get; init; }
-    // Mid-sentence WHEN-adverbials for the severe one-liner ("Severe storms likely in the afternoon").
-    public required string CondMorning { get; init; }
-    public required string CondAfternoon { get; init; }
-    public required string CondEvening { get; init; }
-    public required string CondOvernight { get; init; }
     public required string OutlookPossible { get; init; }   // hedge: "possible"
     public required string OutlookLikely { get; init; }     // hedge: "likely"
     public required string OutlookExpected { get; init; }   // hedge for Certain — never "certain"
     public required string CondSevereStorms { get; init; }  // severe lead, convective: "Severe storms"
     public required string CondSevereWeather { get; init; } // severe lead, non-convective (e.g. damaging wind, no precip): "Severe weather"
-    public required string CondThen { get; init; }          // joins the two clauses of a severe day: "then"
     public required string Storms { get; init; }            // generic "storms"
     public required string HazardBannerFormat { get; init; } // degraded safety send: {0} = severe phrase, {1} = "Saturday afternoon"
     // WX-189 deterministic change-band fallback nouns — used only when Claude's band
@@ -241,6 +238,7 @@ public sealed record ReportVocabulary
         ColConditions = "Conditions",
         HighLabel = "High",
         LowLabel = "Low",
+        GridTimeLegend = "Times use a 24-hour clock: 00 = midnight, 12 = noon, 24 = midnight.",
         SkyClear = "Clear",
         SkyPartlyCloudy = "Partly cloudy",
         SkyMostlyCloudy = "Mostly cloudy",
@@ -273,17 +271,11 @@ public sealed record ReportVocabulary
         PartMorning = "Morning",
         PartAfternoon = "Afternoon",
         PartEvening = "Evening",
-        PartOvernight = "Overnight",
-        CondMorning = "in the morning",
-        CondAfternoon = "in the afternoon",
-        CondEvening = "in the evening",
-        CondOvernight = "overnight",
         OutlookPossible = "possible",
         OutlookLikely = "likely",
         OutlookExpected = "expected",
         CondSevereStorms = "Severe storms",
         CondSevereWeather = "Severe weather",
-        CondThen = "then",
         Storms = "storms",
         HazardBannerFormat = "{0} in your forecast — {1}.",
         ChangeFreezingRain = "Freezing rain",
@@ -330,6 +322,7 @@ public sealed record ReportVocabulary
         ColConditions = "Condiciones",
         HighLabel = "Máx",
         LowLabel = "Mín",
+        GridTimeLegend = "Las horas usan un reloj de 24 horas: 00 = medianoche, 12 = mediodía, 24 = medianoche.",
         SkyClear = "Despejado",
         SkyPartlyCloudy = "Parcialmente nublado",
         SkyMostlyCloudy = "Mayormente nublado",
@@ -362,17 +355,11 @@ public sealed record ReportVocabulary
         PartMorning = "Mañana",
         PartAfternoon = "Tarde",
         PartEvening = "Noche",
-        PartOvernight = "Madrugada",
-        CondMorning = "por la mañana",
-        CondAfternoon = "por la tarde",
-        CondEvening = "al anochecer",
-        CondOvernight = "de madrugada",
         OutlookPossible = "posibles",
         OutlookLikely = "probables",
         OutlookExpected = "previstas",
         CondSevereStorms = "Tormentas severas",
         CondSevereWeather = "Tiempo severo",
-        CondThen = "luego",
         Storms = "tormentas",
         HazardBannerFormat = "{0} en su pronóstico — {1}.",
         ChangeFreezingRain = "Lluvia helada",

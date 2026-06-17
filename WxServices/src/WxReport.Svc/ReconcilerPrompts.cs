@@ -303,12 +303,20 @@ internal static class ReconcilerPrompts
             token renders to. The renderer converts each token to the locality's
             local clock, so a token at 12:00Z that is 7:00 AM locally reads as
             "morning", not "afternoon". When you write a day-part word
-            ("morning", "afternoon", "evening", "overnight") beside a {q:time}
-            token, make the word agree with that token's local hour.
+            ("morning", "afternoon", "evening") beside a {q:time} token, make the
+            word agree with that token's local hour.
+          • The 00:00-06:00 pre-dawn block has NO safe day-part word: "overnight"
+            and "{weekday} night" both float to the WRONG calendar day for a US
+            reader, who hears "Saturday night" as the night that FOLLOWS Saturday,
+            not its first six hours. Never use them for this block. Bind it to its
+            day explicitly and without a night-word — e.g. "the early hours of
+            Saturday" or "Saturday, shortly after midnight" — beside the {q:time}
+            token, which renders the exact local time.
           • Each block is exactly one local day-part (WX-155): its local start hour
-            names it — 00:00 overnight, 06:00 morning, 12:00 afternoon, 18:00
-            evening. A change window covers whole blocks, so name its day-part from
-            the block(s) it spans; that name will agree with the {q:time} rule above.
+            names it — 06:00 morning, 12:00 afternoon, 18:00 evening, and 00:00 the
+            pre-dawn block (bound to its day per the rule above, never "overnight").
+            A change window covers whole blocks, so name its day-part from the
+            block(s) it spans; that name will agree with the {q:time} rule above.
           • Hedged certainty: never state weather as flatly certain, in any
             language — no forecast is ever 100% sure. Render even a "certain"
             precip expectation or a set severeFlag as calibrated strong
