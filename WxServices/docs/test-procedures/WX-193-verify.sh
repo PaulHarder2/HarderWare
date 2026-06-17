@@ -54,14 +54,18 @@ DB_NAME="${WX193_DB:-WeatherData}"
 
 # Run a query; rows '|'-separated, headerless, CR-stripped. The query carries no embedded
 # double quotes (only single-quoted SQL literals), so it nests inside -Q "...".
+# `</dev/null`: sqlbody is called INSIDE the `while read ... <<< "$CANDIDATES"` loop, and
+# powershell.exe would otherwise inherit and DRAIN the loop's stdin -- consuming the remaining
+# candidate rows so only the first is ever processed. Latent here (the IsDiagnostic=1 query
+# usually returns one row) but real; redirect both helpers' stdin from /dev/null (WX-198).
 sqlq() {  # SQL -> rows on stdout
   powershell.exe -NoProfile -Command \
-    "sqlcmd -S $DB_SERVER -d $DB_NAME -E -C -h -1 -W -s '|' -Q \"$1\"" 2>/dev/null | tr -d '\r'
+    "sqlcmd -S $DB_SERVER -d $DB_NAME -E -C -h -1 -W -s '|' -Q \"$1\"" </dev/null 2>/dev/null | tr -d '\r'
 }
 # Dump one report's EmailBody, unbounded width.
 sqlbody() {  # Id -> EmailBody on stdout
   powershell.exe -NoProfile -Command \
-    "sqlcmd -S $DB_SERVER -d $DB_NAME -E -C -y 0 -Q \"SET NOCOUNT ON; SELECT EmailBody FROM CommittedSends WHERE Id=$1\"" 2>/dev/null | tr -d '\r'
+    "sqlcmd -S $DB_SERVER -d $DB_NAME -E -C -y 0 -Q \"SET NOCOUNT ON; SELECT EmailBody FROM CommittedSends WHERE Id=$1\"" </dev/null 2>/dev/null | tr -d '\r'
 }
 
 vl_parse_args "$@"
