@@ -49,15 +49,19 @@ DB_NAME="${WX188_DB:-WeatherData}"
 
 # Run a query; rows '|'-separated, headerless, CR-stripped. The query carries no embedded
 # double quotes (only single-quoted SQL literals), so it nests inside -Q "...".
+# `</dev/null`: sqlbody is called INSIDE the `while read ... <<< "$CANDIDATES"` loop, and
+# powershell.exe would otherwise inherit and DRAIN the loop's stdin -- consuming the remaining
+# candidate rows so only the first is ever processed (an under-count, WX-198). Redirect both
+# helpers' stdin from /dev/null so neither can swallow the loop input.
 sqlq() {  # SQL -> rows on stdout
   powershell.exe -NoProfile -Command \
-    "sqlcmd -S $DB_SERVER -d $DB_NAME -E -C -h -1 -W -s '|' -Q \"$1\"" 2>/dev/null | tr -d '\r'
+    "sqlcmd -S $DB_SERVER -d $DB_NAME -E -C -h -1 -W -s '|' -Q \"$1\"" </dev/null 2>/dev/null | tr -d '\r'
 }
 # Dump one report's EmailBody, unbounded width. -y 0 is mutually exclusive with -h, so any
 # stray header/separator text is simply ignored by the date-cell grep downstream.
 sqlbody() {  # Id -> EmailBody on stdout
   powershell.exe -NoProfile -Command \
-    "sqlcmd -S $DB_SERVER -d $DB_NAME -E -C -y 0 -Q \"SET NOCOUNT ON; SELECT EmailBody FROM CommittedSends WHERE Id=$1\"" 2>/dev/null | tr -d '\r'
+    "sqlcmd -S $DB_SERVER -d $DB_NAME -E -C -y 0 -Q \"SET NOCOUNT ON; SELECT EmailBody FROM CommittedSends WHERE Id=$1\"" </dev/null 2>/dev/null | tr -d '\r'
 }
 
 # Month abbreviation -> number, for parsing the grid's localized "ddd MMM d" date cell.
