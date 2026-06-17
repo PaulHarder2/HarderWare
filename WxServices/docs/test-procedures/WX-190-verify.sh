@@ -12,7 +12,7 @@
 #
 # THE INVARIANT (post-fix): every grid-bearing report rendered since the deploy carries the
 # legend. The UNAMBIGUOUS failure signature is a grid-bearing report (its body has the "Forecast
-# for "/"Pronostico para " heading) whose body LACKS the legend -- that means the old binary is
+# for "/"Pronóstico para " heading) whose body LACKS the legend -- that means the old binary is
 # still running, or AppendExtendedForecast's legend regressed. That FAILs at any horizon.
 #
 # THE GATE (Paul, WX-190 design pass): this is a deterministic render change -- there is nothing
@@ -61,10 +61,11 @@ LEGEND_EN='24-hour clock: 00 = midnight'
 LEGEND_ES='reloj de 24 horas: 00 = medianoche'
 # Grid-bearing markers (the forecast-section heading, EN + ES) -- present iff the body has a
 # grid, and emitted by BOTH the old and new renderers, so "grid present + legend absent" still
-# catches an old binary. GRID_ES is the ASCII tail of "Pronostico para" (avoids the accented o,
-# so no multibyte glob matching is needed).
+# catches an old binary. Use the FULL heading phrase (not a generic tail) so a stray substring in
+# prose can't be mistaken for the heading; matched as a literal UTF-8 substring (case-glob and
+# awk index() are byte-literal, so the accented 'o' needs no special handling).
 GRID_EN='Forecast for '
-GRID_ES='stico para '
+GRID_ES='Pronóstico para '
 
 # Run a query; rows '|'-separated, headerless, CR-stripped. The query carries no embedded
 # double quotes (only single-quoted SQL literals), so it nests inside -Q "...".

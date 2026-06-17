@@ -43,9 +43,9 @@ internal static class ReconcilerPrompts
           • provisional_snapshot — a ForecastSnapshotBody derived deterministically
             from GFS model output, plus the gfs_model_run_utc. Treat the body as
             your working memory's starting state, covering up to a six-day horizon
-            in blocks aligned to the locality's local day-parts (00/06/12/18
-            local time: overnight/morning/afternoon/evening). Each block's startUtc is
-            the UTC instant of its local-day-part boundary.
+            in blocks aligned to the locality's local clock-band boundaries (00/06/12/18
+            local time: 00-06 / 06-12 / 12-18 / 18-24). Each block's startUtc is
+            the UTC instant of its local clock-band boundary.
           • current_observation — the most recent METAR for the station, with its
             observation_time_utc.
           • current_forecast    — the active TAF for the station, with its
@@ -213,8 +213,8 @@ internal static class ReconcilerPrompts
 
           • final_snapshot — your refined ForecastSnapshotBody. Same schema as
             provisional_snapshot: schemaVersion 5, ordered blocks aligned
-            to the locality's local day-part boundaries (00/06/12/18 local time:
-            overnight/morning/afternoon/evening), all required fields per block.
+            to the locality's local clock-band boundaries (00/06/12/18 local time:
+            00-06 / 06-12 / 12-18 / 18-24), all required fields per block.
             Temperatures stay in Celsius; winds stay in knots — a deterministic
             renderer converts units per recipient.
           • structured_report — the unit-neutral structured report. It is the
