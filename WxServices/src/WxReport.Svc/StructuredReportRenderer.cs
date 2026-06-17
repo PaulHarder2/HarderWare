@@ -442,8 +442,10 @@ public static class StructuredReportRenderer
         sb.Append("</table>");
         // 24-hour clock legend (WX-190), directly beneath the grid where a reader meets
         // an unfamiliar band label: the Conditions cell tiles each day into XX-YY clock
-        // bands, so the legend sits one glance away rather than in a distant footer.
-        sb.Append($"<div style=\"font-size:12px;color:#5a6b7c;margin-top:6px;\">{HtmlText(vocab.GridTimeLegend)}</div>");
+        // bands, so the legend sits one glance away rather than in a distant footer. Styled
+        // to match the meteogram caption (WX-195) — centered, italic, 11px, #888 — so the
+        // report's two explanatory captions read as one consistent voice.
+        sb.Append($"<div style=\"text-align:center;font-size:11px;color:#888;font-style:italic;margin-top:6px;\">{HtmlText(vocab.GridTimeLegend)}</div>");
         sb.Append("</div>");
     }
 
@@ -484,9 +486,11 @@ public static class StructuredReportRenderer
     /// (WX-148, Class 2; WX-190).
     /// Days whose every block has fully elapsed at <paramref name="nowUtc"/> are dropped
     /// (WX-188), so the first day returned is the one containing the send instant, never a
-    /// wholly-past "yesterday".  A retained day keeps ALL its blocks — including any already
-    /// elapsed — so its high/low/wind span the whole calendar day regardless of how much of
-    /// the day remains (a 1 PM report still reports this morning's low as today's low).
+    /// wholly-past "yesterday".  A retained day's high/low/wind are computed from ALL its blocks
+    /// — including any already elapsed — so they span the whole calendar day regardless of how
+    /// much of the day remains (a 1 PM report still reports this morning's low as today's low),
+    /// but its <c>Bands</c> (the Conditions tiling) carry only the still-live blocks, so today
+    /// leads with the current day-part, not one already past (WX-195).
     /// Days are returned in chronological order.
     /// </summary>
     private static IEnumerable<DaySummary> AggregateDays(ForecastSnapshotBody body, TimeZoneInfo tz, DateTime nowUtc)
@@ -512,20 +516,24 @@ public static class StructuredReportRenderer
 
         foreach (var day in order)
         {
-            var blocks = byDay[day];  // sorted by StartUtc above
+            var blocks = byDay[day];  // all of the day's blocks, sorted by StartUtc above
 
-            // WX-188: drop a day only when every one of its blocks has fully elapsed at
-            // nowUtc (a wholly-past "yesterday"). A day with any still-active block — the
-            // current day always has one — is kept whole, so its high/low/wind cover the
-            // entire calendar day, not just the unelapsed remainder.
-            if (!blocks.Any(x => SevereBlocks.NotFullyElapsed(x.Block, nowUtc)))
+            // WX-195: the Conditions cell tiles only the day's still-relevant bands — drop any
+            // band that has fully elapsed at nowUtc, so today's row leads with the CURRENT
+            // day-part rather than a period already past. A day with no live band left (a
+            // wholly-past "yesterday") is dropped entirely (WX-188).
+            var liveBands = blocks.Where(x => SevereBlocks.NotFullyElapsed(x.Block, nowUtc)).ToList();
+            if (liveBands.Count == 0)
                 continue;
+            // WX-176/WX-188: high/low/peak wind span the WHOLE calendar day — computed from ALL
+            // blocks, including any already elapsed — so a midday report still reports this
+            // morning's low as today's low. Only the Conditions tiling (liveBands) is trimmed.
             yield return new DaySummary(
                 day,
                 blocks.Max(x => x.Block.TemperatureCelsius.Max),
                 blocks.Min(x => x.Block.TemperatureCelsius.Min),
                 blocks.Max(x => x.Block.WindKt.Max),
-                blocks);
+                liveBands);
         }
     }
 

@@ -153,6 +153,21 @@ public class StructuredReportRendererTests
         ],
     };
 
+    // A single local day (all four blocks) where the morning has rain and the afternoon/evening
+    // are clear. Rendered with a mid-day nowUtc, the 00-06 and 06-12 bands are fully elapsed and
+    // must drop from the Conditions cell (WX-195) — while the day's High/Low still span all four
+    // blocks (incl. the elapsed morning low). 00Z min 15°C is the day's low; 12Z max 33°C the high.
+    private static ForecastSnapshotBody TodayPartlyElapsedForecast() => new()
+    {
+        Blocks =
+        [
+            new() { StartUtc = new(2026, 6, 8, 0, 0, 0, DateTimeKind.Utc), SkyState = SkyState.Overcast, Obscuration = Obscuration.None, TemperatureCelsius = new(20, 26), WindKt = new(3, 8), PrecipExpectation = PrecipExpectation.Likely, PrecipPhenomenon = PrecipPhenomenon.Rain, SevereFlag = false },
+            new() { StartUtc = new(2026, 6, 8, 6, 0, 0, DateTimeKind.Utc), SkyState = SkyState.Overcast, Obscuration = Obscuration.None, TemperatureCelsius = new(15, 22), WindKt = new(4, 10), PrecipExpectation = PrecipExpectation.Likely, PrecipPhenomenon = PrecipPhenomenon.Rain, SevereFlag = false },
+            new() { StartUtc = new(2026, 6, 8, 12, 0, 0, DateTimeKind.Utc), SkyState = SkyState.Clear, Obscuration = Obscuration.None, TemperatureCelsius = new(25, 33), WindKt = new(5, 11), PrecipExpectation = PrecipExpectation.None, PrecipPhenomenon = null, SevereFlag = false },
+            new() { StartUtc = new(2026, 6, 8, 18, 0, 0, DateTimeKind.Utc), SkyState = SkyState.Clear, Obscuration = Obscuration.None, TemperatureCelsius = new(23, 29), WindKt = new(3, 8), PrecipExpectation = PrecipExpectation.None, PrecipPhenomenon = null, SevereFlag = false },
+        ],
+    };
+
     // Closing prose carries one of every quantity-token kind + a time token; no
     // unit words adjacent (the renderer appends units).
     private const string ClosingTokens =
@@ -299,6 +314,22 @@ public class StructuredReportRendererTests
     }
 
     [Fact]
+    public void Conditions_Today_DropsElapsedLeadingBands_ButHiLoSpanWholeDay()
+    {
+        // WX-195: at mid-day, today's already-elapsed bands (00-06, 06-12) must drop from the
+        // Conditions cell so it leads with the CURRENT band — but the day's High/Low must still
+        // span ALL blocks (incl. the elapsed morning low), per the WX-176/WX-188 invariant.
+        var nowUtc = new DateTime(2026, 6, 8, 13, 0, 0, DateTimeKind.Utc);  // 00-06Z and 06-12Z fully elapsed
+        var en = StructuredReportRenderer.Render(Body(), TodayPartlyElapsedForecast(), Observation(), Imperial(), "en", Utc, ReportKind.Scheduled, nowUtc);
+        Assert.Contains("12-24 — Clear and dry", en);   // leads with the current band; 12-18 + 18-24 merge
+        Assert.DoesNotContain("00-06", en);             // elapsed morning bands dropped
+        Assert.DoesNotContain("06-12", en);
+        Assert.DoesNotContain("Rain likely", en);       // the elapsed rain bands are gone from the cell
+        Assert.Contains("91°F", en);                    // High from the 12Z block (33°C) — whole-day
+        Assert.Contains("59°F", en);                    // Low from the ELAPSED 06Z block (15°C) — proves Hi/Lo span all blocks
+    }
+
+    [Fact]
     public void Conditions_UniformDay_CollapsesToWholeDayBand()
     {
         // WX-190: when every band of a day shares one condition, the four bands merge into
@@ -317,6 +348,8 @@ public class StructuredReportRendererTests
         Assert.Contains("Times use a 24-hour clock: 00 = midnight, 12 = noon, 24 = midnight.", en);
         Assert.DoesNotContain("12 AM", en);  // the banned contradictory anchors never appear
         Assert.DoesNotContain("12 PM", en);
+        // WX-195: styled to match the meteogram caption — centered, italic, 11px, #888.
+        Assert.Contains("text-align:center;font-size:11px;color:#888;font-style:italic;margin-top:6px;\">Times use a 24-hour clock", en);
     }
 
     [Fact]
