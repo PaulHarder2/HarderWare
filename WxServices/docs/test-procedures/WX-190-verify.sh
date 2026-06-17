@@ -61,11 +61,13 @@ LEGEND_EN='24-hour clock: 00 = midnight'
 LEGEND_ES='reloj de 24 horas: 00 = medianoche'
 # Grid-bearing markers (the forecast-section heading, EN + ES) -- present iff the body has a
 # grid, and emitted by BOTH the old and new renderers, so "grid present + legend absent" still
-# catches an old binary. Use the FULL heading phrase (not a generic tail) so a stray substring in
-# prose can't be mistaken for the heading; matched as a literal UTF-8 substring (case-glob and
-# awk index() are byte-literal, so the accented 'o' needs no special handling).
+# catches an old binary. GRID_ES is the ASCII TAIL of "Pronóstico para": sqlcmd's output mangles
+# non-ASCII (observed in production: the ° in "°F" came back as the replacement char), so the
+# accented heading would never match a real Spanish body, whereas this tail sits after the
+# accented 'o' and survives the mangling. (EN -- the actual deploy-verification recipient -- is
+# all-ASCII and unaffected either way.)
 GRID_EN='Forecast for '
-GRID_ES='Pronóstico para '
+GRID_ES='stico para '
 
 # Run a query; rows '|'-separated, headerless, CR-stripped. The query carries no embedded
 # double quotes (only single-quoted SQL literals), so it nests inside -Q "...".
@@ -156,8 +158,9 @@ while IFS='|' read -r id snapid created; do
     }
     END {
       for (r=1;r<=rows;r++) {
-        bad = (startbad[r] || contigbad[r])
-        if (r < rows && endbad[r]) bad=1      # the FINAL day-row is exempt from "must reach 24"
+        bad = contigbad[r]
+        if (r > 1 && startbad[r]) bad=1        # the FIRST day-row may start later than 00 (today's elapsed dayparts dropped, WX-195)
+        if (r < rows && endbad[r]) bad=1        # the FINAL day-row may end before 24 (forecast horizon truncation)
         if (bad) print seq[r]
       }
     }')"
@@ -212,16 +215,19 @@ if [ "$overnight" -gt 0 ]; then
 fi
 echo
 
-# Verdict. A grid-bearing report missing the legend is the unambiguous failure signature and FAILs
-# at any horizon (vl_verdict tests the regression count before the exercised gate, so a real
-# violation is never masked). The exercised arg encodes the cycle gate: it is the real cycle count
-# only once >= MIN_CYCLES, else 0 -> WAIT until enough cycles have issued. So: regression -> FAIL
-# immediately (even on cycle 1); else < MIN_CYCLES cycles -> WAIT; else PASS.
-# Either failure signature fails: a grid-bearing report missing the legend (old/broken renderer)
-# OR a day-row whose bands don't tile contiguously (a daypart-coverage gap).
+# Verdict. A clean PASS is gated on >= MIN_CYCLES report-issuing cycles; until then -> WAIT. The
+# TRUE cycle count is reported as `exercised` (so the run log reads truthfully), and the gate is the
+# `precondition` 1/0 flag. verify-lib checks the precondition BEFORE the failure-signature count, so
+# to keep a real signature fail-fast (not deferred to WAIT below the cycle threshold) the flag is
+# also set when regression > 0 -- a failure then passes the precondition gate and is reported as a
+# hard FAIL immediately, at any cycle count.
+# Either signature is a failure: a grid-bearing report missing the legend (old/broken renderer) OR
+# a day-row that doesn't cover its expected span (a daypart-coverage gap -- interior days must be
+# full 00-24; the first day may start late and the final day end early, WX-195/WX-190; a gap
+# tracing to a missing snapshot block is a linked Bug per fix-forward).
 regression=$(( missing + gaps ))
-exercised_arg=$(( cycles >= MIN_CYCLES ? cycles : 0 ))
-vl_verdict "$regression" "$exercised_arg" \
-  "a grid-bearing report either rendered without the 24-hour-clock legend (old binary still running, or the legend regressed) or showed a NON-final day whose clock bands do not cover the full 00-24 (a daypart-coverage gap; if it traces to a missing snapshot block, open a linked Bug per fix-forward)." \
-  "the clock-band grid + legend are present and every day tiles contiguously across $cycles cycle(s); any \"Overnight\" rows above still need the WX-190.md prose-vs-label confirmation." \
-  "$exercised_arg" "at least $MIN_CYCLES report-issuing cycles since the deploy (the startup diagnostic counts as one; $cycles so far)"
+precond=$(( (cycles >= MIN_CYCLES || regression > 0) ? 1 : 0 ))
+vl_verdict "$regression" "$cycles" \
+  "a grid-bearing report either rendered without the 24-hour-clock legend (old binary still running, or the legend regressed) or showed a day whose clock bands do not cover its expected span (a daypart-coverage gap -- first/final days are exempted; a gap from a missing snapshot block is a linked Bug per fix-forward)." \
+  "the clock-band grid + legend are present and every day covers its expected span (first day from the current daypart, interior days full 00-24, final day to the horizon) across $cycles cycle(s); any \"Overnight\" rows above still need the WX-190.md prose-vs-label confirmation." \
+  "$precond" "at least $MIN_CYCLES report-issuing cycles since the deploy (the startup diagnostic counts as one; $cycles so far)"
