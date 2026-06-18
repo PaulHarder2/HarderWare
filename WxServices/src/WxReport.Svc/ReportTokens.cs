@@ -14,16 +14,22 @@ namespace WxReport.Svc;
 public static class Tok
 {
     public const string AndConjunction = "AndConjunction";
-    public const string ClauseJoin = "ClauseJoin";
+    public const string ChangeTempNoun = "ChangeTempNoun";
+    public const string ChangeWindNoun = "ChangeWindNoun";
+    public const string ClosingFallback = "ClosingFallback";
     public const string ColConditions = "ColConditions";
     public const string ColDate = "ColDate";
     public const string ColTemperatures = "ColTemperatures";
     public const string ColWind = "ColWind";
+    public const string CondSevereStorms = "CondSevereStorms";
+    public const string CondSevereWeather = "CondSevereWeather";
     public const string CurrentConditionsHeading = "CurrentConditionsHeading";
     public const string DiagnosticLabel = "DiagnosticLabel";
     public const string DiagnosticSubject = "DiagnosticSubject";
-    public const string EpisodeLine = "EpisodeLine";
-    public const string EpisodeRange = "EpisodeRange";
+    public const string DirAppearing = "DirAppearing";
+    public const string DirClearing = "DirClearing";
+    public const string DirStrengthening = "DirStrengthening";
+    public const string DirWeakening = "DirWeakening";
     public const string ForecastHeadingFormat = "ForecastHeadingFormat";
     public const string GridTimeLegend = "GridTimeLegend";
     public const string HazardBannerFormat = "HazardBannerFormat";
@@ -43,14 +49,12 @@ public static class Tok
     public const string RowWind = "RowWind";
     public const string ScheduledReportLabel = "ScheduledReportLabel";
     public const string ScheduledReportSubject = "ScheduledReportSubject";
-    public const string SevereClause = "SevereClause";
     public const string SkyClear = "SkyClear";
     public const string SkyMostlyCloudy = "SkyMostlyCloudy";
     public const string SkyObscured = "SkyObscured";
     public const string SkyOvercast = "SkyOvercast";
     public const string SkyPartlyCloudy = "SkyPartlyCloudy";
     public const string StationSubtitle = "StationSubtitle";
-    public const string Storms = "Storms";
     public const string SubjectForConnective = "SubjectForConnective";
     public const string UnscheduledUpdateLabel = "UnscheduledUpdateLabel";
     public const string UnscheduledUpdateSubject = "UnscheduledUpdateSubject";
@@ -70,6 +74,7 @@ public static class Tok
     public const string WxHaze = "WxHaze";
     public const string WxMist = "WxMist";
     public const string WxSmoke = "WxSmoke";
+    public const string WxThunderstorm = "WxThunderstorm";
     public const string ClearAndDry = "clear_and_dry";
     public const string Drizzle = "drizzle";
     public const string DrizzleFreezing = "drizzle_freezing";
