@@ -21,6 +21,10 @@ public static class RendererGoldenCorpus
     public readonly record struct GoldenCase(string Name, string Content);
 
     private static readonly DateTime Anchor = new(2026, 6, 8, 18, 0, 0, DateTimeKind.Utc);
+    // Send instant (nowUtc) for the corpus: midnight at the start of the forecast day, so no
+    // forecast band has elapsed under WX-195's trimming and every grid cell renders —
+    // maximizing token coverage. Fixed for determinism.
+    private static readonly DateTime Now = new(2026, 6, 8, 0, 0, 0, DateTimeKind.Utc);
     private static readonly TimeZoneInfo Utc = TimeZoneInfo.Utc;
     private static readonly int[] ScheduleHours = [6, 18];
 
@@ -125,7 +129,7 @@ public static class RendererGoldenCorpus
     };
 
     private static string Report(WeatherSnapshot obs, ForecastSnapshotBody fc, Recipient r, string lang, ReportKind kind, bool withChange = false) =>
-        StructuredReportRenderer.Render(Body(withChange), fc, obs, r, lang, Utc, kind);
+        StructuredReportRenderer.Render(Body(withChange), fc, obs, r, lang, Utc, kind, Now);
 
     // ── shared fixtures ─────────────────────────────────────────────────────────
 
@@ -237,7 +241,7 @@ public static class RendererGoldenCorpus
         // Degraded safety send (hazard banner, no band/closing).
         yield return new("degraded", (r, l) => StructuredReportRenderer.RenderDegraded(
             Fc(Blk(12, SkyState.Overcast, PrecipExpectation.Likely, PrecipPhenomenon.Thunderstorm, severe: true)),
-            ObsLowOvercastLightRain(), r, l, Utc, Anchor));
+            ObsLowOvercastLightRain(), r, l, Utc, Now));
 
         // Welcome (HTML + plain-text fallback).
         yield return new("welcome", (r, l) => StructuredReportRenderer.RenderWelcome(r, l, "Spring", Utc, ScheduleHours));
