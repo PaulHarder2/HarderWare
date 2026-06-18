@@ -108,4 +108,47 @@ public class LanguageTemplateStoreTests
         Assert.True(store.TryGetPhrase("en", "rain", out _));   // subsequent reads do not
         Assert.Equal(2, loads);
     }
+
+    [Fact]
+    public void ForLanguage_Get_ResolvesPhrase_AndFailsLoudlyOnMiss()
+    {
+        var store = new LanguageTemplateStore(Sample);
+        var es = store.ForLanguage("es");
+
+        Assert.Equal("es", es.Iso);
+        Assert.Equal("lluvia", es.Get("rain"));
+        Assert.True(es.Has("rain"));
+        Assert.False(es.Has("snow"));
+
+        // Fail-closed: a missing token throws, carrying iso + token (no silent en-substitution).
+        var ex = Assert.Throws<MissingTemplateException>(() => es.Get("snow"));
+        Assert.Equal("es", ex.IsoCode);
+        Assert.Equal("snow", ex.Token);
+    }
+
+    [Fact]
+    public void ForLanguage_UnloadedLanguage_GetAlwaysThrows()
+    {
+        var store = new LanguageTemplateStore(Sample);
+        var fr = store.ForLanguage("fr");   // not loaded
+        Assert.Throws<MissingTemplateException>(() => fr.Get("rain"));
+    }
+
+    [Fact]
+    public void MissingTokens_ReportsAbsentAndBlocked_EmptyWhenComplete()
+    {
+        var rows = Sample();
+        rows.Add(Row(Es, "wintry_mix", "", representable: false));   // blocked counts as missing
+        var store = new LanguageTemplateStore(() => rows);
+        var required = new[] { "rain", "drizzle_light", "snow", "wintry_mix" };
+
+        // en: has rain + drizzle_light; missing snow + wintry_mix (never seeded).
+        Assert.Equal(new[] { "snow", "wintry_mix" }, store.MissingTokens("en", required));
+        // es: has rain + drizzle_light; snow absent; wintry_mix blocked -> both missing.
+        Assert.Equal(new[] { "snow", "wintry_mix" }, store.MissingTokens("es", required));
+        // A complete contract returns empty.
+        Assert.Empty(store.MissingTokens("es", new[] { "rain", "drizzle_light" }));
+        // An unloaded language is missing everything required.
+        Assert.Equal(new[] { "drizzle_light", "rain" }, store.MissingTokens("fr", new[] { "rain", "drizzle_light" }));
+    }
 }

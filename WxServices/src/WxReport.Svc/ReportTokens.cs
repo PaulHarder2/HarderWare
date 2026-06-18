@@ -1,3 +1,5 @@
+using System.Reflection;
+
 namespace WxReport.Svc;
 
 /// <summary>
@@ -107,4 +109,13 @@ public static class Tok
     public const string WmixExpected = "wmix_expected";
     public const string WmixLikely = "wmix_likely";
     public const string WmixPossible = "wmix_possible";
+
+    private static readonly IReadOnlySet<string> _all =
+        typeof(Tok).GetFields(BindingFlags.Public | BindingFlags.Static)
+            .Where(f => f.IsLiteral && f.FieldType == typeof(string))
+            .Select(f => (string)f.GetRawConstantValue()!)
+            .ToHashSet(StringComparer.Ordinal);
+
+    /// <summary>Every declared token value — the renderer's full required-token contract, consumed by the completeness checks (startup, send gate, WX-172).</summary>
+    public static IReadOnlySet<string> All => _all;
 }

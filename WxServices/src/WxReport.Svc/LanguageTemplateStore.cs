@@ -100,6 +100,41 @@ public sealed class LanguageTemplateStore
             ? lang.Phrases
             : new Dictionary<string, string>(StringComparer.Ordinal);
 
+    /// <summary>
+    /// A per-language view for the renderer, bound to the current snapshot at resolution
+    /// time, so a concurrent <see cref="Reload"/> cannot change phrases mid-render. An
+    /// unloaded language yields an empty view (every <see cref="TemplateSet.Get"/> throws);
+    /// callers gate on <see cref="MissingTokens"/> first, so they never render an
+    /// incomplete language.
+    /// </summary>
+    public TemplateSet ForLanguage(string isoCode)
+    {
+        var phrases = Current().ByIso.TryGetValue(isoCode, out var lang)
+            ? lang.Phrases
+            : new Dictionary<string, string>(StringComparer.Ordinal);
+        return new TemplateSet(isoCode, phrases);
+    }
+
+    /// <summary>
+    /// The subset of <paramref name="required"/> tokens that do NOT resolve for
+    /// <paramref name="isoCode"/> — absent or blocked (not representable). Empty means the
+    /// language is complete for that contract. This is the basis of the fail-closed posture
+    /// (WX-171): the startup check runs it over <see cref="Tok.All"/> for every supported
+    /// language (loud ERROR on any gap), the send path runs it per recipient language, and
+    /// WX-172 runs it at enable time. Returns ordinal-sorted for deterministic logging.
+    /// </summary>
+    public IReadOnlyList<string> MissingTokens(string isoCode, IEnumerable<string> required)
+    {
+        var has = Current().ByIso.TryGetValue(isoCode, out var lang)
+            ? lang.Phrases
+            : new Dictionary<string, string>(StringComparer.Ordinal);
+        return required
+            .Where(t => !has.ContainsKey(t))
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(t => t, StringComparer.Ordinal)
+            .ToList();
+    }
+
     /// <summary>Eagerly rebuilds the cache from the source and swaps it in atomically. Used at startup and by a future reload trigger.</summary>
     public void Reload()
     {
@@ -169,4 +204,58 @@ public sealed class LanguageTemplateStore
             + (skipped > 0 ? $"; skipped {skipped} unkeyable row(s)" : "") + ".");
         return new Snapshot(byIso);
     }
+}
+
+/// <summary>
+/// A per-language phrase view resolved once from a <see cref="LanguageTemplateStore"/>
+/// snapshot (see <see cref="LanguageTemplateStore.ForLanguage"/>). Fail-closed by design
+/// (WX-171): a missing or blocked token throws <see cref="MissingTemplateException"/>
+/// rather than silently substituting English, so an incompleteness that slipped both the
+/// build parity gate and the runtime completeness check still fails loudly instead of
+/// shipping a half-translated report.
+/// </summary>
+public sealed class TemplateSet
+{
+    private readonly IReadOnlyDictionary<string, string> _phrases;
+
+    internal TemplateSet(string iso, IReadOnlyDictionary<string, string> phrases)
+    {
+        Iso = iso;
+        _phrases = phrases;
+    }
+
+    /// <summary>The ISO code this view serves.</summary>
+    public string Iso { get; }
+
+    /// <summary>
+    /// The localized phrase for <paramref name="token"/>. Throws
+    /// <see cref="MissingTemplateException"/> if the token is absent or blocked — by design:
+    /// completeness is verified before rendering, so a miss here is a defect that must fail
+    /// loudly, not degrade silently.
+    /// </summary>
+    public string Get(string token) =>
+        _phrases.TryGetValue(token, out var phrase)
+            ? phrase
+            : throw new MissingTemplateException(Iso, token);
+
+    /// <summary>True if <paramref name="token"/> has a representable phrase in this language.</summary>
+    public bool Has(string token) => _phrases.ContainsKey(token);
+}
+
+/// <summary>
+/// Thrown when a required template token has no representable phrase for a language at
+/// render time. A fail-closed signal: the send path catches it, logs an ERROR (which
+/// WxMonitor alerts on), and skips that recipient rather than emitting a broken report.
+/// </summary>
+public sealed class MissingTemplateException : Exception
+{
+    public MissingTemplateException(string isoCode, string token)
+        : base($"Language template missing for '{isoCode}': token '{token}'.")
+    {
+        IsoCode = isoCode;
+        Token = token;
+    }
+
+    public string IsoCode { get; }
+    public string Token { get; }
 }
