@@ -12,7 +12,7 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace MetarParser.Data.Migrations
 {
     [DbContext(typeof(WeatherDataContext))]
-    [Migration("20260612214542_AddLanguageTemplates")]
+    [Migration("20260618161543_AddLanguageTemplates")]
     partial class AddLanguageTemplates
     {
         /// <inheritdoc />
@@ -257,15 +257,15 @@ namespace MetarParser.Data.Migrations
 
                     SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
 
-                    b.Property<string>("ContextKind")
-                        .IsRequired()
-                        .HasMaxLength(10)
-                        .HasColumnType("nvarchar(10)");
-
                     b.Property<string>("ContextInfo")
                         .IsRequired()
                         .HasMaxLength(1000)
                         .HasColumnType("nvarchar(1000)");
+
+                    b.Property<string>("ContextKind")
+                        .IsRequired()
+                        .HasMaxLength(10)
+                        .HasColumnType("nvarchar(10)");
 
                     b.Property<long>("LanguageId")
                         .HasColumnType("bigint");
@@ -357,6 +357,10 @@ namespace MetarParser.Data.Migrations
                     SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
 
                     b.Property<string>("LastClaudeInputHash")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("LastDegradedInputHash")
                         .HasMaxLength(200)
                         .HasColumnType("nvarchar(200)");
 
