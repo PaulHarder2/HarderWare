@@ -4,6 +4,7 @@ using MetarParser.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace MetarParser.Data.Migrations
 {
     [DbContext(typeof(WeatherDataContext))]
-    partial class WeatherDataContextModelSnapshot : ModelSnapshot
+    [Migration("20260614221205_AddLastDegradedInputHash")]
+    partial class AddLastDegradedInputHash
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -213,21 +216,10 @@ namespace MetarParser.Data.Migrations
 
                     SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
 
-                    b.Property<string>("CultureName")
-                        .HasMaxLength(20)
-                        .HasColumnType("nvarchar(20)");
-
                     b.Property<string>("DisplayName")
                         .IsRequired()
                         .HasMaxLength(100)
                         .HasColumnType("nvarchar(100)");
-
-                    b.Property<DateTime?>("GeneratedAtUtc")
-                        .HasColumnType("datetime2");
-
-                    b.Property<string>("GenerationError")
-                        .HasMaxLength(1000)
-                        .HasColumnType("nvarchar(1000)");
 
                     b.Property<bool>("IsEnabled")
                         .HasColumnType("bit");
@@ -244,60 +236,6 @@ namespace MetarParser.Data.Migrations
                         .HasDatabaseName("UX_Languages_IsoCode");
 
                     b.ToTable("Languages", (string)null);
-                });
-
-            modelBuilder.Entity("MetarParser.Data.Entities.LanguageTemplate", b =>
-                {
-                    b.Property<long>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("bigint");
-
-                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
-
-                    b.Property<string>("ContextKind")
-                        .IsRequired()
-                        .HasMaxLength(10)
-                        .HasColumnType("nvarchar(10)");
-
-                    b.Property<string>("ContextInfo")
-                        .IsRequired()
-                        .HasMaxLength(1000)
-                        .HasColumnType("nvarchar(1000)");
-
-                    b.Property<long>("LanguageId")
-                        .HasColumnType("bigint");
-
-                    b.Property<string>("Note")
-                        .HasMaxLength(1000)
-                        .HasColumnType("nvarchar(1000)");
-
-                    b.Property<string>("Phrase")
-                        .IsRequired()
-                        .HasMaxLength(500)
-                        .HasColumnType("nvarchar(500)");
-
-                    b.Property<bool>("Representable")
-                        .HasColumnType("bit");
-
-                    b.Property<DateTime?>("ReviewedAtUtc")
-                        .HasColumnType("datetime2");
-
-                    b.Property<string>("ReviewedBy")
-                        .HasMaxLength(100)
-                        .HasColumnType("nvarchar(100)");
-
-                    b.Property<string>("Token")
-                        .IsRequired()
-                        .HasMaxLength(60)
-                        .HasColumnType("nvarchar(60)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("LanguageId", "Token")
-                        .IsUnique()
-                        .HasDatabaseName("UX_LanguageTemplates_LanguageId_Token");
-
-                    b.ToTable("LanguageTemplates", (string)null);
                 });
 
             modelBuilder.Entity("MetarParser.Data.Entities.Locality", b =>
@@ -1023,17 +961,6 @@ namespace MetarParser.Data.Migrations
                     b.Navigation("ForecastSnapshot");
                 });
 
-            modelBuilder.Entity("MetarParser.Data.Entities.LanguageTemplate", b =>
-                {
-                    b.HasOne("MetarParser.Data.Entities.Language", "Language")
-                        .WithMany("Templates")
-                        .HasForeignKey("LanguageId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.Navigation("Language");
-                });
-
             modelBuilder.Entity("MetarParser.Data.Entities.LocalityState", b =>
                 {
                     b.HasOne("MetarParser.Data.Entities.Locality", "Locality")
@@ -1126,11 +1053,6 @@ namespace MetarParser.Data.Migrations
                         .IsRequired();
 
                     b.Navigation("ChangePeriod");
-                });
-
-            modelBuilder.Entity("MetarParser.Data.Entities.Language", b =>
-                {
-                    b.Navigation("Templates");
                 });
 
             modelBuilder.Entity("MetarParser.Data.Entities.MetarRecord", b =>

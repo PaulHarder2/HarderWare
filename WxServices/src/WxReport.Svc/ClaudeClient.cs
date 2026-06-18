@@ -96,6 +96,19 @@ public sealed class ClaudeClient
     private const int BaseOutputTokens = 16384;
     private const int PerLanguageOutputTokens = 8192;
 
+    // WX-165 pinned this to 0.25 to damp invented changes: the call authored the
+    // structural changes[], and at the Anthropic default (1.0) each validation retry
+    // rolled a FRESH phantom instead of converging. WX-189 moved change DETECTION out
+    // of the LLM — changes[] is now computed deterministically from the snapshot — so
+    // structural correctness no longer rides on sampling, and the WX-165 payoff applies:
+    // raise the temperature back up so the changeSummary/closing prose breathes
+    // (0.25 flattens it toward repetitive phrasing across localities and days).
+    // Deliberately a MODERATE 0.5, not the old 1.0 default: final_snapshot is still
+    // Claude's, and the computed change set derives from it, so we still want a
+    // reasonably stable reconciled snapshot — 0.5 frees the prose without letting the
+    // snapshot wander. Final value calibrated post-deploy (WX-189 §13).
+    private const double ReconcilerTemperature = 0.5;
+
     private readonly HttpClient _http;
     private readonly string _apiKey;
     private readonly string _model;
@@ -186,6 +199,7 @@ public sealed class ClaudeClient
         {
             model = _model,
             max_tokens = BaseOutputTokens + PerLanguageOutputTokens * narrativeLanguages.Count,
+            temperature = ReconcilerTemperature,   // WX-189: moderate, prose breathes now that detection is deterministic (see const)
             system = new object[]
             {
                 new { type = "text", text = _personaPrefix },

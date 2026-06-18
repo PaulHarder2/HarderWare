@@ -43,34 +43,6 @@ public class ForecastReconcilerTests
         }
         """;
 
-    // WX-148: a structured report announcing rain appearing in a block-aligned
-    // 11–17Z window (the {ch1} anchor appears in the changeSummary, as the body
-    // contract requires when changes is non-empty).
-    private const string RainAppearingAlignedReportJson = """
-        {
-          "schemaVersion": 5,
-          "changes": [
-            { "tier": "plans", "phenomenon": "rain", "direction": "appearing", "window": { "startUtc": "2026-06-09T11:00:00Z", "endUtc": "2026-06-09T17:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
-          ],
-          "narrative": {
-            "en": { "changeSummary": "{ch1}Rain is now likely.", "closing": "A wet stretch ahead — keep an umbrella handy." }
-          }
-        }
-        """;
-
-    // The same change but with an OFF-GRID window (17–21Z) — the 6/9 contradiction shape.
-    private const string RainAppearingOffGridReportJson = """
-        {
-          "schemaVersion": 5,
-          "changes": [
-            { "tier": "plans", "phenomenon": "rain", "direction": "appearing", "window": { "startUtc": "2026-06-09T17:00:00Z", "endUtc": "2026-06-09T21:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
-          ],
-          "narrative": {
-            "en": { "changeSummary": "{ch1}Rain is now likely this afternoon.", "closing": "A wet stretch ahead — keep an umbrella handy." }
-          }
-        }
-        """;
-
     // A final_snapshot whose 11–17Z block carries rain — backs the appearing-rain change.
     private const string RainBlockSnapshotJson = """
         {"schemaVersion":5,"blocks":[{"startUtc":"2026-06-09T11:00:00Z","skyState":"partly_cloudy","obscuration":"none","temperatureCelsius":{"min":22,"max":30},"windKt":{"min":5,"max":12},"precipExpectation":"possible","precipPhenomenon":"rain","severeFlag":false}]}
@@ -89,36 +61,6 @@ public class ForecastReconcilerTests
         """;
 
     // ── WX-149 prose-hygiene fixtures ─────────────────────────────────────────
-
-    // Defect 1 (send 1938): a change typed "thunderstorm" appearing, but the only
-    // precip block carries rain. The WX-148 phenomenon-backing rule already rejects
-    // this phantom (the block must carry the named phenomenon) — WX-149 pins it.
-    private const string PhantomThunderstormSafetyReportJson = """
-        {
-          "schemaVersion": 5,
-          "changes": [
-            { "tier": "safety", "phenomenon": "thunderstorm", "direction": "appearing", "window": { "startUtc": "2026-06-09T11:00:00Z", "endUtc": "2026-06-09T17:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
-          ],
-          "narrative": {
-            "en": { "changeSummary": "{ch1}Storms are now possible this morning.", "closing": "Keep an eye on the sky." }
-          }
-        }
-        """;
-
-    // Defect 4 (send 1938): "possible rain" emitted at the safety tier. The rain
-    // block backs the phenomenon (so the WX-148 check passes), but no block carries
-    // a safety-grade signal — WX-149's tier-backing assertion rejects it.
-    private const string SafetyRainOverEscalationReportJson = """
-        {
-          "schemaVersion": 5,
-          "changes": [
-            { "tier": "safety", "phenomenon": "rain", "direction": "appearing", "window": { "startUtc": "2026-06-09T11:00:00Z", "endUtc": "2026-06-09T17:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
-          ],
-          "narrative": {
-            "en": { "changeSummary": "{ch1}Rain is now possible this morning.", "closing": "Keep an umbrella handy." }
-          }
-        }
-        """;
 
     // Defect 3 (send 1938): raw internal block notation leaked into the closing.
     private const string RawUtcLeakReportJson = """
@@ -147,11 +89,8 @@ public class ForecastReconcilerTests
     private const string ProseTimeMismatchReportJson = """
         {
           "schemaVersion": 5,
-          "changes": [
-            { "tier": "plans", "phenomenon": "rain", "direction": "appearing", "window": { "startUtc": "2026-06-13T11:00:00Z", "endUtc": "2026-06-13T17:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
-          ],
           "narrative": {
-            "en": { "changeSummary": "{ch1}Rain is now expected to develop Saturday afternoon, {q:time:2026-06-13T11:00:00Z}.", "closing": "A wet start to the weekend." }
+            "en": { "changeSummary": "Rain is now expected to develop Saturday afternoon, {q:time:2026-06-13T11:00:00Z}.", "closing": "A wet start to the weekend." }
           }
         }
         """;
@@ -161,38 +100,8 @@ public class ForecastReconcilerTests
     private const string ProseTimeAgreesReportJson = """
         {
           "schemaVersion": 5,
-          "changes": [
-            { "tier": "plans", "phenomenon": "rain", "direction": "appearing", "window": { "startUtc": "2026-06-09T11:00:00Z", "endUtc": "2026-06-09T17:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
-          ],
           "narrative": {
-            "en": { "changeSummary": "{ch1}Rain develops this morning, {q:time:2026-06-09T11:00:00Z}.", "closing": "A wet start to the day." }
-          }
-        }
-        """;
-
-    // A safety-tier thunderstorm BACKED by a severe block — must NOT be rejected.
-    private const string SafetyThunderstormBackedReportJson = """
-        {
-          "schemaVersion": 5,
-          "changes": [
-            { "tier": "safety", "phenomenon": "thunderstorm", "direction": "appearing", "window": { "startUtc": "2026-06-09T11:00:00Z", "endUtc": "2026-06-09T17:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
-          ],
-          "narrative": {
-            "en": { "changeSummary": "{ch1}Severe storms are now likely.", "closing": "Stay weather-aware today." }
-          }
-        }
-        """;
-
-    // A safety-tier FOG change — fog has no snapshot field, so it is exempt from
-    // the tier-backing check (WX-149 documented residual) and must NOT be rejected.
-    private const string FogSafetyExemptReportJson = """
-        {
-          "schemaVersion": 5,
-          "changes": [
-            { "tier": "safety", "phenomenon": "fog", "direction": "appearing", "window": { "startUtc": "2026-06-09T11:00:00Z", "endUtc": "2026-06-09T17:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
-          ],
-          "narrative": {
-            "en": { "changeSummary": "{ch1}Dense fog is now likely.", "closing": "Allow extra time on the roads." }
+            "en": { "changeSummary": "Rain develops this morning, {q:time:2026-06-09T11:00:00Z}.", "closing": "A wet start to the day." }
           }
         }
         """;
@@ -200,136 +109,6 @@ public class ForecastReconcilerTests
     // A 6/13 11-17Z block carrying rain — backs the prose-token-mismatch change.
     private const string RainBlock613SnapshotJson = """
         {"schemaVersion":5,"blocks":[{"startUtc":"2026-06-13T11:00:00Z","skyState":"partly_cloudy","obscuration":"none","temperatureCelsius":{"min":22,"max":30},"windKt":{"min":5,"max":12},"precipExpectation":"possible","precipPhenomenon":"rain","severeFlag":false}]}
-        """;
-
-    // A 6/9 11-17Z block carrying a severe thunderstorm — backs a safety-tier change.
-    private const string SevereThunderstormBlockSnapshotJson = """
-        {"schemaVersion":5,"blocks":[{"startUtc":"2026-06-09T11:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":24,"max":31},"windKt":{"min":10,"max":20},"precipExpectation":"likely","precipPhenomenon":"thunderstorm","severeFlag":true}]}
-        """;
-
-    // ── WX-151 prior-aware snapshots ──────────────────────────────────────────
-
-    // A 6/9 11-17Z block carrying rain at LIKELY (RainBlockSnapshotJson is the same
-    // block at possible) — a stronger prior, for weakening (Likely→Possible).
-    private const string RainLikelyBlockSnapshotJson = """
-        {"schemaVersion":5,"blocks":[{"startUtc":"2026-06-09T11:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":22,"max":30},"windKt":{"min":5,"max":12},"precipExpectation":"likely","precipPhenomenon":"rain","severeFlag":false}]}
-        """;
-
-    // A 6/9 11-17Z block carrying freezing precip (possible) — a prior whose hazard
-    // the new (rain) snapshot legitimately clears.
-    private const string FreezingPrecipBlockSnapshotJson = """
-        {"schemaVersion":5,"blocks":[{"startUtc":"2026-06-09T11:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":-1,"max":2},"windKt":{"min":5,"max":12},"precipExpectation":"possible","precipPhenomenon":"freezingPrecip","severeFlag":false}]}
-        """;
-
-    // A 6/9 11-17Z thunderstorm POSSIBLE, severeFlag FALSE — prior for the severe-
-    // escalation guard (expectation flat, severe rises false→true).
-    private const string StormPossibleNoSevereSnapshotJson = """
-        {"schemaVersion":5,"blocks":[{"startUtc":"2026-06-09T11:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":24,"max":31},"windKt":{"min":10,"max":20},"precipExpectation":"possible","precipPhenomenon":"thunderstorm","severeFlag":false}]}
-        """;
-
-    // A 6/9 11-17Z thunderstorm POSSIBLE, severeFlag TRUE — new snapshot for the
-    // severe-escalation guard, and for severe-appearing.
-    private const string StormPossibleSevereSnapshotJson = """
-        {"schemaVersion":5,"blocks":[{"startUtc":"2026-06-09T11:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":24,"max":31},"windKt":{"min":10,"max":20},"precipExpectation":"possible","precipPhenomenon":"thunderstorm","severeFlag":true}]}
-        """;
-
-    // ── WX-151 prior-aware change fixtures (window 6/9 11-17Z) ─────────────────
-    // changeSummaries avoid day-part words so the anchored-prose check stays inert
-    // (these fixtures exercise the prior-aware verification, not the prose check).
-
-    private const string RainWeakeningReportJson = """
-        {
-          "schemaVersion": 5,
-          "changes": [
-            { "tier": "plans", "phenomenon": "rain", "direction": "weakening", "window": { "startUtc": "2026-06-09T11:00:00Z", "endUtc": "2026-06-09T17:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
-          ],
-          "narrative": {
-            "en": { "changeSummary": "{ch1}The rain is easing off.", "closing": "Drier than it looked." }
-          }
-        }
-        """;
-
-    private const string StormStrengtheningReportJson = """
-        {
-          "schemaVersion": 5,
-          "changes": [
-            { "tier": "plans", "phenomenon": "thunderstorm", "direction": "strengthening", "window": { "startUtc": "2026-06-09T11:00:00Z", "endUtc": "2026-06-09T17:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
-          ],
-          "narrative": {
-            "en": { "changeSummary": "{ch1}The storm threat has stepped up.", "closing": "Worth keeping an eye on." }
-          }
-        }
-        """;
-
-    private const string SevereAppearingReportJson = """
-        {
-          "schemaVersion": 5,
-          "changes": [
-            { "tier": "safety", "phenomenon": "severe", "direction": "appearing", "window": { "startUtc": "2026-06-09T11:00:00Z", "endUtc": "2026-06-09T17:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
-          ],
-          "narrative": {
-            "en": { "changeSummary": "{ch1}Severe weather is now in the forecast.", "closing": "Stay weather-aware." }
-          }
-        }
-        """;
-
-    // A genuine change but the prose times it "this evening" while the window
-    // (6/9 11-17Z) is morning in CDT — the anchored-prose contradiction.
-    private const string RainAppearingEveningProseReportJson = """
-        {
-          "schemaVersion": 5,
-          "changes": [
-            { "tier": "plans", "phenomenon": "rain", "direction": "appearing", "window": { "startUtc": "2026-06-09T11:00:00Z", "endUtc": "2026-06-09T17:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
-          ],
-          "narrative": {
-            "en": { "changeSummary": "{ch1}Rain develops this evening.", "closing": "Keep an umbrella handy." }
-          }
-        }
-        """;
-
-    // Same window, but the anchored sentence names an in-window part plus a
-    // transition word ("this morning … by evening") — must NOT be rejected.
-    private const string RainAppearingTransitionProseReportJson = """
-        {
-          "schemaVersion": 5,
-          "changes": [
-            { "tier": "plans", "phenomenon": "rain", "direction": "appearing", "window": { "startUtc": "2026-06-09T11:00:00Z", "endUtc": "2026-06-09T17:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
-          ],
-          "narrative": {
-            "en": { "changeSummary": "{ch1}Rain develops this morning, tapering by evening.", "closing": "A damp start." }
-          }
-        }
-        """;
-
-    // A safety-tier hazard CLEARING — the new snapshot correctly no longer carries
-    // a safety signal (the block is plain rain). A "newly removed hazard" is still
-    // safety-tier news, so the tier-backing check must NOT fire on a removal
-    // direction. (Snapshot: RainBlockSnapshotJson — rain, no severe/freezing.)
-    private const string SafetyClearingReportJson = """
-        {
-          "schemaVersion": 5,
-          "changes": [
-            { "tier": "safety", "phenomenon": "freezingPrecip", "direction": "clearing", "window": { "startUtc": "2026-06-09T11:00:00Z", "endUtc": "2026-06-09T17:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
-          ],
-          "narrative": {
-            "en": { "changeSummary": "{ch1}The ice threat has lifted; roads should be clear.", "closing": "A safer commute than this morning looked." }
-          }
-        }
-        """;
-
-    // A compound sentence whose day-part word ("evening") belongs to a DIFFERENT
-    // time reference than the {q:time} token (8:00 AM CDT — morning). Separated by
-    // intervening words, so it must NOT be read as governing the token.
-    private const string CompoundSentenceProseTimeReportJson = """
-        {
-          "schemaVersion": 5,
-          "changes": [
-            { "tier": "plans", "phenomenon": "rain", "direction": "appearing", "window": { "startUtc": "2026-06-13T11:00:00Z", "endUtc": "2026-06-13T17:00:00Z" }, "quantities": [], "summaryToken": "ch1" }
-          ],
-          "narrative": {
-            "en": { "changeSummary": "{ch1}Showers taper Friday evening, then redevelop {q:time:2026-06-13T13:00:00Z} Saturday.", "closing": "An unsettled couple of days." }
-          }
-        }
         """;
 
     // ── happy path ──────────────────────────────────────────────────────────
@@ -877,121 +656,43 @@ public class ForecastReconcilerTests
 
     // ── WX-148 change ↔ snapshot consistency validator ───────────────────────
 
-    [Fact]
-    public async Task ChangeWindowOffGrid_IsRejected_ThenDegrades()
-    {
-        // The 6/9 contradiction shape: a 17–21Z window is off the 6-hour block grid,
-        // so the deterministic day-grid (built from the blocks) and the narrative would
-        // disagree. The validator rejects it; retries exhaust; the clean snapshot degrades.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: RainBlockSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: RainAppearingOffGridReportJson);
-
-        var result = await RunReconciler(responseJson);
-
-        var degraded = Assert.IsType<ReconcileResult.Degraded>(result);
-        Assert.Contains("aligned", degraded.Reason);
-    }
-
-    [Fact]
-    public async Task AppearingPrecip_BackedByBlock_Succeeds()
-    {
-        // A block-aligned 11–17Z window whose appearing rain is carried by the 11Z
-        // block passes the validator cleanly.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: RainBlockSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: RainAppearingAlignedReportJson);
-
-        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
-        Assert.Single(success.StructuredReport.Changes);
-    }
-
-    [Fact]
-    public async Task AppearingPrecip_NotBackedByAnyBlock_Degrades()
-    {
-        // A block-aligned window, but the snapshot has no block carrying the announced
-        // rain — the narrative would promise precip the grid never shows. Rejected,
-        // retried, then degraded on the (clean) empty snapshot.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: """{"schemaVersion":5,"blocks":[]}""",
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: RainAppearingAlignedReportJson);
-
-        var degraded = Assert.IsType<ReconcileResult.Degraded>(await RunReconciler(responseJson));
-        Assert.Contains("did not occur", degraded.Reason);
-    }
-
     // ── WX-149 prose-hygiene validator assertions ────────────────────────────
 
     [Fact]
-    public async Task PhantomPhenomenon_NotCarriedByAnyBlock_Degrades()
+    public async Task RawUtcBlockNotation_InClosing_DropsClosingOnly()
     {
-        // Defect 1 (Watonga 6/10, send 1938): a change typed "thunderstorm" over a
-        // day whose only precip block is rain. The phenomenon-backing rule rejects
-        // the phantom; retries exhaust; the clean snapshot degrades.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: RainBlockSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: PhantomThunderstormSafetyReportJson);
-
-        var degraded = Assert.IsType<ReconcileResult.Degraded>(await RunReconciler(responseJson));
-        Assert.Contains("did not occur", degraded.Reason);
-    }
-
-    [Fact]
-    public async Task SafetyTier_NotBackedBySevereSignal_Degrades()
-    {
-        // Defect 4 (Watonga 6/10, send 1938): "possible rain" at the safety tier.
-        // The rain block backs the phenomenon, but no block carries a safety-grade
-        // signal — the tier-backing assertion rejects the over-escalation.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: RainBlockSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: SafetyRainOverEscalationReportJson);
-
-        var degraded = Assert.IsType<ReconcileResult.Degraded>(await RunReconciler(responseJson));
-        Assert.Contains("over-escalated", degraded.Reason);
-    }
-
-    [Fact]
-    public async Task RawUtcBlockNotation_InProse_Degrades()
-    {
-        // Defect 3 (Watonga 6/10, send 1938): internal "(12-18Z)" shorthand leaked
-        // into the reader-facing closing. Rejected; retries exhaust; snapshot degrades.
+        // Defect 3 (Watonga 6/10, send 1938): internal "(12-18Z)" shorthand leaked into
+        // the reader-facing closing. WX-189 independent-section degrade: retries exhaust,
+        // the closing is dropped to the safe fallback, and the rest of the report still
+        // sends (no longer a wholesale narrative degrade).
         var responseJson = BuildClaudeResponseJson(
             finalSnapshotJson: RainBlockSnapshotJson,
             reasoningTrace: "trace",
             inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
             structuredReportJson: RawUtcLeakReportJson);
 
-        var degraded = Assert.IsType<ReconcileResult.Degraded>(await RunReconciler(responseJson));
-        Assert.Contains("raw UTC block notation", degraded.Reason);
+        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
+        Assert.Equal("See the forecast above for the full outlook.", success.StructuredReport.Narrative["en"].Closing);
     }
 
     [Fact]
-    public async Task JargonInProse_AviationTerm_Degrades()
+    public async Task JargonInProse_AviationTerm_DropsClosingOnly()
     {
-        // WX-154: naming an internal data source ("TAF") in reader-facing prose is
-        // rejected — the 2026-06-10 closing "the afternoon TAF carries a 30% chance".
+        // WX-154: naming an internal data source ("TAF") in reader-facing prose is rejected
+        // — the 2026-06-10 closing "the afternoon TAF carries a 30% chance". WX-189: the
+        // closing is dropped to the fallback and the rest still sends.
         var responseJson = BuildClaudeResponseJson(
             finalSnapshotJson: RainBlockSnapshotJson,
             reasoningTrace: "trace",
             inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
             structuredReportJson: ClosingOnlyReport("The afternoon TAF carries a 30% chance of light showers."));
 
-        var degraded = Assert.IsType<ReconcileResult.Degraded>(await RunReconciler(responseJson));
-        Assert.Contains("TAF", degraded.Reason);
+        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
+        Assert.Equal("See the forecast above for the full outlook.", success.StructuredReport.Narrative["en"].Closing);
     }
 
     [Fact]
-    public async Task JargonInProse_LowerCaseSource_Degrades()
+    public async Task JargonInProse_LowerCaseSource_DropsClosingOnly()
     {
         // The homograph-free acronyms (taf/metar/gfs/icao) are caught case-insensitively,
         // so a lowercased leak slips no more than an upper-cased one ("cape" stays exempt).
@@ -1001,37 +702,41 @@ public class ForecastReconcilerTests
             inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
             structuredReportJson: ClosingOnlyReport("The latest metar shows light rain at the field."));
 
-        var degraded = Assert.IsType<ReconcileResult.Degraded>(await RunReconciler(responseJson));
-        Assert.Contains("metar", degraded.Reason);
+        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
+        Assert.Equal("See the forecast above for the full outlook.", success.StructuredReport.Narrative["en"].Closing);
     }
 
     [Fact]
-    public async Task RawUtcBlockNotation_LowerCase_InProse_Degrades()
+    public async Task RawUtcBlockNotation_LowerCase_InClosing_DropsClosingOnly()
     {
-        // Case-insensitive: a lower-cased "12-18z" leak is caught too (PR #87).
+        // Case-insensitive: a lower-cased "12-18z" leak is caught too (PR #87); the closing
+        // is dropped to the fallback and the rest still sends (WX-189).
         var responseJson = BuildClaudeResponseJson(
             finalSnapshotJson: RainBlockSnapshotJson,
             reasoningTrace: "trace",
             inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
             structuredReportJson: RawUtcLeakLowercaseReportJson);
 
-        var degraded = Assert.IsType<ReconcileResult.Degraded>(await RunReconciler(responseJson));
-        Assert.Contains("raw UTC block notation", degraded.Reason);
+        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
+        Assert.Equal("See the forecast above for the full outlook.", success.StructuredReport.Narrative["en"].Closing);
     }
 
     [Fact]
-    public async Task ProseTimeWord_ContradictsTokenLocalRendering_Degrades()
+    public async Task ProseTimeWord_ContradictsTokenLocalRendering_DropsChangeSummaryOnly()
     {
-        // Defect 2 (Spring 6/13, send 1927): prose says "afternoon" beside a
-        // {q:time} token at 11:00Z that renders to 6:00 AM local (CDT) — morning.
+        // Defect 2 (Spring 6/13, send 1927): the changeSummary says "afternoon" beside a
+        // {q:time} token at 11:00Z that renders to 6:00 AM local (CDT) — morning. WX-189
+        // independent-section degrade: the changeSummary is dropped (→ null, so the renderer
+        // falls back to the deterministic band) and the closing still sends.
         var responseJson = BuildClaudeResponseJson(
             finalSnapshotJson: RainBlock613SnapshotJson,
             reasoningTrace: "trace",
             inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
             structuredReportJson: ProseTimeMismatchReportJson);
 
-        var degraded = Assert.IsType<ReconcileResult.Degraded>(await RunReconciler(responseJson, tz: Cdt));
-        Assert.Contains("contradicts", degraded.Reason);
+        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
+        Assert.Null(success.StructuredReport.Narrative["en"].ChangeSummary);
+        Assert.Equal("A wet start to the weekend.", success.StructuredReport.Narrative["en"].Closing);
     }
 
     [Fact]
@@ -1046,255 +751,6 @@ public class ForecastReconcilerTests
             structuredReportJson: ProseTimeAgreesReportJson);
 
         Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
-    }
-
-    [Fact]
-    public async Task SafetyTier_BackedBySevereBlock_Succeeds()
-    {
-        // A genuine safety call — thunderstorm appearing, backed by a severeFlag
-        // block carrying it — passes both the phenomenon- and tier-backing checks.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: SevereThunderstormBlockSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: SafetyThunderstormBackedReportJson);
-
-        Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
-    }
-
-    [Fact]
-    public async Task SafetyTier_FogPhenomenon_ExemptFromBackingCheck_Succeeds()
-    {
-        // Fog has no snapshot field, so a safety-tier fog change is exempt from the
-        // tier-backing check (documented residual) and must not be false-rejected.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: RainBlockSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: FogSafetyExemptReportJson);
-
-        Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
-    }
-
-    [Fact]
-    public async Task SafetyTier_HazardClearing_NotBacked_Succeeds()
-    {
-        // A removal-direction safety change ("the ice threat has lifted"): the new
-        // snapshot legitimately carries no safety signal, but a newly removed hazard
-        // is still safety-tier news — the tier-backing check must not false-reject it.
-        // The prior carried freezing precip in-window, so the prior-aware check sees
-        // a real clearing (WX-151).
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: RainBlockSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: SafetyClearingReportJson);
-
-        Assert.IsType<ReconcileResult.Success>(
-            await RunReconciler(responseJson, prior: PriorOf(FreezingPrecipBlockSnapshotJson)));
-    }
-
-    [Fact]
-    public async Task ProseTimeWord_BoundToDifferentReference_NotRejected_Succeeds()
-    {
-        // "Friday evening" modifies a different instant than the morning {q:time}
-        // token; intervening words separate them, so it must not be read as a
-        // contradiction (guards the conservative proximity rule against false rejects).
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: RainBlock613SnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: CompoundSentenceProseTimeReportJson);
-
-        Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
-    }
-
-    // ── WX-151 prior-aware change verification ────────────────────────────────
-
-    private const string DryPriorSnapshotJson = """{"schemaVersion":5,"blocks":[]}""";
-
-    [Fact]
-    public async Task PriorAware_PrecipUnchanged_PhantomAppearing_Degrades()
-    {
-        // The send-1977 repro essence: prior and new carry the SAME rain in-window,
-        // so "rain appearing" is a change that did not occur. Rejected → degrade.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: RainBlockSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: RainAppearingAlignedReportJson);
-
-        var degraded = Assert.IsType<ReconcileResult.Degraded>(
-            await RunReconciler(responseJson, prior: PriorOf(RainBlockSnapshotJson)));
-        Assert.Contains("did not occur", degraded.Reason);
-    }
-
-    [Fact]
-    public async Task PriorAware_DryToRain_GenuineAppearing_Succeeds()
-    {
-        // Prior was dry in-window, new carries rain — a real onset, not a phantom.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: RainBlockSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: RainAppearingAlignedReportJson);
-
-        Assert.IsType<ReconcileResult.Success>(
-            await RunReconciler(responseJson, prior: PriorOf(DryPriorSnapshotJson)));
-    }
-
-    [Fact]
-    public async Task PriorAware_LikelyToPossible_Weakening_Succeeds()
-    {
-        // Prior rain Likely, new rain Possible — a real weakening.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: RainBlockSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: RainWeakeningReportJson);
-
-        Assert.IsType<ReconcileResult.Success>(
-            await RunReconciler(responseJson, prior: PriorOf(RainLikelyBlockSnapshotJson)));
-    }
-
-    [Fact]
-    public async Task PriorAware_RainUnchanged_PhantomWeakening_Degrades()
-    {
-        // Prior fully covers the window and carries the SAME rain as new, so a
-        // "rain weakening" is a change that did not occur — rejected.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: RainBlockSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: RainWeakeningReportJson);
-
-        var degraded = Assert.IsType<ReconcileResult.Degraded>(
-            await RunReconciler(responseJson, prior: PriorOf(RainBlockSnapshotJson)));
-        Assert.Contains("did not occur", degraded.Reason);
-    }
-
-    [Fact]
-    public async Task PriorAware_PhantomStrengthening_PhenomenonAbsentBothSides_Degrades()
-    {
-        // "thunderstorm strengthening" over a window that carries only rain in both
-        // prior and new — the storm exists nowhere, so the change is phantom.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: RainBlockSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: StormStrengtheningReportJson);
-
-        var degraded = Assert.IsType<ReconcileResult.Degraded>(
-            await RunReconciler(responseJson, prior: PriorOf(RainBlockSnapshotJson)));
-        Assert.Contains("did not occur", degraded.Reason);
-    }
-
-    [Fact]
-    public async Task PriorAware_SevereEscalation_FlatExpectation_NotFalseRejected_Succeeds()
-    {
-        // WX-148 worked example: thunderstorm expectation flat (Possible→Possible) but
-        // severeFlag rises false→true. That IS a real strengthening — must not be
-        // rejected just because the expectation band did not move.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: StormPossibleSevereSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: StormStrengtheningReportJson);
-
-        Assert.IsType<ReconcileResult.Success>(
-            await RunReconciler(responseJson, prior: PriorOf(StormPossibleNoSevereSnapshotJson)));
-    }
-
-    [Fact]
-    public async Task PriorAware_SeverePhenomenon_GenuineAppearing_Succeeds()
-    {
-        // severeFlag false→true in-window backs a "severe appearing" change.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: StormPossibleSevereSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: SevereAppearingReportJson);
-
-        Assert.IsType<ReconcileResult.Success>(
-            await RunReconciler(responseJson, prior: PriorOf(StormPossibleNoSevereSnapshotJson)));
-    }
-
-    [Fact]
-    public async Task PriorAware_SeverePhenomenon_AlreadySevere_PhantomAppearing_Degrades()
-    {
-        // Prior already severe in-window — "severe appearing" did not happen.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: StormPossibleSevereSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: SevereAppearingReportJson);
-
-        var degraded = Assert.IsType<ReconcileResult.Degraded>(
-            await RunReconciler(responseJson, prior: PriorOf(StormPossibleSevereSnapshotJson)));
-        Assert.Contains("did not occur", degraded.Reason);
-    }
-
-    [Fact]
-    public async Task PriorAware_Weakening_NullPrior_NotRejected_Succeeds()
-    {
-        // First send (no prior): weakening/clearing can't be verified — there's
-        // nothing to have weakened from — so it must NOT be hard-rejected (which
-        // would drop a guaranteed first weather report). Appearing/strengthening
-        // still get new-snapshot backing.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: RainBlockSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: RainWeakeningReportJson);
-
-        Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, prior: null));
-    }
-
-    [Fact]
-    public async Task PriorAware_MalformedPriorBody_FallsBackToNewOnly_Succeeds()
-    {
-        // A prior whose body can't be parsed is non-fatal: the cycle logs a WARN and
-        // the prior-aware check degenerates to new-only backing rather than failing.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: RainBlockSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: RainAppearingAlignedReportJson);
-
-        Assert.IsType<ReconcileResult.Success>(
-            await RunReconciler(responseJson, prior: PriorOf("{ this is not valid json")));
-    }
-
-    [Fact]
-    public async Task AnchoredProse_DayPartWordOutsideChangeWindow_Degrades()
-    {
-        // Genuine onset (dry→rain), but the prose times it "this evening" while the
-        // change window (11-17Z) is morning in CDT — a narrative/window
-        // contradiction the {q:time} check can't see (no token).
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: RainBlockSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: RainAppearingEveningProseReportJson);
-
-        var degraded = Assert.IsType<ReconcileResult.Degraded>(
-            await RunReconciler(responseJson, tz: Cdt, prior: PriorOf(DryPriorSnapshotJson)));
-        Assert.Contains("contradicts the change's own window", degraded.Reason);
-    }
-
-    [Fact]
-    public async Task AnchoredProse_InWindowWordPlusTransition_NotRejected_Succeeds()
-    {
-        // "this morning, tapering by evening": morning is in-window, so the sentence
-        // is on-window and the trailing transition word must not trigger a rejection.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: RainBlockSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: RainAppearingTransitionProseReportJson);
-
-        Assert.IsType<ReconcileResult.Success>(
-            await RunReconciler(responseJson, tz: Cdt, prior: PriorOf(DryPriorSnapshotJson)));
     }
 
     // ── WX-152 closing-claim validation ──────────────────────────────────────
@@ -1331,19 +787,43 @@ public class ForecastReconcilerTests
         + JsonSerializer.Serialize(closing) + "}}}";
 
     [Fact]
-    public async Task ClosingClaim_StormTonight_DryEveningOvernight_Degrades()
+    public async Task ClosingClaim_StormTonight_DryEveningOvernight_DropsClosingOnly()
     {
-        // The send-1995 repro: closing asserts a storm "tonight" while the snapshot is
-        // dry every block from this evening on (the lone storm is this afternoon).
+        // The send-1995 repro: closing asserts a storm "tonight" while the snapshot is dry
+        // every block from this evening on (the lone storm is this afternoon). WX-189: the
+        // closing is dropped to the fallback and the rest still sends.
         var responseJson = BuildClaudeResponseJson(
             finalSnapshotJson: ClosingStormAfternoonDrySnapshotJson,
             reasoningTrace: "trace",
             inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
             structuredReportJson: ClosingOnlyReport("Tonight carries a modest chance of a storm before conditions settle, with the rest of the week looking calm."));
 
-        var degraded = Assert.IsType<ReconcileResult.Degraded>(
-            await RunReconciler(responseJson, tz: Cdt));
-        Assert.Contains("entirely dry", degraded.Reason);
+        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
+        Assert.Equal("See the forecast above for the full outlook.", success.StructuredReport.Narrative["en"].Closing);
+    }
+
+    [Fact]
+    public async Task ClosingFault_WithValidChangeSummary_KeepsChangeSummary_DropsClosing()
+    {
+        // WX-189 independent-section degrade preserves the GOOD section: a clean
+        // changeSummary survives while a jargon-leaking closing is dropped to the fallback.
+        const string report = """
+            {
+              "schemaVersion": 5,
+              "narrative": {
+                "en": { "changeSummary": "Conditions are trending more active.", "closing": "The latest TAF backs the wetter trend." }
+              }
+            }
+            """;
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: RainBlockSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: report);
+
+        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
+        Assert.Equal("Conditions are trending more active.", success.StructuredReport.Narrative["en"].ChangeSummary);
+        Assert.Equal("See the forecast above for the full outlook.", success.StructuredReport.Narrative["en"].Closing);
     }
 
     [Fact]
@@ -1430,18 +910,19 @@ public class ForecastReconcilerTests
     }
 
     [Fact]
-    public async Task ClosingClaim_HedgedRainTonight_DryTonight_Degrades()
+    public async Task ClosingClaim_HedgedRainTonight_DryTonight_DropsClosingOnly()
     {
         // "A little rain tonight" is still an assertion — a dry-tonight snapshot
-        // contradicts it. (Guards that "little" was dropped from the skip cues.)
+        // contradicts it. (Guards that "little" was dropped from the skip cues.) WX-189:
+        // the closing is dropped to the fallback and the rest still sends.
         var responseJson = BuildClaudeResponseJson(
             finalSnapshotJson: ClosingStormAfternoonDrySnapshotJson,
             reasoningTrace: "trace",
             inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
             structuredReportJson: ClosingOnlyReport("A little rain is likely tonight before drier air arrives."));
 
-        var degraded = Assert.IsType<ReconcileResult.Degraded>(await RunReconciler(responseJson, tz: Cdt));
-        Assert.Contains("entirely dry", degraded.Reason);
+        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
+        Assert.Equal("See the forecast above for the full outlook.", success.StructuredReport.Narrative["en"].Closing);
     }
 
     [Fact]
@@ -1474,6 +955,79 @@ public class ForecastReconcilerTests
         Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
     }
 
+    // ── WX-165: generation-side invention reduction ──────────────────────────
+    // Three coordinated fixes that attack invented "What's changed" items at the
+    // source rather than only catching them downstream: a low sampling temperature,
+    // the diagnostic report kind getting the WX-178 severe-onset band rule (it had
+    // fallen through to an empty instruction), and prescriptive retry feedback that
+    // names the offending change and says correct-or-remove (don't invent a new one).
+
+    [Fact]
+    public async Task ReconcilerRequest_PinsSamplingTemperatureLow()
+    {
+        // The call had been running at the Anthropic default (1.0); WX-165 pins it low
+        // so the structural sampler is tight and retries converge instead of rolling a
+        // fresh phantom each attempt.
+        var (_, requests) = await RunReconcilerCapturing(
+            _ => BuildClaudeResponseJson("""{"schemaVersion":5,"blocks":[]}""", "trace", 10, 10, 0, 0));
+
+        Assert.Single(requests);
+        Assert.Contains("\"temperature\":0.5", requests[0]);
+    }
+
+    [Fact]
+    public async Task DiagnosticKind_ReceivesNearTermSevereOnsetBandInstruction()
+    {
+        // The Diagnostic kind previously fell through changeAlertInstruction's empty
+        // default — the one report kind never given "an empty changes array is the
+        // correct answer" coaching — so it filled the band against a stale prior and
+        // the phantom degraded the (hard-aborting) startup verification. It now gets
+        // the same near-term-severe-onset rule as a scheduled report.
+        var (result, requests) = await RunReconcilerCapturing(
+            _ => BuildClaudeResponseJson("""{"schemaVersion":5,"blocks":[]}""", "trace", 10, 10, 0, 0),
+            reportKind: ReportKind.Diagnostic);
+
+        Assert.IsType<ReconcileResult.Success>(result);
+        Assert.Contains("diagnostic (startup verification) report", requests[0]);
+        Assert.Contains("a NEW severe hazard", requests[0]);
+        Assert.Contains("emit an EMPTY changes array", requests[0]);
+    }
+
+    [Fact]
+    public async Task ScheduledKind_KeepsScheduledLeadIn_NotDiagnostic()
+    {
+        // The shared band rule is the same, but each kind keeps its own accurate
+        // lead-in — a scheduled report must not be told it is a diagnostic.
+        var (_, requests) = await RunReconcilerCapturing(
+            _ => BuildClaudeResponseJson("""{"schemaVersion":5,"blocks":[]}""", "trace", 10, 10, 0, 0),
+            reportKind: ReportKind.Scheduled);
+
+        Assert.Contains("This is a scheduled report.", requests[0]);
+        Assert.DoesNotContain("diagnostic (startup verification) report", requests[0]);
+    }
+
+    [Fact]
+    public async Task ProseRejection_RetryFeedback_PinsSnapshotAndReauthorsProse()
+    {
+        // WX-189: the change set is now computed deterministically, so the only contract
+        // faults left for a retry are PROSE faults. A raw-UTC-block leak in the closing is
+        // a NarrativeProseException, so the replayed correction pins the snapshot byte-for-
+        // byte and tells Claude to re-author ONLY the narrative prose — never the generic
+        // "fix only that" line, and never any change-array removal text (changes are no
+        // longer Claude-authored).
+        var (result, requests) = await RunReconcilerCapturing(
+            _ => BuildClaudeResponseJson(RainBlockSnapshotJson, "trace", 10, 10, 0, 0, RawUtcLeakReportJson));
+
+        // WX-189 independent-section degrade: after the pinned-snapshot retries exhaust,
+        // the offending closing is dropped to the fallback and the report still sends.
+        var success = Assert.IsType<ReconcileResult.Success>(result);
+        Assert.Equal("See the forecast above for the full outlook.", success.StructuredReport.Narrative["en"].Closing);
+        Assert.Equal(3, requests.Count);
+        Assert.Contains("Keep your final_snapshot EXACTLY as you submitted it", requests[1]);
+        Assert.Contains("Re-author ONLY the narrative prose", requests[1]);
+        Assert.DoesNotContain("REMOVE it from the changes array", requests[1]);
+    }
+
     // ── helpers ─────────────────────────────────────────────────────────────
 
     // A fixed UTC-5 zone (US Central in June / CDT) used by the WX-149 prose-token
@@ -1483,10 +1037,11 @@ public class ForecastReconcilerTests
     private static readonly TimeZoneInfo Cdt =
         TimeZoneInfo.CreateCustomTimeZone("Test-CDT", TimeSpan.FromHours(-5), "Test CDT", "Test CDT");
 
-    // ── WX-160 windKt sustained-ceiling validator ─────────────────────────────
+    // ── WX-160 windKt sustained-ceiling normalizer (clamp; WX-180) ────────────
     // windKt carries sustained wind only; a folded gust (windKt.max above every
-    // sustained source for the block) is rejected and replayed to Claude with
-    // feedback, so the contaminated max never reaches the stored baseline.
+    // sustained source for the block) is CLAMPED down to the ceiling (WX-180; was a
+    // reject → retry → degrade under WX-160), so the contaminated max never reaches
+    // the stored baseline AND a gusty forecast no longer degrades every cycle.
 
     private const string WindCeilingProvisionalJson =
         """{"schemaVersion":5,"blocks":[{"startUtc":"2026-06-09T11:00:00Z","skyState":"clear","obscuration":"none","temperatureCelsius":{"min":18,"max":26},"windKt":{"min":4,"max":12},"precipExpectation":"none","severeFlag":false}]}""";
@@ -1494,19 +1049,24 @@ public class ForecastReconcilerTests
     private static string WindBlockSnapshotJson(int windMax) =>
         $$"""{"schemaVersion":5,"blocks":[{"startUtc":"2026-06-09T11:00:00Z","skyState":"clear","obscuration":"none","temperatureCelsius":{"min":18,"max":26},"windKt":{"min":4,"max":{{windMax}}},"precipExpectation":"none","severeFlag":false}]}""";
 
+    private static string WindBlockMinMaxSnapshotJson(int windMin, int windMax) =>
+        $$"""{"schemaVersion":5,"blocks":[{"startUtc":"2026-06-09T11:00:00Z","skyState":"clear","obscuration":"none","temperatureCelsius":{"min":18,"max":26},"windKt":{"min":{{windMin}},"max":{{windMax}}},"precipExpectation":"none","severeFlag":false}]}""";
+
     [Fact]
-    public async Task WindKtSustained_FoldedGust_RejectedThenCorrectionAccepted()
+    public async Task WindKtSustained_FoldedGust_ClampedToCeiling_NoRetry()
     {
-        // GFS forecasts sustained 12 kt for the block. Claude first folds a gust into
-        // windKt.max (20 kt), which overshoots the sustained ceiling and is rejected;
-        // the retry returns a clean sustained 12 kt and is accepted.
+        // GFS forecasts sustained 12 kt for the block. Claude folds a gust into
+        // windKt.max (20 kt), overshooting the sustained ceiling. WX-180: rather than
+        // rejecting and retrying (which on a gusty forecast never converged and degraded
+        // every cycle — the cost incident), the reconciler clamps windKt.max down to the
+        // ceiling (12 kt) on the FIRST attempt — no retry, no degrade.
         var provisional = ForecastSnapshotBody.Deserialize(WindCeilingProvisionalJson);
         int call = 0;
         var result = await RunReconciler(
             _ =>
             {
-                var snapshotJson = call++ == 0 ? WindBlockSnapshotJson(20) : WindBlockSnapshotJson(12);
-                var json = BuildClaudeResponseJson(snapshotJson, "trace", 10, 10, 0, 0);
+                call++;
+                var json = BuildClaudeResponseJson(WindBlockSnapshotJson(20), "trace", 10, 10, 0, 0);
                 return new HttpResponseMessage(HttpStatusCode.OK)
                 {
                     Content = new StringContent(json, Encoding.UTF8, "application/json"),
@@ -1515,16 +1075,16 @@ public class ForecastReconcilerTests
             provisional: provisional);
 
         var success = Assert.IsType<ReconcileResult.Success>(result);
-        Assert.Equal(12, success.FinalSnapshot.Blocks[0].WindKt.Max);
-        Assert.Equal(2, call);   // exactly one retry: the folded-gust attempt was rejected, the correction accepted
+        Assert.Equal(12, success.FinalSnapshot.Blocks[0].WindKt.Max);  // folded gust clamped out
+        Assert.Equal(1, call);   // corrected in place on the first attempt — no retry
     }
 
     [Fact]
-    public async Task WindKtSustained_PersistentFold_NeverAcceptedAsSuccess()
+    public async Task WindKtSustained_PersistentFold_ClampedAndAccepted()
     {
-        // A gust folded into windKt.max on every attempt is never accepted as a clean
-        // Success — it exhausts the retries (and degrades or fails), so the
-        // contaminated max never reaches the baseline as a committed send.
+        // Even if Claude folds the gust on every attempt, WX-180 clamps windKt.max to the
+        // sustained ceiling and accepts the result: the contaminated max never reaches the
+        // baseline, and there is no degrade loop (the failure mode behind the cost incident).
         var provisional = ForecastSnapshotBody.Deserialize(WindCeilingProvisionalJson);
         var responseJson = BuildClaudeResponseJson(WindBlockSnapshotJson(20), "trace", 10, 10, 0, 0);
         var result = await RunReconciler(
@@ -1534,7 +1094,30 @@ public class ForecastReconcilerTests
             },
             provisional: provisional);
 
-        Assert.IsNotType<ReconcileResult.Success>(result);
+        var success = Assert.IsType<ReconcileResult.Success>(result);
+        Assert.Equal(12, success.FinalSnapshot.Blocks[0].WindKt.Max);
+    }
+
+    [Fact]
+    public async Task WindKtSustained_FoldWithInflatedMin_ClampDoesNotInvertBand()
+    {
+        // Claude folds a gust AND reports an inflated sustained min (windKt {min:15,max:20})
+        // for a block whose sustained ceiling is 12 kt. Clamping max down to 12 must also
+        // lower min, so the band never inverts (min must stay <= max) — an inverted band
+        // would corrupt the significance-gate baseline and ship on degrade.
+        var provisional = ForecastSnapshotBody.Deserialize(WindCeilingProvisionalJson);
+        var responseJson = BuildClaudeResponseJson(WindBlockMinMaxSnapshotJson(15, 20), "trace", 10, 10, 0, 0);
+        var result = await RunReconciler(
+            _ => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(responseJson, Encoding.UTF8, "application/json"),
+            },
+            provisional: provisional);
+
+        var success = Assert.IsType<ReconcileResult.Success>(result);
+        var wind = success.FinalSnapshot.Blocks[0].WindKt;
+        Assert.Equal(12, wind.Max);
+        Assert.True(wind.Min <= wind.Max, $"band inverted: min={wind.Min} max={wind.Max}");
     }
 
     [Fact]
@@ -1560,7 +1143,7 @@ public class ForecastReconcilerTests
             Content = new StringContent(anthropicResponseJson, Encoding.UTF8, "application/json"),
         }, allowSkip, tz: tz, prior: prior);
 
-    private static async Task<ReconcileResult> RunReconciler(Func<HttpRequestMessage, HttpResponseMessage> respond, bool allowSkip = false, string[]? narrativeLanguages = null, TimeZoneInfo? tz = null, ForecastSnapshot? prior = null, ForecastSnapshotBody? provisional = null, WeatherSnapshot? snapshot = null)
+    private static async Task<ReconcileResult> RunReconciler(Func<HttpRequestMessage, HttpResponseMessage> respond, bool allowSkip = false, string[]? narrativeLanguages = null, TimeZoneInfo? tz = null, ForecastSnapshot? prior = null, ForecastSnapshotBody? provisional = null, WeatherSnapshot? snapshot = null, ReportKind reportKind = ReportKind.Scheduled)
     {
         var http = new HttpClient(new StubHandler(respond));
         var claude = new ClaudeClient(http, apiKey: "test-key", model: "claude-sonnet-4-6", personaPrefix: "Persona text.");
@@ -1575,10 +1158,41 @@ public class ForecastReconcilerTests
             prior: prior,
             narrativeLanguages: narrativeLanguages ?? new[] { "en" },
             tz: tz ?? Cdt,
-            reportKind: ReportKind.Scheduled,
+            reportKind: reportKind,
             previousMetarIcao: null,
             allowSkip: allowSkip,
-            changedSinceLastSend: Array.Empty<TriggerSource>());
+            changedSinceLastSend: Array.Empty<TriggerSource>(),
+            significanceCfg: new SignificanceGateConfig(),
+            nowUtc: DateTime.UtcNow,
+            ct: default);
+    }
+
+    // WX-165: like RunReconciler, but captures each outbound request body (the JSON
+    // POSTed to the Messages API) so a test can assert on the system prompt and the
+    // replayed retry corrections. Delegates to RunReconciler with a capturing respond
+    // callback so the harness setup lives in one place. responsePerCall is keyed by the
+    // 1-based attempt number.
+    private static async Task<(ReconcileResult Result, List<string> Requests)> RunReconcilerCapturing(
+        Func<int, string> responsePerCall,
+        ReportKind reportKind = ReportKind.Scheduled,
+        ForecastSnapshot? prior = null,
+        TimeZoneInfo? tz = null)
+    {
+        var requests = new List<string>();
+        int call = 0;
+        var result = await RunReconciler(
+            req =>
+            {
+                call++;
+                requests.Add(req.Content!.ReadAsStringAsync().GetAwaiter().GetResult());
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(responsePerCall(call), Encoding.UTF8, "application/json"),
+                };
+            },
+            tz: tz, prior: prior, reportKind: reportKind);
+
+        return (result, requests);
     }
 
     // WX-151: wrap a final_snapshot JSON as a prior ForecastSnapshot for the

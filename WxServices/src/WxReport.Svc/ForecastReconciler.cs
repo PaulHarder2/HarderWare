@@ -139,6 +139,8 @@ public sealed class ForecastReconciler
     /// <param name="previousMetarIcao">ICAO of the previous report's station, when it differs from the current snapshot's station; <see langword="null"/> when no station change occurred.</param>
     /// <param name="allowSkip">When <see langword="true"/> (unscheduled, arrival-triggered cycles), Claude may decline to send via the <c>skip_send</c> tool, yielding a <see cref="ReconcileResult.NotNews"/>.  When <see langword="false"/> (scheduled / first / startup), the send is guaranteed and skipping is not offered.</param>
     /// <param name="changedSinceLastSend">Which inputs (METAR/TAF/GFS) are newer than they were at the last report actually delivered for this locality (WX-108).  Surfaced to Claude as <c>changed_since_last_sent_report</c> so the anti-reversal rule can bind on observation-only cycles.  Empty list means nothing advanced since the last send; treated as a first send when no prior send exists.</param>
+    /// <param name="significanceCfg">Significance thresholds shared with the WX-114/160 gate; supplies the freeze/heat/wind-advisory and per-tier magnitude lines the WX-189 <see cref="DeterministicChangeDetector"/> applies to temperature and wind.</param>
+    /// <param name="nowUtc">Cycle timestamp; the change detector measures horizon tiers from here, matching the gate.</param>
     /// <param name="ct">Cancellation token propagated to the underlying HTTP call.</param>
     /// <returns>A <see cref="ReconcileResult.Success"/> on a clean three-artifact return; a <see cref="ReconcileResult.NotNews"/> when Claude skips an arrival-triggered send; a <see cref="ReconcileResult.Failure"/> otherwise.</returns>
     /// <sideeffects>Makes one HTTP POST to the Anthropic Messages API via <see cref="ClaudeClient.InvokeReconciliationAsync"/>.  Writes error log entries on schema-validation failure.</sideeffects>
@@ -155,6 +157,8 @@ public sealed class ForecastReconciler
         string? previousMetarIcao,
         bool allowSkip,
         IReadOnlyList<TriggerSource> changedSinceLastSend,
+        SignificanceGateConfig significanceCfg,
+        DateTime nowUtc,
         CancellationToken ct = default)
     {
         // WX-155: a prior snapshot from before the local-day-part rebucketing
@@ -200,6 +204,12 @@ public sealed class ForecastReconciler
         // this lets the caller degrade to a narrative-less hazard report rather than
         // a bare Failure. Stays null when even the snapshot never parsed.
         ForecastSnapshotBody? lastParsedSnapshot = null;
+        // WX-189: the last attempt's parsed structured report (Claude's narrative, before
+        // change injection) + its reasoning trace, for the independent-section degrade —
+        // if retries exhaust on a PROSE fault, the caller drops ONLY the offending section
+        // and sends the rest from these, rather than degrading the whole narrative.
+        StructuredReportBody? lastParsedReport = null;
+        string? lastReasoningTrace = null;
         // WX-151: parse the prior committed snapshot once for prior-aware change
         // verification. Version-lenient (old persisted priors must still load). A
         // malformed prior is non-fatal — log and skip the prior comparison rather
@@ -299,6 +309,7 @@ public sealed class ForecastReconciler
                 lastParsedSnapshot = finalSnapshot;
 
                 var reasoningTrace = RequireString(input, "reasoning_trace");
+                lastReasoningTrace = reasoningTrace;
 
                 // WX-130: the structured report is now the LIVE rendering source —
                 // the StructuredReportRenderer builds every recipient's email from it,
@@ -307,17 +318,33 @@ public sealed class ForecastReconciler
                 // A missing field, schema/token violation, or a requested language
                 // absent/extra all throw and route through the retry → skip/Failure
                 // path, exactly like a final_snapshot schema violation.
-                // WX-160: windKt must be sustained-only — reject a folded gust before
-                // it corrupts the baseline the significance gate compares against.
-                ValidateWindKtSustained(finalSnapshot, provisional, snapshot);
+                // WX-180: windKt must be sustained-only — CLAMP a folded gust out of
+                // windKt.max (rather than reject → retry → degrade, which on a gusty
+                // forecast never converged and degraded every cycle: the ~$45/day cost
+                // incident) before it corrupts the baseline the significance gate compares
+                // against. lastParsedSnapshot is refreshed so a later degrade uses the
+                // corrected windKt too.
+                finalSnapshot = NormalizeWindKtSustained(finalSnapshot, provisional, snapshot);
+                lastParsedSnapshot = finalSnapshot;
 
                 var structuredReportJson = RequireProperty(input, "structured_report").GetRawText();
                 var structuredReport = StructuredReportBody.Deserialize(structuredReportJson);
+                lastParsedReport = structuredReport;
                 ValidateNarrativeContract(structuredReport, narrativeLanguages);
-                ValidateChangeSnapshotConsistency(structuredReport, finalSnapshot, priorBody, tz);
                 ValidateProseHygiene(structuredReport, tz);
-                ValidateAnchoredProseTiming(structuredReport, tz);
                 ValidateClosingClaims(structuredReport, finalSnapshot, tz);
+
+                // WX-189: compute the "What's changed" set deterministically from
+                // (prior, final_snapshot) and inject it — Claude authored only the
+                // narrative prose this cycle, so a structural phantom is impossible by
+                // construction. ValidateChangeSnapshotConsistency then runs as cheap
+                // defense-in-depth on the COMPUTED set: it is tautologically green
+                // unless the detector itself has a bug (the validator stays the safety
+                // net the WX-148/151 work built). ValidateAnchoredProseTiming retires
+                // with the {chN} anchoring it depended on.
+                var computedChanges = DeterministicChangeDetector.Detect(priorBody, finalSnapshot, significanceCfg, nowUtc, tz);
+                structuredReport = structuredReport with { Changes = computedChanges };
+                ValidateChangeSnapshotConsistency(structuredReport, finalSnapshot, priorBody, tz);
 
                 // WX-120 fall-safe, carried forward to the structured-report world:
                 // a present-but-near-blank narrative — e.g. Claude submitted a report
@@ -346,9 +373,23 @@ public sealed class ForecastReconciler
                     // WX-148: replay this rejected attempt to Claude on the next call with
                     // the reason, so the retry corrects the specific fault rather than
                     // blindly resampling (a no-op for the semantic faults this catches).
+                    // WX-189: structural change rejections are gone — the change set is
+                    // computed deterministically, not authored by Claude — so the only
+                    // contract faults left for a retry are PROSE faults. A NarrativeProse
+                    // rejection pins the snapshot: tell Claude to keep final_snapshot byte-
+                    // identical and re-author ONLY the offending prose, which converges the
+                    // retry on the actual fault instead of perturbing the (correct) snapshot.
+                    // (A ChangeConsistencyException can now only come from the tautological
+                    // defense-in-depth check on the COMPUTED set — a detector bug, not a
+                    // Claude fault — so it falls to the generic message and self-heals/degrades;
+                    // tests are the real guard there.)
+                    var feedback = ex is NarrativeProseException
+                        ? $"Your previous report's narrative was rejected ({ex.Message}). Keep your final_snapshot "
+                          + "EXACTLY as you submitted it — do not change any block. Re-author ONLY the narrative prose "
+                          + "(the changeSummary and/or the closing) to fix this, then resubmit via the tool."
+                        : $"Your previous {apiResult.ToolName} was rejected ({ex.Message}). Fix only that and resubmit via the tool.";
                     corrections.Add(new ReconciliationCorrection(
-                        apiResult.ToolUseId, apiResult.ToolName, apiResult.ToolUseInput,
-                        $"Your previous {apiResult.ToolName} was rejected ({ex.Message}). Fix only that and resubmit via the tool."));
+                        apiResult.ToolUseId, apiResult.ToolName, apiResult.ToolUseInput, feedback));
                     Logger.Warn($"Reconciliation tool_use input {what} (attempt {attempt}/{maxAttempts}); retrying with feedback.");
                     continue;
                 }
@@ -379,6 +420,41 @@ public sealed class ForecastReconciler
                     Logger.Error($"Reconciliation tool_use input is {ex.Message} (after {maxAttempts} attempts).");
                     return new ReconcileResult.Failure($"Reconciliation response {ex.Message} (after {maxAttempts} attempts).");
                 }
+                // WX-189 independent-section degrade: a PROSE fault that won't converge
+                // across the retries drops ONLY the offending section and sends the rest.
+                // The deterministic change band, the per-day grid, and the current
+                // conditions are unaffected, so a closing-only fault no longer takes the
+                // whole narrative (and the band) down with it. The change set is computed
+                // here exactly as on the success path. (A structural/schema fault — a
+                // detector-bug ChangeConsistencyException, a final_snapshot violation —
+                // is NOT a NarrativeProseException and still degrades wholesale below.)
+                if (ex is NarrativeProseException npe && lastParsedReport is not null && lastParsedSnapshot is not null)
+                {
+                    var changes = DeterministicChangeDetector.Detect(priorBody, lastParsedSnapshot, significanceCfg, nowUtc, tz);
+                    var cleaned = DropProseSection(lastParsedReport, npe.Section) with { Changes = changes };
+                    try
+                    {
+                        // Re-validate the cleaned report's SURVIVING content: the first prose
+                        // fault short-circuited the validators, so the section we KEPT may never
+                        // have been checked, and the success-path consistency check was skipped.
+                        // If the surviving section is also faulty (a double-section fault), fall
+                        // through to a wholesale degrade rather than ship it. The WX-120
+                        // degeneracy floor is deliberately NOT applied here — a section degrade
+                        // intentionally reduces the narrative, and the closing is always non-blank
+                        // (schema-required), so a thin-but-valid survivor must still send.
+                        ValidateProseHygiene(cleaned, tz);
+                        ValidateClosingClaims(cleaned, lastParsedSnapshot, tz);
+                        ValidateChangeSnapshotConsistency(cleaned, lastParsedSnapshot, priorBody, tz);
+                    }
+                    catch (Exception cleanEx) when (cleanEx is JsonException or InvalidOperationException)
+                    {
+                        Logger.Error($"Reconciliation section degrade left an invalid report ({cleanEx.Message}); degrading to the parsed snapshot, narrative dropped.");
+                        return new ReconcileResult.Degraded(lastParsedSnapshot, tokens, cleanEx.Message);
+                    }
+                    Logger.Error($"Reconciliation could not make the {npe.Section} prose self-consistent after {maxAttempts} attempts ({ex.Message}); dropping that section only and sending the rest (WX-189 independent-section degrade).");
+                    return new ReconcileResult.Success(lastParsedSnapshot, cleaned, lastReasoningTrace ?? string.Empty, tokens);
+                }
+
                 // WX-148: if the snapshot itself parsed cleanly and only the narrative
                 // could not be made self-consistent, degrade rather than fail outright —
                 // the caller can still send a narrative-less hazard report from the
@@ -418,6 +494,41 @@ public sealed class ForecastReconciler
     {
         public MissingToolUseFieldException(string field)
             : base($"missing required field '{field}'") { }
+    }
+
+    // WX-165: a change-consistency / change-anchored-prose rejection — the report
+    // asserted a "What's changed" item (a changes[] entry) the snapshot data does not
+    // support, or narrated one against the wrong window. Distinct from a bare
+    // JsonException so the retry feedback can NAME the offending change and tell Claude
+    // to correct-or-remove THAT change rather than re-author a fresh (often equally
+    // invented) one — the fix for the "three different phantoms in three attempts"
+    // non-convergence. Still a JsonException, so it routes through the identical
+    // retry-then-degrade path as every other contract check; only the feedback differs.
+    private sealed class ChangeConsistencyException : JsonException
+    {
+        public ChangeConsistencyException(string summaryToken, string message)
+            : base(message) => SummaryToken = summaryToken;
+
+        public string SummaryToken { get; }
+    }
+
+    // WX-189: a narrative-PROSE rejection (a leak, jargon, a time-word contradiction,
+    // or a closing/changeSummary precip claim the snapshot leaves dry) — a fault in the
+    // words Claude wrote, NOT in final_snapshot. Distinct from a bare JsonException so
+    // the retry feedback can tell Claude to keep its final_snapshot EXACTLY as
+    // submitted and re-author only the offending prose — Paul's "fix only that"
+    // tightened toward an enforceable pin now that the snapshot is the structural
+    // source of truth. Still a JsonException, so it routes through the identical
+    // retry-then-degrade path; only the feedback differs.
+    // Which narrative prose section a fault came from, so the WX-189 independent-section
+    // degrade can drop ONLY that section on exhaustion (rather than the whole narrative).
+    private enum NarrativeSection { ChangeSummary, Closing }
+
+    private sealed class NarrativeProseException : JsonException
+    {
+        public NarrativeProseException(NarrativeSection section, string message) : base(message) => Section = section;
+
+        public NarrativeSection Section { get; }
     }
 
     // WX-128/WX-130: per-call contract checks the body's intrinsic Validate()
@@ -464,14 +575,17 @@ public sealed class ForecastReconciler
     //      phenomena (wind/windshift/fog/temperature) have no clean snapshot-comparable
     //      semantics and stay prompt-governed. WX-149 adds the tier/raw-UTC/prose
     //      assertions on top of this scaffold.
-    private static void ValidateChangeSnapshotConsistency(
+    // Internal (not private) so the WX-189 detector tests can assert the keystone
+    // invariant directly: every change DeterministicChangeDetector emits passes this,
+    // its inverse — the defense-in-depth net stays tautologically green.
+    internal static void ValidateChangeSnapshotConsistency(
         StructuredReportBody report, ForecastSnapshotBody finalSnapshot, ForecastSnapshotBody? prior, TimeZoneInfo tz)
     {
         foreach (var change in report.Changes)
         {
             var w = change.Window;
             if (!IsBlockAligned(w.StartUtc, tz) || !IsBlockAligned(w.EndUtc, tz) || w.EndUtc <= w.StartUtc)
-                throw new JsonException(
+                throw new ChangeConsistencyException(change.SummaryToken,
                     $"structured_report change '{change.SummaryToken}' window {w.StartUtc:O}..{w.EndUtc:O} is not "
                     + "aligned to a snapshot block boundary (a local 00/06/12/18 day-part boundary); change windows must "
                     + "coincide with block boundaries so the narrative cannot claim timing finer than the blocks support.");
@@ -521,7 +635,7 @@ public sealed class ForecastReconciler
                     _ => true,  // Shifting (WX-111 wind vector) is not a precip-intensity change; prompt-governed
                 };
                 if (!real)
-                    throw new JsonException(
+                    throw new ChangeConsistencyException(change.SummaryToken,
                         $"structured_report change '{change.SummaryToken}' ({change.Phenomenon} {change.Direction}, "
                         + $"window {w.StartUtc:O}..{w.EndUtc:O}) is not a real change versus prior_snapshot: in-window "
                         + $"{precip} expectation moved prior->{(PrecipExpectation)priorE}->new->{(PrecipExpectation)newE} "
@@ -541,7 +655,7 @@ public sealed class ForecastReconciler
                     _ => true,
                 };
                 if (!real)
-                    throw new JsonException(
+                    throw new ChangeConsistencyException(change.SummaryToken,
                         $"structured_report change '{change.SummaryToken}' (Severe {change.Direction}, "
                         + $"window {w.StartUtc:O}..{w.EndUtc:O}) is not a real change versus prior_snapshot: in-window "
                         + $"severeFlag is prior={priorSevere}, new={newSevere}, which does not support '{change.Direction}'. "
@@ -578,7 +692,7 @@ public sealed class ForecastReconciler
                         || b.PrecipPhenomenon is PrecipPhenomenon.FreezingPrecip or PrecipPhenomenon.Snow
                         || b.WindKt.Max >= WxThresholds.SafetyWindKt));
                 if (!safetyBacked)
-                    throw new JsonException(
+                    throw new ChangeConsistencyException(change.SummaryToken,
                         $"structured_report change '{change.SummaryToken}' is tier '{change.Tier}' "
                         + $"({change.Phenomenon}) but no final_snapshot block in its window "
                         + $"{w.StartUtc:O}..{w.EndUtc:O} carries a safety-grade signal (severeFlag, "
@@ -613,7 +727,24 @@ public sealed class ForecastReconciler
     // folded gust (or an invented wind); it fails closed through the same retry-with-
     // feedback path as every other contract check, with a message telling Claude to
     // move the gust to the narrative.
-    private static void ValidateWindKtSustained(
+    /// <summary>
+    /// WX-180: enforce the windKt-is-sustained-only invariant by <b>clamping</b> a
+    /// folded gust out of <c>windKt.max</c>, rather than rejecting it. The merged
+    /// GFS+TAF body's <c>windKt.max</c> (plus any in-block observation's sustained
+    /// wind) is the per-block sustained ceiling; whenever Claude returns a
+    /// <c>windKt.max</c> above that ceiling (a folded gust), it is corrected down to
+    /// the ceiling.
+    /// <para>
+    /// WX-160 originally <em>rejected</em> a folded gust (throw → retry → degrade). On
+    /// a gusty forecast Claude could not converge across the attempts, so the locality
+    /// degraded every cycle and re-burned reconciliations — the ~$45/day cost incident
+    /// (WX-180). The ceiling IS the correct sustained value, so clamping yields the
+    /// same invariant deterministically with no retry. The gust still belongs in the
+    /// narrative <c>{q:gust}</c> token; clamping never touches the narrative.
+    /// </para>
+    /// Returns the (possibly corrected) body — the same reference when nothing was clamped.
+    /// </summary>
+    private static ForecastSnapshotBody NormalizeWindKtSustained(
         ForecastSnapshotBody finalSnapshot, ForecastSnapshotBody provisional, WeatherSnapshot snapshot)
     {
         // The merged body's windKt.max IS the sustained ceiling per block (TAF-prevails
@@ -623,8 +754,10 @@ public sealed class ForecastReconciler
         foreach (var b in ceilingBody.Blocks)
             ceilingByStart[b.StartUtc] = b.WindKt.Max;
 
-        foreach (var block in finalSnapshot.Blocks)
+        List<ForecastSnapshotBlock>? corrected = null;
+        for (int i = 0; i < finalSnapshot.Blocks.Count; i++)
         {
+            var block = finalSnapshot.Blocks[i];
             int ceiling = ceilingByStart.TryGetValue(block.StartUtc, out var m) ? m : int.MinValue;
 
             // The current observation's SUSTAINED wind (never its gust) raises the
@@ -637,17 +770,26 @@ public sealed class ForecastReconciler
                 ceiling = Math.Max(ceiling, obsKt);
 
             // No sustained source covers this block (e.g. a far-horizon block past the
-            // GFS/TAF reach): nothing to pin against, so don't false-reject. This
-            // early-continue MUST precede the tolerance addition below — otherwise
-            // int.MinValue + tolerance underflows.
+            // GFS/TAF reach): nothing to pin against, so leave it. This guard MUST
+            // precede the tolerance addition below — otherwise int.MinValue + tolerance
+            // underflows.
             if (ceiling == int.MinValue) continue;
 
             if (block.WindKt.Max > ceiling + WxThresholds.SustainedCeilingToleranceKt)
-                throw new JsonException(
-                    $"final_snapshot block {block.StartUtc:O} windKt.max is {block.WindKt.Max} kt, but the maximum "
-                    + $"SUSTAINED wind forecast for it (GFS+TAF merged, plus any in-block observation) is {ceiling} kt. "
-                    + "windKt carries sustained wind only — put the gust in the narrative {q:gust} token, not windKt.max.");
+            {
+                Logger.Debug(
+                    $"windKt.max {block.WindKt.Max} kt exceeds the sustained ceiling {ceiling} kt for block "
+                    + $"{block.StartUtc:O} (folded gust); clamping windKt.max to {ceiling} kt (WX-180). "
+                    + "The gust belongs in the narrative {q:gust} token.");
+                corrected ??= [.. finalSnapshot.Blocks];
+                // Lower Min too if it sits above the new ceiling, so the clamp can never
+                // invert the band (Min > Max) — downstream (the significance gate compares
+                // both endpoints, Serialize, and the degrade artifact) assumes Min <= Max.
+                corrected[i] = block with { WindKt = block.WindKt with { Min = Math.Min(block.WindKt.Min, ceiling), Max = ceiling } };
+            }
         }
+
+        return corrected is null ? finalSnapshot : finalSnapshot with { Blocks = corrected };
     }
 
     // WX-149: prose hygiene over the language-keyed narrative — two reader-facing
@@ -661,9 +803,27 @@ public sealed class ForecastReconciler
     {
         foreach (var (lang, sections) in report.Narrative)
         {
-            CheckProse(lang, sections.ChangeSummary, tz);
-            CheckProse(lang, sections.Closing, tz);
+            CheckProse(lang, NarrativeSection.ChangeSummary, sections.ChangeSummary, tz);
+            CheckProse(lang, NarrativeSection.Closing, sections.Closing, tz);
         }
+    }
+
+    // WX-189: returns a copy of the report with one prose section dropped across EVERY
+    // language — changeSummary → null (the renderer then shows the deterministic band
+    // fallback built from the computed changes), closing → a short, snapshot-safe
+    // localized line (the schema requires a non-blank closing). Used by the
+    // independent-section degrade so a fault in one section never takes the whole
+    // narrative down. All languages are cleaned uniformly: ValidateClosingClaims is
+    // English-only, so a non-English same-section fault is untested and is best treated
+    // the same conservative way.
+    private static StructuredReportBody DropProseSection(StructuredReportBody report, NarrativeSection section)
+    {
+        var narrative = new Dictionary<string, NarrativeSections>(report.Narrative.Count, StringComparer.Ordinal);
+        foreach (var (lang, sections) in report.Narrative)
+            narrative[lang] = section == NarrativeSection.ChangeSummary
+                ? sections with { ChangeSummary = null }
+                : sections with { Closing = ReportVocabulary.ForLanguage(lang).ClosingFallback };
+        return report with { Narrative = narrative };
     }
 
     // Matches any {...} token; used to mask tokens to equal-length blanks before
@@ -690,7 +850,7 @@ public sealed class ForecastReconciler
     // prose. Captures the inner timestamp so we can render it to a local hour.
     private static readonly Regex QTimeToken = new(@"\{q:time:([^}]+)\}", RegexOptions.Compiled);
 
-    private static void CheckProse(string lang, string? prose, TimeZoneInfo tz)
+    private static void CheckProse(string lang, NarrativeSection section, string? prose, TimeZoneInfo tz)
     {
         if (string.IsNullOrEmpty(prose))
             return;
@@ -708,7 +868,7 @@ public sealed class ForecastReconciler
         // only as {q:time:...} tokens the renderer localizes.
         var leak = RawUtcBlock.Match(masked);
         if (leak.Success)
-            throw new JsonException(
+            throw new NarrativeProseException(section,
                 $"structured_report narrative '{lang}' leaks raw UTC block notation "
                 + $"('{leak.Value.Trim()}') into recipient prose; express instants only as "
                 + "{q:time:...} tokens, never the internal NNZ block shorthand.");
@@ -717,7 +877,7 @@ public sealed class ForecastReconciler
         // name no data source (TAF/METAR/GFS/CAPE/ICAO); use plain wording ("indications").
         var jargon = JargonToken.Match(masked);
         if (jargon.Success)
-            throw new JsonException(
+            throw new NarrativeProseException(section,
                 $"structured_report narrative '{lang}' uses the internal/aviation term "
                 + $"'{jargon.Value}' in recipient prose; never name a data source "
                 + "(TAF/METAR/GFS/CAPE/ICAO) — use plain wording such as 'the latest indications'.");
@@ -743,7 +903,7 @@ public sealed class ForecastReconciler
 
             var (word, wordPart) = NearestDayPartWord(masked, m.Index, m.Index + m.Length);
             if (word is not null && wordPart != tokenPart)
-                throw new JsonException(
+                throw new NarrativeProseException(section,
                     $"structured_report narrative '{lang}' says \"{word}\" next to a {{q:time}} "
                     + $"token that renders to the {DayPartName(tokenPart)} (local hour {localHour}); "
                     + "the prose time-of-day word contradicts the token's local rendering.");
@@ -858,60 +1018,6 @@ public sealed class ForecastReconciler
         return prose.Length;
     }
 
-    // WX-151: extends WX-149's prose time-word check from {q:time} tokens to the
-    // {chN}-ANCHORED sentence — the anchor ties a sentence to a change with a known
-    // window, so the day-part words narrating a change can be checked against that
-    // change's own window local buckets (no token needed). Conservative, like
-    // WX-149: a sentence is rejected only when it carries day-part words and NONE of
-    // them fall in the window's buckets — i.e. the whole sentence is mis-timed. A
-    // sentence that names an in-window part plus a transition word ("...this
-    // afternoon, clearing by evening") keeps the in-window match and is not
-    // rejected. Catches a change narrated in the wrong part of the day relative to
-    // the window the grid is built from (the WX-148 narrative/grid mismatch class,
-    // for bare prose words the {q:time} check can't see).
-    private static void ValidateAnchoredProseTiming(StructuredReportBody report, TimeZoneInfo tz)
-    {
-        if (report.Changes.Count == 0)
-            return;
-
-        // Mask each language's changeSummary once ({...} tokens → equal-length blanks,
-        // same as CheckProse) so the sentence/word scans ignore token interiors with
-        // offsets still aligned to the original. Hoisted out of the change loop so the
-        // regex runs once per language, not once per (change × language).
-        var maskedByLang = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var (lang, sections) in report.Narrative)
-            if (!string.IsNullOrEmpty(sections.ChangeSummary))
-                maskedByLang[lang] = BraceToken.Replace(sections.ChangeSummary, m => new string(' ', m.Length));
-
-        foreach (var change in report.Changes)
-        {
-            var windowParts = WindowDayParts(change.Window, tz);
-            if (windowParts.Count == 0)
-                continue;  // an off-grid window is ValidateChangeSnapshotConsistency's job, not this one's
-            var anchor = "{" + change.SummaryToken + "}";
-            foreach (var (lang, sections) in report.Narrative)
-            {
-                var prose = sections.ChangeSummary;
-                if (string.IsNullOrEmpty(prose))
-                    continue;
-                int ai = prose.IndexOf(anchor, StringComparison.Ordinal);
-                if (ai < 0)
-                    continue;  // anchor presence is StructuredReportBody.Validate's contract, not this guard's
-
-                var masked = maskedByLang[lang];  // present: prose is non-empty
-                int sentStart = SentenceStart(masked, ai);
-                int sentEnd = SentenceEnd(masked, ai + anchor.Length);
-                var found = SentenceDayPartWords(masked, sentStart, sentEnd);
-                if (found.Count > 0 && !found.Any(f => windowParts.Contains(f.Part)))
-                    throw new JsonException(
-                        $"structured_report change '{change.SummaryToken}' narrative '{lang}' times it \"{found[0].Word}\" "
-                        + $"but the change's window {change.Window.StartUtc:O}..{change.Window.EndUtc:O} is the "
-                        + $"{string.Join("/", windowParts.OrderBy(p => p).Select(DayPartName))} locally; the prose "
-                        + "time-of-day word contradicts the change's own window.");
-            }
-        }
-    }
-
     // A day-part word immediately preceded by one of these is pinned to a SPECIFIC
     // (often different) day than the change's window — "Friday evening", "tomorrow
     // morning" — which we cannot compare to the window's local buckets without
@@ -923,31 +1029,6 @@ public sealed class ForecastReconciler
         "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
         "today", "tonight", "tomorrow", "yesterday",
     };
-
-    // Every unambiguous day-part word in [sentStart, sentEnd), whole-word and
-    // case-insensitive (shares DayPartWords with the {q:time} check), excluding
-    // words pinned to a specific day by a preceding DayQualifier.
-    private static List<(string Word, int Part)> SentenceDayPartWords(string prose, int sentStart, int sentEnd)
-    {
-        var found = new List<(string Word, int Part)>();
-        foreach (var (word, part) in DayPartWords)
-        {
-            int from = sentStart;
-            while (from < sentEnd)
-            {
-                int idx = prose.IndexOf(word, from, sentEnd - from, StringComparison.OrdinalIgnoreCase);
-                if (idx < 0)
-                    break;
-                int after = idx + word.Length;
-                bool wholeWord = (idx == 0 || !char.IsLetter(prose[idx - 1]))
-                    && (after >= prose.Length || !char.IsLetter(prose[after]));
-                if (wholeWord && !QualifiedByOtherDay(prose, sentStart, idx))
-                    found.Add((prose.Substring(idx, word.Length), part));
-                from = after;
-            }
-        }
-        return found;
-    }
 
     // True when the word ending at the letters before wordStart is a DayQualifier.
     // Bounded by sentStart so the scan never crosses into a previous sentence — a
@@ -964,19 +1045,6 @@ public sealed class ForecastReconciler
             i--;
         var prev = prose.Substring(i + 1, end - (i + 1));
         return DayQualifiers.Contains(prev, StringComparer.OrdinalIgnoreCase);
-    }
-
-    // The set of local day-part buckets a change window covers, by walking its UTC
-    // hours and bucketing each into local time (mirrors DayPartOfHour / the renderer).
-    private static HashSet<int> WindowDayParts(ChangeWindow w, TimeZoneInfo tz)
-    {
-        var parts = new HashSet<int>();
-        for (var u = w.StartUtc; u < w.EndUtc; u = u.AddHours(1))
-        {
-            var local = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(u, DateTimeKind.Utc), tz);
-            parts.Add(DayPartOfHour(local.Hour));
-        }
-        return parts;
     }
 
     // WX-152: the closing ("In summary:") is the one narrative section the other
@@ -1012,24 +1080,37 @@ public sealed class ForecastReconciler
 
         foreach (var (lang, sections) in report.Narrative)
         {
-            var prose = sections.Closing;
-            if (string.IsNullOrEmpty(prose))
-                continue;
-            // Mask {...} tokens (a {q:time} instant is the WX-149 check's job, not this one's).
-            var masked = BraceToken.Replace(prose, m => new string(' ', m.Length));
+            // WX-189: check BOTH judgment sections. The closing was the original WX-152
+            // target; the changeSummary band — now that the structural changes[] are
+            // computed deterministically but the band PROSE is still Claude's — can
+            // likewise assert a precip event the snapshot leaves dry, so it gets the
+            // same precip-vs-dry guard (the residual prose-phantom surface Option C left).
+            CheckProseClaims(lang, NarrativeSection.ChangeSummary, sections.ChangeSummary, refDate, finalSnapshot, tz);
+            CheckProseClaims(lang, NarrativeSection.Closing, sections.Closing, refDate, finalSnapshot, tz);
+        }
+    }
 
-            int from = 0;
-            while (from < masked.Length)
-            {
-                int end = SentenceEnd(masked, from);
-                CheckClosingSentence(lang, masked, from, end, refDate, finalSnapshot, tz);
-                from = end + 1;
-            }
+    // Scans one prose section sentence-by-sentence for a precip/storm assertion at a
+    // local time the snapshot leaves entirely dry. Section-agnostic, so the WX-152
+    // closing check and the WX-189 changeSummary check share one body.
+    private static void CheckProseClaims(
+        string lang, NarrativeSection section, string? prose, DateOnly refDate, ForecastSnapshotBody finalSnapshot, TimeZoneInfo tz)
+    {
+        if (string.IsNullOrEmpty(prose))
+            return;
+        // Mask {...} tokens (a {q:time} instant is the WX-149 check's job, not this one's).
+        var masked = BraceToken.Replace(prose, m => new string(' ', m.Length));
+        int from = 0;
+        while (from < masked.Length)
+        {
+            int end = SentenceEnd(masked, from);
+            CheckClosingSentence(lang, section, masked, from, end, refDate, finalSnapshot, tz);
+            from = end + 1;
         }
     }
 
     private static void CheckClosingSentence(
-        string lang, string masked, int start, int end, DateOnly refDate, ForecastSnapshotBody finalSnapshot, TimeZoneInfo tz)
+        string lang, NarrativeSection section, string masked, int start, int end, DateOnly refDate, ForecastSnapshotBody finalSnapshot, TimeZoneInfo tz)
     {
         // Must assert a precipitation/storm phenomenon...
         if (!ContainsAnyWord(masked, start, end, ClosingPrecipWords))
@@ -1061,9 +1142,9 @@ public sealed class ForecastReconciler
             }
         }
         if (any && !anyWet)
-            throw new JsonException(
-                $"structured_report narrative '{lang}' closing asserts precipitation/storm activity at a local time "
-                + "the final_snapshot leaves entirely dry; the closing summarizes the conditions, day-grid, and "
+            throw new NarrativeProseException(section,
+                $"structured_report narrative '{lang}' asserts precipitation/storm activity at a local time "
+                + "the final_snapshot leaves entirely dry; the prose summarizes the conditions, day-grid, and "
                 + "changes and must not introduce a forecast the snapshot does not carry.");
     }
 
@@ -1297,11 +1378,32 @@ public sealed class ForecastReconciler
               + "behaviour, not a cause for concern. "
             : "";
 
-        var changeAlertInstruction = reportKind == ReportKind.Unscheduled
-            ? "This is an unscheduled update — conditions have changed since the last report. "
-              + "For the changeSummary, write one or two sentences summarising "
-              + "what has changed (e.g. a forecast risk that has appeared, or a significant temperature shift). "
-            : "";
+        var changeAlertInstruction = reportKind switch
+        {
+            ReportKind.Unscheduled =>
+                "This is an unscheduled update — conditions have changed since the last report. "
+                + "For the changeSummary, write one or two sentences summarising "
+                + "what has changed (e.g. a forecast risk that has appeared, or a significant temperature shift). ",
+            // WX-178: a scheduled report's "What's changed" band rides ONLY a newly-appearing
+            // near-term severe hazard; everything else belongs in the grid + closing, not a band.
+            // WX-165: the Diagnostic (startup verification) kind gets the SAME suppression — it
+            // previously fell through to the empty default below, the one report kind that never
+            // received this "an empty changes array is the correct answer" coaching, so against a
+            // stale prior it filled the band and the resulting phantom degraded the send (and a
+            // diagnostic degrade is a hard abort, suppressing the deploy verification entirely).
+            ReportKind.Scheduled or ReportKind.Diagnostic =>
+                (reportKind == ReportKind.Diagnostic
+                    ? "This is a diagnostic (startup verification) report. "
+                    : "This is a scheduled report. ")
+                + "Show a \"What's changed\" band ONLY when a NEW severe hazard "
+                + "appears in the near term — a block that was not previously severe becoming severe within "
+                + "the next three local days (today through the day after tomorrow). In that case emit the "
+                + "change(s) and a one- or two-sentence changeSummary naming the hazard and its timing. For "
+                + "every other case — ordinary or non-severe changes, or nothing material — emit an EMPTY "
+                + "changes array and a null changeSummary; that context belongs in the per-day grid and the "
+                + "closing, not a change band. ",
+            _ => "",
+        };
 
         // WX-128/WX-130: the exact language set the structured report's narrative
         // must carry — the distinct languages across this locality's recipients.

@@ -443,6 +443,7 @@ public sealed class WeatherDataContext : DbContext
 
             e.Property(x => x.LastClaudeInputHash).HasMaxLength(200);
             e.Property(x => x.LastSentInputHash).HasMaxLength(200);
+            e.Property(x => x.LastDegradedInputHash).HasMaxLength(200);
             e.Property(x => x.LastMetarIcao).HasMaxLength(4).IsFixedLength();
 
             e.HasIndex(x => x.LocalityId)

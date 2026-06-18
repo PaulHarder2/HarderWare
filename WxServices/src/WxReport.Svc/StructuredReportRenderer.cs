@@ -49,7 +49,9 @@ public static class StructuredReportRenderer
     /// (always shown); the change-summary band itself renders whenever the
     /// narrative carries one — independent of the kind.  (A recipient's first contact is a separate
     /// welcome-only email — see <see cref="RenderWelcome"/>; this method always
-    /// renders a weather report.)
+    /// renders a weather report.)  <paramref name="nowUtc"/> is the send instant: the
+    /// Extended Forecast grid drops any local day whose every 6-hour block has fully
+    /// elapsed by then (WX-188), so it never leads with a wholly-past day.
     /// </summary>
     public static string Render(
         StructuredReportBody report,
@@ -58,7 +60,8 @@ public static class StructuredReportRenderer
         Recipient recipient,
         string langCode,
         TimeZoneInfo localityTz,
-        ReportKind kind)
+        ReportKind kind,
+        DateTime nowUtc)
     {
         // langCode is the recipient's resolved ISO 639-1 code (en, es), resolved by
         // the caller from the Languages registry (WX-166). The narrative map and
@@ -78,11 +81,20 @@ public static class StructuredReportRenderer
 
         AppendHeader(sb, observation, localityTz, vocab, kind);
 
+        // WX-189: the band shows whenever one is warranted — Claude's changeSummary
+        // prose when present, else a deterministic line from the computed changes.
+        // Band PRESENCE is already decided upstream: ReportWorker strips the band
+        // (changeSummary + changes both cleared) on a scheduled report with no
+        // near-term severe onset (WX-178), and never strips an unscheduled one. So a
+        // non-empty Changes here means the band must show; the fallback covers the
+        // case where the model's prose was rejected or absent.
         if (!string.IsNullOrWhiteSpace(sections.ChangeSummary))
             AppendChangeBand(sb, vocab, RenderProse(sections.ChangeSummary!));
+        else if (report.Changes.Count > 0)
+            AppendChangeBand(sb, vocab, HtmlText(RenderFallbackBand(report.Changes, vocab, localityTz)));
 
         AppendCurrentConditions(sb, observation, recipient, vocab);
-        AppendExtendedForecast(sb, finalSnapshot, observation.LocalityName, recipient, localityTz, vocab);
+        AppendExtendedForecast(sb, finalSnapshot, observation.LocalityName, recipient, localityTz, vocab, nowUtc);
         AppendClosing(sb, vocab, RenderProse(sections.Closing));
 
         sb.Append("</div>");
@@ -115,7 +127,7 @@ public static class StructuredReportRenderer
         AppendHeader(sb, observation, localityTz, vocab, ReportKind.Unscheduled);
         AppendHazardBanner(sb, finalSnapshot, localityTz, vocab, nowUtc);
         AppendCurrentConditions(sb, observation, recipient, vocab);
-        AppendExtendedForecast(sb, finalSnapshot, observation.LocalityName, recipient, localityTz, vocab);
+        AppendExtendedForecast(sb, finalSnapshot, observation.LocalityName, recipient, localityTz, vocab, nowUtc);
         sb.Append("</div>");
         return sb.ToString();
     }
@@ -131,19 +143,83 @@ public static class StructuredReportRenderer
     /// </summary>
     private static void AppendHazardBanner(StringBuilder sb, ForecastSnapshotBody body, TimeZoneInfo tz, ReportVocabulary vocab, DateTime nowUtc)
     {
-        var severe = body.Blocks
-            .Where(b => b.SevereFlag && DateTime.SpecifyKind(b.StartUtc, DateTimeKind.Utc).AddHours(6) > nowUtc)
-            .OrderBy(b => b.StartUtc)
-            .FirstOrDefault();
+        var severe = SevereBlocks.EarliestActive(body, nowUtc);
         if (severe is null)
             return;
         var local = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(severe.StartUtc, DateTimeKind.Utc), tz);
-        var timing = $"{local.ToString("dddd", vocab.Culture)} {Lower(PartLabel(PartOf(local.Hour), vocab))}";
+        var timing = ProseTiming(local, vocab);
         var text = string.Format(vocab.Culture, vocab.HazardBannerFormat, vocab.SevereNoun(severe.PrecipPhenomenon), timing);
         sb.Append("<div style=\"background:#7a1c1c;color:#ffffff;padding:14px 24px;font-weight:bold;font-size:15px;\">");
         sb.Append(HtmlText(text));
         sb.Append("</div>");
     }
+
+    // ── WX-189 deterministic change-band fallback ─────────────────────────────
+
+    /// <summary>
+    /// Deterministic "What's changed" band, reached only when a band is warranted
+    /// (an unscheduled report, or a scheduled one with a near-term severe onset) but
+    /// Claude's changeSummary prose was rejected or absent. Renders the top one or two
+    /// already-salience-ranked changes as terse, label-style localized lines
+    /// ("Severe storms — Saturday afternoon"). Plain and correct by design — this path
+    /// is hit only when the model's own prose failed — and always names the calendar
+    /// day explicitly (never a bare "overnight"; see WX-190).
+    /// </summary>
+    private static string RenderFallbackBand(
+        IReadOnlyList<ReportChange> changes, ReportVocabulary vocab, TimeZoneInfo tz)
+    {
+        var lines = changes.Take(2).Select(c =>
+        {
+            var dir = DirectionWord(c, vocab);
+            var timing = ChangeTiming(c.Window.StartUtc, vocab, tz);
+            return dir.Length == 0
+                ? $"{ChangeNoun(c, vocab)} — {timing}."
+                : $"{ChangeNoun(c, vocab)} {dir} — {timing}.";
+        });
+        return string.Join(" ", lines);
+    }
+
+    // Localized direction gerund for a precip/severe change ("Rain easing", "Snow ending")
+    // — without it a clearing/weakening change reads as arriving. Temperature and wind
+    // nouns are already direction-neutral ("Temperature change"), so they take no word;
+    // Shifting (WX-191) has none yet.
+    private static string DirectionWord(ReportChange c, ReportVocabulary vocab) =>
+        c.Phenomenon is ChangePhenomenon.Temperature or ChangePhenomenon.Wind or ChangePhenomenon.WindShift
+            ? string.Empty
+            : c.Direction switch
+            {
+                ChangeDirection.Appearing => vocab.DirAppearing,
+                ChangeDirection.Strengthening => vocab.DirStrengthening,
+                ChangeDirection.Weakening => vocab.DirWeakening,
+                ChangeDirection.Clearing => vocab.DirClearing,
+                _ => string.Empty,
+            };
+
+    // Localized "{weekday} {day-part}" for a change window's start ("Saturday afternoon"),
+    // mirroring AppendHazardBanner so the fallback reads like the rest of the report.
+    private static string ChangeTiming(DateTime startUtc, ReportVocabulary vocab, TimeZoneInfo tz)
+    {
+        var local = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(startUtc, DateTimeKind.Utc), tz);
+        return ProseTiming(local, vocab);
+    }
+
+    // Localized, capitalized noun phrase for a computed change. Precipitation and severe
+    // reuse the grid's weather vocabulary — a Safety-tier convective change uses the
+    // severe lead, matching the hazard banner and the WX-156 subject — while freezing
+    // precip, temperature, and wind use their own brief nouns (WX-191's WindShift never
+    // reaches here yet).
+    private static string ChangeNoun(ReportChange c, ReportVocabulary vocab) => Capitalize(c.Phenomenon switch
+    {
+        ChangePhenomenon.Rain => vocab.WxRain,
+        ChangePhenomenon.Thunderstorm => c.Tier == ChangeTier.Safety ? vocab.CondSevereStorms : vocab.WxThunderstorm,
+        ChangePhenomenon.Snow => vocab.WxSnow,
+        ChangePhenomenon.Mixed => vocab.WxMixed,
+        ChangePhenomenon.FreezingPrecip => vocab.ChangeFreezingRain,
+        ChangePhenomenon.Severe => vocab.CondSevereWeather,
+        ChangePhenomenon.Temperature => vocab.ChangeTempNoun,
+        ChangePhenomenon.Wind => vocab.ChangeWindNoun,
+        _ => vocab.ChangeWindNoun,
+    });
 
     // ── first-contact welcome (WX-130; standalone welcome-only email) ──────────
 
@@ -333,9 +409,9 @@ public static class StructuredReportRenderer
     // ── extended forecast grid ────────────────────────────────────────────────
 
     private static void AppendExtendedForecast(
-        StringBuilder sb, ForecastSnapshotBody body, string locationName, Recipient recipient, TimeZoneInfo tz, ReportVocabulary vocab)
+        StringBuilder sb, ForecastSnapshotBody body, string locationName, Recipient recipient, TimeZoneInfo tz, ReportVocabulary vocab, DateTime nowUtc)
     {
-        var days = AggregateDays(body, tz).ToList();
+        var days = AggregateDays(body, tz, nowUtc).ToList();
         if (days.Count == 0)
             return;  // no forecast blocks → omit the section entirely rather than emit a header-only grid
 
@@ -363,7 +439,14 @@ public static class StructuredReportRenderer
             sb.Append($"<td style=\"padding:6px 10px;\">{HtmlText(wind)}</td>");
             sb.Append($"<td style=\"padding:6px 10px;\">{condHtml}</td></tr>");
         }
-        sb.Append("</table></div>");
+        sb.Append("</table>");
+        // 24-hour clock legend (WX-190), directly beneath the grid where a reader meets
+        // an unfamiliar band label: the Conditions cell tiles each day into XX-YY clock
+        // bands, so the legend sits one glance away rather than in a distant footer. Styled
+        // to match the meteogram caption (WX-195) — centered, italic, 11px, #888 — so the
+        // report's two explanatory captions read as one consistent voice.
+        sb.Append($"<div style=\"text-align:center;font-size:11px;color:#888;font-style:italic;margin-top:6px;\">{HtmlText(vocab.GridTimeLegend)}</div>");
+        sb.Append("</div>");
     }
 
     // ── closing ───────────────────────────────────────────────────────────────
@@ -380,43 +463,38 @@ public static class StructuredReportRenderer
 
     // ── per-day aggregation ───────────────────────────────────────────────────
 
+    /// <summary>
+    /// One local calendar day's forecast.  High/low/wind span the whole day (computed from ALL
+    /// blocks); <see cref="Bands"/> carries only the day's still-live 6-hour blocks in chronological
+    /// order (one per local day-part, WX-155; fully-elapsed blocks dropped per WX-195), from which
+    /// the Conditions cell tiles the remaining clock bands (WX-190).
+    /// </summary>
     private sealed record DaySummary(
         DateOnly Date,
         double MaxTempC,
         double MinTempC,
         int MaxWindKt,
-        SkyState Sky,
-        IReadOnlyList<Episode> Episodes,
-        bool Severe,
-        int SevereLocalHour);
-
-    /// <summary>
-    /// One precipitation episode within a day: a maximal run of consecutive
-    /// 6-hour blocks sharing a phenomenon.  <see cref="StartHour"/> / <see cref="EndHour"/>
-    /// are the local hours of the run's first and last blocks, so an episode that
-    /// crosses a time-of-day boundary renders as a range ("Overnight–morning").
-    /// <see cref="Expectation"/> is the peak across the run; <see cref="Severe"/> is
-    /// the logical OR of its blocks' severe flags.
-    /// </summary>
-    private sealed record Episode(
-        int StartHour,
-        int EndHour,
-        PrecipExpectation Expectation,
-        PrecipPhenomenon Phenomenon,
-        bool Severe);
+        IReadOnlyList<(int Hour, ForecastSnapshotBlock Block)> Bands);
 
     private enum DayPart { Overnight, Morning, Afternoon, Evening }
 
     /// <summary>
     /// Buckets the snapshot's 6-hour blocks into per-local-calendar-day summaries:
     /// a day's high/low are the max/min across its blocks, wind the day's peak
-    /// sustained, sky the most cloud-significant state, and precipitation is split
-    /// into <see cref="Episode"/>s (a run of consecutive blocks sharing a phenomenon)
-    /// rather than collapsed to a single peak — so a day with, say, morning rain and
-    /// afternoon storms surfaces both instead of dropping one (WX-148, Class 2).
-    /// Days are returned in chronological order; the first is today.
+    /// sustained, and the day's blocks are carried through whole as <c>Bands</c> for the
+    /// Conditions cell to tile into clock bands — so a day with, say, morning rain and
+    /// afternoon storms surfaces both, each in its own band, instead of dropping one
+    /// (WX-148, Class 2; WX-190).
+    /// Days whose every block has fully elapsed at <paramref name="nowUtc"/> are dropped
+    /// (WX-188), so the first day returned is the one containing the send instant, never a
+    /// wholly-past "yesterday".  A retained day's high/low/wind are computed from ALL its blocks
+    /// — including any already elapsed — so they span the whole calendar day regardless of how
+    /// much of the day remains (a 1 PM report still reports this morning's low as today's low),
+    /// but its <c>Bands</c> (the Conditions tiling) carry only the still-live blocks, so today
+    /// leads with the current day-part, not one already past (WX-195).
+    /// Days are returned in chronological order.
     /// </summary>
-    private static IEnumerable<DaySummary> AggregateDays(ForecastSnapshotBody body, TimeZoneInfo tz)
+    private static IEnumerable<DaySummary> AggregateDays(ForecastSnapshotBody body, TimeZoneInfo tz, DateTime nowUtc)
     {
         var byDay = new Dictionary<DateOnly, List<(int Hour, ForecastSnapshotBlock Block)>>();
         var order = new List<DateOnly>();
@@ -439,81 +517,25 @@ public static class StructuredReportRenderer
 
         foreach (var day in order)
         {
-            var blocks = byDay[day];  // sorted by StartUtc above
-            // Day-level severe is the OR of every block's flag — independent of precip,
-            // so a severe block with no precipitation (e.g. a damaging-wind event) still
-            // marks the day severe and is timed by the earliest such block.
-            var severeBlocks = blocks.Where(x => x.Block.SevereFlag).ToList();
+            var blocks = byDay[day];  // all of the day's blocks, sorted by StartUtc above
+
+            // WX-195: the Conditions cell tiles only the day's still-relevant bands — drop any
+            // band that has fully elapsed at nowUtc, so today's row leads with the CURRENT
+            // day-part rather than a period already past. A day with no live band left (a
+            // wholly-past "yesterday") is dropped entirely (WX-188).
+            var liveBands = blocks.Where(x => SevereBlocks.NotFullyElapsed(x.Block, nowUtc)).ToList();
+            if (liveBands.Count == 0)
+                continue;
+            // WX-176/WX-188: high/low/peak wind span the WHOLE calendar day — computed from ALL
+            // blocks, including any already elapsed — so a midday report still reports this
+            // morning's low as today's low. Only the Conditions tiling (liveBands) is trimmed.
             yield return new DaySummary(
                 day,
                 blocks.Max(x => x.Block.TemperatureCelsius.Max),
                 blocks.Min(x => x.Block.TemperatureCelsius.Min),
                 blocks.Max(x => x.Block.WindKt.Max),
-                blocks.Select(x => x.Block.SkyState).Max(),  // SkyState ordinal increases with cloudiness
-                BuildEpisodes(blocks),
-                severeBlocks.Count > 0,
-                severeBlocks.Count > 0 ? severeBlocks[0].Hour : 0);
+                liveBands);
         }
-    }
-
-    /// <summary>
-    /// Splits a day's chronological blocks into precipitation episodes.  An episode
-    /// is a maximal run of consecutive blocks sharing a phenomenon; a dry block, or
-    /// a change of phenomenon, closes the current episode (and a phenomenon change
-    /// opens a new one).  Each episode carries the local hours of its first and last
-    /// blocks, its peak expectation, and a severe flag OR'd across the run.
-    /// </summary>
-    private static IReadOnlyList<Episode> BuildEpisodes(List<(int Hour, ForecastSnapshotBlock Block)> blocks)
-    {
-        var episodes = new List<Episode>();
-        int startHour = 0, endHour = 0;
-        PrecipPhenomenon phenomenon = default;
-        PrecipExpectation peak = PrecipExpectation.None;
-        DateTime prevStartUtc = default;
-        bool severe = false, open = false;
-
-        void Close()
-        {
-            if (open)
-            {
-                episodes.Add(new Episode(startHour, endHour, peak, phenomenon, severe));
-                open = false;
-            }
-        }
-
-        foreach (var (hour, b) in blocks)
-        {
-            if (b.PrecipExpectation == PrecipExpectation.None || b.PrecipPhenomenon is not PrecipPhenomenon p)
-            {
-                Close();
-                continue;
-            }
-
-            // Extend only when this block is contiguous with the run: same phenomenon AND
-            // immediately after the previous block (StartUtc == prev + 6h). A missing block
-            // (a time gap) breaks the run even when the phenomenon matches, so two rain
-            // spells either side of a dropped slot don't merge into one mistimed episode.
-            if (open && p == phenomenon && b.StartUtc == prevStartUtc.AddHours(6))
-            {
-                endHour = hour;
-                if ((int)b.PrecipExpectation > (int)peak)
-                    peak = b.PrecipExpectation;
-                severe |= b.SevereFlag;
-            }
-            else
-            {
-                Close();
-                open = true;
-                startHour = endHour = hour;
-                phenomenon = p;
-                peak = b.PrecipExpectation;
-                severe = b.SevereFlag;
-            }
-            prevStartUtc = b.StartUtc;
-        }
-
-        Close();
-        return episodes;
     }
 
     // ── deterministic phrase composers ────────────────────────────────────────
@@ -633,85 +655,71 @@ public static class StructuredReportRenderer
     }
 
     /// <summary>
-    /// Renders the per-day Conditions cell as an HTML fragment (each text piece
-    /// already escaped).  Three shapes (WX-148, Class 2):
-    /// <list type="bullet">
-    /// <item>Severe day → a single sentence (deliberately breaks the tabular rhythm
-    /// so the hazard stands out): clauses in chronological order joined by "then",
-    /// the severe one rendered with its lead phrase. Checked first, so a severe block
-    /// carrying no precipitation (a damaging-wind event, which forms no episode) still
-    /// surfaces — led generically and timed by the earliest severe block.</item>
-    /// <item>Dry day → the sky word, plus "and dry" when clear.</item>
-    /// <item>Otherwise → one labeled line per episode ("Afternoon — rain likely"),
-    /// chronological, an episode that crosses a time-of-day boundary timed as a
-    /// range ("Overnight–morning").</item>
-    /// </list>
-    /// At most two episodes are shown; on a busier day the rest ride the narrative.
+    /// Renders the per-day Conditions cell as an HTML fragment (each text piece already
+    /// escaped).  The day is tiled into its 6-hour clock bands (00-06 / 06-12 / 12-18 /
+    /// 18-24 — the snapshot's native blocks); each band contributes one condition phrase,
+    /// and adjacent bands sharing a phrase merge into a single labeled line.  So when the
+    /// day's four 6-hour blocks are present the cell tiles the whole day with no gaps (WX-190):
+    /// a uniform day collapses to one "00-24 — …" line, a mixed day shows two to four
+    /// "XX-YY — …" lines in clock order.  A missing interior block leaves a visible gap between
+    /// bands (bands merge only when clock-contiguous) rather than a fabricated span over hours
+    /// the snapshot does not carry.  A severe band is emphasized (bold); its clock range plus
+    /// the grid row's date bind the hazard to the correct calendar day, so no floating
+    /// "overnight" is ever needed.
     /// </summary>
     private static string ConditionsCellHtml(DaySummary day, ReportVocabulary vocab)
     {
-        var shown = SelectEpisodes(day);
+        if (day.Bands.Count == 0)
+            return "—";  // defensive: AggregateDays only yields days with at least one block
 
-        // Severe first — before the dry/empty check — so a severe block with no precip
-        // (no episode) is never dropped to a benign sky phrase.
-        if (day.Severe)
+        // Collapse consecutive bands with an identical phrase into runs, tracking each run's
+        // first and last band-start hours so its label spans the whole run. The merge requires
+        // clock-contiguity (this band starts 6h after the run's last) as well as an identical
+        // phrase: a missing interior block must NOT be bridged, or the merged label would
+        // assert coverage of hours the snapshot has no block for.
+        var runs = new List<(int FirstStart, int LastStart, string Phrase, bool Severe)>();
+        foreach (var (hour, block) in day.Bands)
         {
-            var clauses = new List<string>();
-            bool severeNamed = false;
-            foreach (var e in shown)
-            {
-                if (e.Severe)
-                {
-                    severeNamed = true;
-                    clauses.Add($"{vocab.SevereNoun(e.Phenomenon)} {OutlookWord(e.Expectation, vocab)} {WhenWord(PartOf(e.StartHour), vocab)}");
-                }
-                else
-                {
-                    clauses.Add($"{Lower(PhenomenonWord(e.Phenomenon, vocab))} {WhenWord(PartOf(e.StartHour), vocab)}");
-                }
-            }
-            // Severe but no severe precip episode → a non-convective hazard (e.g. damaging
-            // wind); lead generically, timed by the earliest severe block, with any precip
-            // episodes following.
-            if (!severeNamed)
-                clauses.Insert(0, $"{vocab.CondSevereWeather} {vocab.OutlookLikely} {WhenWord(PartOf(day.SevereLocalHour), vocab)}");
-            return HtmlText(string.Join($", {vocab.CondThen} ", clauses));
+            var (phrase, severe) = BandPhrase(block, vocab);
+            if (runs.Count > 0 && runs[^1].Phrase == phrase && runs[^1].Severe == severe
+                && hour == runs[^1].LastStart + 6)
+                runs[^1] = (runs[^1].FirstStart, hour, phrase, severe);
+            else
+                runs.Add((hour, hour, phrase, severe));
         }
 
-        if (shown.Count == 0)
+        var lines = runs.Select(r =>
         {
-            var skyWord = SkyWord(day.Sky, vocab);
-            return HtmlText(day.Sky == SkyState.Clear ? $"{skyWord} {vocab.CondAndDry}" : skyWord);
-        }
-
-        var lines = shown.Select(e =>
-            HtmlText($"{EpisodeRangeLabel(e, vocab)} — {Lower(PhenomenonWord(e.Phenomenon, vocab))} {OutlookWord(e.Expectation, vocab)}"));
+            var line = HtmlText($"{ClockBandSpan(r.FirstStart, r.LastStart)} — {r.Phrase}");
+            return r.Severe ? $"<strong>{line}</strong>" : line;
+        });
         return string.Join("<br/>", lines);
     }
 
     /// <summary>
-    /// Returns the day's episodes to show, capped at two.  When a day has more, the
-    /// two most significant — severe first (a severe episode must never be evicted by
-    /// the cap), then expectation, then earliest — are kept and re-ordered
-    /// chronologically; the drop is logged so the truncation is never silent (the
-    /// narrative still carries the omitted episode).
+    /// The condition phrase for one clock band's block, with a flag marking a severe band
+    /// (which the caller emphasizes).  Severe leads with its noun ("Severe storms" /
+    /// "Severe weather"); otherwise a precipitation band reads "{phenomenon} {outlook}"
+    /// and a dry band reads its sky word ("Clear and dry" when clear).  Capitalized so
+    /// every tiled line in the cell opens with a consistent leading capital.
     /// </summary>
-    private static IReadOnlyList<Episode> SelectEpisodes(DaySummary day)
+    private static (string Phrase, bool Severe) BandPhrase(ForecastSnapshotBlock block, ReportVocabulary vocab)
     {
-        if (day.Episodes.Count <= 2)
-            return day.Episodes;
+        if (block.SevereFlag)
+        {
+            // A severe block may carry no precip (a damaging-wind event); SevereNoun(null)
+            // gives the generic lead, and a missing expectation falls back to "likely".
+            var outlook = block.PrecipExpectation == PrecipExpectation.None
+                ? vocab.OutlookLikely
+                : OutlookWord(block.PrecipExpectation, vocab);
+            return ($"{vocab.SevereNoun(block.PrecipPhenomenon)} {outlook}", true);
+        }
 
-        var top = day.Episodes
-            .Select((e, i) => (e, i))
-            .OrderByDescending(t => t.e.Severe)
-            .ThenByDescending(t => (int)t.e.Expectation)
-            .ThenBy(t => t.i)
-            .Take(2)
-            .OrderBy(t => t.i)
-            .Select(t => t.e)
-            .ToList();
-        Logger.Warn($"Day {day.Date:yyyy-MM-dd} has {day.Episodes.Count} precip episodes; conditions grid shows 2, the narrative carries the rest.");
-        return top;
+        if (block.PrecipExpectation != PrecipExpectation.None && block.PrecipPhenomenon is PrecipPhenomenon p)
+            return (Capitalize($"{PhenomenonWord(p, vocab)} {OutlookWord(block.PrecipExpectation, vocab)}"), false);
+
+        var sky = SkyWord(block.SkyState, vocab);
+        return (block.SkyState == SkyState.Clear ? $"{sky} {vocab.CondAndDry}" : sky, false);
     }
 
     private static DayPart PartOf(int hour) => hour switch
@@ -722,21 +730,34 @@ public static class StructuredReportRenderer
         _ => DayPart.Overnight,
     };
 
-    private static string PartLabel(DayPart p, ReportVocabulary vocab) => p switch
+    /// <summary>
+    /// "{weekday} {day-part}" for a prose instant — used by the hazard banner and the
+    /// WX-189 fallback band, neither of which sits inside a day-bound grid row.  The
+    /// day-owned parts keep idiom ("Saturday afternoon"); the 00-06 pre-dawn block is
+    /// bound by its clock range ("Saturday 00-06") rather than a floating night-word,
+    /// which a US reader would otherwise read as the following calendar day (WX-190).
+    /// </summary>
+    private static string ProseTiming(DateTime local, ReportVocabulary vocab) =>
+        $"{local.ToString("dddd", vocab.Culture)} {ProsePart(local.Hour, vocab)}";
+
+    private static string ProsePart(int localHour, ReportVocabulary vocab) => PartOf(localHour) switch
     {
-        DayPart.Morning => vocab.PartMorning,
-        DayPart.Afternoon => vocab.PartAfternoon,
-        DayPart.Evening => vocab.PartEvening,
-        _ => vocab.PartOvernight,
+        DayPart.Morning => Lower(vocab.PartMorning),
+        DayPart.Afternoon => Lower(vocab.PartAfternoon),
+        DayPart.Evening => Lower(vocab.PartEvening),
+        _ => ClockBand(localHour),
     };
 
-    private static string WhenWord(DayPart p, ReportVocabulary vocab) => p switch
+    /// <summary>The 24-hour "XX-YY" label of the single 6-hour band containing <paramref name="localHour"/> ("00-06" … "18-24").</summary>
+    private static string ClockBand(int localHour)
     {
-        DayPart.Morning => vocab.CondMorning,
-        DayPart.Afternoon => vocab.CondAfternoon,
-        DayPart.Evening => vocab.CondEvening,
-        _ => vocab.CondOvernight,
-    };
+        int start = localHour / 6 * 6;
+        return ClockBandSpan(start, start);
+    }
+
+    /// <summary>The 24-hour "XX-YY" label spanning a merged run of bands, from band-start hour <paramref name="firstStart"/> through the band starting at <paramref name="lastStart"/> ("00-24" for a whole day).</summary>
+    private static string ClockBandSpan(int firstStart, int lastStart) =>
+        $"{firstStart:00}-{lastStart + 6:00}";
 
     private static string OutlookWord(PrecipExpectation e, ReportVocabulary vocab) => e switch
     {
@@ -752,16 +773,6 @@ public static class StructuredReportRenderer
         SkyState.Overcast => vocab.SkyOvercast,
         _ => vocab.SkyClear,
     };
-
-    /// <summary>The episode's time label: a single day-part, or a "start–end" range when it spans buckets.</summary>
-    private static string EpisodeRangeLabel(Episode e, ReportVocabulary vocab)
-    {
-        var start = PartOf(e.StartHour);
-        var end = PartOf(e.EndHour);
-        return start == end
-            ? PartLabel(start, vocab)
-            : $"{PartLabel(start, vocab)}–{Lower(PartLabel(end, vocab))}";
-    }
 
     private static string? ObscurationWord(WeatherObscuration? o, ReportVocabulary vocab) => o switch
     {

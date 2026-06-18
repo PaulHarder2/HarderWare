@@ -52,6 +52,9 @@ public sealed class ReportWorker : BackgroundService
     private readonly Counter<long> _redundantSuppressed;
     private readonly Counter<long> _severeFlipSuppressed;
     private readonly Counter<long> _significanceGateSkips;
+    private readonly Counter<long> _debounceSuppressed;
+    private readonly Counter<long> _quietWindowSuppressed;
+    private readonly Counter<long> _degradeBreaker;
     private readonly Histogram<double> _cycleDuration;
     private readonly Histogram<double> _claudeDuration;
 
@@ -95,6 +98,9 @@ public sealed class ReportWorker : BackgroundService
         _redundantSuppressed = _meter.CreateCounter<long>("wxreport.suppressed.redundant.total", description: "WX-108: unscheduled sends suppressed because the reconciled snapshot was materially identical to the last sent report.");
         _severeFlipSuppressed = _meter.CreateCounter<long>("wxreport.suppressed.severe_flip.total", description: "WX-108: unscheduled sends suppressed because the only change was a severe-flag flip on an observation-only advance with no newer GFS run or TAF.");
         _significanceGateSkips = _meter.CreateCounter<long>("wxreport.suppressed.significance_gate.total", description: "WX-114: cycles the deterministic significance gate found unchanged since the last sent report, tagged by mode (enforce = Claude call skipped; shadow = would-skip but Claude still called).");
+        _debounceSuppressed = _meter.CreateCounter<long>("wxreport.suppressed.debounce.total", description: "WX-181: significant unscheduled cycles suppressed by the day-banded debounce (the change's day-band min-gap had not elapsed since the last unscheduled send), tagged by mode (enforce = Claude call skipped; shadow = would-skip but Claude still called).");
+        _quietWindowSuppressed = _meter.CreateCounter<long>("wxreport.suppressed.quietwindow.total", description: "WX-157: significant unscheduled cycles suppressed by the day-banded pre-scheduled quiet window (the next scheduled slot fell within the change's day-band quiet window; content rides the scheduled report), tagged by mode (enforce = Claude call skipped; shadow = would-skip but Claude still called).");
+        _degradeBreaker = _meter.CreateCounter<long>("wxreport.degrade_breaker.total", description: "WX-182: due scheduled/first cycles where the degrade circuit-breaker skipped the Claude reconcile because the input is identical to the last degrade-to-no-send, tagged by outcome (cached_send = scheduled report re-issued from the last good snapshot, no Claude call; skip = no usable cached snapshot, slot deferred to self-heal on the next input change).");
         _cycleDuration = _meter.CreateHistogram<double>("wxreport.cycle.duration.seconds", unit: "s", description: "Duration of each report cycle.");
         _claudeDuration = _meter.CreateHistogram<double>("wxreport.claude.duration.seconds", unit: "s", description: "Duration of each Claude API call.");
     }
@@ -279,6 +285,8 @@ public sealed class ReportWorker : BackgroundService
             previousMetarIcao: null,
             allowSkip: false, // startup is an unconditional verification send — never skippable
             changedSinceLastSend: Array.Empty<TriggerSource>(), // unused on a guaranteed send
+            significanceCfg: cfg.SignificanceGate,
+            nowUtc: DateTime.UtcNow,
             ct: ct);
 
         // allowSkip:false, so ReconcileAsync never returns NotNews — a stray
@@ -313,7 +321,17 @@ public sealed class ReportWorker : BackgroundService
         ctx.ForecastSnapshots.Add(reconciledSnapshot);
         await ctx.SaveChangesAsync(ct);
 
-        var structuredReportJson = success.StructuredReport.Serialize();
+        var nowUtc = DateTime.UtcNow;   // one send instant for the whole fan-out (WX-188 grid trim)
+
+        // WX-193: a diagnostic report follows the same band rule as a scheduled one — it carries the
+        // "What's changed" band only for a near-term severe onset. WX-189 made the change set
+        // deterministic, so the band renders from the computed changes[] via the fallback even when
+        // Claude wrote no changeSummary; without this strip a diagnostic surfaced a band for ordinary
+        // non-severe changes. Decided once here — the report is shared across members.
+        var outboundReport = StripChangeBandUnlessSevereOnset(
+            success.StructuredReport, success.FinalSnapshot, priorSnapshot, ReportKind.Diagnostic, nowUtc, tz, label);
+
+        var structuredReportJson = outboundReport.Serialize();
         var emailer = new SmtpSender(smtp, "WxReport");
         var plotsDir = new WxPaths(_config["InstallRoot"]).PlotsDir;
 
@@ -326,7 +344,7 @@ public sealed class ReportWorker : BackgroundService
             {
                 var langCode = ResolveLanguageCode(member, langById, cfg.DefaultLanguage);
                 var innerBody = StructuredReportRenderer.Render(
-                    success.StructuredReport, success.FinalSnapshot, snapshot, member, langCode, tz, ReportKind.Diagnostic);
+                    outboundReport, success.FinalSnapshot, snapshot, member, langCode, tz, ReportKind.Diagnostic, nowUtc);
                 var report = WrapAsEmailHtml(innerBody, langCode, snapshot, tz);
 
                 var committedSend = new CommittedSend
@@ -538,11 +556,12 @@ public sealed class ReportWorker : BackgroundService
             // LocalityStates table while recipients already have prior per-recipient
             // deliveries — without this, ShouldSend would see all-null cadence and
             // treat every established locality as "first", forcing an off-cadence send
-            // to everyone on the first post-deploy cycle. Seed both cadence timestamps
-            // from the most-recent real delivery (so a scheduled slot the old system
-            // already served this cycle isn't re-sent) plus the last station. The
+            // to everyone on the first post-deploy cycle. Seed the scheduled-cadence
+            // timestamp from the most-recent real delivery (so a scheduled slot the old
+            // system already served this cycle isn't re-sent) plus the last station. The
             // last-sent input hash stays null: the first cycle reconciles once against
-            // the historical prior snapshot to establish it.
+            // the historical prior snapshot to establish it. (LastUnscheduledSentUtc is
+            // intentionally left null here — see the state initializer below.)
             var lastDelivered = await ctx.CommittedSends
                 .Where(cs => memberIds.Contains(cs.RecipientId) && cs.SentAtUtc.HasValue && !cs.IsDiagnostic)
                 .OrderByDescending(cs => cs.SentAtUtc)
@@ -553,7 +572,12 @@ public sealed class ReportWorker : BackgroundService
             {
                 LocalityId = locality.Id,
                 LastScheduledSentUtc = lastDelivered?.SentAtUtc,
-                LastUnscheduledSentUtc = lastDelivered?.SentAtUtc,
+                // WX-181: left null rather than seeded from lastDelivered — that delivery may
+                // have been a SCHEDULED send, and the day-banded debounce keys specifically on
+                // the last *unscheduled* send, so seeding it would over-suppress a genuine
+                // update on the first post-deploy cycle. The min-gap is unaffected: it uses
+                // Max(scheduled, unscheduled), which still sees LastScheduledSentUtc.
+                LastUnscheduledSentUtc = null,
                 LastMetarIcao = lastDelivered?.StationIcao,
             };
             ctx.LocalityStates.Add(state);
@@ -623,6 +647,25 @@ public sealed class ReportWorker : BackgroundService
                 Logger.Debug($"{label}: no input changed since last Claude call — pre-filter skip.");
             }
             return welcomed;
+        }
+
+        // WX-182 degrade circuit-breaker: we already degraded-to-no-send on this exact
+        // input, so a re-reconcile would deterministically degrade again. On the
+        // guaranteed scheduled/first path (which bypasses the pre-filter), re-issue the
+        // last good report from cache with no Claude call — or, if there is no usable
+        // cached snapshot, skip and self-heal when the input next changes. The unscheduled
+        // "change" path cannot reach here (its pre-filter already skips an identical
+        // input). Strict equality keeps this orthogonal to the WX-157 quiet window: it
+        // can never fire on an advanced input. A null return means a severe block has
+        // crossed into the hazard horizon on this stuck input — fall through to a normal
+        // reconcile so the WX-148 degrade-hazard path can send the banner (safety > cost).
+        if ((reason is "scheduled" or "first") && state.LastDegradedInputHash == inputHash)
+        {
+            var cachedSent = await SendScheduledFromCacheAsync(
+                ctx, emailer, locality, members, memberIds, servedIds, state, snapshot,
+                preferredIcaos, inputHash, reason, tz, langById, cfg, now, label, ct);
+            if (cachedSent is int sent)
+                return sent;
         }
 
         var triggerType = reason == "change"
@@ -704,6 +747,27 @@ public sealed class ReportWorker : BackgroundService
             }
             else if (gate is { Significant: true } passed)
             {
+                // Two day-banded admission-control suppressors, evaluated before the Claude
+                // call: WX-181 post-send debounce, then the WX-157 pre-scheduled quiet window.
+                // Each folds a significant, non-severe-onset unscheduled change away (its
+                // content rides the next cycle / the scheduled report); a not-severe→severe
+                // onset punches through both (inside the decision fns); the 90-min
+                // MinGapMinutes floor was already enforced in ShouldSend. Both honor the gate's
+                // enforce/shadow mode; the scheduled report itself is never quieted (ShouldSend
+                // fires it on its slot). Debounce wins ties (checked first), matching its
+                // longer window.
+                if (await ApplyDayBandedSuppressorAsync(
+                        ctx, state, inputHash, label, gateMode, triggerType,
+                        cfg.UpdateDebounceSchedule, "UpdateDebounceSchedule", "WX-181 debounce", _debounceSuppressed,
+                        sch => (ShouldDebounceUpdate(passed, state.LastUnscheduledSentUtc, sch, now, tz, out var r), r), ct))
+                    return 0;
+
+                if (await ApplyDayBandedSuppressorAsync(
+                        ctx, state, inputHash, label, gateMode, triggerType,
+                        cfg.PreScheduledQuietSchedule, "PreScheduledQuietSchedule", "WX-157 quiet window", _quietWindowSuppressed,
+                        sch => (ShouldQuietBeforeSlot(passed, scheduledHours, sch, now, tz, out var r), r), ct))
+                    return 0;
+
                 Logger.Debug($"{label}: WX-114 significance gate passed ({gateMode}, {triggerType}) — fired: {string.Join(", ", passed.FiredCriteria)}.");
             }
         }
@@ -725,6 +789,8 @@ public sealed class ReportWorker : BackgroundService
             previousMetarIcao: previousMetarIcao,
             allowSkip: allowSkip,
             changedSinceLastSend: changedSinceLastSend,
+            significanceCfg: cfg.SignificanceGate,
+            nowUtc: now,
             ct: ct);
         _claudeDuration.Record(claudeSw.Elapsed.TotalSeconds);
         _claudeCalls.Add(1);
@@ -753,13 +819,17 @@ public sealed class ReportWorker : BackgroundService
         {
             AddClaudeTokens(degraded.Tokens);
             LogClaudeTokens(label, degraded.Tokens, $"{triggerType}/degraded");
-            bool hazardSoon = degraded.FinalSnapshot.Blocks.Any(b =>
-                b.SevereFlag && b.StartUtc.AddHours(6) > now && b.StartUtc <= now.Add(DegradeHazardHorizon));
+            bool hazardSoon = SevereBlocks.AnyActiveWithin(degraded.FinalSnapshot, now, DegradeHazardHorizon);
             if (!hazardSoon)
             {
                 _claudeMalformedOutput.Add(1);
+                // WX-182: arm the degrade circuit-breaker — record the input we just
+                // degraded on so an identical next cycle skips the (deterministically
+                // wasteful) re-reconcile. PersistUnsentCycleAsync saves both this and
+                // LastClaudeInputHash in one write.
+                state.LastDegradedInputHash = inputHash;
                 await PersistUnsentCycleAsync(ctx, label, state, inputHash, ct);
-                Logger.Warn($"{label}: reconciliation degraded ({degraded.Reason}); no near-term severe block, summary omitted and no send — self-heal next cycle.");
+                Logger.Warn($"{label}: reconciliation degraded ({degraded.Reason}); no near-term severe block, summary omitted and no send — self-heal next cycle (WX-182 breaker armed for this input).");
                 return 0;
             }
 
@@ -850,7 +920,14 @@ public sealed class ReportWorker : BackgroundService
         ctx.ForecastSnapshots.Add(reconciledSnapshot);
         await ctx.SaveChangesAsync(ct);
 
-        var structuredReportJson = success.StructuredReport.Serialize();
+        // WX-178: a scheduled report shows "What's changed" only for a near-term severe onset;
+        // otherwise strip the band deterministically (the reconciler prompt steers the LLM the
+        // same way; this guarantees it). Decided once here — the report is shared across members.
+        // The shared strip is a no-op on a non-gating (unscheduled) kind.
+        var outboundReport = StripChangeBandUnlessSevereOnset(
+            success.StructuredReport, success.FinalSnapshot, priorSnapshot, kind, now, tz, label);
+
+        var structuredReportJson = outboundReport.Serialize();
         var plotsDir = new WxPaths(_config["InstallRoot"]).PlotsDir;
         var weatherSent = 0;   // weather reports delivered — drives the baseline/cadence advance
         var welcomeSent = 0;   // first-contact welcome-only emails delivered
@@ -872,7 +949,7 @@ public sealed class ReportWorker : BackgroundService
                 }
 
                 var innerBody = StructuredReportRenderer.Render(
-                    success.StructuredReport, success.FinalSnapshot, snapshot, member, langCode, tz, kind);
+                    outboundReport, success.FinalSnapshot, snapshot, member, langCode, tz, kind, now);
                 if (await DeliverWeatherReportAsync(
                         ctx, emailer, member, langCode, reconciledSnapshot, innerBody,
                         structuredReportJson, success.ReasoningTrace, snapshot, locality, tz,
@@ -905,7 +982,7 @@ public sealed class ReportWorker : BackgroundService
     /// </summary>
     private async Task AdvanceBaselineAfterSendAsync(
         WeatherDataContext ctx, LocalityState state, string reason, DateTime now, string inputHash,
-        WeatherSnapshot snapshot, string label, CancellationToken ct)
+        WeatherSnapshot snapshot, string label, CancellationToken ct, bool clearDegraded = true)
     {
         if (reason is "scheduled" or "first")
             state.LastScheduledSentUtc = now;
@@ -913,6 +990,11 @@ public sealed class ReportWorker : BackgroundService
             state.LastUnscheduledSentUtc = now;
         state.LastClaudeInputHash = inputHash;
         state.LastSentInputHash = inputHash;
+        // WX-182: a genuine Claude-reconciled send resets the degrade breaker; the cached
+        // re-send (clearDegraded:false) leaves it armed so further scheduled slots on the
+        // same stuck input stay cost-0.
+        if (clearDegraded)
+            state.LastDegradedInputHash = null;
         if (snapshot.ObservationAvailable)
             state.LastMetarIcao = snapshot.StationIcao;
 
@@ -922,6 +1004,205 @@ public sealed class ReportWorker : BackgroundService
             _statePersistFailures.Add(1);
             Logger.Error($"{label}: failed to save locality state after sends — baseline did not advance; next cycle may resend.", ex);
         }
+    }
+
+    /// <summary>
+    /// WX-182 degrade circuit-breaker delivery: a due scheduled/first slot whose input is
+    /// identical to the last degrade-to-no-send. Re-issues the locality's last good report
+    /// from cache — the last reconciled snapshot + its narrative (change band suppressed) +
+    /// the live current conditions — with NO Claude call, and returns the number sent.
+    /// Returns <c>0</c> (skip; self-heal on the next input change) when there is no usable
+    /// cached snapshot (e.g. a locality whose first-ever reconcile degraded). Returns
+    /// <see langword="null"/> to tell the caller to fall through to a normal reconcile: a
+    /// severe block fixed in the cached forecast has crossed into the hazard horizon as the
+    /// clock advanced, so the WX-148 degrade-hazard path must run (safety over cost) — the
+    /// breaker only ever arms on a non-hazard degrade, so a clock-advance is the sole way
+    /// severe can surface here. Delivers to served members only (new members onboard on a
+    /// normal reconciling cycle).
+    /// </summary>
+    private async Task<int?> SendScheduledFromCacheAsync(
+        WeatherDataContext ctx, SmtpSender emailer, Locality locality, List<Recipient> members,
+        List<string> memberIds, IReadOnlySet<string> servedIds, LocalityState state,
+        WeatherSnapshot snapshot, IReadOnlyList<string> preferredIcaos, string inputHash, string reason,
+        TimeZoneInfo tz, IReadOnlyDictionary<long, Language> langById, ReportConfig cfg, DateTime now,
+        string label, CancellationToken ct)
+    {
+        int Skip(string why)
+        {
+            _degradeBreaker.Add(1, new KeyValuePair<string, object?>("outcome", "skip"));
+            Logger.Warn($"{label}: WX-182 degrade circuit-breaker — {why}; {reason} report deferred until the input changes (self-heal).");
+            return 0;
+        }
+
+        // The locality's last DELIVERED reconciled report: its snapshot + narrative. Keyed
+        // on a non-null StructuredReport so a prior narrative-less degraded-hazard send is
+        // not picked as the cache source.
+        var lastGood = await ctx.CommittedSends
+            .Where(cs => memberIds.Contains(cs.RecipientId) && cs.SentAtUtc.HasValue
+                && !cs.IsDiagnostic && cs.StructuredReport != null)
+            .OrderByDescending(cs => cs.ForecastSnapshot.GeneratedAtUtc)
+            .Select(cs => new { cs.StructuredReport, cs.ForecastSnapshot })
+            .FirstOrDefaultAsync(ct);
+
+        ForecastSnapshotBody cachedBody;
+        StructuredReportBody bandFree;
+        string bandFreeJson;
+        if (lastGood?.ForecastSnapshot is not { } cachedSnapshot
+            || cachedSnapshot.SchemaVersion != ForecastSnapshotBody.SchemaVersionCurrent
+            || lastGood.StructuredReport is null)
+            return Skip("degraded on identical input and no usable cached snapshot");
+        try
+        {
+            // Band-free: a cached scheduled re-send narrates no change (input unchanged
+            // since the degrade), so strip the stale "What's changed" band before rendering.
+            bandFree = WithoutChangeBand(StructuredReportBody.Deserialize(lastGood.StructuredReport));
+            cachedBody = ForecastSnapshotBody.Deserialize(cachedSnapshot.Body);
+            bandFreeJson = bandFree.Serialize();
+        }
+        catch (JsonException ex)
+        {
+            // A cached body that no longer deserializes must NOT defer the guaranteed
+            // scheduled report. This is reachable across a release boundary when the body's
+            // validation rules tighten — e.g. WX-189 forbade the {chN} anchors that older
+            // persisted reports still carry. Fall through to a normal reconcile (null) so the
+            // report is delivered on time and a fresh, current-schema body replaces the stale
+            // one; the breaker self-heals (costs one Claude call this once, not a missed send).
+            Logger.Warn($"{label}: WX-182 degrade circuit-breaker — cached report unusable ({ex.Message}); reconciling so the {reason} report is still delivered.");
+            return null;
+        }
+
+        // Safety re-check (WX-182 acceptance: severe is unaffected). The breaker armed on a
+        // non-hazard degrade, but a severe block fixed in the cached forecast can cross into
+        // the hazard horizon as the clock advances on a stuck input. If one now falls within
+        // it, do NOT serve a routine cached report — return null so the caller reconciles and
+        // the WX-148 degrade-hazard path delivers the banner (safety over cost).
+        if (SevereBlocks.AnyActiveWithin(cachedBody, now, DegradeHazardHorizon))
+        {
+            Logger.Info($"{label}: WX-182 degrade circuit-breaker — a severe block in the cached forecast is now within the hazard horizon; reconciling so the hazard path can send (not serving from cache).");
+            return null;
+        }
+
+        Logger.Info($"{label}: WX-182 degrade circuit-breaker — re-issuing the {reason} report from the last good snapshot (no Claude call).");
+        var plotsDir = new WxPaths(_config["InstallRoot"]).PlotsDir;
+        var sent = 0;
+        foreach (var member in members)
+        {
+            if (!servedIds.Contains(member.RecipientId))
+                continue;  // brand-new members onboard on a normal reconciling cycle, not a cached re-send
+            try
+            {
+                var langCode = ResolveLanguageCode(member, langById, cfg.DefaultLanguage);
+                var innerBody = StructuredReportRenderer.Render(
+                    bandFree, cachedBody, snapshot, member, langCode, tz, ReportKind.Scheduled, now);
+                if (await DeliverWeatherReportAsync(
+                        ctx, emailer, member, langCode, cachedSnapshot, innerBody,
+                        bandFreeJson, reasoningTrace: "WX-182 cached re-send (degrade circuit-breaker); no Claude call",
+                        snapshot, locality, tz, preferredIcaos, plotsDir, ReportKind.Scheduled, label,
+                        cachedBody, ct))
+                    sent++;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Logger.Error($"{member.RecipientId} {member.Email} ({member.Name}): failed to render or send cached scheduled report for {label}.", ex);
+            }
+        }
+
+        if (sent > 0)
+        {
+            _degradeBreaker.Add(1, new KeyValuePair<string, object?>("outcome", "cached_send"));
+            // clearDegraded:false — keep the breaker armed so further scheduled slots on this
+            // same stuck input also serve from cache (zero Claude cost) until the input changes.
+            await AdvanceBaselineAfterSendAsync(ctx, state, reason, now, inputHash, snapshot, label, ct, clearDegraded: false);
+        }
+        return sent;
+    }
+
+    /// <summary>
+    /// WX-178/WX-193: the single "What's changed" band-strip decision shared by every send path
+    /// that gates the band. Returns <paramref name="report"/> stripped (<see cref="WithoutChangeBand"/>)
+    /// when <see cref="SuppressesScheduledChangeBand"/> says a scheduled or diagnostic report carries
+    /// no near-term severe onset; otherwise returns it unchanged. Centralizing this is the deeper fix
+    /// behind WX-193 — the regression existed because the strip lived inline in the scheduled path and
+    /// was simply absent from the diagnostic one; one shared call keeps the two from drifting again. The
+    /// prior baseline is deserialized only when <paramref name="kind"/> actually gates the band (an
+    /// unscheduled cycle never needs it), and the suppression is logged with the kind for operability.
+    /// </summary>
+    private StructuredReportBody StripChangeBandUnlessSevereOnset(
+        StructuredReportBody report, ForecastSnapshotBody finalSnapshot,
+        ForecastSnapshot? priorSnapshot, ReportKind kind, DateTime nowUtc, TimeZoneInfo tz, string label)
+    {
+        // SuppressesScheduledChangeBand returns false for any non-gating kind; skip the prior
+        // deserialize entirely for those rather than pay for a baseline the gate won't read.
+        if (kind is not (ReportKind.Scheduled or ReportKind.Diagnostic)) return report;
+        var priorBandBody = priorSnapshot is null ? null : ForecastSnapshotBody.Deserialize(priorSnapshot.Body);
+        if (!SuppressesScheduledChangeBand(kind, report, finalSnapshot, priorBandBody, nowUtc, tz)) return report;
+        Logger.Debug($"{label}: {kind} \"What's changed\" band suppressed — no near-term severe onset (WX-178/WX-193).");
+        return WithoutChangeBand(report);
+    }
+
+    /// <summary>
+    /// WX-182: a copy of <paramref name="report"/> with the "What's changed" band removed —
+    /// empty <see cref="StructuredReportBody.Changes"/> and a null
+    /// <see cref="NarrativeSections.ChangeSummary"/> in every language, keeping each
+    /// language's closing. A cached scheduled re-send narrates no change (the input is
+    /// unchanged since the degrade; scheduled reports narrate only severe-onset, which would
+    /// have sent via the degrade-hazard path), so the stale band must not render.
+    /// </summary>
+    internal static StructuredReportBody WithoutChangeBand(StructuredReportBody report) =>
+        report with
+        {
+            Changes = [],
+            Narrative = report.Narrative.ToDictionary(
+                kv => kv.Key, kv => kv.Value with { ChangeSummary = null }, StringComparer.Ordinal),
+        };
+
+    /// <summary>
+    /// WX-178 (extended to Diagnostic by WX-193): whether a scheduled or diagnostic report's
+    /// "What's changed" band must be suppressed. Such a report carries the band ONLY for a
+    /// newly-appearing near-term severe hazard — a block going
+    /// <see cref="ForecastSnapshotBlock.SevereFlag"/> false→true versus the prior committed snapshot,
+    /// within local Day 1-3 (today through the day after tomorrow). For any other change the band
+    /// reads as an unscheduled update and is stripped (<see cref="WithoutChangeBand"/>). Pure and
+    /// deterministic — the reconciler prompt steers the LLM the same way and this is the backstop
+    /// that guarantees it. Never suppresses for an unscheduled kind or a bandless report; a first
+    /// send (no prior snapshot) that nonetheless carries a band IS suppressed — with no prior there
+    /// is no onset to establish.  The horizon (local Day 1-3) is deliberately its own thing, not the
+    /// <c>DegradeHazardHorizon</c> (~36 h, which governs sending a narrative-less hazard alert now).
+    /// </summary>
+    internal static bool SuppressesScheduledChangeBand(
+        ReportKind kind, StructuredReportBody report, ForecastSnapshotBody finalSnapshot,
+        ForecastSnapshotBody? priorBody, DateTime nowUtc, TimeZoneInfo tz)
+    {
+        if (kind is not (ReportKind.Scheduled or ReportKind.Diagnostic)) return false;
+        if (!ReportCarriesChangeBand(report)) return false;   // nothing to suppress
+        // First send (no prior): a severe ONSET can't be established against nothing, so a
+        // "What's changed" band is meaningless — suppress it. (Severe still shows in the grid,
+        // the WX-156 subject, and the closing.)
+        if (priorBody is null) return true;
+        return !finalSnapshot.HasSevereEscalationOver(priorBody, NearTermCutoffUtc(nowUtc, tz));
+    }
+
+    /// <summary>True when <paramref name="report"/> carries change content the band strip would clear — a non-empty changes array or any non-blank changeSummary. (The rendered band itself is driven by changeSummary; changes is included so a strip leaves a consistent band-free body. Validation keeps the two coupled.)</summary>
+    private static bool ReportCarriesChangeBand(StructuredReportBody report) =>
+        report.Changes.Count > 0
+        || report.Narrative.Values.Any(n => !string.IsNullOrWhiteSpace(n.ChangeSummary));
+
+    /// <summary>
+    /// The UTC instant at the start of local Day 4 (today + 3 local days, at local midnight):
+    /// a block starting before it falls on local Day 1-3, the WX-178 near-term window. DST-correct
+    /// via <see cref="TimeZoneInfo"/>.
+    /// </summary>
+    private static DateTime NearTermCutoffUtc(DateTime nowUtc, TimeZoneInfo tz)
+    {
+        var localNow = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(nowUtc, DateTimeKind.Utc), tz);
+        var day4LocalStart = DateTime.SpecifyKind(localNow.Date.AddDays(3), DateTimeKind.Unspecified);
+        // WX-185 guard: in a midnight-transition timezone, local midnight on a spring-forward day
+        // is a non-existent wall-clock time and ConvertTimeToUtc would throw, aborting the cycle.
+        // Roll forward an hour (mirrors GfsSnapshotBuilder.FloorToLocalDayPartStart); a ~1 h shift
+        // of a day-granular cutoff is immaterial to the near-term decision.
+        if (tz.IsInvalidTime(day4LocalStart))
+            day4LocalStart = day4LocalStart.AddHours(1);
+        return TimeZoneInfo.ConvertTimeToUtc(day4LocalStart, tz);
     }
 
     /// <summary>
@@ -1094,6 +1375,52 @@ public sealed class ReportWorker : BackgroundService
         Pressure = r.PressureUnit,
         WindSpeed = r.WindSpeedUnit,
     };
+
+    /// <summary>
+    /// Shared admission-control suppressor for the two day-banded send-timing rate-limits
+    /// (WX-181 post-send debounce, WX-157 pre-scheduled quiet window). Parses
+    /// <paramref name="scheduleRaw"/> fail-closed (a malformed schedule is logged and the
+    /// limiter disabled this cycle — never throws), runs <paramref name="decide"/>, and on a
+    /// suppress decision bumps <paramref name="counter"/> (mode-tagged). In Enforce mode it
+    /// persists the unsent cycle and returns <see langword="true"/> so the caller skips the
+    /// Claude call; in Shadow mode it logs the would-suppress and returns
+    /// <see langword="false"/> so the cycle proceeds. <paramref name="ticketLabel"/> drives the
+    /// Debug-log prefix the §13 verify scripts grep ("WX-181 debounce", "WX-157 quiet window");
+    /// <paramref name="configName"/> drives the fail-closed Warn ("invalid {configName}").
+    /// </summary>
+    private async Task<bool> ApplyDayBandedSuppressorAsync(
+        WeatherDataContext ctx, LocalityState state, string inputHash, string label,
+        SignificanceGateMode gateMode, string triggerType,
+        string scheduleRaw, string configName, string ticketLabel, Counter<long> counter,
+        Func<IReadOnlyList<DayBandedSchedule.Step>, (bool suppress, string reason)> decide,
+        CancellationToken ct)
+    {
+        IReadOnlyList<DayBandedSchedule.Step> schedule;
+        try
+        {
+            schedule = DayBandedSchedule.Parse(scheduleRaw);
+        }
+        catch (FormatException ex)
+        {
+            Logger.Warn($"{label}: invalid {configName} '{scheduleRaw}' — disabled this cycle: {ex.Message}");
+            return false;
+        }
+
+        var (suppress, reason) = decide(schedule);
+        if (!suppress)
+            return false;
+
+        bool enforce = gateMode == SignificanceGateMode.Enforce;
+        counter.Add(1, new KeyValuePair<string, object?>("mode", enforce ? "enforce" : "shadow"));
+        if (enforce)
+        {
+            Logger.Debug($"{label}: {ticketLabel} suppressed {triggerType} cycle — {reason}; Claude not called.");
+            await PersistUnsentCycleAsync(ctx, label, state, inputHash, ct);
+            return true;
+        }
+        Logger.Debug($"{label}: {ticketLabel} (shadow) WOULD suppress {triggerType} — {reason}; calling Claude anyway.");
+        return false;
+    }
 
     /// <summary>
     /// Persists the "called Claude but not sending this cycle" locality state shared
@@ -1296,25 +1623,12 @@ public sealed class ReportWorker : BackgroundService
         if (!state.LastScheduledSentUtc.HasValue && !state.LastUnscheduledSentUtc.HasValue)
             return (true, "first", ReportKind.Scheduled, false);
 
-        var minGap = TimeSpan.FromMinutes(cfg.MinGapMinutes);
-
-        // Last time any report was sent to this recipient.  Use Max (which
-        // ignores nulls) rather than a nullable `>` ternary: `a > b` is false
-        // whenever either operand is null, so the old ternary returned the null
-        // side when only one timestamp was set — skipping the gap check after a
-        // scheduled-only send and letting an arrival fire with no rate limit.
-        var lastSentUtc = new[] { state.LastScheduledSentUtc, state.LastUnscheduledSentUtc }.Max();
-
-        // Enforce minimum gap.  Note: LastClaudeInputHash is deliberately NOT
-        // touched on this path — an input that advanced during the gap must still
-        // read as "changed" once the gap clears, so the deferred send fires on the
-        // next eligible cycle.  A future refactor must not move the hash update
-        // into the gap path, or post-gap arrival sends would be silently swallowed
-        // (covered by ShouldSendTests.PostGap_AdvancedInput_SendsOnceGapClears).
-        if (lastSentUtc.HasValue && (nowUtc - lastSentUtc.Value) < minGap)
-            return (false, "gap", ReportKind.Scheduled, false);
-
-        // ── Scheduled send (always sends; bypasses the pre-filter) ────────────
+        // ── Scheduled send (WX-157: takes precedence) ─────────────────────────
+        // Evaluated BEFORE the min-gap and bypassing the pre-filter, so a preceding
+        // unscheduled send can never defer a due scheduled report — a "7 AM report"
+        // arrives at 7, not up to MinGapMinutes later (the late-scheduled deferral bug).
+        // The pre-scheduled quiet window (WX-157, in the gate stage) is what keeps
+        // unscheduled churn from landing right before the slot in the first place.
 
         var localNow = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, tz);
 
@@ -1337,6 +1651,26 @@ public sealed class ReportWorker : BackgroundService
                 return (true, "scheduled", ReportKind.Scheduled, false);
         }
 
+        // ── Minimum gap (unscheduled/arrival path only; scheduled is exempt above) ──
+
+        var minGap = TimeSpan.FromMinutes(cfg.MinGapMinutes);
+
+        // Last time any report was sent to this recipient.  Use Max (which
+        // ignores nulls) rather than a nullable `>` ternary: `a > b` is false
+        // whenever either operand is null, so the old ternary returned the null
+        // side when only one timestamp was set — skipping the gap check after a
+        // scheduled-only send and letting an arrival fire with no rate limit.
+        var lastSentUtc = new[] { state.LastScheduledSentUtc, state.LastUnscheduledSentUtc }.Max();
+
+        // Enforce minimum gap.  Note: LastClaudeInputHash is deliberately NOT
+        // touched on this path — an input that advanced during the gap must still
+        // read as "changed" once the gap clears, so the deferred send fires on the
+        // next eligible cycle.  A future refactor must not move the hash update
+        // into the gap path, or post-gap arrival sends would be silently swallowed
+        // (covered by ShouldSendTests.PostGap_AdvancedInput_SendsOnceGapClears).
+        if (lastSentUtc.HasValue && (nowUtc - lastSentUtc.Value) < minGap)
+            return (false, "gap", ReportKind.Scheduled, false);
+
         // ── Arrival pre-filter (WX-80) ────────────────────────────────────────
 
         // Cheap C# gate: has any input advanced since the last Claude call? If
@@ -1349,6 +1683,95 @@ public sealed class ReportWorker : BackgroundService
             return (false, "prefilter-skip", ReportKind.Scheduled, false);
 
         return (true, "change", ReportKind.Unscheduled, true);
+    }
+
+    /// <summary>
+    /// WX-181 day-banded update debounce decision (pure). Returns true when a *significant*
+    /// unscheduled change should be SUPPRESSED because its day-band's minimum gap has not
+    /// elapsed since the last unscheduled send. Sends (returns false) when: the change is a
+    /// not-severe→severe onset (<paramref name="gate"/>.SevereEntered — punches through), the
+    /// change is uncharacterized (no <c>EarliestChangedDayLocal</c>, e.g. disjoint horizon),
+    /// or the locality has never sent an unscheduled update. The <see cref="ReportConfig.MinGapMinutes"/>
+    /// floor is enforced separately (ShouldSend), so this only adds the longer day-banded window.
+    /// </summary>
+    internal static bool ShouldDebounceUpdate(
+        SignificanceResult gate, DateTime? lastUnscheduledSentUtc,
+        IReadOnlyList<DayBandedSchedule.Step> schedule,
+        DateTime nowUtc, TimeZoneInfo tz, out string reason)
+    {
+        reason = "";
+        if (gate.SevereEntered) return false;
+        if (gate.EarliestChangedDayLocal is not DateOnly changedDay) return false;
+        if (lastUnscheduledSentUtc is not DateTime lastUnscheduled) return false;
+
+        // 1-based day from the recipient's "today": today = 1, tomorrow = 2, … A change to a
+        // past day (shouldn't occur — the gate only reports in-horizon blocks) floors at 1.
+        var today = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(nowUtc, tz));
+        int dayNumber = Math.Max(1, changedDay.DayNumber - today.DayNumber + 1);
+        int minMinutes = DayBandedSchedule.MinMinutesForDay(schedule, dayNumber);
+
+        var sinceLast = nowUtc - lastUnscheduled;
+        if (sinceLast < TimeSpan.FromMinutes(minMinutes))
+        {
+            reason = $"change reaches local day {dayNumber} (min gap {minMinutes} min); last unscheduled send {sinceLast.TotalMinutes:0} min ago";
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// WX-157 day-banded pre-scheduled quiet window decision (pure). Returns true when a
+    /// *significant* unscheduled change should be SUPPRESSED because the next upcoming
+    /// scheduled slot falls within the change's day-band quiet window — its content will
+    /// ride the scheduled report (which renders "What's changed"). Sends (returns false)
+    /// when: the change is a not-severe→severe onset (<paramref name="gate"/>.SevereEntered
+    /// — punches through), the change is uncharacterized (no <c>EarliestChangedDayLocal</c>,
+    /// e.g. disjoint horizon), the locality has no scheduled hours, or the next slot is
+    /// further off than the quiet window. The scheduled report itself is never quieted
+    /// (ShouldSend fires it on its slot); <see cref="ReportConfig.MinGapMinutes"/> remains a
+    /// hard floor. Parallels <see cref="ShouldDebounceUpdate"/>.
+    /// </summary>
+    internal static bool ShouldQuietBeforeSlot(
+        SignificanceResult gate, IReadOnlyList<int> scheduledHours,
+        IReadOnlyList<DayBandedSchedule.Step> schedule,
+        DateTime nowUtc, TimeZoneInfo tz, out string reason)
+    {
+        reason = "";
+        if (gate.SevereEntered) return false;
+        if (gate.EarliestChangedDayLocal is not DateOnly changedDay) return false;
+        if (scheduledHours.Count == 0) return false;
+
+        // Nearest upcoming scheduled slot (strictly after now), handling multiple hours,
+        // day rollover, and tz/DST via ConvertTimeToUtc. Scheduled hours are ascending
+        // (ScheduledSendHoursFormat.Parse), matching ShouldSend's lastPassedHour scan.
+        var localNow = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, tz);
+        DateTime nextSlotLocal = default;
+        bool found = false;
+        foreach (var h in scheduledHours)
+        {
+            var slot = new DateTime(localNow.Year, localNow.Month, localNow.Day, h, 0, 0, DateTimeKind.Unspecified);
+            if (slot > localNow) { nextSlotLocal = slot; found = true; break; }
+        }
+        if (!found)
+        {
+            // All of today's slots have passed — the next is the earliest hour tomorrow.
+            var firstHour = scheduledHours[0];
+            nextSlotLocal = new DateTime(localNow.Year, localNow.Month, localNow.Day, firstHour, 0, 0, DateTimeKind.Unspecified).AddDays(1);
+        }
+        var nextSlotUtc = TimeZoneInfo.ConvertTimeToUtc(nextSlotLocal, tz);
+        var untilSlot = nextSlotUtc - nowUtc;
+
+        // 1-based day from the recipient's "today": today = 1, tomorrow = 2, …
+        var today = DateOnly.FromDateTime(localNow);
+        int dayNumber = Math.Max(1, changedDay.DayNumber - today.DayNumber + 1);
+        int quietMinutes = DayBandedSchedule.MinMinutesForDay(schedule, dayNumber);
+
+        if (untilSlot <= TimeSpan.FromMinutes(quietMinutes))
+        {
+            reason = $"next scheduled slot in {untilSlot.TotalMinutes:0} min <= quiet window {quietMinutes} min (change reaches local day {dayNumber}); content rides the scheduled report";
+            return true;
+        }
+        return false;
     }
 
     /// <summary>

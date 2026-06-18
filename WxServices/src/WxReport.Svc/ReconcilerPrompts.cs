@@ -43,9 +43,9 @@ internal static class ReconcilerPrompts
           • provisional_snapshot — a ForecastSnapshotBody derived deterministically
             from GFS model output, plus the gfs_model_run_utc. Treat the body as
             your working memory's starting state, covering up to a six-day horizon
-            in blocks aligned to the locality's local day-parts (00/06/12/18
-            local time: overnight/morning/afternoon/evening). Each block's startUtc is
-            the UTC instant of its local-day-part boundary.
+            in blocks aligned to the locality's local clock-band boundaries (00/06/12/18
+            local time: 00-06 / 06-12 / 12-18 / 18-24). Each block's startUtc is
+            the UTC instant of its local clock-band boundary.
           • current_observation — the most recent METAR for the station, with its
             observation_time_utc.
           • current_forecast    — the active TAF for the station, with its
@@ -213,8 +213,8 @@ internal static class ReconcilerPrompts
 
           • final_snapshot — your refined ForecastSnapshotBody. Same schema as
             provisional_snapshot: schemaVersion 5, ordered blocks aligned
-            to the locality's local day-part boundaries (00/06/12/18 local time:
-            overnight/morning/afternoon/evening), all required fields per block.
+            to the locality's local clock-band boundaries (00/06/12/18 local time:
+            00-06 / 06-12 / 12-18 / 18-24), all required fields per block.
             Temperatures stay in Celsius; winds stay in knots — a deterministic
             renderer converts units per recipient.
           • structured_report — the unit-neutral structured report. It is the
@@ -230,54 +230,33 @@ internal static class ReconcilerPrompts
           deterministic program with NO further LLM involvement, so it must be
           unit-neutral and language-complete by construction.
 
-          • changes — every reader-relevant difference versus prior_snapshot,
-            most important first (the same significance hierarchy above governs
-            tier). Each change carries tier, phenomenon, direction, the UTC
-            window affected, typed quantities, and a summaryToken ("ch1", "ch2",
-            … in array order). Empty when nothing changed (e.g. a steady-forecast
-            scheduled send).
-              - Every change MUST be a real difference from prior_snapshot. A
-                change is news only when this reconciled forecast differs from
-                prior_snapshot in its window: precipitation appearing where the
-                prior was dry, strengthening or weakening a band, clearing, or a
-                severe flag flipping. If the prior already carried the same
-                precipitation at the same likelihood in that window, it has NOT
-                changed — do not narrate it. Never invent a downgrade, an onset,
-                or a clearing that the prior-vs-now comparison does not show.
+          • You do NOT author a structured change list. After this call, a
+            deterministic program computes "what changed" by comparing
+            prior_snapshot against your final_snapshot, so you cannot introduce a
+            structural change the data does not support — get the final_snapshot
+            right and the change set follows. Your job for the band is the
+            changeSummary PROSE (below).
+              - In changeSummary, describe in one or two plain sentences what
+                genuinely differs from prior_snapshot: precipitation appearing
+                where the prior was dry, a band strengthening or weakening, a
+                hazard appearing or clearing, a meaningful temperature or wind
+                change. Narrate only REAL prior-vs-now differences the
+                final_snapshot supports — if the prior already carried the same
+                precipitation at the same likelihood in a window, it has NOT
+                changed; do not narrate it, and never describe an onset, downgrade,
+                or clearing the comparison does not show.
               - Sky-cover drift (partly/mostly cloudy/overcast) and a few knots of
-                wind within the same impact band are NOT "what's changed"
-                precipitation news. When a cycle's only differences from
-                prior_snapshot are that kind of wobble, the changes list is empty;
-                do not manufacture a precipitation change to fill the band.
-              - Each change window MUST coincide with the snapshot's block
-                boundaries: startUtc and endUtc are block startUtc values taken
-                from provisional_snapshot / final_snapshot (each block is exactly
-                one local day-part), and the window spans exactly the affected
-                blocks. The per-day grid the reader sees is built deterministically
-                from those same blocks, so a window off the block boundaries makes
-                the narrative and the grid disagree. Do NOT invent a finer clock
-                window than the blocks support — use a block's own startUtc and the
-                next block boundary, never an arbitrary clock time.
-              - A change whose phenomenon is precipitation APPEARING or
-                STRENGTHENING must correspond to a final_snapshot block that
-                actually carries that phenomenon within the window. Never report
-                precipitation (or a tier) the reconciled snapshot does not back.
-              - A change's PHENOMENON must be one the blocks in its window carry:
-                do not label a change "thunderstorm" when the blocks are rain.
-              - A change's TIER must be backed by the blocks. The safety-critical
-                tier in particular requires a block in the window carrying a
-                safety-grade signal: severeFlag set, freezing precipitation or
-                snow, or sustained wind of 34 kt or more. Ordinary "possible rain"
-                with no severe block is plans-affecting, NOT safety-critical — do
-                not over-escalate the tier above what the snapshot supports. This
-                block-backing requirement applies only to phenomena the snapshot
-                can encode; safety-critical conditions it cannot represent — dense
-                fog and the other obscurations, or extreme temperature — still
-                follow the significance hierarchy above, so a genuine dense-fog
-                hazard remains safety-critical without a severe/precip/wind block.
+                wind within the same impact band are NOT news — do not narrate
+                them in the change band.
+              - Never describe precipitation, a storm, or a hazard at a time the
+                final_snapshot blocks do not carry it; the per-day grid the reader
+                sees is built from those same blocks, so the band must agree with
+                them. Express every instant as a {q:time:...} token (the renderer
+                shows it in local time), never an internal clock window.
           • narrative — one entry per language code requested below, each with
-            exactly two prose sections: changeSummary (null when there is no
-            change band) and closing (the "In summary:" wrap-up). The current-
+            exactly two prose sections: changeSummary (the change-band prose; null
+            only on a scheduled or diagnostic report with no near-term severe
+            onset) and closing (the "In summary:" wrap-up). The current-
             conditions table and the per-day forecast grid are rendered
             deterministically from the data, so do NOT narrate them here. Write
             each language natively and idiomatically — never translate
@@ -324,25 +303,27 @@ internal static class ReconcilerPrompts
             token renders to. The renderer converts each token to the locality's
             local clock, so a token at 12:00Z that is 7:00 AM locally reads as
             "morning", not "afternoon". When you write a day-part word
-            ("morning", "afternoon", "evening", "overnight") beside a {q:time}
-            token, make the word agree with that token's local hour.
+            ("morning", "afternoon", "evening") beside a {q:time} token, make the
+            word agree with that token's local hour.
+          • The 00:00-06:00 pre-dawn block has NO safe day-part word: "overnight"
+            and "{weekday} night" both float to the WRONG calendar day for a US
+            reader, who hears "Saturday night" as the night that FOLLOWS Saturday,
+            not its first six hours. Never use them for this block. Bind it to its
+            day explicitly and without a night-word — e.g. "the early hours of
+            Saturday" or "Saturday, shortly after midnight" — beside the {q:time}
+            token, which renders the exact local time.
           • Each block is exactly one local day-part (WX-155): its local start hour
-            names it — 00:00 overnight, 06:00 morning, 12:00 afternoon, 18:00
-            evening. A change window covers whole blocks, so name its day-part from
-            the block(s) it spans; that name will agree with the {q:time} rule above.
-          • Change anchors: begin each changeSummary sentence that narrates a
-            change with that change's anchor token, e.g. "{ch1}Thunderstorms are
-            now expected after {q:time:...}." The anchor renders to nothing; it
-            ties the sentence to the change. Every change must be narrated in
-            EVERY language's changeSummary, and anchors appear only in
-            changeSummary.
+            names it — 06:00 morning, 12:00 afternoon, 18:00 evening, and 00:00 the
+            pre-dawn block (bound to its day per the rule above, never "overnight").
+            A change window covers whole blocks, so name its day-part from the
+            block(s) it spans; that name will agree with the {q:time} rule above.
           • Hedged certainty: never state weather as flatly certain, in any
             language — no forecast is ever 100% sure. Render even a "certain"
             precip expectation or a set severeFlag as calibrated strong
             likelihood ("almost certain", "highly likely", "expect"), never as a
             guarantee ("will", "definitely", "guaranteed").
           • The closing only SUMMARIZES the reconciled forecast (the current
-            conditions, the per-day grid, and the changes above). It must NOT
+            conditions, the per-day grid, and the change band). It must NOT
             introduce a precipitation, storm, or hazard chance — or a timing for
             one — that the final_snapshot blocks do not carry. If the blocks show
             a dry evening, do not write "a chance of a storm tonight"; if a storm
@@ -385,7 +366,7 @@ internal static class ReconcilerPrompts
                 changeSummary = new
                 {
                     type = new[] { "string", "null" },
-                    description = "Prose for the change band; null when no change band. The only section where {chN} anchors appear — every change's anchor, in every language.",
+                    description = "Prose for the change band: one or two plain sentences describing what genuinely changed since the prior committed forecast. Null only on a scheduled/diagnostic report with no near-term severe onset. Quantities appear only as {q:...} tokens; no anchors.",
                 },
                 closing = new { type = "string", description = "Prose for the \"In summary:\" closing. The current-conditions table and per-day grid are rendered deterministically — narrate only the change band and this closing." },
             },
@@ -415,42 +396,15 @@ internal static class ReconcilerPrompts
                     structured_report = new
                     {
                         type = "object",
-                        required = new[] { "schemaVersion", "changes", "narrative" },
+                        // WX-189: Claude no longer authors the structural change set. It
+                        // returns only the narrative prose; the deterministic
+                        // DeterministicChangeDetector computes changes[] from
+                        // (prior_snapshot, final_snapshot) after the call, so a phantom
+                        // structural change is impossible by construction.
+                        required = new[] { "schemaVersion", "narrative" },
                         properties = new
                         {
                             schemaVersion = new { type = "integer", @const = StructuredReportBody.SchemaVersionCurrent },
-                            changes = new
-                            {
-                                type = "array",
-                                description = "Reader-relevant differences versus prior_snapshot, most important first; empty when nothing changed.",
-                                items = new
-                                {
-                                    type = "object",
-                                    required = new[] { "tier", "phenomenon", "direction", "window", "quantities", "summaryToken" },
-                                    properties = new
-                                    {
-                                        tier = new { type = "string", @enum = SnakeCaseNames<ChangeTier>() },
-                                        phenomenon = new { type = "string", @enum = SnakeCaseNames<ChangePhenomenon>() },
-                                        direction = new { type = "string", @enum = SnakeCaseNames<ChangeDirection>() },
-                                        window = new { type = "object", description = "UTC window the change affects. startUtc and endUtc MUST be block boundaries copied from the snapshot blocks (each block is one local day-part) and span exactly the affected final_snapshot blocks — the per-day grid is built from those blocks, so an off-grid window disagrees with it.", required = new[] { "startUtc", "endUtc" }, properties = new { startUtc = new { type = "string", format = "date-time" }, endUtc = new { type = "string", format = "date-time" } } },
-                                        quantities = new
-                                        {
-                                            type = "array",
-                                            items = new
-                                            {
-                                                type = "object",
-                                                required = new[] { "kind", "value" },
-                                                properties = new
-                                                {
-                                                    kind = new { type = "string", @enum = SnakeCaseNames<QuantityKind>() },
-                                                    value = new { type = "number", description = "Canonical unit for the kind: temp °C, wind/gust kt, pressure hPa, precip_mm mm." },
-                                                },
-                                            },
-                                        },
-                                        summaryToken = new { type = "string", pattern = "^" + ReportTokens.AnchorNameRegexText + "$", description = "Anchor name: ch1, ch2, … in array order; unique." },
-                                    },
-                                },
-                            },
                             narrative = new
                             {
                                 type = "object",
@@ -519,16 +473,6 @@ internal static class ReconcilerPrompts
     /// reasoning_trace — no email, no snapshot — and the caller suppresses the
     /// send while leaving the committed forecast unchanged.
     /// </summary>
-    /// <summary>
-    /// snake_case_lower string names of <typeparamref name="T"/>'s members via
-    /// the same naming policy <c>CanonicalBodyJson</c> serializes with — the
-    /// C# enums are the single source for every <c>@enum</c> array in the
-    /// structured-report schema, so the vocabulary Claude is offered and the
-    /// vocabulary the deserializer accepts cannot drift apart.
-    /// </summary>
-    private static string[] SnakeCaseNames<T>() where T : struct, Enum
-        => Enum.GetNames<T>().Select(JsonNamingPolicy.SnakeCaseLower.ConvertName).ToArray();
-
     /// <returns>The serialisable tool definition for the skip-send decision.</returns>
     internal static object BuildSkipSendTool() => new
     {

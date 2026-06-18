@@ -4,6 +4,11 @@ Notes/
 # Machine-local secrets — never commit
 appsettings.local.json
 
+# Build/format scratch artifacts — dotnet format (and Dropbox-sync interference)
+# can leave "<name>.tmp.<pid>.<hex>" files beside the file it rewrites; they must
+# never be committed (a blanket `git add -A` would otherwise sweep them in). WX-188.
+*.tmp.*
+
 # Credential-file-type exclusions (WX-91) — keep secrets out by file-type,
 # not just by path, so a future credential-bearing file is excluded by
 # default rather than needing a one-off rule.
