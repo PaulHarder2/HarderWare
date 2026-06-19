@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# WX-204-verify.sh - confirm the reconciliation-degrade + wasted-Claude-call fixes
+# WX-204-205-206-verify.sh - confirm the reconciliation-degrade + wasted-Claude-call fixes
 # (WX-204 / WX-205 / WX-206, shipped together in 1.34.1) are live, by inspecting the service log
 # since the deploy.
 #
@@ -34,13 +34,13 @@
 # leave a service-log fingerprint -- unlike the WX-171/188/190 rendered-output checks). It reuses
 # verify-lib.sh for the version-pinned deploy boundary, the log window, and the PASS/FAIL/WAIT call.
 #
-# Usage:  WX-204-verify.sh [--since 'YYYY-MM-DD HH:MM:SS'] [--log PATH] [--deploy-log PATH] [-h]
+# Usage:  WX-204-205-206-verify.sh [--since 'YYYY-MM-DD HH:MM:SS'] [--log PATH] [--deploy-log PATH] [-h]
 # Shell:  bash (WSL). The PC runs in UTC. Shared scaffold in verify-lib.sh.
 
 set -uo pipefail
 
 SELF="${BASH_SOURCE[0]}"
-TICKET='WX-204'                                     # self-identification + header
+TICKET='WX-204/205/206'                                     # self-identification + header
 VERSION='1.34.1'                                    # the release that shipped WX-204/205/206 -- the deploy pin
 COMPONENTS=('WxReportSvc')                            # the service the fixes ship in
 TITLE='reconciliation degrade fixes -- per-block consistency + non-retryable computed faults'
@@ -54,7 +54,7 @@ vl_setup_window         # POST (log lines since SINCE) / elapsed / hh / mm (WAIT
 min_window_secs=0       # deterministic fix -- no wait time; the lib's >0 floor is bypassed here
 
 # Fingerprints over the post-deploy window.
-reconciled=$(printf '%s\n' "$POST" | cnt 'reconciled')                                  # exercised: a reconciliation ran
+reconciled=$(printf '%s\n' "$POST" | cnt 'Claude reconciliation tokens')                                  # exercised: a reconciliation ran
 phantom=$(printf '%s\n' "$POST" | cnt 'is not a real change versus prior_snapshot')      # FAILURE SIGNATURE: the phantom rejection
 wx205=$(printf '%s\n' "$POST" | cnt 'degrading immediately without retry')               # WX-205 fired (non-gating evidence)
 named=$(printf '%s\n' "$POST" | cnt 'sentence: \\"')                                      # WX-206 named-sentence closing fault (non-gating)
@@ -83,5 +83,5 @@ regression=$phantom
 precond=$(( (reconciled >= MIN_CYCLES || regression > 0) ? 1 : 0 ))
 vl_verdict "$regression" "$reconciled" \
   "the phantom-'Strengthening' rejection still fires post-deploy (shown above) -- the per-block consistency fix (WX-204) is not eliminating it; inspect the matched lines and the DeterministicChangeDetector/ValidateChangeSnapshotConsistency pair." \
-  "no phantom-'Strengthening' rejection fired across $reconciled reconciliation(s); any computed-change fault degraded immediately (WX-205: $wx205 line(s), no wasted retries). Review the WX-205/206 non-gating evidence above per WX-204.md." \
+  "no phantom-'Strengthening' rejection fired across $reconciled reconciliation(s); any computed-change fault degraded immediately (WX-205: $wx205 line(s), no wasted retries). Review the WX-205/206 non-gating evidence above per WX-204-205-206.md." \
   "$precond" "at least $MIN_CYCLES reconciliations since the deploy (got $reconciled)"
