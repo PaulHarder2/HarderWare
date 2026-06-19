@@ -364,6 +364,22 @@ public sealed class ForecastReconciler
             }
             catch (Exception ex) when (ex is MissingToolUseFieldException or JsonException or InvalidOperationException or DegenerateNarrativeException)
             {
+                // WX-205: a ChangeConsistencyException comes from ValidateChangeSnapshotConsistency on
+                // the COMPUTED change set (WX-189 computes changes[] deterministically AFTER this call),
+                // so it is a change-detector/validator disagreement — NOT something Claude authored or
+                // can fix. Retrying just re-calls Claude, which resubmits the same final_snapshot; the
+                // detector recomputes the same change and the validator rejects it identically (3 wasted
+                // calls in prod). Skip the futile retries: degrade immediately to the cleanly-parsed
+                // snapshot. Per-cycle cost drops from 3 Claude calls to 1, and the loud ERROR keeps the
+                // underlying detector bug visible (WX-204) rather than silently burning calls.
+                if (ex is ChangeConsistencyException && lastParsedSnapshot is not null)
+                {
+                    Logger.Error($"Reconciliation rejected a COMPUTED change ({ex.Message}); this is a deterministic "
+                        + "change-detector/validator disagreement Claude cannot fix — degrading immediately without retry "
+                        + "(WX-205). Fix the detector (WX-204) to eliminate the fault.");
+                    return new ReconcileResult.Degraded(lastParsedSnapshot, tokens, ex.Message);
+                }
+
                 // Retryable-malformed output: re-call unless attempts are exhausted.
                 if (attempt < maxAttempts)
                 {
@@ -631,10 +647,19 @@ public sealed class ForecastReconciler
                 // phenomenon's change (a phantom "snow strengthening").
                 bool newSevere = SevereForPhenomenon(finalSnapshot, precip, w);
                 bool priorSevere = prior is not null && SevereForPhenomenon(prior, precip, w);
+                // WX-204: back the change PER BLOCK, not by the window aggregate. The detector
+                // classifies each block vs its prior-by-StartUtc counterpart and groups consecutive
+                // same-direction blocks into one window, so a window is a REAL strengthening when an
+                // INTERIOR block rose (e.g. a 17Z block going severe) even if another block was already
+                // at the max — leaving the window-aggregate (MaxExpect/SevereForPhenomenon) flat. The
+                // old window-max comparison masked those interior rises and false-rejected real changes
+                // (prod phantom-"Strengthening" degrades). "Any in-window block moved the claimed way"
+                // accepts exactly what the detector emits (tautological again) while still rejecting a
+                // true phantom — a change with NO block carrying it (the WX-151 intent).
                 bool real = change.Direction switch
                 {
-                    ChangeDirection.Appearing or ChangeDirection.Strengthening => newE > priorE || (newSevere && !priorSevere),
-                    ChangeDirection.Weakening or ChangeDirection.Clearing => !priorCoversWindow || newE < priorE || (priorSevere && !newSevere),
+                    ChangeDirection.Appearing or ChangeDirection.Strengthening => AnyPrecipBlockRises(finalSnapshot, prior, precip, w),
+                    ChangeDirection.Weakening or ChangeDirection.Clearing => !priorCoversWindow || AnyPrecipBlockFalls(finalSnapshot, prior, precip, w),
                     _ => true,  // Shifting (WX-111 wind vector) is not a precip-intensity change; prompt-governed
                 };
                 if (!real)
@@ -651,10 +676,14 @@ public sealed class ForecastReconciler
                 // not tied to a precip phenomenon.
                 bool newSevere = AnySevereInWindow(finalSnapshot, w);
                 bool priorSevere = prior is not null && AnySevereInWindow(prior, w);
+                // WX-204: per-block backing (see the precip arm) — an interior block whose severe rose
+                // is a real change even when another in-window block was already severe (window
+                // aggregate flat). Mirrors the detector's per-block grouping; still rejects a true
+                // phantom (no block's severe moved the claimed way).
                 bool real = change.Direction switch
                 {
-                    ChangeDirection.Appearing or ChangeDirection.Strengthening => newSevere && !priorSevere,
-                    ChangeDirection.Weakening or ChangeDirection.Clearing => !priorCoversWindow || (priorSevere && !newSevere),
+                    ChangeDirection.Appearing or ChangeDirection.Strengthening => AnySevereBlockRises(finalSnapshot, prior, w),
+                    ChangeDirection.Weakening or ChangeDirection.Clearing => !priorCoversWindow || AnySevereBlockFalls(finalSnapshot, prior, w),
                     _ => true,
                 };
                 if (!real)
@@ -1119,13 +1148,13 @@ public sealed class ForecastReconciler
         while (from < masked.Length)
         {
             int end = SentenceEnd(masked, from);
-            CheckClosingSentence(lang, section, masked, from, end, refDate, finalSnapshot, tz);
+            CheckClosingSentence(lang, section, prose, masked, from, end, refDate, finalSnapshot, tz);
             from = end + 1;
         }
     }
 
     private static void CheckClosingSentence(
-        string lang, NarrativeSection section, string masked, int start, int end, DateOnly refDate, ForecastSnapshotBody finalSnapshot, TimeZoneInfo tz)
+        string lang, NarrativeSection section, string prose, string masked, int start, int end, DateOnly refDate, ForecastSnapshotBody finalSnapshot, TimeZoneInfo tz)
     {
         // Must assert a precipitation/storm phenomenon...
         if (!ContainsAnyWord(masked, start, end, ClosingPrecipWords))
@@ -1157,10 +1186,20 @@ public sealed class ForecastReconciler
             }
         }
         if (any && !anyWet)
+        {
+            // WX-206: name the exact offending sentence (whitespace-collapsed) so the retry feedback
+            // pins the one sentence to re-word rather than a generic "a local time", which converges
+            // the retry instead of resampling. Cut from the ORIGINAL prose (CodeRabbit) — masked has
+            // brace tokens blanked, but it is the same length as prose (equal-length replacement), so
+            // start/end index identically — so Claude sees its real sentence, tokens intact.
+            var offending = string.Join(" ", prose.Substring(start, end - start)
+                .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
             throw new NarrativeProseException(section,
-                $"structured_report narrative '{lang}' asserts precipitation/storm activity at a local time "
-                + "the final_snapshot leaves entirely dry; the prose summarizes the conditions, day-grid, and "
-                + "changes and must not introduce a forecast the snapshot does not carry.");
+                $"structured_report narrative '{lang}' asserts precipitation/storm activity at a local time the "
+                + $"final_snapshot leaves entirely dry, in this {section} sentence: \"{offending}\". Re-word that exact "
+                + "sentence to match the snapshot (it is dry at that time); the prose summarizes the conditions, "
+                + "day-grid, and changes and must not introduce a forecast the snapshot does not carry.");
+        }
     }
 
     // Precipitation/storm phenomenon words the closing could assert. (A precip word
@@ -1322,6 +1361,51 @@ public sealed class ForecastReconciler
                 return false;
         return true;
     }
+
+    // ── WX-204 per-block change backing ───────────────────────────────────────
+    // DeterministicChangeDetector classifies each block against its prior-by-StartUtc counterpart
+    // and groups consecutive same-direction blocks into one change window, so a window is a REAL
+    // change when an INTERIOR block moved even if the window aggregate (MaxExpect / AnySevereInWindow)
+    // is flat. These mirror that per-block axis so the consistency net accepts exactly what the
+    // detector emits (tautological) while still rejecting a change no block carries (the WX-151 intent).
+    // The expectation/severe axis matches the detector's ExpectOf/SevereOf: a block backs phenomenon
+    // p only when it actually carries p.
+    private static int BlockExpect(ForecastSnapshotBlock? b, PrecipPhenomenon p) =>
+        b is not null && b.PrecipPhenomenon == p ? (int)b.PrecipExpectation : (int)PrecipExpectation.None;
+
+    private static bool BlockSevere(ForecastSnapshotBlock? b, PrecipPhenomenon p) =>
+        b is not null && b.PrecipPhenomenon == p && b.SevereFlag;
+
+    private static ForecastSnapshotBlock? PriorBlockAt(ForecastSnapshotBody? prior, DateTime startUtc) =>
+        prior?.Blocks.FirstOrDefault(b => b.StartUtc == startUtc);
+
+    private static bool AnyPrecipBlockRises(ForecastSnapshotBody final, ForecastSnapshotBody? prior, PrecipPhenomenon p, ChangeWindow w) =>
+        final.Blocks.Where(b => BlockOverlapsWindow(b.StartUtc, w)).Any(b =>
+        {
+            var pri = PriorBlockAt(prior, b.StartUtc);
+            return BlockExpect(b, p) > BlockExpect(pri, p) || (BlockSevere(b, p) && !BlockSevere(pri, p));
+        });
+
+    private static bool AnyPrecipBlockFalls(ForecastSnapshotBody final, ForecastSnapshotBody? prior, PrecipPhenomenon p, ChangeWindow w) =>
+        final.Blocks.Where(b => BlockOverlapsWindow(b.StartUtc, w)).Any(b =>
+        {
+            var pri = PriorBlockAt(prior, b.StartUtc);
+            return BlockExpect(b, p) < BlockExpect(pri, p) || (BlockSevere(pri, p) && !BlockSevere(b, p));
+        });
+
+    // The standalone Severe phenomenon is STANDALONE-severe (severe with no precip type) per
+    // DeterministicChangeDetector.DetectSevere — a severe block that carries a precip phenomenon is
+    // that phenomenon's strengthening, not a standalone Severe change. Mirror that exactly: a block
+    // counts only when SevereFlag is set AND PrecipPhenomenon is null (null block → not standalone).
+    private static bool IsStandaloneSevere(ForecastSnapshotBlock? b) => b is { SevereFlag: true, PrecipPhenomenon: null };
+
+    private static bool AnySevereBlockRises(ForecastSnapshotBody final, ForecastSnapshotBody? prior, ChangeWindow w) =>
+        final.Blocks.Where(b => BlockOverlapsWindow(b.StartUtc, w)).Any(b =>
+            IsStandaloneSevere(b) && !IsStandaloneSevere(PriorBlockAt(prior, b.StartUtc)));
+
+    private static bool AnySevereBlockFalls(ForecastSnapshotBody final, ForecastSnapshotBody? prior, ChangeWindow w) =>
+        final.Blocks.Where(b => BlockOverlapsWindow(b.StartUtc, w)).Any(b =>
+            !IsStandaloneSevere(b) && IsStandaloneSevere(PriorBlockAt(prior, b.StartUtc)));
 
     // WX-120 fall-safe, carried into the structured-report world (WX-130): true
     // when any requested language's narrative is near-blank. The narrative now
