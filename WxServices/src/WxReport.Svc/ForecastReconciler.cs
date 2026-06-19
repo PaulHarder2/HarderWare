@@ -1148,13 +1148,13 @@ public sealed class ForecastReconciler
         while (from < masked.Length)
         {
             int end = SentenceEnd(masked, from);
-            CheckClosingSentence(lang, section, masked, from, end, refDate, finalSnapshot, tz);
+            CheckClosingSentence(lang, section, prose, masked, from, end, refDate, finalSnapshot, tz);
             from = end + 1;
         }
     }
 
     private static void CheckClosingSentence(
-        string lang, NarrativeSection section, string masked, int start, int end, DateOnly refDate, ForecastSnapshotBody finalSnapshot, TimeZoneInfo tz)
+        string lang, NarrativeSection section, string prose, string masked, int start, int end, DateOnly refDate, ForecastSnapshotBody finalSnapshot, TimeZoneInfo tz)
     {
         // Must assert a precipitation/storm phenomenon...
         if (!ContainsAnyWord(masked, start, end, ClosingPrecipWords))
@@ -1187,10 +1187,12 @@ public sealed class ForecastReconciler
         }
         if (any && !anyWet)
         {
-            // WX-206: name the exact offending sentence (whitespace-collapsed; brace tokens are
-            // already masked to blanks) so the retry feedback pins the one sentence to re-word
-            // rather than a generic "a local time", which converges the retry instead of resampling.
-            var offending = string.Join(" ", masked.Substring(start, end - start)
+            // WX-206: name the exact offending sentence (whitespace-collapsed) so the retry feedback
+            // pins the one sentence to re-word rather than a generic "a local time", which converges
+            // the retry instead of resampling. Cut from the ORIGINAL prose (CodeRabbit) — masked has
+            // brace tokens blanked, but it is the same length as prose (equal-length replacement), so
+            // start/end index identically — so Claude sees its real sentence, tokens intact.
+            var offending = string.Join(" ", prose.Substring(start, end - start)
                 .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
             throw new NarrativeProseException(section,
                 $"structured_report narrative '{lang}' asserts precipitation/storm activity at a local time the "
