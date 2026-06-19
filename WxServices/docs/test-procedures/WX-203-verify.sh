@@ -72,6 +72,18 @@ sqlbody() {  # Id -> EmailBody on stdout, unbounded width.
 vl_parse_args "$@"
 vl_resolve_boundary     # SINCE / COMMIT / DEPLOY_INFO (WAIT-exits if VERSION not deployed)
 min_window_secs=0       # deterministic fix -- no wait time; gate is the es-report precondition + zero artifacts
+# DB/event-based verify: this script does NOT call vl_setup_window, so it must set the window
+# bookkeeping vl_verdict expects (elapsed/hh/mm) itself -- elapsed = deploy boundary -> now. Without
+# this, vl_verdict dies with "elapsed: unbound variable" on the precond-MET (PASS/FAIL) branch, which
+# only runs once an es report has been delivered -- so every prior WAIT run hid the fault (WX-203
+# verify's own bug, surfaced 2026-06-19 the moment the first es report arrived). Mirrors WX-171-verify.
+# INTERIM per-script fix — this exact computation should live ONCE in verify-lib.sh (vl_verdict deriving
+# elapsed from SINCE when unset), not be duplicated per DB/event-based script. Tracked in WX-209.
+since_epoch=$(date -u -d "$SINCE UTC" +%s 2>/dev/null) \
+  || { echo "could not parse boundary '$SINCE'" >&2; exit 2; }   # mirror vl_setup_window's guard
+now_epoch=$(date -u +%s)
+elapsed=$(( now_epoch - since_epoch )); [ "$elapsed" -gt 0 ] || elapsed=1
+hh=$(( elapsed / 3600 )); mm=$(( (elapsed % 3600) / 60 ))
 
 # Delivered report sends since the deploy boundary.
 CANDIDATES="$(sqlq "SET NOCOUNT ON; SELECT cs.Id, CONVERT(varchar(19), cs.CreatedAtUtc, 120) FROM CommittedSends cs WHERE cs.SentAtUtc IS NOT NULL AND cs.CreatedAtUtc >= '$SINCE' ORDER BY cs.Id")"
