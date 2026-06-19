@@ -374,6 +374,12 @@ public static partial class ReportTokens
     [GeneratedRegex(@"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?(\.\d+)?Z$")]
     private static partial Regex TimeValuePattern();
 
+    // WX-203: an isolated pair of periods — a token's trailing period ("p. m.")
+    // colliding with a sentence period — and NOT a run of three or more (an
+    // ellipsis), which the lookarounds exclude. Used to collapse the pair to one.
+    [GeneratedRegex(@"(?<!\.)\.\.(?!\.)")]
+    private static partial Regex DoubledPeriodPattern();
+
     // A literal unit written adjacent to a *quantity* token ({q:time:...} is
     // exempt — a unit word after a time reference is not the double-unit bug).
     // The renderer appends the unit when it substitutes the token, so prose
@@ -516,7 +522,7 @@ public static partial class ReportTokens
         Func<QuantityKind, double, string> renderQuantity,
         Func<DateTime, string> renderTime)
     {
-        return BraceSpanPattern().Replace(text, m =>
+        var expanded = BraceSpanPattern().Replace(text, m =>
         {
             var span = m.Value;
             if (AnchorTokenPattern().IsMatch(span))
@@ -542,5 +548,19 @@ public static partial class ReportTokens
                 ? renderQuantity(qk, parsed)
                 : span;
         });
+
+        // WX-203: when period-ending text — the es time designator "p. m.", or any
+        // Spanish abbreviation — immediately precedes a sentence-terminating period,
+        // the result is a doubled period ("…tras 9:00 p. m.."). Spanish typography
+        // treats the abbreviation's period as also closing the sentence, so collapse
+        // an ISOLATED doubled period to one. The lookarounds match only a lone pair,
+        // so a run of three or more is left intact — an intentional ellipsis ("..."),
+        // or the rarer abbreviation+ellipsis run, which is genuinely ambiguous (drop
+        // to three, or a deliberate ellipsis+period keep four?) and so deliberately
+        // not guessed at. The es time is the motivating case and the only
+        // period-ending TOKEN value, but the rule is general; en's "9:00 PM" has no
+        // trailing period, so it never fires there. Applied at the single chokepoint
+        // every prose render flows through, so the closing and the change band both get it.
+        return DoubledPeriodPattern().Replace(expanded, ".");
     }
 }
