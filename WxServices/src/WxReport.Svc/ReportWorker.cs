@@ -251,6 +251,23 @@ public sealed class ReportWorker : BackgroundService
 
         Logger.Info($"{label}: sending startup (diagnostic) report to {startup.RecipientId} {startup.Email} ({startup.Name}) only.");
 
+        // WX-171: resolve the renderable (complete, canonicalized) language first; if the startup
+        // recipient's language is incomplete, skip the diagnostic BEFORE creating the audit anchor
+        // or calling Claude, so a broken-templates startup doesn't orphan a snapshot (CodeRabbit).
+        // Canonicalize the code so the requested narrative set matches the renderer's normalized lookup.
+        var langById = await ctx.Languages.ToDictionaryAsync(l => l.Id, ct);
+        var narrativeLanguages = members
+            .Select(m => LanguageTemplateStore.CanonicalIso(ResolveLanguageCode(m, langById, cfg.DefaultLanguage)))
+            .Distinct(StringComparer.Ordinal)
+            .Where(iso => _templates.MissingTokens(iso, Tok.All).Count == 0)
+            .ToList();
+        if (narrativeLanguages.Count == 0)
+        {
+            Logger.Error($"{label}: startup recipient's language template set is incomplete — skipping the diagnostic " +
+                "(no audit anchor, no Claude call). (WX-171 fail-closed pre-filter.)");
+            return;
+        }
+
         // Pre-Claude audit anchor (matches the cycle path); the diagnostic prior
         // lookup deliberately excludes diagnostic rows so a prior real send is the
         // baseline, never an earlier startup test.
@@ -271,21 +288,6 @@ public sealed class ReportWorker : BackgroundService
             .FirstOrDefaultAsync(ct);
 
         var provisionalBody = ForecastSnapshotBody.Deserialize(anchorSnapshot.Body);
-        var langById = await ctx.Languages.ToDictionaryAsync(l => l.Id, ct);
-        // WX-171: only request narrative for renderable (complete) languages; if the startup
-        // recipient's language is incomplete, skip the diagnostic before the Claude call rather
-        // than reconcile and then fail the lone recipient closed (CodeRabbit).
-        var narrativeLanguages = members
-            .Select(m => ResolveLanguageCode(m, langById, cfg.DefaultLanguage))
-            .Distinct(StringComparer.Ordinal)
-            .Where(iso => _templates.MissingTokens(iso, Tok.All).Count == 0)
-            .ToList();
-        if (narrativeLanguages.Count == 0)
-        {
-            Logger.Error($"{label}: startup recipient's language template set is incomplete — skipping the diagnostic " +
-                "(no Claude call). (WX-171 fail-closed pre-filter.)");
-            return;
-        }
 
         var reconciler = new ForecastReconciler(
             new ClaudeClient(_claudeHttpClient, claude_cfg.ApiKey, claude_cfg.Model, _persona.Text), _templates);
@@ -725,6 +727,27 @@ public sealed class ReportWorker : BackgroundService
         // snapshot records what we were about to reconcile. Per-recipient delivery
         // rows (CommittedSend) are written only on success — there is no provisional
         // CommittedSend in the per-locality model.
+
+        // WX-171: resolve the renderable (complete) languages up front — canonicalized to the
+        // same bare iso the renderer and reconciler key on (so the requested narrative set can't
+        // mismatch a normalized lookup). A recipient whose language is incomplete fails closed
+        // (the per-member send gate below). If NO member has a complete language, skip the
+        // locality HERE — before building/persisting the provisional snapshot or calling Claude —
+        // so a broken-templates locality doesn't orphan an audit snapshot or burn a reconcile
+        // every cycle (CodeRabbit). The per-member gate stays the fail-closed boundary for the mix.
+        var sendableLanguages = members
+            .Select(m => LanguageTemplateStore.CanonicalIso(ResolveLanguageCode(m, langById, cfg.DefaultLanguage)))
+            .Distinct(StringComparer.Ordinal)
+            .Where(iso => _templates.MissingTokens(iso, Tok.All).Count == 0)
+            .ToList();
+        if (sendableLanguages.Count == 0)
+        {
+            Logger.Error($"{label}: no member has a complete language template set — skipping the locality this cycle " +
+                "(no provisional snapshot, no Claude reconcile, no send). Resolve by regenerating/repairing the " +
+                "language templates. (WX-171 fail-closed pre-filter.)");
+            return 0;
+        }
+
         var snapshotKey = !string.IsNullOrWhiteSpace(snapshot.StationIcao)
             ? snapshot.StationIcao
             : (snapshot.TafStationIcao ?? "");
@@ -806,26 +829,10 @@ public sealed class ReportWorker : BackgroundService
             }
         }
 
-        // The narrative must carry every language the locality's members read — but only the
-        // ones we can actually render. WX-171: a recipient whose language is incomplete fails
-        // closed (the per-member send gate below logs + skips it), so build the narrative for
-        // the COMPLETE languages only (don't pay Claude to author prose for a language we'd
-        // discard). And if NO member has a complete language, skip the whole locality BEFORE the
-        // expensive reconcile rather than call Claude and send to no one (which never advances
-        // the baseline, so it would repeat every cycle — CodeRabbit). The per-member gate stays
-        // the authoritative fail-closed boundary for the mixed case.
-        var narrativeLanguages = members
-            .Select(m => ResolveLanguageCode(m, langById, cfg.DefaultLanguage))
-            .Distinct(StringComparer.Ordinal)
-            .Where(iso => _templates.MissingTokens(iso, Tok.All).Count == 0)
-            .ToList();
-        if (narrativeLanguages.Count == 0)
-        {
-            Logger.Error($"{label}: no member has a complete language template set — skipping the locality this cycle " +
-                "(no Claude reconcile, no send). Every recipient fails closed; resolve by regenerating/repairing the " +
-                "language templates. (WX-171 fail-closed pre-filter.)");
-            return 0;
-        }
+        // The reconcile requests narrative for exactly the renderable languages resolved above
+        // (complete + canonicalized), so Claude is never asked for a language we'd discard and
+        // the requested set matches the renderer's normalized narrative lookup.
+        var narrativeLanguages = sendableLanguages;
 
         var claudeSw = Stopwatch.StartNew();
         var reconcileResult = await reconciler.ReconcileAsync(

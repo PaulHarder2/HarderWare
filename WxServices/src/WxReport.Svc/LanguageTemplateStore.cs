@@ -77,8 +77,10 @@ public sealed class LanguageTemplateStore
     /// cache and failing a recipient closed (WX-171; the defense the renderer's former
     /// <c>NormalizeLang</c> provided, kept here as the single iso→templates boundary). This
     /// canonicalizes the lookup KEY only — it never substitutes a different language's phrases.
+    /// Public so callers that must agree with the renderer/reconciler on the language key
+    /// (e.g. the worker's <c>narrativeLanguages</c>) canonicalize identically (WX-171, review).
     /// </summary>
-    private static string Normalize(string isoCode) =>
+    public static string CanonicalIso(string isoCode) =>
         string.IsNullOrEmpty(isoCode) ? isoCode : isoCode.Split('-')[0].ToLowerInvariant();
 
     /// <summary>
@@ -92,7 +94,7 @@ public sealed class LanguageTemplateStore
         phrase = "";
         if (string.IsNullOrEmpty(isoCode) || string.IsNullOrEmpty(token))
             return false;
-        if (!Current().ByIso.TryGetValue(Normalize(isoCode), out var lang))
+        if (!Current().ByIso.TryGetValue(CanonicalIso(isoCode), out var lang))
             return false;
         // Don't pass `phrase` straight to TryGetValue: on a miss it would overwrite our
         // "" guard with null. Only assign on a hit, so a miss always yields ("", false).
@@ -106,13 +108,13 @@ public sealed class LanguageTemplateStore
 
     /// <summary>The blocked (not-representable) tokens for a language, or an empty set if the language is not loaded. Returns a defensive copy so the shared snapshot's set can't be mutated through the returned reference.</summary>
     public IReadOnlySet<string> BlockedTokens(string isoCode) =>
-        Current().ByIso.TryGetValue(Normalize(isoCode), out var lang)
+        Current().ByIso.TryGetValue(CanonicalIso(isoCode), out var lang)
             ? new HashSet<string>(lang.BlockedTokens, StringComparer.Ordinal)
             : new HashSet<string>(StringComparer.Ordinal);
 
     /// <summary>The full representable token→phrase map for a language, or an empty map if not loaded.</summary>
     public IReadOnlyDictionary<string, string> PhrasesFor(string isoCode) =>
-        Current().ByIso.TryGetValue(Normalize(isoCode), out var lang)
+        Current().ByIso.TryGetValue(CanonicalIso(isoCode), out var lang)
             ? lang.Phrases
             : new Dictionary<string, string>(StringComparer.Ordinal);
 
@@ -125,7 +127,7 @@ public sealed class LanguageTemplateStore
     /// </summary>
     public TemplateSet ForLanguage(string isoCode)
     {
-        var iso = Normalize(isoCode);
+        var iso = CanonicalIso(isoCode);
         var phrases = Current().ByIso.TryGetValue(iso, out var lang)
             ? lang.Phrases
             : new Dictionary<string, string>(StringComparer.Ordinal);
@@ -145,7 +147,7 @@ public sealed class LanguageTemplateStore
     /// </summary>
     public CultureInfo CultureFor(string isoCode)
     {
-        var name = !string.IsNullOrEmpty(isoCode) && Current().CultureByIso.TryGetValue(Normalize(isoCode), out var c) && !string.IsNullOrWhiteSpace(c)
+        var name = !string.IsNullOrEmpty(isoCode) && Current().CultureByIso.TryGetValue(CanonicalIso(isoCode), out var c) && !string.IsNullOrWhiteSpace(c)
             ? c
             : "en-US";
         return SafeCulture(name);
@@ -167,7 +169,7 @@ public sealed class LanguageTemplateStore
     /// </summary>
     public IReadOnlyList<string> MissingTokens(string isoCode, IEnumerable<string> required)
     {
-        var has = Current().ByIso.TryGetValue(Normalize(isoCode), out var lang)
+        var has = Current().ByIso.TryGetValue(CanonicalIso(isoCode), out var lang)
             ? lang.Phrases
             : new Dictionary<string, string>(StringComparer.Ordinal);
         return required
