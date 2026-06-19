@@ -134,7 +134,7 @@ internal static class DeterministicChangeDetector
                 // own change (a severe thunderstorm is a Thunderstorm strengthening),
                 // so the standalone Severe phenomenon is reserved for severe with no
                 // precip type (high wind) — see DetectSevere.
-                var tier = PrecipTier(block, pri, nowUtc);
+                var tier = PrecipTier(block, pri, dir, nowUtc);
                 runs.Offer(block.StartUtc, dir, tier, quantities: []);
             }
             runs.Flush();
@@ -323,15 +323,22 @@ internal static class DeterministicChangeDetector
 
     // ── per-phenomenon / per-block helpers ────────────────────────────────────
 
-    // Tier for a precip block's change: safety when EITHER the new or the prior block
-    // carries a safety-grade signal (severe, frozen/freezing precip, or sustained wind
-    // ≥ 34 kt — the oracle's safety-backing set), else by horizon. The prior block is
-    // checked too because a WEAKENING/CLEARING change removes a hazard the FINAL block no
-    // longer carries — and the WX-81 hierarchy counts a newly-removed hazard as safety
-    // news at any horizon (clearing a snow/ice event must not de-escalate below Safety).
-    private static ChangeTier PrecipTier(ForecastSnapshotBlock final, ForecastSnapshotBlock prior, DateTime nowUtc)
+    // Tier for a precip block's change: safety when a safety-grade signal (severe,
+    // frozen/freezing precip, or sustained wind ≥ 34 kt — the oracle's safety-backing set)
+    // backs it, else by horizon. The FINAL block's hazard always qualifies. The PRIOR
+    // block's hazard qualifies ONLY for a WEAKENING/CLEARING change — a newly-removed hazard
+    // is safety news at any horizon (clearing a snow/ice event must not de-escalate below
+    // Safety, WX-81), and ValidateChangeSnapshotConsistency deliberately does not require
+    // final backing for those. For an APPEARING/STRENGTHENING change the prior hazard is
+    // irrelevant — a block going Snow→Rain makes the *snow clearing* the safety event, not
+    // the appearing rain — and the validator requires the FINAL to carry the signal there,
+    // so inheriting Safety from the prior over-escalates and breaks the tautology (WX-207:
+    // "tier 'Safety' (Rain) but no final_snapshot block carries a safety-grade signal").
+    private static ChangeTier PrecipTier(ForecastSnapshotBlock final, ForecastSnapshotBlock prior, ChangeDirection? dir, DateTime nowUtc)
     {
-        if (IsSafetyGradePrecip(final) || IsSafetyGradePrecip(prior))
+        if (IsSafetyGradePrecip(final))
+            return ChangeTier.Safety;
+        if (dir is ChangeDirection.Weakening or ChangeDirection.Clearing && IsSafetyGradePrecip(prior))
             return ChangeTier.Safety;
         return HorizonTier(TierOf(final.StartUtc, nowUtc));
     }

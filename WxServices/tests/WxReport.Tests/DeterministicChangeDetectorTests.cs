@@ -326,6 +326,27 @@ public class DeterministicChangeDetectorTests
         ForecastReconciler.ValidateChangeSnapshotConsistency(report, final, prior, Utc);
     }
 
+    [Fact]
+    public void RainAppearing_OverPriorSnowBlock_IsNotSafetyTier_AndPassesConsistency_WX207()
+    {
+        // WX-207 regression: a block going Snow->Rain. The detector emits a Rain APPEARING and a
+        // Snow CLEARING. The appearing rain is NOT a safety event — only the snow clearing is — so
+        // PrecipTier must not inherit Safety from the prior snow block for the appearing rain, or the
+        // consistency validator rejects it ("tier 'Safety' (Rain) but no final_snapshot block carries
+        // a safety-grade signal"). The snow clearing legitimately stays Safety (a removed hazard).
+        var prior = Body(Blk(precip: PrecipExpectation.Likely, phenom: PrecipPhenomenon.Snow));
+        var final = Body(Blk(precip: PrecipExpectation.Certain, phenom: PrecipPhenomenon.Rain));
+
+        var changes = Detect(prior, final);
+        var rain = Assert.Single(changes, c => c.Phenomenon == ChangePhenomenon.Rain);
+        Assert.Equal(ChangeDirection.Appearing, rain.Direction);
+        Assert.NotEqual(ChangeTier.Safety, rain.Tier);   // appearing rain is not safety-tier
+
+        // Must not throw — pre-WX-207 the Safety-tiered Rain appearing raised ChangeConsistencyException.
+        var report = new StructuredReportBody { Changes = changes };
+        ForecastReconciler.ValidateChangeSnapshotConsistency(report, final, prior, Utc);
+    }
+
     public static IEnumerable<object[]> InvariantCases() => new List<object[]>
     {
         new object[] { Body(Blk()), Body(Blk(precip: PrecipExpectation.Likely, phenom: PrecipPhenomenon.Rain)) },
