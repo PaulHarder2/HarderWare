@@ -54,8 +54,11 @@ DB_NAME="${WX203_DB:-WeatherData}"
 ES_MARKER='Condiciones actuales|stico para |En resumen:|Bienvenido a WxReport'
 
 # Failure signature (ASCII): the es time designator tail doubled. "p. m." and "a. m." both end in
-# "m.", so "m.." is the doubled period -- the only period-ending token value es renders.
-ARTIFACT='m\.\.'
+# "m.", so "m.." is the doubled period -- the only period-ending token value es renders. The pattern
+# requires the pair be ISOLATED (a non-period char or end-of-line after it), so a legitimate run of
+# three or more -- an ellipsis on an m-word ("tormenta tras tormenta...") or the preserved
+# abbreviation+ellipsis run -- is NOT flagged, matching the fix's "leave runs of 3+ intact" rule.
+ARTIFACT='m\.\.([^.]|$)'
 
 sqlq() {  # SQL -> rows on stdout (headerless, '|'-separated, CR-stripped). </dev/null so powershell can't drain the read loop's stdin.
   powershell.exe -NoProfile -Command \
