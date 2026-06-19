@@ -91,6 +91,55 @@ public class LanguageTemplateStoreTests
     }
 
     [Fact]
+    public void Reload_PicksUpNewlySupportedLanguage()
+    {
+        // The per-cycle refresh scenario (WX-171): a language enabled/generated while the
+        // service is running (WX-172) appears in the store after the next Reload — without a
+        // restart — so the send gate stops failing its recipients closed.
+        var rows = Sample();
+        var store = new LanguageTemplateStore(() => rows);
+        Assert.DoesNotContain("fr", store.LoadedLanguages);
+        Assert.Equal(new[] { "rain" }, store.MissingTokens("fr", new[] { "rain" }));   // unloaded → missing
+
+        var fr = new Language { Id = 3, IsoCode = "fr", DisplayName = "French", CultureName = "fr-FR" };
+        rows.Add(Row(fr, "rain", "pluie"));
+        store.Reload();
+
+        Assert.Contains("fr", store.LoadedLanguages);
+        Assert.Equal("pluie", store.ForLanguage("fr").Get("rain"));
+        Assert.Empty(store.MissingTokens("fr", new[] { "rain" }));                      // now complete for that contract
+    }
+
+    [Fact]
+    public void Lookups_NormalizeRegionalAndCaseTags_ToBaseLanguage()
+    {
+        // WX-171 (review): a regional or mixed-case tag ("es-419", "ES") must resolve to its base
+        // language rather than miss the cache and fail the recipient closed -- the defense the
+        // renderer's former NormalizeLang gave, now centralized in the store. It canonicalizes the
+        // lookup KEY only; the es phrases (not en) are returned.
+        var store = new LanguageTemplateStore(Sample);
+
+        Assert.True(store.TryGetPhrase("es-419", "rain", out var p) && p == "lluvia");
+        Assert.True(store.TryGetPhrase("ES", "rain", out var p2) && p2 == "lluvia");
+        Assert.Equal("lluvia", store.ForLanguage("es-419").Get("rain"));
+        Assert.Equal("es", store.ForLanguage("es-419").Iso);          // TemplateSet carries the bare iso for narrative selection
+        Assert.Empty(store.MissingTokens("es-419", new[] { "rain", "drizzle_light" }));   // complete via the base language
+    }
+
+    [Fact]
+    public void CultureFor_UsesLanguageCultureName_DefaultsToEnUsThenInvariant()
+    {
+        var fr = new Language { Id = 3, IsoCode = "fr", DisplayName = "French", CultureName = "fr-FR" };
+        var rows = Sample();                       // En/Es carry no CultureName
+        rows.Add(Row(fr, "rain", "pluie"));
+        var store = new LanguageTemplateStore(() => rows);
+
+        Assert.Equal("fr-FR", store.CultureFor("fr").Name);     // from Language.CultureName
+        Assert.Equal("en-US", store.CultureFor("en").Name);     // no CultureName → en-US default
+        Assert.Equal("en-US", store.CultureFor("xx").Name);     // unloaded → en-US default
+    }
+
+    [Fact]
     public void Invalidate_RebuildsLazilyOnNextRead()
     {
         var rows = Sample();

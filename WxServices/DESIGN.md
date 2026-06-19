@@ -494,7 +494,7 @@ Observation-less cycles are handled by the same input-identity pre-filter and Cl
 | `SignificanceGate` | WxReport.Svc | WX-114 deterministic **cost pre-filter**: compares the current provisional snapshot against the last *sent* forecast and reports whether anything changed materially (per local day: high/low magnitude, directional freeze/thaw at 32 °F, heat crossing; per 6-hour block: precip occurrence/type, severe flag, sustained-wind advisory + magnitude — across four horizon tiers). `ReportWorker` skips the Claude call when nothing fires. TAF-aware (WX-160): the evaluated "current" is a GFS+TAF merge (`TafBlockProjector`), so a fresh TAF that moves nothing material is suppressed deterministically instead of bypassing the gate via the retired `taf-fresh` shortcut. Wind is sustained-only; a gust gates only through the 50-kt severe rule. Suppress-only and mode-controlled (`Report:SignificanceGate:Mode` — Off / Shadow / Enforce, default **Enforce**); never decides sends |
 | `ForecastReconciler` | WxReport.Svc | Orchestrates the Claude two-pass reconciliation (WX-79): sends the provisional snapshot + current METAR + current TAF + prior committed snapshot, and returns Claude's tool-use decision — `submit_reconciled_report` (email body + refined snapshot + reasoning trace) or `skip_send` (reasoning trace only) |
 | `SnapshotDescriber` | WxReport.Svc | `WeatherSnapshot` → structured plain-text used by `ForecastReconciler` to render Claude's user message; unit-aware (temperature, pressure, wind speed); outputs relative humidity (computed from temperature and dew point) rather than raw dew point |
-| `StructuredReportRenderer` | WxReport.Svc | WX-129 deterministic renderer: turns the unit-neutral `StructuredReportBody` (WX-128) into one recipient's HTML body with **no LLM call** — Current Conditions table rebuilt from the observation, Extended Forecast grid (one row per local calendar day) from the reconciled snapshot, change-band + closing from the language narrative with `{q:...}` tokens substituted into the recipient's units/locale/precip unit (WX-142). The per-day Conditions cell tiles the day into 24-hour **clock bands** (WX-190 — the four native 6-hour blocks `00-06`/`06-12`/`12-18`/`18-24`, adjacent same-condition bands merged, a uniform day collapsed to a single `00-24` line, severe bands emphasized and bound to their calendar day by the row date plus clock range; a legend beneath the grid keys the clock), and `RenderDegraded` produces the narrative-less hazard report for the WX-148 degrade path. Built + unit-tested; wired into the send path by WX-130. Deterministic chrome (labels, sky/weather/visibility/conditions words, en + es) lives in `ReportVocabulary` — the WX-137 template seed, with `SupportedCodes` as its gate |
+| `StructuredReportRenderer` | WxReport.Svc | WX-129 deterministic renderer: turns the unit-neutral `StructuredReportBody` (WX-128) into one recipient's HTML body with **no LLM call** — Current Conditions table rebuilt from the observation, Extended Forecast grid (one row per local calendar day) from the reconciled snapshot, change-band + closing from the language narrative with `{q:...}` tokens substituted into the recipient's units/locale/precip unit (WX-142). The per-day Conditions cell tiles the day into 24-hour **clock bands** (WX-190 — the four native 6-hour blocks `00-06`/`06-12`/`12-18`/`18-24`, adjacent same-condition bands merged, a uniform day collapsed to a single `00-24` line, severe bands emphasized and bound to their calendar day by the row date plus clock range; a legend beneath the grid keys the clock), and `RenderDegraded` produces the narrative-less hazard report for the WX-148 degrade path. Built + unit-tested; wired into the send path by WX-130. Deterministic chrome (labels, sky/weather/visibility/conditions words) is **localized via the DB** (WX-171): the renderer takes a `(TemplateSet, CultureInfo)` resolved per language from the `LanguageTemplates` table and resolves every grammar-sensitive combination as a single **atomic token** through the `Tok.*` contract (`rain_freezing`, `sev_storms_likely`, `sky_overcast_low`, …) — it never concatenates two vocabulary items, so other languages need no English word order (fixing the latent es "Helada lluvia" → "Lluvia helada", WX-174). The hard-coded `ReportVocabulary` is gone; the DB is the sole phrase source. Fail-closed in depth: a build-time `Tok`↔seed parity gate, a startup completeness check (ERROR → WxMonitor on any incomplete language), and a per-recipient send gate (an incomplete language fails *its* recipients closed; no silent English substitution). The template cache (`LanguageTemplateStore`, eager + atomic-swap) reloads once per report cycle — picking up a newly-enabled language or an edited phrase without a restart; the event-driven reload trigger is deferred to WX-179. The enable gate (`SupportedLanguages`, in WxManager) is a DB template-existence check (coverage of the `en` baseline), one source of truth with the renderer |
 | `ClaudeClient` | WxReport.Svc | Thin Anthropic Messages API wrapper (`InvokeReconciliationAsync`), driven by `ForecastReconciler`; injects the cached author-persona prefix as the first `system` content block (see *Persona prefix* below); retries transient failures (429, 529, 5xx, `HttpRequestException`) up to 3 times with linear backoff |
 | `PersonaPrefix` | WxReport.Svc | Tiny record wrapping the contents of `AboutPaul.md`, loaded once at service startup and threaded into every `ClaudeClient` so it can be sent as a cached system-prompt prefix |
 | `SmtpSender` | WxServices.Common | MailKit SMTP wrapper; `SendAsync` accepts optional `htmlBody` and `inlineImages`; sends `multipart/alternative` (plain-text + HTML); HTML part is wrapped in `multipart/related` when inline images are provided (`cid:` URI support); `fromName` set per-service at construction time; all failures (including invalid addresses and SMTP errors) are caught and return `false` rather than throwing |
@@ -923,6 +923,22 @@ erDiagram
         string IsoCode UK
         string DisplayName
         bool IsEnabled
+        string CultureName "null; IETF culture, e.g. es-US (WX-171)"
+        datetime GeneratedAtUtc "null until generated (WX-172)"
+        string GenerationError "null; BLOCKED reason (WX-172)"
+    }
+
+    LanguageTemplates {
+        bigint Id PK
+        bigint LanguageId FK
+        string Token "language-neutral key, e.g. rain_freezing"
+        string Phrase "localized atomic phrase / format string"
+        string ContextInfo "translation aid (REQUIRED)"
+        string ContextKind "Example | Hint"
+        string Note "null"
+        bool Representable "false = BLOCKED-needs-code (WX-172)"
+        string ReviewedBy "null (WX-173)"
+        datetime ReviewedAtUtc "null (WX-173)"
     }
 
     Localities {
@@ -1033,6 +1049,7 @@ erDiagram
     ForecastSnapshots ||--o{ CommittedSends : "anchored by"
     Localities ||--o{ Recipients : "groups"
     Languages ||--o{ Recipients : "assigned to"
+    Languages ||--o{ LanguageTemplates : "localized by"
     Localities ||--o| LocalityStates : "tracked by"
 ```
 

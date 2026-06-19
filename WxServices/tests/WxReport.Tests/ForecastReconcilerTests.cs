@@ -1147,7 +1147,7 @@ public class ForecastReconcilerTests
     {
         var http = new HttpClient(new StubHandler(respond));
         var claude = new ClaudeClient(http, apiKey: "test-key", model: "claude-sonnet-4-6", personaPrefix: "Persona text.");
-        var reconciler = new ForecastReconciler(claude);
+        var reconciler = new ForecastReconciler(claude, SeedTemplateStore.Build());
 
         return await reconciler.ReconcileAsync(
             snapshot: snapshot ?? BuildSnapshot(),

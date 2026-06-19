@@ -1,3 +1,5 @@
+using System.Globalization;
+
 using log4net;
 
 using MetarParser.Data.Entities;
@@ -41,9 +43,12 @@ public sealed class LanguageTemplateStore
         public required IReadOnlySet<string> BlockedTokens { get; init; }
     }
 
-    // Immutable snapshot: isoCode -> phrases. Replaced wholesale on reload; never mutated
-    // in place, so readers always see a consistent set.
-    private sealed record Snapshot(IReadOnlyDictionary<string, LanguagePhrases> ByIso);
+    // Immutable snapshot: isoCode -> phrases, plus isoCode -> IETF culture name (from
+    // Language.CultureName). Replaced wholesale on reload; never mutated in place, so
+    // readers always see a consistent set.
+    private sealed record Snapshot(
+        IReadOnlyDictionary<string, LanguagePhrases> ByIso,
+        IReadOnlyDictionary<string, string> CultureByIso);
 
     private readonly Func<IReadOnlyList<LanguageTemplate>> _load;
     private readonly object _gate = new();
@@ -66,6 +71,17 @@ public sealed class LanguageTemplateStore
     public IReadOnlySet<string> LoadedLanguages => Current().ByIso.Keys.ToHashSet(StringComparer.Ordinal);
 
     /// <summary>
+    /// Canonicalizes a requested code to the bare lower-case ISO 639-1 part the cache is keyed
+    /// on — dropping any regional suffix and case (<c>"es-419"</c> / <c>"ES"</c> → <c>"es"</c>),
+    /// so a regional or mixed-case tag resolves to its base language rather than missing the
+    /// cache and failing a recipient closed (WX-171; the defense the renderer's former
+    /// <c>NormalizeLang</c> provided, kept here as the single iso→templates boundary). This
+    /// canonicalizes the lookup KEY only — it never substitutes a different language's phrases.
+    /// </summary>
+    private static string Normalize(string isoCode) =>
+        string.IsNullOrEmpty(isoCode) ? isoCode : isoCode.Split('-')[0].ToLowerInvariant();
+
+    /// <summary>
     /// Looks up the localized phrase for <paramref name="token"/> in <paramref name="isoCode"/>.
     /// Returns false (and an empty <paramref name="phrase"/>) when the language is not loaded,
     /// the token is absent, or the token is blocked (not representable) in that language — in
@@ -76,7 +92,7 @@ public sealed class LanguageTemplateStore
         phrase = "";
         if (string.IsNullOrEmpty(isoCode) || string.IsNullOrEmpty(token))
             return false;
-        if (!Current().ByIso.TryGetValue(isoCode, out var lang))
+        if (!Current().ByIso.TryGetValue(Normalize(isoCode), out var lang))
             return false;
         // Don't pass `phrase` straight to TryGetValue: on a miss it would overwrite our
         // "" guard with null. Only assign on a hit, so a miss always yields ("", false).
@@ -90,13 +106,13 @@ public sealed class LanguageTemplateStore
 
     /// <summary>The blocked (not-representable) tokens for a language, or an empty set if the language is not loaded.</summary>
     public IReadOnlySet<string> BlockedTokens(string isoCode) =>
-        Current().ByIso.TryGetValue(isoCode, out var lang)
+        Current().ByIso.TryGetValue(Normalize(isoCode), out var lang)
             ? lang.BlockedTokens
             : new HashSet<string>(StringComparer.Ordinal);
 
     /// <summary>The full representable token→phrase map for a language, or an empty map if not loaded.</summary>
     public IReadOnlyDictionary<string, string> PhrasesFor(string isoCode) =>
-        Current().ByIso.TryGetValue(isoCode, out var lang)
+        Current().ByIso.TryGetValue(Normalize(isoCode), out var lang)
             ? lang.Phrases
             : new Dictionary<string, string>(StringComparer.Ordinal);
 
@@ -109,10 +125,36 @@ public sealed class LanguageTemplateStore
     /// </summary>
     public TemplateSet ForLanguage(string isoCode)
     {
-        var phrases = Current().ByIso.TryGetValue(isoCode, out var lang)
+        var iso = Normalize(isoCode);
+        var phrases = Current().ByIso.TryGetValue(iso, out var lang)
             ? lang.Phrases
             : new Dictionary<string, string>(StringComparer.Ordinal);
-        return new TemplateSet(isoCode, phrases);
+        // Carry the normalized iso so a caller keying off TemplateSet.Iso (the renderer's
+        // narrative selection) also sees the bare code, not a regional/mixed-case variant.
+        return new TemplateSet(iso, phrases);
+    }
+
+    /// <summary>
+    /// The <see cref="CultureInfo"/> for <paramref name="isoCode"/> — built from the
+    /// language's <see cref="Language.CultureName"/> (e.g. <c>"es-US"</c>), used by the
+    /// renderer for date/weekday names and number formatting. Falls back to
+    /// <c>en-US</c> when the language is not loaded or carries no culture name, and to
+    /// <see cref="CultureInfo.InvariantCulture"/> if even that is somehow unresolvable —
+    /// a cosmetic locale must never fail a send. (Number conventions stay US/period-decimal
+    /// for every language until WX-138 swaps the source to <c>Recipient.NumberFormat</c>.)
+    /// </summary>
+    public CultureInfo CultureFor(string isoCode)
+    {
+        var name = !string.IsNullOrEmpty(isoCode) && Current().CultureByIso.TryGetValue(Normalize(isoCode), out var c) && !string.IsNullOrWhiteSpace(c)
+            ? c
+            : "en-US";
+        return SafeCulture(name);
+    }
+
+    private static CultureInfo SafeCulture(string name)
+    {
+        try { return CultureInfo.GetCultureInfo(name); }
+        catch (CultureNotFoundException) { return CultureInfo.InvariantCulture; }
     }
 
     /// <summary>
@@ -125,7 +167,7 @@ public sealed class LanguageTemplateStore
     /// </summary>
     public IReadOnlyList<string> MissingTokens(string isoCode, IEnumerable<string> required)
     {
-        var has = Current().ByIso.TryGetValue(isoCode, out var lang)
+        var has = Current().ByIso.TryGetValue(Normalize(isoCode), out var lang)
             ? lang.Phrases
             : new Dictionary<string, string>(StringComparer.Ordinal);
         return required
@@ -169,6 +211,7 @@ public sealed class LanguageTemplateStore
     {
         var phrases = new Dictionary<string, Dictionary<string, string>>(StringComparer.Ordinal);
         var blocked = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        var cultures = new Dictionary<string, string>(StringComparer.Ordinal);
         int loaded = 0, skipped = 0;
 
         foreach (var row in rows)
@@ -189,6 +232,11 @@ public sealed class LanguageTemplateStore
                 blocked[iso] = new HashSet<string>(StringComparer.Ordinal);
             }
 
+            // The culture name lives on the Language, not the row; capture it once per iso
+            // (every row of a language carries the same Language, so first-wins is fine).
+            if (!cultures.ContainsKey(iso) && !string.IsNullOrWhiteSpace(row.Language?.CultureName))
+                cultures[iso] = row.Language!.CultureName!;
+
             if (row.Representable)
                 p[row.Token] = row.Phrase;   // unique (LanguageId, Token) index => no real collisions
             else
@@ -202,7 +250,7 @@ public sealed class LanguageTemplateStore
 
         Logger.Info($"LanguageTemplateStore loaded {loaded} template(s) across {byIso.Count} language(s)"
             + (skipped > 0 ? $"; skipped {skipped} unkeyable row(s)" : "") + ".");
-        return new Snapshot(byIso);
+        return new Snapshot(byIso, cultures);
     }
 }
 

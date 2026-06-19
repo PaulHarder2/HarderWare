@@ -1,6 +1,4 @@
 using System.Reflection;
-using System.Runtime.CompilerServices;
-using System.Text.RegularExpressions;
 
 using WxReport.Svc;
 
@@ -14,7 +12,10 @@ namespace WxReport.Tests;
 /// renderer can reference is unseeded, and no seeded token is orphaned. Drift fails
 /// CI before it can reach the runtime completeness check. Baseline (en/es) only —
 /// languages generated at runtime (WX-172) are verified by the runtime check, since
-/// they do not exist at compile time.
+/// they do not exist at compile time. The seed is parsed once by
+/// <see cref="SeedTemplateStore"/> (shared with the renderer/reconciler test store), so
+/// the parity gate and the test renderer can never read the migration through diverging
+/// parsers — a parser bug surfaces here as a parity failure rather than being masked.
 /// </summary>
 public class TokSeedParityTests
 {
@@ -24,34 +25,18 @@ public class TokSeedParityTests
             .Select(f => (string)f.GetRawConstantValue()!)
             .ToHashSet(StringComparer.Ordinal);
 
-    // Anchored on this test file's compile-time path (as the golden harness does),
-    // then up to WxServices/ and into the migration. The migration filename carries a
-    // timestamp, so match by suffix; exactly one non-Designer file is expected.
-    private static string MigrationSource([CallerFilePath] string thisFile = "")
-    {
-        var wxServices = Directory.GetParent(thisFile)!.Parent!.Parent!.FullName;
-        var migDir = Path.Combine(wxServices, "src", "MetarParser.Data", "Migrations");
-        var matches = Directory.GetFiles(migDir, "*_AddLanguageTemplates.cs")
-            .Where(p => !p.EndsWith(".Designer.cs", StringComparison.Ordinal))
-            .ToList();
-        Assert.True(matches.Count == 1,
-            $"expected exactly one AddLanguageTemplates migration in {migDir}, found {matches.Count}");
-        return File.ReadAllText(matches[0]);
-    }
-
-    private static IReadOnlySet<string> SeedTokens(long languageId, string migration)
-    {
-        var rx = new Regex("\\{\\s*" + languageId + "L,\\s*\"([^\"]+)\"");
-        return rx.Matches(migration).Select(m => m.Groups[1].Value).ToHashSet(StringComparer.Ordinal);
-    }
+    private static IReadOnlySet<string> SeedTokens(string iso) =>
+        SeedTemplateStore.SeedRows()
+            .Where(r => r.Language?.IsoCode == iso)
+            .Select(r => r.Token)
+            .ToHashSet(StringComparer.Ordinal);
 
     [Fact]
     public void Tok_matches_en_and_es_seed_exactly()
     {
         var tok = TokValues();
-        var migration = MigrationSource();
-        var en = SeedTokens(37, migration);
-        var es = SeedTokens(39, migration);
+        var en = SeedTokens("en");
+        var es = SeedTokens("es");
 
         Assert.True(en.SetEquals(es),
             $"en/es seed token sets differ. en-only: [{string.Join(", ", en.Except(es).OrderBy(x => x))}]; " +

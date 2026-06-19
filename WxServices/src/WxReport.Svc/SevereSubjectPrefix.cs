@@ -14,8 +14,9 @@ namespace WxReport.Svc;
 /// <para>
 /// The hazard salience this adds to the subject is a separate axis from
 /// <see cref="ReportKind"/> (provenance); it rides on top of the report type word.
-/// The noun comes from <see cref="ReportVocabulary.SevereNoun"/> — the same source the
-/// body hazard banner uses — so the subject and the body never name the hazard differently.
+/// The noun comes from <see cref="ReportLabels.SevereNounToken"/> resolved against the
+/// recipient's <see cref="TemplateSet"/> — the same source the body hazard banner uses —
+/// so the subject and the body never name the hazard differently.
 /// </para>
 ///
 /// <para>
@@ -38,8 +39,8 @@ internal static class SevereSubjectPrefix
     /// </summary>
     /// <param name="body">The reconciled forecast snapshot whose blocks are inspected.</param>
     /// <param name="nowUtc">The current instant (UTC); the window is <c>[nowUtc, nowUtc + 24 h]</c>.</param>
-    /// <param name="vocab">The recipient-language vocabulary supplying the severe noun.</param>
-    public static string? Evaluate(ForecastSnapshotBody body, DateTime nowUtc, ReportVocabulary vocab)
+    /// <param name="templates">The recipient-language template set supplying the localized severe noun.</param>
+    public static string? Evaluate(ForecastSnapshotBody body, DateTime nowUtc, TemplateSet templates)
     {
         var horizon = nowUtc.Add(Window);
         var block = body.Blocks
@@ -50,7 +51,7 @@ internal static class SevereSubjectPrefix
             })
             .OrderBy(b => b.StartUtc)
             .FirstOrDefault();
-        return block is null ? null : vocab.SevereNoun(block.PrecipPhenomenon);
+        return block is null ? null : templates.Get(ReportLabels.SevereNounToken(block.PrecipPhenomenon));
     }
 
     /// <summary>

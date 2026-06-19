@@ -1,5 +1,9 @@
 using System.Reflection;
 
+using log4net;
+
+using MetarParser.Data.Entities;
+
 namespace WxReport.Svc;
 
 /// <summary>
@@ -123,4 +127,65 @@ public static class Tok
 
     /// <summary>Every declared token value — the renderer's full required-token contract, consumed by the completeness checks (startup, send gate, WX-172).</summary>
     public static IReadOnlySet<string> All => _all;
+}
+
+/// <summary>
+/// Which surface a report-kind word is destined for: the email <see cref="Title"/>
+/// (subject line) or the rendered <see cref="Header"/> label inside the report. The
+/// two read differently for the same kind ("Weather Report" vs "Scheduled Report"),
+/// so <see cref="ReportLabels.TokenFor"/> takes this to pick the right token.
+/// </summary>
+public enum LabelType
+{
+    /// <summary>The email subject word — e.g. "Weather Report" / "Weather Update".</summary>
+    Title,
+
+    /// <summary>The italic report-type label rendered in the header — e.g. "Scheduled Report" / "Unscheduled Update".</summary>
+    Header,
+}
+
+/// <summary>
+/// Maps the deterministic report enums to their <see cref="Tok"/> token constants — the
+/// kind→word and severe-phenomenon→noun mappings that the renderer, the subject builder,
+/// and the WX-156 subject prefix all share (WX-171). Centralizing them here keeps the
+/// subject and the body from ever naming the same thing differently, and keeps every
+/// renderer-reachable token reference on the compile-checked <see cref="Tok"/> contract.
+/// </summary>
+public static class ReportLabels
+{
+    private static readonly ILog Logger = LogManager.GetLogger(typeof(ReportLabels));
+
+    /// <summary>
+    /// The <see cref="Tok"/> token a <see cref="ReportKind"/> renders to on either surface:
+    /// the email subject (<see cref="LabelType.Title"/>) or the in-report header label
+    /// (<see cref="LabelType.Header"/>). A future <see cref="ReportKind"/> or
+    /// <see cref="LabelType"/> not handled falls to the Scheduled word but logs a warning,
+    /// so it surfaces without ever failing a send over a cosmetic label.
+    /// </summary>
+    public static string TokenFor(ReportKind kind, LabelType labelType) => (labelType, kind) switch
+    {
+        (LabelType.Title, ReportKind.Scheduled) => Tok.ScheduledReportSubject,
+        (LabelType.Title, ReportKind.Unscheduled) => Tok.UnscheduledUpdateSubject,
+        (LabelType.Title, ReportKind.Diagnostic) => Tok.DiagnosticSubject,
+        (LabelType.Header, ReportKind.Scheduled) => Tok.ScheduledReportLabel,
+        (LabelType.Header, ReportKind.Unscheduled) => Tok.UnscheduledUpdateLabel,
+        (LabelType.Header, ReportKind.Diagnostic) => Tok.DiagnosticLabel,
+        _ => DefaultFor(kind, labelType),
+    };
+
+    private static string DefaultFor(ReportKind kind, LabelType labelType)
+    {
+        Logger.Warn($"ReportLabels.TokenFor: unhandled (kind={kind}, labelType={labelType}); defaulting to the scheduled {labelType}.");
+        return labelType == LabelType.Title ? Tok.ScheduledReportSubject : Tok.ScheduledReportLabel;
+    }
+
+    /// <summary>
+    /// The severe lead-noun token: convective (<see cref="Tok.CondSevereStorms"/>,
+    /// "Severe storms") for a thunderstorm, generic (<see cref="Tok.CondSevereWeather"/>,
+    /// "Severe weather") otherwise — a severe block can be a damaging-wind event with no
+    /// precip. Single source for both the body hazard banner and the WX-156 subject prefix,
+    /// so they never disagree.
+    /// </summary>
+    public static string SevereNounToken(PrecipPhenomenon? phenomenon) =>
+        phenomenon == PrecipPhenomenon.Thunderstorm ? Tok.CondSevereStorms : Tok.CondSevereWeather;
 }

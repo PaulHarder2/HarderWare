@@ -28,6 +28,13 @@ public static class RendererGoldenCorpus
     private static readonly TimeZoneInfo Utc = TimeZoneInfo.Utc;
     private static readonly int[] ScheduleHours = [6, 18];
 
+    // WX-171: the renderer now reads atomic phrases from the DB-backed template store; the
+    // corpus builds one from the migration seed (the same rows production loads) and resolves
+    // each language's TemplateSet + culture, so the goldens exercise the real DB phrases.
+    private static readonly LanguageTemplateStore Store = SeedTemplateStore.Build();
+    private static TemplateSet Templates(string lang) => Store.ForLanguage(lang);
+    private static System.Globalization.CultureInfo Culture(string lang) => Store.CultureFor(lang);
+
     // ── recipients (units only; language is a separate render arg) ──────────────
 
     private static Recipient Imperial() => new()
@@ -129,7 +136,7 @@ public static class RendererGoldenCorpus
     };
 
     private static string Report(WeatherSnapshot obs, ForecastSnapshotBody fc, Recipient r, string lang, ReportKind kind, bool withChange = false) =>
-        StructuredReportRenderer.Render(Body(withChange), fc, obs, r, lang, Utc, kind, Now);
+        StructuredReportRenderer.Render(Body(withChange), fc, obs, r, Templates(lang), Culture(lang), Utc, kind, Now);
 
     // ── shared fixtures ─────────────────────────────────────────────────────────
 
@@ -241,11 +248,11 @@ public static class RendererGoldenCorpus
         // Degraded safety send (hazard banner, no band/closing).
         yield return new("degraded", (r, l) => StructuredReportRenderer.RenderDegraded(
             Fc(Blk(12, SkyState.Overcast, PrecipExpectation.Likely, PrecipPhenomenon.Thunderstorm, severe: true)),
-            ObsLowOvercastLightRain(), r, l, Utc, Now));
+            ObsLowOvercastLightRain(), r, Templates(l), Culture(l), Utc, Now));
 
         // Welcome (HTML + plain-text fallback).
-        yield return new("welcome", (r, l) => StructuredReportRenderer.RenderWelcome(r, l, "Spring", Utc, ScheduleHours));
-        yield return new("welcome-plain", (r, l) => StructuredReportRenderer.WelcomePlainText(r, l, "Spring", ScheduleHours));
+        yield return new("welcome", (r, l) => StructuredReportRenderer.RenderWelcome(r, Templates(l), Culture(l), "Spring", Utc, ScheduleHours));
+        yield return new("welcome-plain", (r, l) => StructuredReportRenderer.WelcomePlainText(r, Templates(l), Culture(l), "Spring", ScheduleHours));
     }
 
     /// <summary>The full corpus: every scenario in en (imperial) and es (metric), plus the rich scenario in en-metric for unit coverage.</summary>

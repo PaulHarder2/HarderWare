@@ -109,12 +109,15 @@ public abstract record ReconcileResult
 public sealed class ForecastReconciler
 {
     private readonly ClaudeClient _claude;
+    private readonly LanguageTemplateStore _templates;
 
     /// <summary>Initializes a new instance backed by the supplied <see cref="ClaudeClient"/>.</summary>
     /// <param name="claude">Anthropic Messages API wrapper used for the tool-use call.</param>
-    public ForecastReconciler(ClaudeClient claude)
+    /// <param name="templates">The DB-backed template store, read only for the per-language <see cref="Tok.ClosingFallback"/> when the independent-section degrade replaces an unusable closing (WX-171).</param>
+    public ForecastReconciler(ClaudeClient claude, LanguageTemplateStore templates)
     {
         _claude = claude;
+        _templates = templates;
     }
 
     /// <summary>
@@ -816,14 +819,26 @@ public sealed class ForecastReconciler
     // narrative down. All languages are cleaned uniformly: ValidateClosingClaims is
     // English-only, so a non-English same-section fault is untested and is best treated
     // the same conservative way.
-    private static StructuredReportBody DropProseSection(StructuredReportBody report, NarrativeSection section)
+    private StructuredReportBody DropProseSection(StructuredReportBody report, NarrativeSection section)
     {
         var narrative = new Dictionary<string, NarrativeSections>(report.Narrative.Count, StringComparer.Ordinal);
         foreach (var (lang, sections) in report.Narrative)
             narrative[lang] = section == NarrativeSection.ChangeSummary
                 ? sections with { ChangeSummary = null }
-                : sections with { Closing = ReportVocabulary.ForLanguage(lang).ClosingFallback };
+                : sections with { Closing = ClosingFallbackFor(lang, sections.Closing) };
         return report with { Narrative = narrative };
+    }
+
+    // The localized degrade closing for a language: the DB-backed Tok.ClosingFallback when the
+    // language carries it (every enabled language does — §6 gates on a complete template set),
+    // else the existing closing kept verbatim. Keeping the original is the resilient choice: it
+    // is already non-blank (the schema requires it), so a single language somehow missing the
+    // fallback token never blanks the closing nor throws mid-degrade — the per-recipient send
+    // gate (WX-171) is the loud fail-closed boundary, not this shared degrade.
+    private string ClosingFallbackFor(string lang, string current)
+    {
+        var set = _templates.ForLanguage(lang);
+        return set.Has(Tok.ClosingFallback) ? set.Get(Tok.ClosingFallback) : current;
     }
 
     // Matches any {...} token; used to mask tokens to equal-length blanks before
