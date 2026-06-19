@@ -79,7 +79,9 @@ min_window_secs=0       # deterministic fix -- no wait time; gate is the es-repo
 # verify's own bug, surfaced 2026-06-19 the moment the first es report arrived). Mirrors WX-171-verify.
 # INTERIM per-script fix — this exact computation should live ONCE in verify-lib.sh (vl_verdict deriving
 # elapsed from SINCE when unset), not be duplicated per DB/event-based script. Tracked in WX-209.
-since_epoch=$(date -u -d "$SINCE UTC" +%s); now_epoch=$(date -u +%s)
+since_epoch=$(date -u -d "$SINCE UTC" +%s 2>/dev/null) \
+  || { echo "could not parse boundary '$SINCE'" >&2; exit 2; }   # mirror vl_setup_window's guard
+now_epoch=$(date -u +%s)
 elapsed=$(( now_epoch - since_epoch )); [ "$elapsed" -gt 0 ] || elapsed=1
 hh=$(( elapsed / 3600 )); mm=$(( (elapsed % 3600) / 60 ))
 
