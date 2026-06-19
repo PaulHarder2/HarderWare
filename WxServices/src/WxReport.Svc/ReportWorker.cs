@@ -272,10 +272,20 @@ public sealed class ReportWorker : BackgroundService
 
         var provisionalBody = ForecastSnapshotBody.Deserialize(anchorSnapshot.Body);
         var langById = await ctx.Languages.ToDictionaryAsync(l => l.Id, ct);
+        // WX-171: only request narrative for renderable (complete) languages; if the startup
+        // recipient's language is incomplete, skip the diagnostic before the Claude call rather
+        // than reconcile and then fail the lone recipient closed (CodeRabbit).
         var narrativeLanguages = members
             .Select(m => ResolveLanguageCode(m, langById, cfg.DefaultLanguage))
             .Distinct(StringComparer.Ordinal)
+            .Where(iso => _templates.MissingTokens(iso, Tok.All).Count == 0)
             .ToList();
+        if (narrativeLanguages.Count == 0)
+        {
+            Logger.Error($"{label}: startup recipient's language template set is incomplete — skipping the diagnostic " +
+                "(no Claude call). (WX-171 fail-closed pre-filter.)");
+            return;
+        }
 
         var reconciler = new ForecastReconciler(
             new ClaudeClient(_claudeHttpClient, claude_cfg.ApiKey, claude_cfg.Model, _persona.Text), _templates);
@@ -367,7 +377,7 @@ public sealed class ReportWorker : BackgroundService
                 ctx.CommittedSends.Add(committedSend);
                 await ctx.SaveChangesAsync(ct);
 
-                var subject = BuildSubject(snapshot, templates, tz, ReportKind.Diagnostic, recipientName: member.Name, severeBody: success.FinalSnapshot);
+                var subject = BuildSubject(snapshot, templates, culture, tz, ReportKind.Diagnostic, recipientName: member.Name, severeBody: success.FinalSnapshot);
                 var plainFallback = SnapshotDescriber.Describe(snapshot, tz, ToUnitPreferences(member));
 
                 var meteogramPath = FindMeteogramAbbrevPath(
@@ -796,11 +806,26 @@ public sealed class ReportWorker : BackgroundService
             }
         }
 
-        // The narrative must carry every language the locality's members read.
+        // The narrative must carry every language the locality's members read — but only the
+        // ones we can actually render. WX-171: a recipient whose language is incomplete fails
+        // closed (the per-member send gate below logs + skips it), so build the narrative for
+        // the COMPLETE languages only (don't pay Claude to author prose for a language we'd
+        // discard). And if NO member has a complete language, skip the whole locality BEFORE the
+        // expensive reconcile rather than call Claude and send to no one (which never advances
+        // the baseline, so it would repeat every cycle — CodeRabbit). The per-member gate stays
+        // the authoritative fail-closed boundary for the mixed case.
         var narrativeLanguages = members
             .Select(m => ResolveLanguageCode(m, langById, cfg.DefaultLanguage))
             .Distinct(StringComparer.Ordinal)
+            .Where(iso => _templates.MissingTokens(iso, Tok.All).Count == 0)
             .ToList();
+        if (narrativeLanguages.Count == 0)
+        {
+            Logger.Error($"{label}: no member has a complete language template set — skipping the locality this cycle " +
+                "(no Claude reconcile, no send). Every recipient fails closed; resolve by regenerating/repairing the " +
+                "language templates. (WX-171 fail-closed pre-filter.)");
+            return 0;
+        }
 
         var claudeSw = Stopwatch.StartNew();
         var reconcileResult = await reconciler.ReconcileAsync(
@@ -881,7 +906,7 @@ public sealed class ReportWorker : BackgroundService
                         continue;  // incomplete language: this recipient fails closed; others still get the hazard report
                     var innerBody = StructuredReportRenderer.RenderDegraded(degraded.FinalSnapshot, snapshot, member, templates, culture, tz, now);
                     if (await DeliverWeatherReportAsync(
-                            ctx, emailer, member, langCode, templates, degradedSnapshot, innerBody,
+                            ctx, emailer, member, langCode, templates, culture, degradedSnapshot, innerBody,
                             structuredReportJson: null, reasoningTrace: $"DEGRADED: {degraded.Reason}",
                             snapshot, locality, tz, preferredIcaos, degradedPlotsDir, ReportKind.Unscheduled, label,
                             degraded.FinalSnapshot, ct))
@@ -979,7 +1004,7 @@ public sealed class ReportWorker : BackgroundService
                 var innerBody = StructuredReportRenderer.Render(
                     outboundReport, success.FinalSnapshot, snapshot, member, templates, culture, tz, kind, now);
                 if (await DeliverWeatherReportAsync(
-                        ctx, emailer, member, langCode, templates, reconciledSnapshot, innerBody,
+                        ctx, emailer, member, langCode, templates, culture, reconciledSnapshot, innerBody,
                         structuredReportJson, success.ReasoningTrace, snapshot, locality, tz,
                         preferredIcaos, plotsDir, kind, label, success.FinalSnapshot, ct))
                     weatherSent++;
@@ -1125,7 +1150,7 @@ public sealed class ReportWorker : BackgroundService
                 var innerBody = StructuredReportRenderer.Render(
                     bandFree, cachedBody, snapshot, member, templates, culture, tz, ReportKind.Scheduled, now);
                 if (await DeliverWeatherReportAsync(
-                        ctx, emailer, member, langCode, templates, cachedSnapshot, innerBody,
+                        ctx, emailer, member, langCode, templates, culture, cachedSnapshot, innerBody,
                         bandFreeJson, reasoningTrace: "WX-182 cached re-send (degrade circuit-breaker); no Claude call",
                         snapshot, locality, tz, preferredIcaos, plotsDir, ReportKind.Scheduled, label,
                         cachedBody, ct))
@@ -1254,7 +1279,7 @@ public sealed class ReportWorker : BackgroundService
     /// degraded, narrative-less send). Returns true iff the email was accepted.
     /// </summary>
     private async Task<bool> DeliverWeatherReportAsync(
-        WeatherDataContext ctx, SmtpSender emailer, Recipient member, string langCode, TemplateSet templates,
+        WeatherDataContext ctx, SmtpSender emailer, Recipient member, string langCode, TemplateSet templates, CultureInfo culture,
         ForecastSnapshot reconciledSnapshot, string innerBody,
         string? structuredReportJson, string? reasoningTrace,
         WeatherSnapshot snapshot, Locality locality, TimeZoneInfo tz,
@@ -1275,7 +1300,7 @@ public sealed class ReportWorker : BackgroundService
         ctx.CommittedSends.Add(committedSend);
         await ctx.SaveChangesAsync(ct);
 
-        var subject = BuildSubject(snapshot, templates, tz, kind, recipientName: member.Name, severeBody: finalBody);
+        var subject = BuildSubject(snapshot, templates, culture, tz, kind, recipientName: member.Name, severeBody: finalBody);
         var plainFallback = SnapshotDescriber.Describe(snapshot, tz, ToUnitPreferences(member));
 
         var meteogramPath = FindMeteogramAbbrevPath(
@@ -1933,6 +1958,7 @@ public sealed class ReportWorker : BackgroundService
     /// </summary>
     /// <param name="snap">Snapshot providing the station ICAO, locality name, and observation time.</param>
     /// <param name="templates">The recipient-language template set supplying the localized subject words.</param>
+    /// <param name="culture">The recipient's culture, used to format the subject time so it matches the body and stays deterministic across service-account/host cultures (WX-171).</param>
     /// <param name="tz">Timezone used to convert the UTC observation time for display.</param>
     /// <param name="kind">
     /// The kind of send: <see cref="ReportKind.Unscheduled"/> → "Weather Update",
@@ -1944,13 +1970,13 @@ public sealed class ReportWorker : BackgroundService
     /// hazard (WX-156): if the rule holds, a front-loaded severe noun is prepended to the subject. Null skips the check.</param>
     /// <returns>A localised subject string, e.g. <c>"Weather Report for Paul — The Woodlands (7:05 AM)"</c>,
     /// or with a WX-156 hazard prefix <c>"Severe storms — Weather Update for Paul — The Woodlands (7:05 AM)"</c>.</returns>
-    private static string BuildSubject(WeatherSnapshot snap, TemplateSet templates, TimeZoneInfo tz,
+    private static string BuildSubject(WeatherSnapshot snap, TemplateSet templates, CultureInfo culture, TimeZoneInfo tz,
         ReportKind kind, string recipientName = "", ForecastSnapshotBody? severeBody = null)
     {
         // Use send-time when no observation is available; ObservationTimeUtc is
         // default(DateTime) in that case, which would render as 12:00 AM.
         var subjectTimeUtc = snap.ObservationAvailable ? snap.ObservationTimeUtc : DateTime.UtcNow;
-        var localTime = TimeZoneInfo.ConvertTimeFromUtc(subjectTimeUtc, tz).ToString("h:mm tt");
+        var localTime = TimeZoneInfo.ConvertTimeFromUtc(subjectTimeUtc, tz).ToString("h:mm tt", culture);
 
         var label = templates.Get(ReportLabels.TokenFor(kind, LabelType.Title));
         var forName = string.IsNullOrWhiteSpace(recipientName)

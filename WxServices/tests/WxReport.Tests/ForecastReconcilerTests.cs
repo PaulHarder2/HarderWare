@@ -26,6 +26,11 @@ namespace WxReport.Tests;
 
 public class ForecastReconcilerTests
 {
+    // One seed-backed template store for the whole harness — the reconciler only reads
+    // Tok.ClosingFallback from it, so rebuilding it (and re-parsing the migration) per test
+    // is wasted work (CodeRabbit).
+    private static readonly LanguageTemplateStore Templates = SeedTemplateStore.Build();
+
     // A valid WX-128/130 structured_report whose 'en' narrative clears the
     // per-language degeneracy floor (MinVisibleNarrativeChars). The narrative
     // carries only the two judgment sections (changeSummary + closing); the
@@ -1147,7 +1152,7 @@ public class ForecastReconcilerTests
     {
         var http = new HttpClient(new StubHandler(respond));
         var claude = new ClaudeClient(http, apiKey: "test-key", model: "claude-sonnet-4-6", personaPrefix: "Persona text.");
-        var reconciler = new ForecastReconciler(claude, SeedTemplateStore.Build());
+        var reconciler = new ForecastReconciler(claude, Templates);
 
         return await reconciler.ReconcileAsync(
             snapshot: snapshot ?? BuildSnapshot(),

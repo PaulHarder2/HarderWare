@@ -104,10 +104,10 @@ public sealed class LanguageTemplateStore
         return false;
     }
 
-    /// <summary>The blocked (not-representable) tokens for a language, or an empty set if the language is not loaded.</summary>
+    /// <summary>The blocked (not-representable) tokens for a language, or an empty set if the language is not loaded. Returns a defensive copy so the shared snapshot's set can't be mutated through the returned reference.</summary>
     public IReadOnlySet<string> BlockedTokens(string isoCode) =>
         Current().ByIso.TryGetValue(Normalize(isoCode), out var lang)
-            ? lang.BlockedTokens
+            ? new HashSet<string>(lang.BlockedTokens, StringComparer.Ordinal)
             : new HashSet<string>(StringComparer.Ordinal);
 
     /// <summary>The full representable token→phrase map for a language, or an empty map if not loaded.</summary>
@@ -246,7 +246,9 @@ public sealed class LanguageTemplateStore
 
         var byIso = new Dictionary<string, LanguagePhrases>(StringComparer.Ordinal);
         foreach (var iso in phrases.Keys)
-            byIso[iso] = new LanguagePhrases { Phrases = phrases[iso], BlockedTokens = blocked[iso] };
+            // Wrap the per-language map read-only so a caller (PhrasesFor / the TemplateSet view)
+            // can't downcast it back to the mutable Dictionary and corrupt the shared snapshot.
+            byIso[iso] = new LanguagePhrases { Phrases = phrases[iso].AsReadOnly(), BlockedTokens = blocked[iso] };
 
         Logger.Info($"LanguageTemplateStore loaded {loaded} template(s) across {byIso.Count} language(s)"
             + (skipped > 0 ? $"; skipped {skipped} unkeyable row(s)" : "") + ".");

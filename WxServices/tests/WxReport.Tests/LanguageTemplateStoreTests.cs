@@ -111,6 +111,25 @@ public class LanguageTemplateStoreTests
     }
 
     [Fact]
+    public void ReadAccessors_DoNotExposeMutableSnapshotState()
+    {
+        // WX-171 (review): the read accessors must not hand out the shared snapshot's mutable
+        // collections, or a caller could downcast + mutate them and corrupt the atomic cache.
+        var rows = Sample();
+        rows.Add(Row(Es, "wintry_mix", "", representable: false));   // a blocked token to read back
+        var store = new LanguageTemplateStore(() => rows);
+
+        // PhrasesFor returns a read-only view, not the backing Dictionary.
+        Assert.IsNotType<Dictionary<string, string>>(store.PhrasesFor("en"));
+
+        // BlockedTokens returns a defensive copy: mutating it must not leak into the store.
+        var blocked = (HashSet<string>)store.BlockedTokens("es");
+        blocked.Add("intruder");
+        Assert.DoesNotContain("intruder", store.BlockedTokens("es"));
+        Assert.Contains("wintry_mix", store.BlockedTokens("es"));
+    }
+
+    [Fact]
     public void Lookups_NormalizeRegionalAndCaseTags_ToBaseLanguage()
     {
         // WX-171 (review): a regional or mixed-case tag ("es-419", "ES") must resolve to its base

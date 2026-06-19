@@ -120,8 +120,12 @@ public static class RendererGoldenCorpus
     // Closing prose carrying one of every quantity-token kind + a time token.
     private const string ClosingEn =
         "Highs near {q:temp:33.5}, winds to {q:wind:22} gusting {q:gust:30}, pressure {q:pressure:1013.2}, rainfall {q:precip_mm:12}, clearing after {q:time:2026-06-08T21:00:00Z}.";
+    // The {q:time} token is placed mid-sentence, not sentence-final: es localized times end in a
+    // period ("9:00 p. m."), so ending the sentence right after one yields a double period
+    // ("p. m..") in the rendered prose (CodeRabbit). The real es-time-at-sentence-end punctuation
+    // is a separate localization concern; here the corpus just avoids baking the artifact in.
     private const string ClosingEs =
-        "Máximas cerca de {q:temp:33.5}, lluvia de {q:precip_mm:12}, despejando tras {q:time:2026-06-08T21:00:00Z}.";
+        "Máximas cerca de {q:temp:33.5}, despejando tras {q:time:2026-06-08T21:00:00Z}, con lluvia de {q:precip_mm:12}.";
 
     private static StructuredReportBody Body(bool withChange) => new()
     {
