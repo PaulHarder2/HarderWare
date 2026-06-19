@@ -423,4 +423,88 @@ public class StructuredReportBodyTests
         Assert.Equal("Near 00 today.".Length, ReportTokens.VisibleLength("{ch1}Near {q:temp:33.5} today."));
         Assert.Equal(0, ReportTokens.VisibleLength("   "));
     }
+
+    // ── Substitute: WX-203 doubled-period collapse ───────────────────────────
+
+    [Fact]
+    public void Substitute_EsTimeAtSentenceEnd_CollapsesDoubledPeriod()
+    {
+        // The es time designator ends in a period ("p. m."); a sentence ending right
+        // on the token would double it ("…p. m..") — collapse to a single period.
+        var result = ReportTokens.Substitute(
+            "Despejando tras {q:time:2026-06-20T02:00:00Z}.",
+            (_, _) => "X",
+            _ => "9:00 p. m.");
+
+        Assert.Equal("Despejando tras 9:00 p. m.", result);
+        Assert.DoesNotContain("..", result);
+    }
+
+    [Fact]
+    public void Substitute_Ellipsis_IsPreserved()
+    {
+        // An intentional ellipsis (a run of three) is not the token/sentence collision
+        // and must survive the collapse untouched.
+        var result = ReportTokens.Substitute(
+            "Storms possible... then clearing.",
+            (_, _) => "X",
+            _ => "noon");
+
+        Assert.Contains("...", result);
+    }
+
+    [Fact]
+    public void Substitute_EnTimeAtSentenceEnd_Unaffected()
+    {
+        // en's "9:00 PM" has no trailing period, so the sentence period stands alone —
+        // nothing to collapse, and the rule never fires for English.
+        var result = ReportTokens.Substitute(
+            "Clearing after {q:time:2026-06-20T02:00:00Z}.",
+            (_, _) => "X",
+            _ => "9:00 PM");
+
+        Assert.Equal("Clearing after 9:00 PM.", result);
+    }
+
+    [Fact]
+    public void Substitute_PeriodTokenMidSentence_NotCollapsed()
+    {
+        // A period-ending token NOT at sentence end (its period is followed by a
+        // space, then more prose) does not double — left exactly as rendered.
+        var result = ReportTokens.Substitute(
+            "By {q:time:2026-06-20T02:00:00Z} skies clear.",
+            (_, _) => "X",
+            _ => "9:00 p. m.");
+
+        Assert.Equal("By 9:00 p. m. skies clear.", result);
+    }
+
+    [Fact]
+    public void Substitute_MultipleCollisions_AllCollapse()
+    {
+        // The collapse is global, so two period-ending tokens each ending a sentence
+        // both get fixed in one pass.
+        var result = ReportTokens.Substitute(
+            "Despejando tras {q:time:2026-06-20T02:00:00Z}. Lluvia hasta {q:time:2026-06-20T14:00:00Z}.",
+            (_, _) => "X",
+            _ => "9:00 p. m.");
+
+        Assert.DoesNotContain("..", result);
+        Assert.Equal("Despejando tras 9:00 p. m. Lluvia hasta 9:00 p. m.", result);
+    }
+
+    [Fact]
+    public void Substitute_RunOfThreeOrMore_LeftIntact()
+    {
+        // Only an isolated pair collapses. A run of four (a period-ending token then an
+        // ellipsis) is genuinely ambiguous — abbreviation+ellipsis (→ three) vs a
+        // deliberate ellipsis+period (keep four) — so we do NOT guess; the run is left
+        // exactly as authored, just as a bare ellipsis is.
+        var result = ReportTokens.Substitute(
+            "Despejando tras {q:time:2026-06-20T02:00:00Z}...",
+            (_, _) => "X",
+            _ => "9:00 p. m.");
+
+        Assert.Equal("Despejando tras 9:00 p. m....", result);
+    }
 }
