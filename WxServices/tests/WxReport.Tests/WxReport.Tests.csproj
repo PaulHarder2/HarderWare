@@ -20,4 +20,17 @@
     <ProjectReference Include="..\..\src\WxInterp\WxInterp.csproj" />
     <ProjectReference Include="..\..\src\WxReport.Svc\WxReport.Svc.csproj" />
   </ItemGroup>
+  <!--
+    WX-171: pin ICU app-locally for the test host so the localized-time formatting in the
+    golden corpus (AM/PM designator + the narrow-no-break-space before it) is byte-identical
+    on every machine. Without this the goldens are environment-specific: the host ICU/CLDR
+    version differs between a dev box and the CI runner, so a corpus recorded on one renders
+    differently on the other (e.g. "6:00 p. m." vs "6:00 p.m."), failing Verify in CI only.
+    Scoped to the test project — production still uses the host ICU (a separate concern).
+    The AppLocalIcu value matches the package version.
+  -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.ICU.ICU4C.Runtime" Version="72.1.0.3" />
+    <RuntimeHostConfigurationOption Include="System.Globalization.AppLocalIcu" Value="72.1.0.3" Trim="false" />
+  </ItemGroup>
 </Project>

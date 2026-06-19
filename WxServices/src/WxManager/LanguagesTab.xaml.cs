@@ -67,9 +67,37 @@ public partial class LanguagesTab : UserControl
             StatusText.Text = "Select a language on the left to enable.";
             return;
         }
-        if (!SupportedLanguages.HasTemplates(lang.IsoCode))
+        // WX-171: a language is enable-able only when its stored templates cover the full
+        // required token set — the tokens the baseline (en) carries. Query both token sets
+        // from LanguageTemplates and apply the shared completeness rule, so the enable gate
+        // and the renderer read one source of truth (the DB), not a hard-coded constant.
+        try
         {
-            StatusText.Text = $"“{lang.DisplayName}” ({lang.IsoCode}) has no report templates yet, so it can't be enabled. Templates are added in WX-167.";
+            await using var ctx = new WeatherDataContext(_dbOptions);
+            var baseline = (await ctx.LanguageTemplates
+                .Where(t => t.Language!.IsoCode == SupportedLanguages.BaselineCode && t.Representable)
+                .Select(t => t.Token)
+                .ToListAsync()).ToHashSet(StringComparer.Ordinal);
+            var langTokens = (await ctx.LanguageTemplates
+                .Where(t => t.Language!.IsoCode == lang.IsoCode && t.Representable)
+                .Select(t => t.Token)
+                .ToListAsync()).ToHashSet(StringComparer.Ordinal);
+            // The baseline (en) is what "complete" is measured against. If it's empty the seed/
+            // migration itself is missing — blame that, not the selected language (CodeRabbit).
+            if (baseline.Count == 0)
+            {
+                StatusText.Text = $"Can't enable “{lang.DisplayName}”: the baseline “{SupportedLanguages.BaselineCode}” report templates are missing — the LanguageTemplates seed/migration hasn't been applied. Resolve the database seed first.";
+                return;
+            }
+            if (!SupportedLanguages.HasCompleteTemplates(langTokens, baseline))
+            {
+                StatusText.Text = $"“{lang.DisplayName}” ({lang.IsoCode}) has no complete report templates yet, so it can't be enabled. Generate or repair its templates first (WX-172).";
+                return;
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Could not check report templates for “{lang.DisplayName}”: {ex.Message}";
             return;
         }
         await SetEnabledAsync(lang, true);

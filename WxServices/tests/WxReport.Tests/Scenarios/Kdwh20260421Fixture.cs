@@ -346,7 +346,7 @@ internal static class Kdwh20260421Fixture
     // (opt-in, normally a no-op) would otherwise only reveal months later.
     internal static Task<ReconcileResult> Reconcile(ClaudeClient claude, WeatherSnapshot snapshot, CancellationToken ct = default)
     {
-        var reconciler = new ForecastReconciler(claude);
+        var reconciler = new ForecastReconciler(claude, SeedTemplateStore.Build());
         return reconciler.ReconcileAsync(
             snapshot: snapshot,
             provisional: BuildProvisionalBody(),

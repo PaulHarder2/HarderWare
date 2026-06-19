@@ -59,6 +59,23 @@ var host = Host.CreateDefaultBuilder(args)
         services.AddSingleton(dbOptions);
         services.AddSingleton(LoadPersonaPrefix());
 
+        // WX-171: the localized-template cache the renderer rewire will read phrases from.
+        // Registered here and injected later; a short-lived context per (re)load mirrors
+        // the rest of the service's DbContextOptions pattern. Warmed eagerly at startup
+        // (below) once the schema is ensured.
+        services.AddSingleton(sp =>
+        {
+            var opts = sp.GetRequiredService<DbContextOptions<WeatherDataContext>>();
+            return new LanguageTemplateStore(() =>
+            {
+                using var ctx = new WeatherDataContext(opts);
+                return ctx.LanguageTemplates
+                    .Include(t => t.Language)
+                    .AsNoTracking()
+                    .ToList();
+            });
+        });
+
         // Geocoding + airport-lookup client. Keeps the 100s HttpClient default so a
         // stalled upstream lookup fails fast; the Claude timeout below must not bleed
         // into this path (WX-100 code-review finding).
@@ -103,6 +120,42 @@ try
     Logger.Info("Database ready.");
 
     await ValidateConfigAsync(dbOptions);
+
+    // WX-171: warm the localized-template cache now the schema exists (the store loads in its
+    // constructor on first resolution) and run the fail-closed startup completeness self-check.
+    // The renderer reads every phrase from this cache now (ReportVocabulary is gone), so a load
+    // failure is logged at ERROR — WxMonitor alerts — but is NOT fatal: the per-recipient send
+    // gate is the actual stop, and an unrelated language must not block the whole service.
+    try
+    {
+        var templates = host.Services.GetRequiredService<LanguageTemplateStore>();
+        var loaded = templates.LoadedLanguages.OrderBy(c => c, StringComparer.Ordinal).ToList();
+        Logger.Info($"Language templates loaded for: {string.Join(", ", loaded)}.");
+
+        // Completeness self-check over ALL loaded languages, regardless of recipients (WX-171
+        // fail-closed posture, layer 2): any language missing a renderer-required token (Tok.All)
+        // logs an ERROR so it is screamed about and fixed even when unused. This blocks NOTHING —
+        // it is pure alerting; the send-time per-recipient gate is what actually withholds a report.
+        var incomplete = 0;
+        foreach (var iso in loaded)
+        {
+            var missing = templates.MissingTokens(iso, Tok.All);
+            if (missing.Count == 0)
+                continue;
+            incomplete++;
+            Logger.Error($"Language '{iso}' is INCOMPLETE — {missing.Count} renderer template token(s) missing " +
+                $"([{string.Join(", ", missing.Take(15))}{(missing.Count > 15 ? ", …" : "")}]). " +
+                "Recipients in this language will fail closed (no report) until repaired. (WX-171 startup completeness check.)");
+        }
+        if (incomplete == 0 && loaded.Count > 0)
+            Logger.Info($"Language template completeness check passed for all {loaded.Count} loaded language(s).");
+        else if (loaded.Count == 0)
+            Logger.Error("No language templates loaded at startup — every recipient will fail closed. (WX-171; check the LanguageTemplates seed/migration.)");
+    }
+    catch (Exception ex)
+    {
+        Logger.Error("Language template load/completeness check failed at startup; recipients fail closed until resolved.", ex);
+    }
 
     await PrerequisiteChecker.LogPrerequisitesAsync(
         PrerequisiteChecker.Requires.SqlServer,

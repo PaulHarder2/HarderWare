@@ -18,6 +18,16 @@ namespace WxReport.Svc;
 /// locality; this fans it out per recipient.
 ///
 /// <para>
+/// Localized words come from the DB-backed <see cref="TemplateSet"/> the caller
+/// resolves per language (WX-171): the renderer never glues two vocabulary items,
+/// it looks up the grammar-sensitive combination as a single atomic
+/// <see cref="Tok"/> token — translated as a unit — and only ever interpolates
+/// runtime data (numbers, names, dates) into a translated format string. A missing
+/// token throws (fail-closed); completeness is verified before a recipient is
+/// rendered, so a miss here is a defect, not a degrade.
+/// </para>
+///
+/// <para>
 /// Layout follows the established report shape (data in tables, judgment in
 /// prose, decided 2026-06-08): the Current Conditions <b>table</b> is rebuilt
 /// deterministically from the shared observation, the Extended Forecast
@@ -45,41 +55,41 @@ public static class StructuredReportRenderer
     /// HTML body.  <paramref name="finalSnapshot"/> drives the Extended Forecast
     /// grid, <paramref name="observation"/> the Current Conditions table, and
     /// <paramref name="localityTz"/> localizes per-day bucketing and instant
-    /// rendering.  <paramref name="kind"/> selects the header's report-type label
-    /// (always shown); the change-summary band itself renders whenever the
-    /// narrative carries one — independent of the kind.  (A recipient's first contact is a separate
-    /// welcome-only email — see <see cref="RenderWelcome"/>; this method always
-    /// renders a weather report.)  <paramref name="nowUtc"/> is the send instant: the
-    /// Extended Forecast grid drops any local day whose every 6-hour block has fully
-    /// elapsed by then (WX-188), so it never leads with a wholly-past day.
+    /// rendering.  <paramref name="templates"/> supplies the language's localized
+    /// phrases (resolved by the caller from the DB template store) and
+    /// <paramref name="culture"/> its date/number locale.  <paramref name="kind"/>
+    /// selects the header's report-type label (always shown); the change-summary
+    /// band itself renders whenever the narrative carries one — independent of the
+    /// kind.  (A recipient's first contact is a separate welcome-only email — see
+    /// <see cref="RenderWelcome"/>; this method always renders a weather report.)
+    /// <paramref name="nowUtc"/> is the send instant: the Extended Forecast grid
+    /// drops any local day whose every 6-hour block has fully elapsed by then
+    /// (WX-188), so it never leads with a wholly-past day.
     /// </summary>
     public static string Render(
         StructuredReportBody report,
         ForecastSnapshotBody finalSnapshot,
         WeatherSnapshot observation,
         Recipient recipient,
-        string langCode,
+        TemplateSet templates,
+        CultureInfo culture,
         TimeZoneInfo localityTz,
         ReportKind kind,
         DateTime nowUtc)
     {
-        // langCode is the recipient's resolved ISO 639-1 code (en, es), resolved by
-        // the caller from the Languages registry (WX-166). The narrative map and
-        // ReportVocabulary key on it; normalize defensively so a future regional tag
-        // (e.g. "es-419") can't silently miss the narrative and fall back.
-        var lang = NormalizeLang(langCode);
-        var sections = SelectNarrative(report, lang);
-        var vocab = ReportVocabulary.ForLanguage(lang);
+        // templates.Iso is the recipient's resolved bare ISO 639-1 code (en, es), keyed by
+        // the caller from the Languages registry (WX-166); the narrative map keys on the same.
+        var sections = SelectNarrative(report, templates.Iso);
 
         string RenderProse(string prose) => HtmlText(ReportTokens.Substitute(
             prose,
             (kind, value) => RenderQuantity(kind, value, recipient),
-            instant => RenderInstant(instant, localityTz, vocab.Culture)));
+            instant => RenderInstant(instant, localityTz, culture)));
 
         var sb = new StringBuilder();
         sb.Append("<div style=\"max-width:600px;margin:0 auto;font-family:Arial,Helvetica,sans-serif;color:#1a3a5c;\">");
 
-        AppendHeader(sb, observation, localityTz, vocab, kind);
+        AppendHeader(sb, observation, localityTz, templates, culture, kind);
 
         // WX-189: the band shows whenever one is warranted — Claude's changeSummary
         // prose when present, else a deterministic line from the computed changes.
@@ -89,13 +99,13 @@ public static class StructuredReportRenderer
         // non-empty Changes here means the band must show; the fallback covers the
         // case where the model's prose was rejected or absent.
         if (!string.IsNullOrWhiteSpace(sections.ChangeSummary))
-            AppendChangeBand(sb, vocab, RenderProse(sections.ChangeSummary!));
+            AppendChangeBand(sb, templates, RenderProse(sections.ChangeSummary!));
         else if (report.Changes.Count > 0)
-            AppendChangeBand(sb, vocab, HtmlText(RenderFallbackBand(report.Changes, vocab, localityTz)));
+            AppendChangeBand(sb, templates, HtmlText(RenderFallbackBand(report.Changes, templates, culture, localityTz)));
 
-        AppendCurrentConditions(sb, observation, recipient, vocab);
-        AppendExtendedForecast(sb, finalSnapshot, observation.LocalityName, recipient, localityTz, vocab, nowUtc);
-        AppendClosing(sb, vocab, RenderProse(sections.Closing));
+        AppendCurrentConditions(sb, observation, recipient, templates);
+        AppendExtendedForecast(sb, finalSnapshot, observation.LocalityName, recipient, localityTz, templates, culture, nowUtc);
+        AppendClosing(sb, templates, RenderProse(sections.Closing));
 
         sb.Append("</div>");
         return sb.ToString();
@@ -115,19 +125,17 @@ public static class StructuredReportRenderer
         ForecastSnapshotBody finalSnapshot,
         WeatherSnapshot observation,
         Recipient recipient,
-        string langCode,
+        TemplateSet templates,
+        CultureInfo culture,
         TimeZoneInfo localityTz,
         DateTime nowUtc)
     {
-        var lang = NormalizeLang(langCode);
-        var vocab = ReportVocabulary.ForLanguage(lang);
-
         var sb = new StringBuilder();
         sb.Append("<div style=\"max-width:600px;margin:0 auto;font-family:Arial,Helvetica,sans-serif;color:#1a3a5c;\">");
-        AppendHeader(sb, observation, localityTz, vocab, ReportKind.Unscheduled);
-        AppendHazardBanner(sb, finalSnapshot, localityTz, vocab, nowUtc);
-        AppendCurrentConditions(sb, observation, recipient, vocab);
-        AppendExtendedForecast(sb, finalSnapshot, observation.LocalityName, recipient, localityTz, vocab, nowUtc);
+        AppendHeader(sb, observation, localityTz, templates, culture, ReportKind.Unscheduled);
+        AppendHazardBanner(sb, finalSnapshot, localityTz, templates, culture, nowUtc);
+        AppendCurrentConditions(sb, observation, recipient, templates);
+        AppendExtendedForecast(sb, finalSnapshot, observation.LocalityName, recipient, localityTz, templates, culture, nowUtc);
         sb.Append("</div>");
         return sb.ToString();
     }
@@ -141,14 +149,14 @@ public static class StructuredReportRenderer
     /// exists (the caller only degrades-and-sends when one does, so this is a
     /// defensive guard).
     /// </summary>
-    private static void AppendHazardBanner(StringBuilder sb, ForecastSnapshotBody body, TimeZoneInfo tz, ReportVocabulary vocab, DateTime nowUtc)
+    private static void AppendHazardBanner(StringBuilder sb, ForecastSnapshotBody body, TimeZoneInfo tz, TemplateSet t, CultureInfo culture, DateTime nowUtc)
     {
         var severe = SevereBlocks.EarliestActive(body, nowUtc);
         if (severe is null)
             return;
         var local = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(severe.StartUtc, DateTimeKind.Utc), tz);
-        var timing = ProseTiming(local, vocab);
-        var text = string.Format(vocab.Culture, vocab.HazardBannerFormat, vocab.SevereNoun(severe.PrecipPhenomenon), timing);
+        var timing = ProseTiming(local, t, culture);
+        var text = string.Format(culture, t.Get(Tok.HazardBannerFormat), t.Get(ReportLabels.SevereNounToken(severe.PrecipPhenomenon)), timing);
         sb.Append("<div style=\"background:#7a1c1c;color:#ffffff;padding:14px 24px;font-weight:bold;font-size:15px;\">");
         sb.Append(HtmlText(text));
         sb.Append("</div>");
@@ -166,15 +174,15 @@ public static class StructuredReportRenderer
     /// day explicitly (never a bare "overnight"; see WX-190).
     /// </summary>
     private static string RenderFallbackBand(
-        IReadOnlyList<ReportChange> changes, ReportVocabulary vocab, TimeZoneInfo tz)
+        IReadOnlyList<ReportChange> changes, TemplateSet t, CultureInfo culture, TimeZoneInfo tz)
     {
         var lines = changes.Take(2).Select(c =>
         {
-            var dir = DirectionWord(c, vocab);
-            var timing = ChangeTiming(c.Window.StartUtc, vocab, tz);
+            var dir = DirectionWord(c, t);
+            var timing = ChangeTiming(c.Window.StartUtc, t, culture, tz);
             return dir.Length == 0
-                ? $"{ChangeNoun(c, vocab)} — {timing}."
-                : $"{ChangeNoun(c, vocab)} {dir} — {timing}.";
+                ? $"{ChangeNoun(c, t)} — {timing}."
+                : $"{ChangeNoun(c, t)} {dir} — {timing}.";
         });
         return string.Join(" ", lines);
     }
@@ -183,42 +191,43 @@ public static class StructuredReportRenderer
     // — without it a clearing/weakening change reads as arriving. Temperature and wind
     // nouns are already direction-neutral ("Temperature change"), so they take no word;
     // Shifting (WX-191) has none yet.
-    private static string DirectionWord(ReportChange c, ReportVocabulary vocab) =>
+    private static string DirectionWord(ReportChange c, TemplateSet t) =>
         c.Phenomenon is ChangePhenomenon.Temperature or ChangePhenomenon.Wind or ChangePhenomenon.WindShift
             ? string.Empty
             : c.Direction switch
             {
-                ChangeDirection.Appearing => vocab.DirAppearing,
-                ChangeDirection.Strengthening => vocab.DirStrengthening,
-                ChangeDirection.Weakening => vocab.DirWeakening,
-                ChangeDirection.Clearing => vocab.DirClearing,
+                ChangeDirection.Appearing => t.Get(Tok.DirAppearing),
+                ChangeDirection.Strengthening => t.Get(Tok.DirStrengthening),
+                ChangeDirection.Weakening => t.Get(Tok.DirWeakening),
+                ChangeDirection.Clearing => t.Get(Tok.DirClearing),
                 _ => string.Empty,
             };
 
     // Localized "{weekday} {day-part}" for a change window's start ("Saturday afternoon"),
     // mirroring AppendHazardBanner so the fallback reads like the rest of the report.
-    private static string ChangeTiming(DateTime startUtc, ReportVocabulary vocab, TimeZoneInfo tz)
+    private static string ChangeTiming(DateTime startUtc, TemplateSet t, CultureInfo culture, TimeZoneInfo tz)
     {
         var local = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(startUtc, DateTimeKind.Utc), tz);
-        return ProseTiming(local, vocab);
+        return ProseTiming(local, t, culture);
     }
 
     // Localized, capitalized noun phrase for a computed change. Precipitation and severe
     // reuse the grid's weather vocabulary — a Safety-tier convective change uses the
     // severe lead, matching the hazard banner and the WX-156 subject — while freezing
-    // precip, temperature, and wind use their own brief nouns (WX-191's WindShift never
-    // reaches here yet).
-    private static string ChangeNoun(ReportChange c, ReportVocabulary vocab) => Capitalize(c.Phenomenon switch
+    // precip (the atomic rain_freezing token, correct order/agreement in every language),
+    // temperature, and wind use their own brief nouns (WX-191's WindShift never reaches
+    // here yet).
+    private static string ChangeNoun(ReportChange c, TemplateSet t) => Capitalize(c.Phenomenon switch
     {
-        ChangePhenomenon.Rain => vocab.WxRain,
-        ChangePhenomenon.Thunderstorm => c.Tier == ChangeTier.Safety ? vocab.CondSevereStorms : vocab.WxThunderstorm,
-        ChangePhenomenon.Snow => vocab.WxSnow,
-        ChangePhenomenon.Mixed => vocab.WxMixed,
-        ChangePhenomenon.FreezingPrecip => vocab.ChangeFreezingRain,
-        ChangePhenomenon.Severe => vocab.CondSevereWeather,
-        ChangePhenomenon.Temperature => vocab.ChangeTempNoun,
-        ChangePhenomenon.Wind => vocab.ChangeWindNoun,
-        _ => vocab.ChangeWindNoun,
+        ChangePhenomenon.Rain => t.Get(Tok.Rain),
+        ChangePhenomenon.Thunderstorm => c.Tier == ChangeTier.Safety ? t.Get(Tok.CondSevereStorms) : t.Get(Tok.WxThunderstorm),
+        ChangePhenomenon.Snow => t.Get(Tok.Snow),
+        ChangePhenomenon.Mixed => t.Get(Tok.WintryMix),
+        ChangePhenomenon.FreezingPrecip => t.Get(Tok.RainFreezing),
+        ChangePhenomenon.Severe => t.Get(Tok.CondSevereWeather),
+        ChangePhenomenon.Temperature => t.Get(Tok.ChangeTempNoun),
+        ChangePhenomenon.Wind => t.Get(Tok.ChangeWindNoun),
+        _ => t.Get(Tok.ChangeWindNoun),
     });
 
     // ── first-contact welcome (WX-130; standalone welcome-only email) ──────────
@@ -226,20 +235,20 @@ public static class StructuredReportRenderer
     /// <summary>
     /// Renders a recipient's one-time welcome email — a greeting plus a statement
     /// of what to expect (daily reports for <paramref name="localityName"/> at the
-    /// locality's <paramref name="scheduledHours"/>, localized to the recipient's
-    /// language), with <b>no weather content</b>.  This is the first contact a new
-    /// recipient receives; weather reports begin on the locality's normal cadence.
+    /// locality's <paramref name="scheduledHours"/>, localized via
+    /// <paramref name="templates"/> / <paramref name="culture"/>), with <b>no weather
+    /// content</b>.  This is the first contact a new recipient receives; weather
+    /// reports begin on the locality's normal cadence.
     /// </summary>
     public static string RenderWelcome(
         Recipient recipient,
-        string langCode,
+        TemplateSet templates,
+        CultureInfo culture,
         string localityName,
         TimeZoneInfo localityTz,
         IReadOnlyList<int> scheduledHours)
     {
-        var lang = NormalizeLang(langCode);
-        var vocab = ReportVocabulary.ForLanguage(lang);
-        var body = string.Format(vocab.Culture, vocab.WelcomeFormat, localityName, FormatScheduleTimes(scheduledHours, vocab));
+        var body = string.Format(culture, templates.Get(Tok.WelcomeFormat), localityName, FormatScheduleTimes(scheduledHours, culture, templates));
 
         var sb = new StringBuilder();
         sb.Append("<div style=\"max-width:600px;margin:0 auto;font-family:Arial,Helvetica,sans-serif;color:#1a3a5c;\">");
@@ -247,41 +256,30 @@ public static class StructuredReportRenderer
         sb.Append($"<div style=\"font-weight:bold;font-size:22px;\">{HtmlText(localityName)}</div>");
         sb.Append("</div>");
         sb.Append("<div style=\"background:#eef4fb;padding:20px 24px;font-size:15px;line-height:1.5;border-radius:0 0 6px 6px;\">");
-        sb.Append($"<strong>{HtmlText(vocab.WelcomeGreeting)}</strong> {HtmlText(body)}");
+        sb.Append($"<strong>{HtmlText(templates.Get(Tok.WelcomeGreeting))}</strong> {HtmlText(body)}");
         sb.Append("</div>");
         sb.Append("</div>");
         return sb.ToString();
     }
 
-    /// <summary>Plain-text form of the welcome email (the SMTP fallback), sharing the same vocabulary + schedule formatting as <see cref="RenderWelcome"/> so the two cannot drift.</summary>
-    public static string WelcomePlainText(Recipient recipient, string langCode, string localityName, IReadOnlyList<int> scheduledHours)
+    /// <summary>Plain-text form of the welcome email (the SMTP fallback), sharing the same templates + schedule formatting as <see cref="RenderWelcome"/> so the two cannot drift.</summary>
+    public static string WelcomePlainText(Recipient recipient, TemplateSet templates, CultureInfo culture, string localityName, IReadOnlyList<int> scheduledHours)
     {
-        var lang = NormalizeLang(langCode);
-        var vocab = ReportVocabulary.ForLanguage(lang);
-        return $"{vocab.WelcomeGreeting} "
-            + string.Format(vocab.Culture, vocab.WelcomeFormat, localityName, FormatScheduleTimes(scheduledHours, vocab));
+        return $"{templates.Get(Tok.WelcomeGreeting)} "
+            + string.Format(culture, templates.Get(Tok.WelcomeFormat), localityName, FormatScheduleTimes(scheduledHours, culture, templates));
     }
 
-    /// <summary>
-    /// Normalizes a resolved language code to the bare lower-case ISO 639-1 part the
-    /// narrative map and <see cref="ReportVocabulary"/> key on — dropping any regional
-    /// suffix (e.g. <c>"es-419"</c> → <c>"es"</c>) so a future regional tag can't
-    /// silently miss the narrative and fall back. Single source so the render entry
-    /// points can't drift.
-    /// </summary>
-    private static string NormalizeLang(string langCode) => langCode.Split('-')[0].ToLowerInvariant();
-
     /// <summary>Localized "6 AM and 12 PM" list of the recipient's daily send hours, joined with the language's conjunction. Empty when no hours are configured.</summary>
-    private static string FormatScheduleTimes(IReadOnlyList<int> hours, ReportVocabulary vocab)
+    private static string FormatScheduleTimes(IReadOnlyList<int> hours, CultureInfo culture, TemplateSet t)
     {
         var times = hours
-            .Select(h => new DateTime(2000, 1, 1, h, 0, 0).ToString("h tt", vocab.Culture))
+            .Select(h => new DateTime(2000, 1, 1, h, 0, 0).ToString("h tt", culture))
             .ToList();
         if (times.Count == 0)
             return "";
         if (times.Count == 1)
             return times[0];
-        return string.Join(", ", times.Take(times.Count - 1)) + $" {vocab.AndConjunction} " + times[^1];
+        return string.Join(", ", times.Take(times.Count - 1)) + $" {t.Get(Tok.AndConjunction)} " + times[^1];
     }
 
     /// <summary>The recipient's language narrative, falling back to en (then any present) if the recipient's own language is somehow absent. An entirely empty narrative is a precondition violation — <see cref="StructuredReportBody.Validate"/> guarantees at least one language — and throws here, failing the send closed rather than emailing a blank report.</summary>
@@ -297,7 +295,7 @@ public static class StructuredReportRenderer
     // ── header ──────────────────────────────────────────────────────────────
 
     private static void AppendHeader(
-        StringBuilder sb, WeatherSnapshot snap, TimeZoneInfo tz, ReportVocabulary vocab, ReportKind kind)
+        StringBuilder sb, WeatherSnapshot snap, TimeZoneInfo tz, TemplateSet t, CultureInfo culture, ReportKind kind)
     {
         sb.Append("<div style=\"background:#1a3a5c;color:#ffffff;text-align:left;padding:20px 24px;border-radius:6px 6px 0 0;\">");
         sb.Append($"<div style=\"font-weight:bold;font-size:22px;\">{HtmlText(snap.LocalityName)}</div>");
@@ -305,42 +303,42 @@ public static class StructuredReportRenderer
         {
             var local = TimeZoneInfo.ConvertTimeFromUtc(
                 DateTime.SpecifyKind(snap.ObservationTimeUtc, DateTimeKind.Utc), tz);
-            var when = local.ToString("dddd, MMMM d, h:mm tt", vocab.Culture);
+            var when = local.ToString("dddd, MMMM d, h:mm tt", culture);
             sb.Append($"<div style=\"font-size:14px;color:#c8daea;\">{HtmlText(when)}</div>");
         }
-        var typeLabel = vocab.GetFromReportKind(kind, LabelType.Header);
+        var typeLabel = t.Get(ReportLabels.TokenFor(kind, LabelType.Header));
         sb.Append($"<div style=\"font-style:italic;font-size:13px;color:#a0bcd4;\">{HtmlText(typeLabel)}</div>");
         sb.Append("</div>");
     }
 
     // ── change-summary band ──────────────────────────────────────────────────
 
-    private static void AppendChangeBand(StringBuilder sb, ReportVocabulary vocab, string renderedProse)
+    private static void AppendChangeBand(StringBuilder sb, TemplateSet t, string renderedProse)
     {
         sb.Append("<div style=\"background:#fef6e4;border-left:4px solid #e8a020;padding:14px 20px;font-size:14px;\">");
-        sb.Append($"<strong>{HtmlText(vocab.WhatsChangedLabel)}</strong> {renderedProse}");
+        sb.Append($"<strong>{HtmlText(t.Get(Tok.WhatsChangedLabel))}</strong> {renderedProse}");
         sb.Append("</div>");
     }
 
     // ── current conditions ────────────────────────────────────────────────────
 
     private static void AppendCurrentConditions(
-        StringBuilder sb, WeatherSnapshot snap, Recipient recipient, ReportVocabulary vocab)
+        StringBuilder sb, WeatherSnapshot snap, Recipient recipient, TemplateSet t)
     {
         sb.Append("<div style=\"background:#f7f9fc;padding:20px 24px;\">");
-        AppendSectionHeading(sb, vocab.CurrentConditionsHeading);
+        AppendSectionHeading(sb, t.Get(Tok.CurrentConditionsHeading));
 
         // Station-attribution subtitle (WX-130, restored): name the observing
         // station beneath the heading when it differs from the locality, so the
         // reader knows "Current Conditions" came from, e.g., the nearby airport.
-        var subtitle = StationSubtitle(snap, vocab);
+        var subtitle = StationSubtitle(snap, t);
         if (subtitle is not null)
             sb.Append($"<div style=\"font-size:13px;font-style:italic;color:#6b8fa8;font-weight:normal;margin-top:2px;\">{HtmlText(subtitle)}</div>");
 
         if (!snap.ObservationAvailable)
         {
             var note = string.IsNullOrWhiteSpace(snap.ObservationUnavailableNote)
-                ? vocab.NoObservationNote
+                ? t.Get(Tok.NoObservationNote)
                 : snap.ObservationUnavailableNote!;
             sb.Append($"<p style=\"font-style:italic;font-size:14px;color:#6b8fa8;margin:12px 0 0;\">{HtmlText(note)}</p>");
             sb.Append("</div>");
@@ -357,18 +355,18 @@ public static class StructuredReportRenderer
             sb.Append($"<td style=\"padding:6px 10px;\">{HtmlText(value)}</td></tr>");
         }
 
-        Row(vocab.RowSky, SkyPhrase(snap.SkyLayers, vocab));
-        Row(vocab.RowVisibility, VisibilityPhrase(snap, vocab));
-        Row(vocab.RowWind, WindPhrase(snap, recipient, vocab));
-        var weather = WeatherPhrase(snap.WeatherPhenomena, vocab);
+        Row(t.Get(Tok.RowSky), SkyPhrase(snap.SkyLayers, t));
+        Row(t.Get(Tok.RowVisibility), VisibilityPhrase(snap, t));
+        Row(t.Get(Tok.RowWind), WindPhrase(snap, recipient, t));
+        var weather = WeatherPhrase(snap.WeatherPhenomena, t);
         if (weather.Length > 0)
-            Row(vocab.RowWeather, weather);
+            Row(t.Get(Tok.RowWeather), weather);
         if (snap.TemperatureCelsius is double tc)
-            Row(vocab.RowTemperature, FormatTempC(tc, recipient));
+            Row(t.Get(Tok.RowTemperature), FormatTempC(tc, recipient));
         if (snap.TemperatureCelsius is double t2 && snap.DewPointCelsius is double dp)
-            Row(vocab.RowHumidity, $"{Meteorology.RelativeHumidity(t2, dp):0}%");
+            Row(t.Get(Tok.RowHumidity), $"{Meteorology.RelativeHumidity(t2, dp):0}%");
         if (snap.AltimeterInHg is double inHg)
-            Row(vocab.RowPressure, FormatPressureInHg(inHg, recipient));
+            Row(t.Get(Tok.RowPressure), FormatPressureInHg(inHg, recipient));
 
         sb.Append("</table></div>");
     }
@@ -380,8 +378,10 @@ public static class StructuredReportRenderer
     /// Ported from the former reconciler-prompt subtitle logic (WX-130): prefer
     /// "at &lt;municipality&gt;, &lt;airport&gt;", collapse when the airport name
     /// already contains the municipality, fall back to whichever single name exists.
+    /// The "at {0}" framing is the atomic <see cref="Tok.StationSubtitle"/> format
+    /// string, so the preposition localizes as a unit ("en {0}").
     /// </summary>
-    private static string? StationSubtitle(WeatherSnapshot snap, ReportVocabulary vocab)
+    private static string? StationSubtitle(WeatherSnapshot snap, TemplateSet t)
     {
         var municipality = snap.StationMunicipality;
         var airportName = snap.StationName;
@@ -391,48 +391,44 @@ public static class StructuredReportRenderer
             string.Equals(municipality, locality, StringComparison.OrdinalIgnoreCase))
             return null;
 
-        var at = vocab.StationAtPrefix;
+        string? name;
         if (municipality is not null && airportName is not null)
-        {
-            return airportName.Contains(municipality, StringComparison.OrdinalIgnoreCase)
-                ? $"{at} {airportName}"
-                : $"{at} {municipality}, {airportName}";
-        }
-        if (airportName is not null)
-            return $"{at} {airportName}";
-        if (municipality is not null)
-            return $"{at} {municipality}";
+            name = airportName.Contains(municipality, StringComparison.OrdinalIgnoreCase)
+                ? airportName
+                : $"{municipality}, {airportName}";
+        else
+            name = airportName ?? municipality;
 
-        return null;
+        return name is null ? null : string.Format(Inv, t.Get(Tok.StationSubtitle), name);
     }
 
     // ── extended forecast grid ────────────────────────────────────────────────
 
     private static void AppendExtendedForecast(
-        StringBuilder sb, ForecastSnapshotBody body, string locationName, Recipient recipient, TimeZoneInfo tz, ReportVocabulary vocab, DateTime nowUtc)
+        StringBuilder sb, ForecastSnapshotBody body, string locationName, Recipient recipient, TimeZoneInfo tz, TemplateSet t, CultureInfo culture, DateTime nowUtc)
     {
         var days = AggregateDays(body, tz, nowUtc).ToList();
         if (days.Count == 0)
             return;  // no forecast blocks → omit the section entirely rather than emit a header-only grid
 
         sb.Append("<div style=\"background:#ffffff;padding:20px 24px;\">");
-        AppendSectionHeading(sb, string.Format(vocab.Culture, vocab.ForecastHeadingFormat, locationName));
+        AppendSectionHeading(sb, string.Format(culture, t.Get(Tok.ForecastHeadingFormat), locationName));
 
         sb.Append("<table style=\"width:100%;border-collapse:collapse;font-size:14px;margin-top:8px;\">");
         sb.Append("<tr style=\"background:#1a3a5c;color:#ffffff;\">");
-        sb.Append($"<th style=\"padding:6px 10px;text-align:left;\">{HtmlText(vocab.ColDate)}</th>");
-        sb.Append($"<th style=\"padding:6px 10px;text-align:left;\">{HtmlText(vocab.ColTemperatures)}</th>");
-        sb.Append($"<th style=\"padding:6px 10px;text-align:left;\">{HtmlText(vocab.ColWind)}</th>");
-        sb.Append($"<th style=\"padding:6px 10px;text-align:left;\">{HtmlText(vocab.ColConditions)}</th></tr>");
+        sb.Append($"<th style=\"padding:6px 10px;text-align:left;\">{HtmlText(t.Get(Tok.ColDate))}</th>");
+        sb.Append($"<th style=\"padding:6px 10px;text-align:left;\">{HtmlText(t.Get(Tok.ColTemperatures))}</th>");
+        sb.Append($"<th style=\"padding:6px 10px;text-align:left;\">{HtmlText(t.Get(Tok.ColWind))}</th>");
+        sb.Append($"<th style=\"padding:6px 10px;text-align:left;\">{HtmlText(t.Get(Tok.ColConditions))}</th></tr>");
 
         var row = 0;
         foreach (var day in days)
         {
             var bg = row++ % 2 == 0 ? "#f7f9fc" : "#ffffff";
-            var date = day.Date.ToString("ddd MMM d", vocab.Culture);
-            var temps = $"{HtmlText(vocab.HighLabel)}: {FormatTempC(day.MaxTempC, recipient)}<br/>{HtmlText(vocab.LowLabel)}: {FormatTempC(day.MinTempC, recipient)}";
+            var date = day.Date.ToString("ddd MMM d", culture);
+            var temps = $"{HtmlText(t.Get(Tok.HighLabel))}: {FormatTempC(day.MaxTempC, recipient)}<br/>{HtmlText(t.Get(Tok.LowLabel))}: {FormatTempC(day.MinTempC, recipient)}";
             var wind = FormatWindKt(day.MaxWindKt, recipient);
-            var condHtml = ConditionsCellHtml(day, vocab);
+            var condHtml = ConditionsCellHtml(day, t);
             sb.Append($"<tr style=\"background:{bg};\">");
             sb.Append($"<td style=\"padding:6px 10px;\">{HtmlText(date)}</td>");
             sb.Append($"<td style=\"padding:6px 10px;\">{temps}</td>");
@@ -445,16 +441,16 @@ public static class StructuredReportRenderer
         // bands, so the legend sits one glance away rather than in a distant footer. Styled
         // to match the meteogram caption (WX-195) — centered, italic, 11px, #888 — so the
         // report's two explanatory captions read as one consistent voice.
-        sb.Append($"<div style=\"text-align:center;font-size:11px;color:#888;font-style:italic;margin-top:6px;\">{HtmlText(vocab.GridTimeLegend)}</div>");
+        sb.Append($"<div style=\"text-align:center;font-size:11px;color:#888;font-style:italic;margin-top:6px;\">{HtmlText(t.Get(Tok.GridTimeLegend))}</div>");
         sb.Append("</div>");
     }
 
     // ── closing ───────────────────────────────────────────────────────────────
 
-    private static void AppendClosing(StringBuilder sb, ReportVocabulary vocab, string renderedProse)
+    private static void AppendClosing(StringBuilder sb, TemplateSet t, string renderedProse)
     {
         sb.Append("<div style=\"background:#f0f4f9;padding:16px 24px;border-top:1px solid #d0dce8;\">");
-        sb.Append($"<strong>{HtmlText(vocab.InSummaryLabel)}</strong> {renderedProse}");
+        sb.Append($"<strong>{HtmlText(t.Get(Tok.InSummaryLabel))}</strong> {renderedProse}");
         sb.Append("</div>");
     }
 
@@ -540,7 +536,7 @@ public static class StructuredReportRenderer
 
     // ── deterministic phrase composers ────────────────────────────────────────
 
-    private static string SkyPhrase(IReadOnlyList<SkyLayer> layers, ReportVocabulary vocab)
+    private static string SkyPhrase(IReadOnlyList<SkyLayer> layers, TemplateSet t)
     {
         // Rank by cloudiness, not raw enum ordinal: SkyCoverage orders
         // NoSignificantCloud / NoCloudsDetected ABOVE Broken / Overcast, so a
@@ -565,94 +561,121 @@ public static class StructuredReportRenderer
                 ceilFeet = h;
         }
 
-        var (phrase, prefixable) = rank switch
+        // Only mostly-cloudy (rank 2) and overcast (rank 3) take a low/high prefix; the
+        // prefixed form is a single atomic token ("low overcast" / "nublado bajo"), seeded
+        // lower-case, so capitalize it to match the cell's leading-capital convention — the
+        // English output the current renderer produced via the "Low" prefix word (WX-171).
+        if ((rank == 2 || rank == 3) && ceilFeet is int c && (c < 6500 || c > 20000))
         {
-            1 => (vocab.SkyPartlyCloudy, false),
-            2 => (vocab.SkyMostlyCloudy, true),
-            3 => (vocab.SkyOvercast, true),
-            4 => (vocab.SkyObscured, false),
-            _ => (vocab.SkyClear, false),
-        };
-
-        if (prefixable && ceilFeet is int c)
-        {
-            if (c < 6500)
-                return $"{vocab.LowPrefix} {Lower(phrase)}";
-            if (c > 20000)
-                return $"{vocab.HighPrefix} {Lower(phrase)}";
+            var overcast = rank == 3;
+            var low = c < 6500;
+            var heightToken = overcast
+                ? (low ? Tok.SkyOvercastLow : Tok.SkyOvercastHigh)
+                : (low ? Tok.SkyMostlycloudyLow : Tok.SkyMostlycloudyHigh);
+            return Capitalize(t.Get(heightToken));
         }
-        return phrase;
+
+        return rank switch
+        {
+            1 => t.Get(Tok.SkyPartlyCloudy),
+            2 => t.Get(Tok.SkyMostlyCloudy),
+            3 => t.Get(Tok.SkyOvercast),
+            4 => t.Get(Tok.SkyObscured),
+            _ => t.Get(Tok.SkyClear),
+        };
     }
 
-    private static string VisibilityPhrase(WeatherSnapshot snap, ReportVocabulary vocab)
+    private static string VisibilityPhrase(WeatherSnapshot snap, TemplateSet t)
     {
         // An obscuration names itself (fog/haze/smoke/mist) rather than a band.
         foreach (var w in snap.WeatherPhenomena)
         {
-            var named = ObscurationWord(w.Obscuration, vocab);
+            var named = ObscurationWord(w.Obscuration, t);
             if (named is not null)
                 return named;
         }
         if (snap.Cavok)
-            return vocab.VisGood;
+            return t.Get(Tok.VisGood);
         if (snap.VisibilityStatuteMiles is not double mi)
             return "—";
         return mi switch
         {
-            >= 6 => vocab.VisGood,
-            >= 2 => vocab.VisHazy,
-            >= 0.5 => vocab.VisReduced,
-            _ => vocab.VisPoor,
+            >= 6 => t.Get(Tok.VisGood),
+            >= 2 => t.Get(Tok.VisHazy),
+            >= 0.5 => t.Get(Tok.VisReduced),
+            _ => t.Get(Tok.VisPoor),
         };
     }
 
-    private static string WindPhrase(WeatherSnapshot snap, Recipient recipient, ReportVocabulary vocab)
+    private static string WindPhrase(WeatherSnapshot snap, Recipient recipient, TemplateSet t)
     {
         if ((snap.WindSpeedKt ?? 0) == 0 && snap.WindGustKt is null && !snap.WindIsVariable)
-            return vocab.WindCalm;
+            return t.Get(Tok.WindCalm);
 
         var speed = FormatWindKt(snap.WindSpeedKt ?? 0, recipient);
         var dir = snap.WindIsVariable || snap.WindDirectionDeg is null
-            ? vocab.WindVariable
+            ? t.Get(Tok.WindVariable)
             : Meteorology.DegreesToCompass(snap.WindDirectionDeg.Value);
-        var gust = snap.WindGustKt is int g ? $", {vocab.WindGusting} {FormatWindKt(g, recipient)}" : "";
-        return $"{dir} {vocab.WindAt} {speed}{gust}";
+        // WindLine "{0} at {1}" + WindGust ", gusting {1}" are atomic format strings; dir
+        // and speed are already-formatted strings, so the culture passed to Format is
+        // immaterial (no numeric placeholder) — use Inv for determinism.
+        var line = string.Format(Inv, t.Get(Tok.WindLine), dir, speed);
+        var gust = snap.WindGustKt is int g ? string.Format(Inv, t.Get(Tok.WindGust), FormatWindKt(g, recipient)) : "";
+        return $"{line}{gust}";
     }
 
-    private static string WeatherPhrase(IReadOnlyList<SnapshotWeather> phenomena, ReportVocabulary vocab)
+    private static string WeatherPhrase(IReadOnlyList<SnapshotWeather> phenomena, TemplateSet t)
     {
         var parts = new List<string>();
         foreach (var w in phenomena)
         {
-            var p = OneWeatherPhrase(w, vocab);
+            var p = OneWeatherPhrase(w, t);
             if (p.Length > 0)
                 parts.Add(p);
         }
         return parts.Count == 0 ? "" : Capitalize(string.Join(", ", parts));
     }
 
-    private static string OneWeatherPhrase(SnapshotWeather w, ReportVocabulary vocab)
+    private static string OneWeatherPhrase(SnapshotWeather w, TemplateSet t)
     {
         if (w.Descriptor == WeatherDescriptor.Thunderstorm)
-            return vocab.WxThunderstorm;
+            return t.Get(Tok.WxThunderstorm);
 
         if (w.Precipitation.Count > 0)
-        {
-            var word = PrecipWord(w.Precipitation[0], vocab);
-            if (w.Descriptor == WeatherDescriptor.Freezing)
-                return $"{vocab.WxFreezing} {Lower(word)}";
-            if (w.Descriptor == WeatherDescriptor.Showers)
-                return $"{vocab.WxShowers} {Lower(word)}";
-            return w.Intensity switch
-            {
-                WeatherIntensity.Light => $"{vocab.WxLight} {Lower(word)}",
-                WeatherIntensity.Heavy => $"{vocab.WxHeavy} {Lower(word)}",
-                _ => word,
-            };
-        }
+            return t.Get(ObservedPrecipToken(w.Precipitation[0], w.Descriptor, w.Intensity));
 
-        return ObscurationWord(w.Obscuration, vocab) ?? "";
+        return ObscurationWord(w.Obscuration, t) ?? "";
     }
+
+    /// <summary>
+    /// The atomic observed-precipitation token for a (type, descriptor, intensity) triple.
+    /// Freezing and showers descriptors take precedence over light/heavy intensity (matching
+    /// the former composition order); any combination not separately authored
+    /// (e.g. heavy drizzle, freezing snow, light wintry mix) falls back to the bare type
+    /// token — never empty. Returns a <see cref="Tok"/> constant so every reference stays on
+    /// the compile-checked contract; a fallback that resolves to bare is the intended design
+    /// (WX-171, Step 2 ruling).
+    /// </summary>
+    private static string ObservedPrecipToken(PrecipitationType type, WeatherDescriptor? descriptor, WeatherIntensity intensity) => type switch
+    {
+        PrecipitationType.Drizzle =>
+            descriptor == WeatherDescriptor.Freezing ? Tok.DrizzleFreezing
+            : intensity == WeatherIntensity.Light ? Tok.DrizzleLight
+            : Tok.Drizzle,
+        PrecipitationType.Snow or PrecipitationType.SnowGrains =>
+            descriptor == WeatherDescriptor.Showers ? Tok.SnowShowers
+            : intensity == WeatherIntensity.Light ? Tok.SnowLight
+            : intensity == WeatherIntensity.Heavy ? Tok.SnowHeavy
+            : Tok.Snow,
+        PrecipitationType.IcePellets or PrecipitationType.Hail or PrecipitationType.SmallHail =>
+            Tok.WintryMix,   // no intensity/freezing/showers variants authored — bare always
+        _ =>  // Rain and any other liquid precipitation
+            descriptor == WeatherDescriptor.Freezing ? Tok.RainFreezing
+            : descriptor == WeatherDescriptor.Showers ? Tok.RainShowers
+            : intensity == WeatherIntensity.Light ? Tok.RainLight
+            : intensity == WeatherIntensity.Heavy ? Tok.RainHeavy
+            : Tok.Rain,
+    };
 
     /// <summary>
     /// Renders the per-day Conditions cell as an HTML fragment (each text piece already
@@ -667,7 +690,7 @@ public static class StructuredReportRenderer
     /// the grid row's date bind the hazard to the correct calendar day, so no floating
     /// "overnight" is ever needed.
     /// </summary>
-    private static string ConditionsCellHtml(DaySummary day, ReportVocabulary vocab)
+    private static string ConditionsCellHtml(DaySummary day, TemplateSet t)
     {
         if (day.Bands.Count == 0)
             return "—";  // defensive: AggregateDays only yields days with at least one block
@@ -680,7 +703,7 @@ public static class StructuredReportRenderer
         var runs = new List<(int FirstStart, int LastStart, string Phrase, bool Severe)>();
         foreach (var (hour, block) in day.Bands)
         {
-            var (phrase, severe) = BandPhrase(block, vocab);
+            var (phrase, severe) = BandPhrase(block, t);
             if (runs.Count > 0 && runs[^1].Phrase == phrase && runs[^1].Severe == severe
                 && hour == runs[^1].LastStart + 6)
                 runs[^1] = (runs[^1].FirstStart, hour, phrase, severe);
@@ -698,28 +721,28 @@ public static class StructuredReportRenderer
 
     /// <summary>
     /// The condition phrase for one clock band's block, with a flag marking a severe band
-    /// (which the caller emphasizes).  Severe leads with its noun ("Severe storms" /
-    /// "Severe weather"); otherwise a precipitation band reads "{phenomenon} {outlook}"
-    /// and a dry band reads its sky word ("Clear and dry" when clear).  Capitalized so
-    /// every tiled line in the cell opens with a consistent leading capital.
+    /// (which the caller emphasizes).  Severe leads with its atomic noun+outlook token
+    /// ("Severe storms likely" / "Severe weather likely"); otherwise a precipitation band
+    /// reads its atomic "{phenomenon} {outlook}" token ("Rain likely") and a dry band reads
+    /// its sky word ("Clear and dry" when clear).  Capitalized so every tiled line in the
+    /// cell opens with a consistent leading capital.
     /// </summary>
-    private static (string Phrase, bool Severe) BandPhrase(ForecastSnapshotBlock block, ReportVocabulary vocab)
+    private static (string Phrase, bool Severe) BandPhrase(ForecastSnapshotBlock block, TemplateSet t)
     {
         if (block.SevereFlag)
         {
-            // A severe block may carry no precip (a damaging-wind event); SevereNoun(null)
-            // gives the generic lead, and a missing expectation falls back to "likely".
-            var outlook = block.PrecipExpectation == PrecipExpectation.None
-                ? vocab.OutlookLikely
-                : OutlookWord(block.PrecipExpectation, vocab);
-            return ($"{vocab.SevereNoun(block.PrecipPhenomenon)} {outlook}", true);
+            // A severe block may carry no precip (a damaging-wind event); the non-convective
+            // token covers that, and a missing expectation falls back to "likely". The severe
+            // tokens are seeded already-capitalized, so use them verbatim.
+            return (t.Get(SevereBandToken(block.PrecipPhenomenon, block.PrecipExpectation)), true);
         }
 
         if (block.PrecipExpectation != PrecipExpectation.None && block.PrecipPhenomenon is PrecipPhenomenon p)
-            return (Capitalize($"{PhenomenonWord(p, vocab)} {OutlookWord(block.PrecipExpectation, vocab)}"), false);
+            return (Capitalize(t.Get(BandPrecipToken(p, block.PrecipExpectation))), false);
 
-        var sky = SkyWord(block.SkyState, vocab);
-        return (block.SkyState == SkyState.Clear ? $"{sky} {vocab.CondAndDry}" : sky, false);
+        if (block.SkyState == SkyState.Clear)
+            return (Capitalize(t.Get(Tok.ClearAndDry)), false);
+        return (t.Get(SkyWordToken(block.SkyState)), false);
     }
 
     private static DayPart PartOf(int hour) => hour switch
@@ -737,14 +760,14 @@ public static class StructuredReportRenderer
     /// bound by its clock range ("Saturday 00-06") rather than a floating night-word,
     /// which a US reader would otherwise read as the following calendar day (WX-190).
     /// </summary>
-    private static string ProseTiming(DateTime local, ReportVocabulary vocab) =>
-        $"{local.ToString("dddd", vocab.Culture)} {ProsePart(local.Hour, vocab)}";
+    private static string ProseTiming(DateTime local, TemplateSet t, CultureInfo culture) =>
+        $"{local.ToString("dddd", culture)} {ProsePart(local.Hour, t)}";
 
-    private static string ProsePart(int localHour, ReportVocabulary vocab) => PartOf(localHour) switch
+    private static string ProsePart(int localHour, TemplateSet t) => PartOf(localHour) switch
     {
-        DayPart.Morning => Lower(vocab.PartMorning),
-        DayPart.Afternoon => Lower(vocab.PartAfternoon),
-        DayPart.Evening => Lower(vocab.PartEvening),
+        DayPart.Morning => Lower(t.Get(Tok.PartMorning)),
+        DayPart.Afternoon => Lower(t.Get(Tok.PartAfternoon)),
+        DayPart.Evening => Lower(t.Get(Tok.PartEvening)),
         _ => ClockBand(localHour),
     };
 
@@ -759,45 +782,66 @@ public static class StructuredReportRenderer
     private static string ClockBandSpan(int firstStart, int lastStart) =>
         $"{firstStart:00}-{lastStart + 6:00}";
 
-    private static string OutlookWord(PrecipExpectation e, ReportVocabulary vocab) => e switch
+    /// <summary>The outlook suffix ("possible" / "likely" / "expected") for a precip expectation; <c>Certain</c> reads "expected" (never "certain").</summary>
+    private static PrecipExpectation NormalizeOutlook(PrecipExpectation e) =>
+        e == PrecipExpectation.None ? PrecipExpectation.Likely : e;
+
+    /// <summary>
+    /// The atomic forecast-band token for a non-severe (phenomenon, outlook) pair — the
+    /// noun and the agreeing outlook hedge baked into one token ("rain likely",
+    /// "lluvia probable"). Rain is the default family for any unhandled phenomenon, matching
+    /// the former composition. Every arm is a <see cref="Tok"/> constant (compile-checked).
+    /// </summary>
+    private static string BandPrecipToken(PrecipPhenomenon phen, PrecipExpectation exp) => (phen, exp) switch
     {
-        PrecipExpectation.Possible => vocab.OutlookPossible,
-        PrecipExpectation.Likely => vocab.OutlookLikely,
-        _ => vocab.OutlookExpected,
+        (PrecipPhenomenon.Thunderstorm, PrecipExpectation.Possible) => Tok.StormsPossible,
+        (PrecipPhenomenon.Thunderstorm, PrecipExpectation.Likely) => Tok.StormsLikely,
+        (PrecipPhenomenon.Thunderstorm, _) => Tok.StormsExpected,
+        (PrecipPhenomenon.Snow, PrecipExpectation.Possible) => Tok.SnowPossible,
+        (PrecipPhenomenon.Snow, PrecipExpectation.Likely) => Tok.SnowLikely,
+        (PrecipPhenomenon.Snow, _) => Tok.SnowExpected,
+        (PrecipPhenomenon.Mixed, PrecipExpectation.Possible) => Tok.WmixPossible,
+        (PrecipPhenomenon.Mixed, PrecipExpectation.Likely) => Tok.WmixLikely,
+        (PrecipPhenomenon.Mixed, _) => Tok.WmixExpected,
+        (PrecipPhenomenon.FreezingPrecip, PrecipExpectation.Possible) => Tok.FzraPossible,
+        (PrecipPhenomenon.FreezingPrecip, PrecipExpectation.Likely) => Tok.FzraLikely,
+        (PrecipPhenomenon.FreezingPrecip, _) => Tok.FzraExpected,
+        (_, PrecipExpectation.Possible) => Tok.RainPossible,
+        (_, PrecipExpectation.Likely) => Tok.RainLikely,
+        (_, _) => Tok.RainExpected,
     };
 
-    private static string SkyWord(SkyState s, ReportVocabulary vocab) => s switch
+    /// <summary>
+    /// The atomic severe-band token for a (phenomenon, outlook) pair: convective
+    /// (thunderstorm) → <c>sev_storms_*</c>, otherwise → <c>sev_wx_*</c> (covers a no-precip
+    /// damaging-wind event). A <c>None</c> expectation defaults to "likely". Each arm is a
+    /// <see cref="Tok"/> constant (compile-checked).
+    /// </summary>
+    private static string SevereBandToken(PrecipPhenomenon? phen, PrecipExpectation exp) => (phen == PrecipPhenomenon.Thunderstorm, NormalizeOutlook(exp)) switch
     {
-        SkyState.PartlyCloudy => vocab.SkyPartlyCloudy,
-        SkyState.MostlyCloudy => vocab.SkyMostlyCloudy,
-        SkyState.Overcast => vocab.SkyOvercast,
-        _ => vocab.SkyClear,
+        (true, PrecipExpectation.Possible) => Tok.SevStormsPossible,
+        (true, PrecipExpectation.Likely) => Tok.SevStormsLikely,
+        (true, _) => Tok.SevStormsExpected,
+        (false, PrecipExpectation.Possible) => Tok.SevWxPossible,
+        (false, PrecipExpectation.Likely) => Tok.SevWxLikely,
+        (false, _) => Tok.SevWxExpected,
     };
 
-    private static string? ObscurationWord(WeatherObscuration? o, ReportVocabulary vocab) => o switch
+    private static string SkyWordToken(SkyState s) => s switch
     {
-        WeatherObscuration.Fog => vocab.WxFog,
-        WeatherObscuration.Mist => vocab.WxMist,
-        WeatherObscuration.Haze => vocab.WxHaze,
-        WeatherObscuration.Smoke => vocab.WxSmoke,
+        SkyState.PartlyCloudy => Tok.SkyPartlyCloudy,
+        SkyState.MostlyCloudy => Tok.SkyMostlyCloudy,
+        SkyState.Overcast => Tok.SkyOvercast,
+        _ => Tok.SkyClear,
+    };
+
+    private static string? ObscurationWord(WeatherObscuration? o, TemplateSet t) => o switch
+    {
+        WeatherObscuration.Fog => t.Get(Tok.WxFog),
+        WeatherObscuration.Mist => t.Get(Tok.WxMist),
+        WeatherObscuration.Haze => t.Get(Tok.WxHaze),
+        WeatherObscuration.Smoke => t.Get(Tok.WxSmoke),
         _ => null,
-    };
-
-    private static string PrecipWord(PrecipitationType t, ReportVocabulary vocab) => t switch
-    {
-        PrecipitationType.Drizzle => vocab.WxDrizzle,
-        PrecipitationType.Snow or PrecipitationType.SnowGrains => vocab.WxSnow,
-        PrecipitationType.IcePellets or PrecipitationType.Hail or PrecipitationType.SmallHail => vocab.WxMixed,
-        _ => vocab.WxRain,
-    };
-
-    private static string PhenomenonWord(PrecipPhenomenon p, ReportVocabulary vocab) => p switch
-    {
-        PrecipPhenomenon.Thunderstorm => vocab.Storms,
-        PrecipPhenomenon.Snow => vocab.WxSnow,
-        PrecipPhenomenon.Mixed => vocab.WxMixed,
-        PrecipPhenomenon.FreezingPrecip => $"{vocab.WxFreezing} {Lower(vocab.WxRain)}",
-        _ => vocab.WxRain,
     };
 
     // ── unit conversion (canonical → recipient unit + suffix) ─────────────────
