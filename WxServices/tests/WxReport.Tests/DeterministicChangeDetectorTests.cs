@@ -302,6 +302,30 @@ public class DeterministicChangeDetectorTests
         ForecastReconciler.ValidateChangeSnapshotConsistency(report, final, prior, Utc);
     }
 
+    [Fact]
+    public void Strengthening_FromInteriorBlockRise_IsEmittedAndPassesConsistency_WX204()
+    {
+        // WX-204 regression: block0 expectation Likely->Certain and block6 severe False->True are
+        // both real per-block rises, so the detector groups them into one Thunderstorm Strengthening
+        // window (00-12). But the window AGGREGATE is flat — max expectation Certain->Certain (block6
+        // was already Certain) and severe True->True (block0 was already severe) — so the old
+        // window-max consistency check false-rejected the change as a phantom, the prod degrade. The
+        // per-block check must both see the change AND accept it (the keystone invariant restored).
+        var prior = Body(
+            Blk(0, precip: PrecipExpectation.Likely, phenom: PrecipPhenomenon.Thunderstorm, severe: true),
+            Blk(6, precip: PrecipExpectation.Certain, phenom: PrecipPhenomenon.Thunderstorm, severe: false));
+        var final = Body(
+            Blk(0, precip: PrecipExpectation.Certain, phenom: PrecipPhenomenon.Thunderstorm, severe: true),
+            Blk(6, precip: PrecipExpectation.Certain, phenom: PrecipPhenomenon.Thunderstorm, severe: true));
+
+        var changes = Detect(prior, final);
+        Assert.Contains(changes, c => c.Phenomenon == ChangePhenomenon.Thunderstorm && c.Direction == ChangeDirection.Strengthening);
+
+        // Must not throw — pre-WX-204 this scenario raised ChangeConsistencyException.
+        var report = new StructuredReportBody { Changes = changes };
+        ForecastReconciler.ValidateChangeSnapshotConsistency(report, final, prior, Utc);
+    }
+
     public static IEnumerable<object[]> InvariantCases() => new List<object[]>
     {
         new object[] { Body(Blk()), Body(Blk(precip: PrecipExpectation.Likely, phenom: PrecipPhenomenon.Rain)) },
@@ -310,5 +334,10 @@ public class DeterministicChangeDetectorTests
         new object[] { Body(Blk()), Body(Blk(precip: PrecipExpectation.Likely, phenom: PrecipPhenomenon.Thunderstorm, severe: true)) },
         new object[] { Body(Blk(windMax: 10)), Body(Blk(windMax: 55, severe: true)) },
         new object[] { Body(Blk(0), Blk(6), Blk(12)), Body(Blk(0, precip: PrecipExpectation.Likely, phenom: PrecipPhenomenon.Snow), Blk(6, precip: PrecipExpectation.Likely, phenom: PrecipPhenomenon.Snow), Blk(12)) },
+        // WX-204 (review): a standalone-severe block (severe, no precip) becomes a severe THUNDERSTORM
+        // (severe + precip). The detector emits a standalone-Severe Clearing (it is no longer standalone)
+        // plus a Thunderstorm Appearing; the per-block consistency net must back BOTH — so the severe
+        // helpers must scope to standalone-severe (PrecipPhenomenon null), mirroring DetectSevere.
+        new object[] { Body(Blk(windMax: 55, severe: true)), Body(Blk(precip: PrecipExpectation.Likely, phenom: PrecipPhenomenon.Thunderstorm, severe: true)) },
     };
 }
