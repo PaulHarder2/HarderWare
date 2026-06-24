@@ -403,4 +403,55 @@ public class MetarFetcherDedupTests
             Assert.Equal(1, ctx.SkyConditions.Count());                       // only the fresh row's child landed
         }
     }
+
+    [Fact]
+    public void Fallback_MixedBatchSaveFails_OverwriteStillLandsOnRetry()
+    {
+        // The harder fallback path: an overwrite shares a failed mixed batch, so its
+        // graph has already been mutated by ApplyPlan (SetValues + child re-attach)
+        // before SaveChanges throws and the tracker is cleared. ApplyOverwritesPerRow
+        // must re-apply that same overwrite graph in a fresh context and land it.
+        using var conn = new SqliteConnection("DataSource=:memory:");
+        var options = NewDb(conn);
+
+        int storedId;
+        using (var ctx = new WeatherDataContext(options))
+        {
+            var seed = Obs("KJXI", T, cor: false, raw: "METAR KJXI 241335Z 18005KT");
+            seed.WindSpeed = 5;
+            seed.SkyConditions.Add(new MetarSkyCondition { Cover = "BKN", HeightFeet = 1800, SortOrder = 0 });
+            ctx.Metars.Add(seed);
+            ctx.Metars.Add(Obs("KDUP", T));   // a co-batched insert will later collide with this
+            ctx.SaveChanges();
+            storedId = seed.Id;
+        }
+
+        var cor = Obs("KJXI", T, cor: true, raw: "METAR KJXI 241335Z 18012KT COR");
+        cor.WindSpeed = 12;
+        cor.SkyConditions.Add(new MetarSkyCondition { Cover = "SCT", HeightFeet = 3000, SortOrder = 0 });
+        var dupInsert = Obs("KDUP", T);   // duplicates the stored KDUP -> forces the batch to fail
+        var plan = new MetarFetcher.MetarReconcilePlan([dupInsert], [(storedId, cor)], 0);
+
+        int corrected;
+        using (var ctx = new WeatherDataContext(options))
+        {
+            MetarFetcher.ApplyPlan(ctx, plan);                          // mutates the overwrite graph + queues the insert
+            Assert.Throws<DbUpdateException>(() => ctx.SaveChanges());  // dup insert fails -> whole batch rolls back
+            ctx.ChangeTracker.Clear();
+            corrected = MetarFetcher.ApplyOverwritesPerRow(plan.Overwrites, options); // reuse the mutated overwrite graph
+        }
+
+        Assert.Equal(1, corrected);
+        using (var ctx = new WeatherDataContext(options))
+        {
+            var row = Assert.Single(ctx.Metars.Include(m => m.SkyConditions).Where(m => m.StationIcao == "KJXI"));
+            Assert.Equal(storedId, row.Id);          // overwrite in place after the failed batch
+            Assert.True(row.IsCorrection);
+            Assert.Equal(12, row.WindSpeed);
+            Assert.Single(row.SkyConditions);        // children replaced (BKN -> SCT), none orphaned
+            Assert.Equal("SCT", row.SkyConditions[0].Cover);
+            Assert.Equal(1, ctx.SkyConditions.Count());
+            Assert.Equal(1, ctx.Metars.Count(m => m.StationIcao == "KDUP")); // the dup insert never landed
+        }
+    }
 }
