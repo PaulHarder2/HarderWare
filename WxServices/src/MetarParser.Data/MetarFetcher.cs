@@ -196,37 +196,57 @@ public static class MetarFetcher
 
         using var ctx = new WeatherDataContext(dbOptions);
 
-        var stations = parsed.Select(p => p.Entity.StationIcao).Distinct().ToList();
-        var minTime = parsed.Min(p => p.Entity.ObservationUtc);
+        // Collapse same-key duplicates within this one response before touching
+        // the DB. AWC re-serves byte-identical lines for some stations (KJXI
+        // comes back ~3x every cycle); without this, the repeats each pass the
+        // not-yet-in-DB check, both Add, and violate UX_Metars_Station_Time_Type
+        // — and because SaveChanges is a single transaction, that one bad row
+        // would roll back every co-batched station's inserts. A correction (COR)
+        // wins over a non-COR for the same key, regardless of feed order (WX-210).
+        var collapsed = CollapseByKey(parsed.Select(p => p.Entity));
 
-        var existingKeys = ctx.Metars
+        var stations = collapsed.Select(e => e.StationIcao).Distinct().ToList();
+        var minTime = collapsed.Min(e => e.ObservationUtc);
+
+        // Snapshot the rows already stored for these keys. Id + IsCorrection +
+        // RawReport are all the reconcile rules need to decide insert / skip /
+        // overwrite — a later-arriving COR must replace a stored uncorrected obs.
+        var existing = ctx.Metars
             .Where(m => stations.Contains(m.StationIcao) && m.ObservationUtc >= minTime)
-            .Select(m => new { m.StationIcao, m.ObservationUtc, m.ReportType })
+            .Select(m => new { m.Id, m.StationIcao, m.ObservationUtc, m.ReportType, m.IsCorrection, m.RawReport })
             .AsEnumerable()
-            .Select(m => (m.StationIcao, m.ObservationUtc, m.ReportType))
-            .ToHashSet();
+            .ToDictionary(
+                m => (m.StationIcao, m.ObservationUtc, m.ReportType),
+                m => new PriorMetar(m.Id, m.IsCorrection, m.RawReport));
 
-        int inserted = 0, skipped = 0;
+        var plan = Reconcile(collapsed, existing);
+        int inserted = plan.Inserts.Count, corrected = plan.Overwrites.Count, skipped = plan.Skipped;
 
-        foreach (var (_, entity) in parsed)
+        if (inserted > 0 || corrected > 0)
         {
-            var key = (entity.StationIcao, entity.ObservationUtc, entity.ReportType);
-            if (existingKeys.Contains(key)) { skipped++; continue; }
-            ctx.Metars.Add(entity);
-            inserted++;
-        }
-
-        if (inserted > 0)
-        {
-            try { ctx.SaveChanges(); }
+            try
+            {
+                ApplyPlan(ctx, plan);
+                ctx.SaveChanges();
+            }
             catch (DbUpdateException ex)
             {
-                Logger.Error($"Database error during METAR batch insert: {ex.InnerException?.Message ?? ex.Message}");
-                return new FetchResult(lines.Count, []);
+                // The within-response collapse removes the known duplicate cause,
+                // so a row-level fault here is unexpected — but it must not sink the
+                // co-batched work. Detach the failed batch and re-apply each insert
+                // AND each correction in its own context, so one bad row can't
+                // discard the rest. The rolled-back SaveChanges leaves the entities'
+                // store-generated keys unset (still default), so reusing the same
+                // instances re-inserts cleanly — pinned by the
+                // Fallback_BatchSaveFailsThenClearAndReuse regression test.
+                Logger.Error($"Database error during METAR batch insert: {ex.InnerException?.Message ?? ex.Message}. Retrying row-by-row.");
+                ctx.ChangeTracker.Clear();
+                inserted = InsertPerRow(plan.Inserts, dbOptions);
+                corrected = ApplyOverwritesPerRow(plan.Overwrites, dbOptions);
             }
         }
 
-        Logger.Info($"METAR fetch done. Inserted: {inserted}  Skipped: {skipped}  Parse errors: {parseErrors}");
+        Logger.Info($"METAR fetch done. Inserted: {inserted}  Corrected: {corrected}  Skipped: {skipped}  Parse errors: {parseErrors}");
 
         // ── Upsert any station ICAOs not yet in WxStations ───────────────────
         await UpsertNewStationsAsync(stations, dbOptions, httpClient);
@@ -237,6 +257,234 @@ public static class MetarFetcher
                 .GroupBy(p => p.Entity.StationIcao, StringComparer.OrdinalIgnoreCase)
                 .Select(g => (Icao: g.Key, NewestObsUtc: g.Max(p => p.Entity.ObservationUtc)))
                 .ToList());
+    }
+
+    /// <summary>Minimal snapshot of an already-stored METAR row — enough for the reconcile rules.</summary>
+    internal readonly record struct PriorMetar(int Id, bool IsCorrection, string RawReport);
+
+    /// <summary>The insert / overwrite / skip decisions for one fetch batch, reconciled against the DB.</summary>
+    internal sealed record MetarReconcilePlan(
+        IReadOnlyList<MetarRecord> Inserts,
+        IReadOnlyList<(int ExistingId, MetarRecord Corrected)> Overwrites,
+        int Skipped);
+
+    /// <summary>Correction rank: a COR (corrected report) outranks a non-COR for the same key (WX-210).</summary>
+    private static int Rank(bool isCorrection) => isCorrection ? 1 : 0;
+
+    /// <summary>
+    /// Collapses observations that share a <c>(station, observation-time, type)</c>
+    /// key within a single fetch response down to one survivor. A correction
+    /// (<c>COR</c>) beats a non-correction regardless of feed order; identical
+    /// re-served copies (the KJXI case) collapse with no loss. Two genuinely
+    /// different corrections for one key in the same response are the only
+    /// ambiguous case (METAR carries no amendment sequence) — one is kept and the
+    /// conflict is logged rather than silently picked.
+    /// </summary>
+    internal static IReadOnlyList<MetarRecord> CollapseByKey(IEnumerable<MetarRecord> parsed)
+    {
+        var survivors = new List<MetarRecord>();
+
+        foreach (var group in parsed.GroupBy(e => (e.StationIcao, e.ObservationUtc, e.ReportType)))
+        {
+            var winner = group.First();
+            foreach (var e in group)
+            {
+                if (Rank(e.IsCorrection) > Rank(winner.IsCorrection))
+                    winner = e;
+            }
+
+            if (winner.IsCorrection)
+            {
+                var distinctCors = group
+                    .Where(e => e.IsCorrection)
+                    .Select(e => e.RawReport)
+                    .Distinct(StringComparer.Ordinal)
+                    .Count();
+                if (distinctCors > 1)
+                    Logger.Warn($"Conflicting corrected (COR) reports for {winner.StationIcao} "
+                        + $"{winner.ObservationUtc:u} {winner.ReportType} in one response; keeping one.");
+            }
+
+            survivors.Add(winner);
+        }
+
+        return survivors;
+    }
+
+    /// <summary>
+    /// Decides, for each collapsed observation, whether to insert it, overwrite a
+    /// stored row, or skip it — by comparing correction rank against what is
+    /// already in the DB. A <c>COR</c> overwrites a stored non-<c>COR</c>; a stored
+    /// <c>COR</c> is never clobbered by a later non-<c>COR</c>; an identical
+    /// re-arrival is skipped; two differing <c>COR</c>s resolve to the later (this
+    /// fetch) with a logged warning. Pure — no DB access — so the rules are unit-tested directly.
+    /// </summary>
+    internal static MetarReconcilePlan Reconcile(
+        IEnumerable<MetarRecord> collapsed,
+        IReadOnlyDictionary<(string StationIcao, DateTime ObservationUtc, string ReportType), PriorMetar> existing)
+    {
+        var inserts = new List<MetarRecord>();
+        var overwrites = new List<(int ExistingId, MetarRecord Corrected)>();
+        int skipped = 0;
+
+        foreach (var e in collapsed)
+        {
+            var key = (e.StationIcao, e.ObservationUtc, e.ReportType);
+            if (!existing.TryGetValue(key, out var prior))
+            {
+                inserts.Add(e);
+                continue;
+            }
+
+            int newRank = Rank(e.IsCorrection);
+            int priorRank = Rank(prior.IsCorrection);
+
+            if (newRank > priorRank)
+            {
+                overwrites.Add((prior.Id, e));                  // stored non-COR <- incoming COR
+            }
+            else if (newRank == priorRank && newRank == 1
+                     && !string.Equals(prior.RawReport, e.RawReport, StringComparison.Ordinal))
+            {
+                // Two differing corrections for one key across cycles: the later
+                // arrival (this fetch) wins. Rare; log rather than silently pick.
+                Logger.Warn($"Conflicting corrected (COR) reports for {e.StationIcao} {e.ObservationUtc:u} "
+                    + $"{e.ReportType}; overwriting the stored correction with the newly fetched one.");
+                overwrites.Add((prior.Id, e));
+            }
+            else if (newRank == priorRank && newRank == 0
+                     && !string.Equals(prior.RawReport, e.RawReport, StringComparison.Ordinal))
+            {
+                // Same key, neither a correction, but the content differs — a data
+                // conflict, not a benign re-send. Keep the stored row (no COR
+                // authorizes a replacement) but surface it rather than silently skip.
+                Logger.Warn($"Conflicting non-correction reports for {e.StationIcao} {e.ObservationUtc:u} "
+                    + $"{e.ReportType}; keeping the stored report.");
+                skipped++;
+            }
+            else
+            {
+                skipped++;                                      // identical re-arrival, or stored COR vs late non-COR
+            }
+        }
+
+        return new MetarReconcilePlan(inserts, overwrites, skipped);
+    }
+
+    /// <summary>
+    /// Applies a reconcile plan to <paramref name="ctx"/> without saving: queues the
+    /// inserts, and overwrites each correction in place — replacing the cascade
+    /// child rows and copying every scalar column via <c>SetValues</c> (so it stays
+    /// correct as columns are added), preserving the existing PK and unique key.
+    /// </summary>
+    internal static void ApplyPlan(WeatherDataContext ctx, MetarReconcilePlan plan)
+    {
+        foreach (var e in plan.Inserts)
+            ctx.Metars.Add(e);
+
+        if (plan.Overwrites.Count == 0)
+            return;
+
+        var ids = plan.Overwrites.Select(o => o.ExistingId).ToHashSet();
+        var tracked = ctx.Metars
+            .Include(m => m.SkyConditions)
+            .Include(m => m.WeatherPhenomena)
+            .Include(m => m.RunwayVisualRanges)
+            .Where(m => ids.Contains(m.Id))
+            .ToDictionary(m => m.Id);
+
+        foreach (var (existingId, corrected) in plan.Overwrites)
+        {
+            if (!tracked.TryGetValue(existingId, out var row))
+            {
+                // The stored row vanished between snapshot and load (a concurrent
+                // cycle) — fall back to a plain insert of the correction.
+                corrected.Id = 0;
+                ctx.Metars.Add(corrected);
+                continue;
+            }
+
+            // Defense-in-depth at the point of mutation: Reconcile already never
+            // plans this, but the one transition we must never make is replacing a
+            // stored correction with an uncorrected observation — that silently
+            // destroys good data. Guard it here so the invariant holds even if a
+            // future caller hands ApplyPlan a bad plan.
+            if (row.IsCorrection && !corrected.IsCorrection)
+            {
+                Logger.Warn($"Refusing to overwrite a stored correction for {row.StationIcao} "
+                    + $"{row.ObservationUtc:u} {row.ReportType} with a non-correction; keeping the correction.");
+                continue;
+            }
+
+            ctx.RemoveRange(row.SkyConditions);
+            ctx.RemoveRange(row.WeatherPhenomena);
+            ctx.RemoveRange(row.RunwayVisualRanges);
+
+            corrected.Id = row.Id;
+            ctx.Entry(row).CurrentValues.SetValues(corrected);
+            row.SkyConditions = corrected.SkyConditions;
+            row.WeatherPhenomena = corrected.WeatherPhenomena;
+            row.RunwayVisualRanges = corrected.RunwayVisualRanges;
+        }
+    }
+
+    /// <summary>
+    /// Inserts each record in its own context so one bad row cannot roll back the
+    /// rest — the recovery path after a batch <see cref="DbUpdateException"/>.
+    /// Returns the number that landed.
+    /// </summary>
+    internal static int InsertPerRow(IReadOnlyList<MetarRecord> inserts, DbContextOptions<WeatherDataContext> dbOptions)
+    {
+        int inserted = 0;
+
+        foreach (var e in inserts)
+        {
+            try
+            {
+                using var ctx = new WeatherDataContext(dbOptions);
+                ctx.Metars.Add(e);
+                ctx.SaveChanges();
+                inserted++;
+            }
+            catch (DbUpdateException ex)
+            {
+                Logger.Error($"METAR insert failed for {e.StationIcao} {e.ObservationUtc:u} {e.ReportType}: "
+                    + $"{ex.InnerException?.Message ?? ex.Message}");
+            }
+        }
+
+        return inserted;
+    }
+
+    /// <summary>
+    /// Applies each correction in its own context so one bad overwrite cannot roll
+    /// back the rest — the recovery path after a batch <see cref="DbUpdateException"/>
+    /// that carried overwrites alongside inserts. Returns the number applied.
+    /// </summary>
+    internal static int ApplyOverwritesPerRow(
+        IReadOnlyList<(int ExistingId, MetarRecord Corrected)> overwrites,
+        DbContextOptions<WeatherDataContext> dbOptions)
+    {
+        int corrected = 0;
+
+        foreach (var overwrite in overwrites)
+        {
+            try
+            {
+                using var ctx = new WeatherDataContext(dbOptions);
+                ApplyPlan(ctx, new MetarReconcilePlan([], [overwrite], 0));
+                ctx.SaveChanges();
+                corrected++;
+            }
+            catch (DbUpdateException ex)
+            {
+                Logger.Error($"METAR correction failed for {overwrite.Corrected.StationIcao} "
+                    + $"{overwrite.Corrected.ObservationUtc:u} {overwrite.Corrected.ReportType}: "
+                    + $"{ex.InnerException?.Message ?? ex.Message}");
+            }
+        }
+
+        return corrected;
     }
 
     /// <summary>Raw response size plus per-station newest-observation results for one fetch URL.</summary>
