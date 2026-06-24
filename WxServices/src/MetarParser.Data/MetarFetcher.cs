@@ -232,15 +232,14 @@ public static class MetarFetcher
             catch (DbUpdateException ex)
             {
                 // The within-response collapse removes the known duplicate cause,
-                // so a row-level fault here is unexpected — but it must not sink
-                // the co-batched inserts. Detach the failed batch and retry the
-                // inserts one per context so the good rows still land. A failed
-                // correction is not retried here: the same COR re-arrives on the
-                // next cycle and the overwrite is re-planned, so it self-heals.
-                Logger.Error($"Database error during METAR batch insert: {ex.InnerException?.Message ?? ex.Message}. Retrying inserts row-by-row.");
+                // so a row-level fault here is unexpected — but it must not sink the
+                // co-batched work. Detach the failed batch and re-apply each insert
+                // AND each correction in its own context, so one bad row can't
+                // discard the rest.
+                Logger.Error($"Database error during METAR batch insert: {ex.InnerException?.Message ?? ex.Message}. Retrying row-by-row.");
                 ctx.ChangeTracker.Clear();
                 inserted = InsertPerRow(plan.Inserts, dbOptions);
-                corrected = 0;
+                corrected = ApplyOverwritesPerRow(plan.Overwrites, dbOptions);
             }
         }
 
@@ -350,6 +349,16 @@ public static class MetarFetcher
                     + $"{e.ReportType}; overwriting the stored correction with the newly fetched one.");
                 overwrites.Add((prior.Id, e));
             }
+            else if (newRank == priorRank && newRank == 0
+                     && !string.Equals(prior.RawReport, e.RawReport, StringComparison.Ordinal))
+            {
+                // Same key, neither a correction, but the content differs — a data
+                // conflict, not a benign re-send. Keep the stored row (no COR
+                // authorizes a replacement) but surface it rather than silently skip.
+                Logger.Warn($"Conflicting non-correction reports for {e.StationIcao} {e.ObservationUtc:u} "
+                    + $"{e.ReportType}; keeping the stored report.");
+                skipped++;
+            }
             else
             {
                 skipped++;                                      // identical re-arrival, or stored COR vs late non-COR
@@ -442,6 +451,37 @@ public static class MetarFetcher
         }
 
         return inserted;
+    }
+
+    /// <summary>
+    /// Applies each correction in its own context so one bad overwrite cannot roll
+    /// back the rest — the recovery path after a batch <see cref="DbUpdateException"/>
+    /// that carried overwrites alongside inserts. Returns the number applied.
+    /// </summary>
+    internal static int ApplyOverwritesPerRow(
+        IReadOnlyList<(int ExistingId, MetarRecord Corrected)> overwrites,
+        DbContextOptions<WeatherDataContext> dbOptions)
+    {
+        int corrected = 0;
+
+        foreach (var overwrite in overwrites)
+        {
+            try
+            {
+                using var ctx = new WeatherDataContext(dbOptions);
+                ApplyPlan(ctx, new MetarReconcilePlan([], [overwrite], 0));
+                ctx.SaveChanges();
+                corrected++;
+            }
+            catch (DbUpdateException ex)
+            {
+                Logger.Error($"METAR correction failed for {overwrite.Corrected.StationIcao} "
+                    + $"{overwrite.Corrected.ObservationUtc:u} {overwrite.Corrected.ReportType}: "
+                    + $"{ex.InnerException?.Message ?? ex.Message}");
+            }
+        }
+
+        return corrected;
     }
 
     /// <summary>Raw response size plus per-station newest-observation results for one fetch URL.</summary>

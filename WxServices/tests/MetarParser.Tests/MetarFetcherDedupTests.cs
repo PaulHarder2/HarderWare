@@ -136,10 +136,27 @@ public class MetarFetcherDedupTests
     [Fact]
     public void Reconcile_IdenticalNonCorReArrival_Skipped()
     {
+        // Truly identical (same raw): a benign re-send -> skip.
+        var raw = "METAR KJXI 241335Z 18005KT";
         var plan = MetarFetcher.Reconcile(
-            [Obs("KJXI", T, cor: false)],
+            [Obs("KJXI", T, cor: false, raw: raw)],
+            Stored(9, cor: false, raw: raw));
+
+        Assert.Empty(plan.Inserts);
+        Assert.Empty(plan.Overwrites);
+        Assert.Equal(1, plan.Skipped);
+    }
+
+    [Fact]
+    public void Reconcile_DifferingNonCor_KeepsStoredAndSkips()
+    {
+        // Same key, neither a COR, different content: a conflict — keep the stored
+        // row (no correction authorizes a replacement), never overwrite.
+        var plan = MetarFetcher.Reconcile(
+            [Obs("KJXI", T, cor: false, raw: "METAR KJXI 241335Z 18012KT")],
             Stored(9, cor: false, raw: "METAR KJXI 241335Z 18005KT"));
 
+        Assert.Empty(plan.Inserts);
         Assert.Empty(plan.Overwrites);
         Assert.Equal(1, plan.Skipped);
     }
@@ -304,6 +321,44 @@ public class MetarFetcherDedupTests
         {
             Assert.Equal(1, ctx.Metars.Count(m => m.StationIcao == "KMMM"));
             Assert.Equal(1, ctx.Metars.Count(m => m.StationIcao == "KJXI")); // still just the original
+        }
+    }
+
+    [Fact]
+    public void ApplyOverwritesPerRow_AppliesCorrectionInIsolation()
+    {
+        // The mixed-batch fallback: corrections are re-applied one-per-context (not
+        // discarded with the failed insert batch). One overwrite must land in place.
+        using var conn = new SqliteConnection("DataSource=:memory:");
+        var options = NewDb(conn);
+
+        int storedId;
+        using (var ctx = new WeatherDataContext(options))
+        {
+            var seed = Obs("KJXI", T, cor: false, raw: "METAR KJXI 241335Z 18005KT");
+            seed.WindSpeed = 5;
+            seed.SkyConditions.Add(new MetarSkyCondition { Cover = "BKN", HeightFeet = 1800, SortOrder = 0 });
+            ctx.Metars.Add(seed);
+            ctx.SaveChanges();
+            storedId = seed.Id;
+        }
+
+        var cor = Obs("KJXI", T, cor: true, raw: "METAR KJXI 241335Z 18012KT COR");
+        cor.WindSpeed = 12;
+        cor.SkyConditions.Add(new MetarSkyCondition { Cover = "SCT", HeightFeet = 3000, SortOrder = 0 });
+
+        var applied = MetarFetcher.ApplyOverwritesPerRow([(storedId, cor)], options);
+
+        Assert.Equal(1, applied);
+        using (var ctx = new WeatherDataContext(options))
+        {
+            var row = Assert.Single(ctx.Metars.Include(m => m.SkyConditions).Where(m => m.StationIcao == "KJXI"));
+            Assert.Equal(storedId, row.Id);          // overwrite in place, PK preserved
+            Assert.True(row.IsCorrection);
+            Assert.Equal(12, row.WindSpeed);
+            Assert.Single(row.SkyConditions);
+            Assert.Equal("SCT", row.SkyConditions[0].Cover);
+            Assert.Equal(1, ctx.SkyConditions.Count()); // no orphaned child rows
         }
     }
 }
