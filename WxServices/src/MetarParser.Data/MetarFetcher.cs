@@ -235,7 +235,10 @@ public static class MetarFetcher
                 // so a row-level fault here is unexpected — but it must not sink the
                 // co-batched work. Detach the failed batch and re-apply each insert
                 // AND each correction in its own context, so one bad row can't
-                // discard the rest.
+                // discard the rest. The rolled-back SaveChanges leaves the entities'
+                // store-generated keys unset (still default), so reusing the same
+                // instances re-inserts cleanly — pinned by the
+                // Fallback_BatchSaveFailsThenClearAndReuse regression test.
                 Logger.Error($"Database error during METAR batch insert: {ex.InnerException?.Message ?? ex.Message}. Retrying row-by-row.");
                 ctx.ChangeTracker.Clear();
                 inserted = InsertPerRow(plan.Inserts, dbOptions);

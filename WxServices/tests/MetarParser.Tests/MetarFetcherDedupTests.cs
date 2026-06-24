@@ -361,4 +361,46 @@ public class MetarFetcherDedupTests
             Assert.Equal(1, ctx.SkyConditions.Count()); // no orphaned child rows
         }
     }
+
+    [Fact]
+    public void Fallback_BatchSaveFailsThenClearAndReuse_GoodRowStillLands()
+    {
+        // Reproduces the production fallback sequence exactly: a batch SaveChanges
+        // throws, ChangeTracker.Clear() runs, and InsertPerRow then REUSES the same
+        // entity instances (with their child graphs) that were Add-ed to the failed
+        // context. Guards against EF carrying leaked store-generated keys/FKs into
+        // the retry (CodeRabbit PR #127). The good row must still land.
+        using var conn = new SqliteConnection("DataSource=:memory:");
+        var options = NewDb(conn);
+
+        using (var ctx = new WeatherDataContext(options))
+        {
+            ctx.Metars.Add(Obs("KJXI", T));   // pre-existing row -> a re-insert collides
+            ctx.SaveChanges();
+        }
+
+        var dup = Obs("KJXI", T);             // same key as the stored row -> batch fails
+        dup.SkyConditions.Add(new MetarSkyCondition { Cover = "BKN", HeightFeet = 2000, SortOrder = 0 });
+        var fresh = Obs("KMMM", T);           // distinct -> must survive
+        fresh.SkyConditions.Add(new MetarSkyCondition { Cover = "SCT", HeightFeet = 3000, SortOrder = 0 });
+        var inserts = new List<MetarRecord> { dup, fresh };
+
+        int landed;
+        using (var ctx = new WeatherDataContext(options))
+        {
+            foreach (var e in inserts)
+                ctx.Metars.Add(e);
+            Assert.Throws<DbUpdateException>(() => ctx.SaveChanges());
+            ctx.ChangeTracker.Clear();
+            landed = MetarFetcher.InsertPerRow(inserts, options);   // reuse the same instances
+        }
+
+        Assert.Equal(1, landed);
+        using (var ctx = new WeatherDataContext(options))
+        {
+            Assert.Equal(1, ctx.Metars.Count(m => m.StationIcao == "KMMM"));
+            Assert.Equal(1, ctx.Metars.Count(m => m.StationIcao == "KJXI")); // still just the original
+            Assert.Equal(1, ctx.SkyConditions.Count());                       // only the fresh row's child landed
+        }
+    }
 }
