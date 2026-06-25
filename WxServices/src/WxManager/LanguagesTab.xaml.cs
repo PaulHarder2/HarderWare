@@ -162,7 +162,7 @@ public partial class LanguagesTab : UserControl
         }
         StatusText.Text = enabled
             ? (willGenerate
-                ? $"Enabled “{lang.DisplayName}” — its report templates will be generated on the next report cycle; it becomes assignable to recipients once ready."
+                ? $"Enabled “{lang.DisplayName}” — its report templates are queued for generation on an upcoming report cycle; it becomes assignable to recipients once ready."
                 : $"Enabled “{lang.DisplayName}” — ready; recipients can now be assigned it.")
             : $"Disabled “{lang.DisplayName}”.";
         await ReloadAsync();
@@ -201,9 +201,9 @@ internal sealed class SupportedLanguageRow
         LanguageGenerationState.Ready =>
             $"Ready — generated {Language.GeneratedAtUtc:yyyy-MM-dd HH:mm} UTC. Recipients can be assigned this language on the Recipients tab.",
         LanguageGenerationState.Pending =>
-            "Generating — its report templates will be produced on WxReport's next report cycle. No action needed; reload this tab to see the result.",
+            "Generating — its report templates are queued and will be produced on an upcoming WxReport report cycle (one language is generated per cycle). No action needed; reload this tab to see the result.",
         LanguageGenerationState.Failed =>
-            "Generation hit a transient error and retries automatically each cycle. If it persists, check the Claude API key and connectivity (appsettings.shared.json) and the WxReport log.\n\n"
+            "Generation hit a transient error and retries automatically each cycle. If it persists, check the Claude API key and connectivity (the key lives in appsettings.local.json) and the WxReport log.\n\n"
             + Language.GenerationError,
         LanguageGenerationState.Blocked =>
             Language.GenerationError

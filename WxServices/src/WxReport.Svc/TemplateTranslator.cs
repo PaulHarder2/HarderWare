@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -201,6 +202,11 @@ public sealed class TemplateTranslator
         var cultureName = RequireString(input, "cultureName").Trim();
         if (cultureName.Length == 0 || cultureName.Length > CultureMaxLength)
             throw new JsonException($"cultureName '{cultureName}' is empty or exceeds {CultureMaxLength} characters.");
+        // It is the language's date/number-format tag — fail closed on a malformed or
+        // control-char value, not just an oversized one (it would otherwise persist and the
+        // renderer's CultureFor would silently fall back to en-US).
+        if (HasControlChar(cultureName) || !IsValidCulture(cultureName))
+            throw new JsonException($"cultureName '{cultureName}' is not a valid IETF culture tag.");
 
         if (!input.TryGetProperty("translations", out var arr) || arr.ValueKind != JsonValueKind.Array)
             throw new JsonException("missing or non-array 'translations'.");
@@ -286,6 +292,13 @@ public sealed class TemplateTranslator
             if (char.IsControl(ch))
                 return true;
         return false;
+    }
+
+    // A real IETF/.NET culture tag (e.g. "fr-FR"); rejects a made-up or malformed value.
+    private static bool IsValidCulture(string name)
+    {
+        try { _ = CultureInfo.GetCultureInfo(name); return true; }
+        catch (CultureNotFoundException) { return false; }
     }
 
     // ── tool_use field accessors (mirror ForecastReconciler) ───────────────────

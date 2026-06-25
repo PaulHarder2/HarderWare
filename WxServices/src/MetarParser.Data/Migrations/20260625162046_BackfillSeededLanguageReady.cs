@@ -27,6 +27,7 @@ namespace MetarParser.Data.Migrations
                 WHERE IsEnabled = 1
                   AND GeneratedAtUtc IS NULL
                   AND GenerationError IS NULL
+                  AND NULLIF(LTRIM(RTRIM(CultureName)), '') IS NOT NULL
                   AND EXISTS (SELECT 1 FROM LanguageTemplates t WHERE t.LanguageId = Languages.Id)
                   AND NOT EXISTS (
                       SELECT 1

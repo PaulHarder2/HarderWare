@@ -240,4 +240,13 @@ public class TemplateTranslatorTests
         Assert.Throws<JsonException>(() => TemplateTranslator.Validate(
             Payload(new string('x', 21), FullSet()), Baseline()));
     }
+
+    [Fact]
+    public void Rejects_a_malformed_culture_tag()
+    {
+        // Non-empty, short, control-char-free, but not a real culture (a space is invalid in a
+        // culture name) — must fail closed rather than persist as the date/number-format tag.
+        Assert.Throws<JsonException>(() => TemplateTranslator.Validate(
+            Payload("fr FR", FullSet()), Baseline()));
+    }
 }

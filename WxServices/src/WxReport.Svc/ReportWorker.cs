@@ -445,6 +445,13 @@ public sealed class ReportWorker : BackgroundService
                 return;
             }
 
+            // WX-172: generate templates for any PENDING/FAILED language FIRST — ahead of the
+            // no-recipient / no-locality early returns below — so a freshly-enabled language on a
+            // system that has no recipients yet still gets generated (and becomes assignable). It
+            // runs in its own DbContext and is capped at one Claude call per cycle, so on a normal
+            // cycle this adds only a bounded, rare delay, and only when a language was just enabled.
+            await GeneratePendingLanguagesAsync(claude_cfg, ct);
+
             // WX-123/WX-130: the expensive Claude reconciliation runs once per
             // LOCALITY, then renders per recipient. Membership is read straight from
             // the Recipients table (RecipientId, LocalityId, units, language); the
@@ -516,13 +523,6 @@ public sealed class ReportWorker : BackgroundService
 
                 reportsSent += await ProcessLocalityAsync(ctx, locality, members, reconciler, emailer, cfg, langById, now, ct);
             }
-
-            // WX-172 generation-on-enable: AFTER the sends (so a slow translation never
-            // delays a report cycle), generate templates for any language enabled but not
-            // yet generated. A newly-enabled language has no recipients until it reaches
-            // READY, so doing this last costs nothing this cycle; the next cycle's
-            // _templates.Reload() picks up the freshly-written phrases.
-            await GeneratePendingLanguagesAsync(claude_cfg, ct);
 
             Logger.Info(reportsSent > 0
                 ? $"Report cycle complete. {reportsSent} report(s) sent."
@@ -661,7 +661,12 @@ public sealed class ReportWorker : BackgroundService
                             LanguageId = lang.Id,
                             Token = tr.Token,
                             Phrase = tr.Phrase,
-                            ContextInfo = tr.TranslatedContext,
+                            // A Hint context is a language-neutral English gloss that must stay
+                            // English in every language; keep the baseline's verbatim rather than
+                            // Claude's (which the guidance tells it to echo unchanged anyway).
+                            ContextInfo = baseRow.ContextKind == TemplateContextKind.Hint
+                                ? baseRow.ContextInfo
+                                : tr.TranslatedContext,
                             ContextKind = baseRow.ContextKind,   // kind is the token's, not the language's
                             Note = tr.Note,
                             Representable = tr.Representable,
@@ -674,8 +679,8 @@ public sealed class ReportWorker : BackgroundService
                     lang.GeneratedAtUtc = DateTime.UtcNow;
                     lang.GenerationError = blocked.Count == 0
                         ? null
-                        : $"{blocked.Count} token(s) cannot be expressed in {lang.DisplayName} by simple substitution: "
-                          + $"{string.Join(", ", blocked)}. This needs a renderer/code change; it will not retry.";
+                        : FitGenerationError($"{blocked.Count} token(s) cannot be expressed in {lang.DisplayName} by simple substitution: "
+                          + $"{string.Join(", ", blocked)}. This needs a renderer/code change; it will not retry.");
                     await ctx.SaveChangesAsync(ct);
 
                     Logger.Info(blocked.Count == 0
@@ -686,7 +691,7 @@ public sealed class ReportWorker : BackgroundService
                 {
                     // FAILED: record the transient reason but leave GeneratedAtUtc null so
                     // the next cycle retries. No rows are written on failure.
-                    lang.GenerationError = $"Generation failed (will retry next cycle): {f.Reason}";
+                    lang.GenerationError = FitGenerationError($"Generation failed (will retry next cycle): {f.Reason}");
                     await ctx.SaveChangesAsync(ct);
                     Logger.Error($"WX-172: '{iso}' generation FAILED — {f.Reason}");
                 }
@@ -699,6 +704,13 @@ public sealed class ReportWorker : BackgroundService
             }
         }
     }
+
+    // Language.GenerationError is nvarchar(1000); a large blocked-token set or a verbose
+    // validation error could exceed it and make SaveChangesAsync throw, which would leave the
+    // language without the state transition we were persisting. Cap it to fit.
+    private const int GenerationErrorMaxLength = 1000;
+    private static string FitGenerationError(string value) =>
+        value.Length <= GenerationErrorMaxLength ? value : value[..(GenerationErrorMaxLength - 3)] + "...";
 
     /// <summary>
     /// Partitions valid, locality-assigned recipients into per-locality member
