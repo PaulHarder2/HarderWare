@@ -7,6 +7,8 @@ using MetarParser.Data.Entities;
 
 using Microsoft.EntityFrameworkCore;
 
+using WxServices.Logging;
+
 namespace WxManager;
 
 /// <summary>
@@ -63,7 +65,9 @@ public partial class LanguagesTab : UserControl
             {
                 _reloadQueued = false;
                 await using var ctx = new WeatherDataContext(_dbOptions);
-                _all = await ctx.Languages.OrderBy(l => l.DisplayName).ToListAsync();
+                var langs = await ctx.Languages.OrderBy(l => l.DisplayName).ToListAsync();
+                if (!IsLoaded) return;   // switched away / window closed mid-reload — drop this stale result (WX-212/CR)
+                _all = langs;
                 ApplyFilterAndBind();
             }
             while (_reloadQueued);
@@ -72,7 +76,10 @@ public partial class LanguagesTab : UserControl
         {
             // One catch for the query AND the rebind: ReloadAsync must never throw, since it runs
             // from an async-void timer Tick / Loaded handler where an escaped exception would crash
-            // WxManager instead of surfacing.
+            // WxManager instead of surfacing. Log as well as the UI message, so an auto-refresh
+            // failure leaves a durable trace in the WxManager log and not just a transient
+            // StatusText (CR) — matching the other tabs' reload-failure logging.
+            Logger.Warn($"Languages tab reload failed: {ex.Message}");
             StatusText.Text = $"Could not load languages: {ex.Message}";
         }
         finally
