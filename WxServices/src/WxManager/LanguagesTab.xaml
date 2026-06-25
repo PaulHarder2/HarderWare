@@ -54,7 +54,7 @@
 
         <!-- Status / guidance for the selected supported language (WX-172) -->
         <Border Grid.Row="2" x:Name="DetailPanel" Visibility="Collapsed" Margin="0,8,0,0"
-                Padding="8" BorderBrush="#FFCCCCCC" BorderThickness="1" Background="#FFF7F7F7">
+                Padding="8" BorderBrush="#404040" BorderThickness="1" Background="#252525">
             <StackPanel>
                 <TextBlock x:Name="DetailHeader" FontWeight="SemiBold" TextWrapping="Wrap"/>
                 <TextBlock x:Name="DetailText" TextWrapping="Wrap" Margin="0,4,0,0"/>
