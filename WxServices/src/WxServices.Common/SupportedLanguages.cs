@@ -1,17 +1,16 @@
 namespace WxServices.Common;
 
 /// <summary>
-/// The gate WX-166 enforces when enabling a language in WxManager, so a recipient is never
-/// assigned a language the renderer cannot actually produce: a language is supported only
-/// when its localized report templates cover the full required token set.
+/// The reference baseline for the localized-template system. WX-166 used a
+/// <c>HasCompleteTemplates</c> gate here to refuse enabling a language whose templates were
+/// incomplete; WX-172 inverted that (enabling a language now triggers asynchronous generation
+/// rather than requiring pre-existing templates), so the completeness rule moved into the
+/// WX-172 generator's fail-closed validation and the <c>BackfillSeededLanguageReady</c> migration.
 /// <para>
-/// WX-171 makes this DB-backed (replacing the former hard-coded <c>{en, es}</c> constant):
-/// the required set is the tokens the <see cref="BaselineCode"/> language carries — which the
-/// build-time <c>Tok</c>↔seed parity gate keeps equal to the renderer's whole token contract —
-/// so "supported" means "has every token the baseline has." The token sets are queried from
-/// <c>LanguageTemplates</c> by the caller (WxManager, which already has DB access), keeping this
-/// assembly free of a database dependency; this type is the pure set-comparison rule the
-/// renderer's completeness check and the enable gate now share as one source of truth.
+/// What remains here is <see cref="BaselineCode"/> — the language whose token set defines
+/// "complete" — shared by the WX-172 generator (it translates the baseline into each new
+/// language), the renderer's per-recipient send gate, and the migration. Kept in this
+/// database-free common assembly so every layer agrees on one baseline.
 /// </para>
 /// </summary>
 public static class SupportedLanguages
@@ -23,15 +22,4 @@ public static class SupportedLanguages
     /// token carries every renderer-required token.
     /// </summary>
     public const string BaselineCode = "en";
-
-    /// <summary>
-    /// Whether <paramref name="isoTokens"/> (a language's stored, representable template tokens)
-    /// covers the full required set <paramref name="baselineTokens"/> (the <see cref="BaselineCode"/>
-    /// language's tokens) — so the language may be enabled (moved into the SupportedLanguages set).
-    /// False when the baseline itself is empty (nothing to compare against) or the language is
-    /// missing any baseline token. Both sets use ordinal comparison; registry codes/tokens are
-    /// stored case-exact.
-    /// </summary>
-    public static bool HasCompleteTemplates(IReadOnlySet<string> isoTokens, IReadOnlySet<string> baselineTokens) =>
-        baselineTokens.Count > 0 && baselineTokens.IsSubsetOf(isoTokens);
 }

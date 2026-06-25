@@ -109,6 +109,15 @@ public sealed class ClaudeClient
     // snapshot wander. Final value calibrated post-deploy (WX-189 §13).
     private const double ReconcilerTemperature = 0.5;
 
+    // WX-172 template-generation call. Translation is faithful, not creative — a low
+    // temperature keeps it close to the sense the context fixes rather than paraphrasing.
+    // The output cap is generous because the call returns one entry per vocabulary token
+    // (~100), each with a phrase, a translated context sentence, and an optional note;
+    // billing is per token generated, and the call runs only when a language is enabled,
+    // so headroom against truncation matters more than a tight ceiling here.
+    private const double TranslatorTemperature = 0.2;
+    private const int TranslationOutputTokens = 32768;
+
     private readonly HttpClient _http;
     private readonly string _apiKey;
     private readonly string _model;
@@ -216,6 +225,28 @@ public sealed class ClaudeClient
             messages = BuildMessages(userMessageText, corrections),
         };
 
+        // submit_reconciled_report is always permitted; skip_send only when this cycle
+        // offered it (allowSkip). The set membership is what SendForToolUseAsync enforces
+        // at the API boundary, so a skip_send returned on a guaranteed send is rejected.
+        var permittedTools = allowSkip
+            ? new HashSet<string>(StringComparer.Ordinal) { "submit_reconciled_report", "skip_send" }
+            : new HashSet<string>(StringComparer.Ordinal) { "submit_reconciled_report" };
+        return await SendForToolUseAsync(request, permittedTools, ct);
+    }
+
+    /// <summary>
+    /// Posts a fully-built Messages API request (with retry/backoff on transient
+    /// transport and 429/5xx) and returns its single <c>tool_use</c> block as a
+    /// <see cref="ClaudeReconciliationResult"/>, or <see langword="null"/> on transport
+    /// failure, a parse failure, a response that is not exactly one tool_use block, a
+    /// tool not in <paramref name="permittedTools"/>, or a tool_use missing its id.
+    /// Shared by the reconciliation (<see cref="InvokeReconciliationAsync"/>) and
+    /// translation (<see cref="InvokeTranslationAsync"/>) calls — the request shape and
+    /// permitted-tool set differ, the POST/parse contract does not.
+    /// </summary>
+    private async Task<ClaudeReconciliationResult?> SendForToolUseAsync(
+        object request, IReadOnlySet<string> permittedTools, CancellationToken ct)
+    {
         const int maxAttempts = 3;
         HttpResponseMessage resp;
 
@@ -284,16 +315,14 @@ public sealed class ClaudeClient
                 return null;
             }
 
-            // Enforce the allowSkip contract on the way back: a valid reconciliation
-            // response is exactly one tool_use block whose name is permitted for this
-            // cycle. submit_reconciled_report is always permitted; skip_send only when
-            // allowSkip is true (the cycle offered it via toolChoice above). Anything
-            // else — zero blocks, more than one block (a self-contradictory submit+skip
-            // would otherwise be resolved by arbitrary ordering), or an un-offered tool
-            // — is malformed output: reject it here at the API boundary (return null ->
-            // caller's Failure path) rather than guess. This keeps the choice
-            // deterministic and makes ClaudeReconciliationResult.ToolName always a tool
-            // that was actually permitted for this cycle.
+            // Enforce the tool contract on the way back: a valid response is exactly one
+            // tool_use block whose name is in permittedTools. Anything else — zero blocks,
+            // more than one block (a self-contradictory pair would otherwise be resolved by
+            // arbitrary ordering), or an un-offered tool (e.g. a skip_send returned on a
+            // guaranteed send, where the caller passed only submit_reconciled_report) — is
+            // malformed output: reject it here at the API boundary (return null -> caller's
+            // failure path) rather than guess. This keeps the choice deterministic and makes
+            // ClaudeReconciliationResult.ToolName always a tool the caller actually offered.
             var toolUseBlocks = parsed?.Content?.Where(c => c.Type == "tool_use").ToList();
 
             if (toolUseBlocks is not { Count: 1 })
@@ -303,15 +332,14 @@ public sealed class ClaudeClient
                 // a baffling "0 tool_use blocks" rather than the token-cap hit it is
                 // (WX-109). The common truncation case — one block with a partial
                 // input — is handled downstream in ForecastReconciler via StopReason.
-                Logger.Error($"Claude response had {toolUseBlocks?.Count ?? 0} tool_use block(s); expected exactly 1 (allowSkip={allowSkip}, stop_reason={parsed?.StopReason ?? "null"}).");
+                Logger.Error($"Claude response had {toolUseBlocks?.Count ?? 0} tool_use block(s); expected exactly 1 (permitted=[{string.Join(", ", permittedTools)}], stop_reason={parsed?.StopReason ?? "null"}).");
                 return null;
             }
 
             var toolName = toolUseBlocks[0].Name;
-            if (toolName is not ("submit_reconciled_report" or "skip_send")
-                || (toolName == "skip_send" && !allowSkip))
+            if (toolName is null || !permittedTools.Contains(toolName))
             {
-                Logger.Error($"Claude response tool_use '{toolName}' is not permitted for allowSkip={allowSkip}.");
+                Logger.Error($"Claude response tool_use '{toolName ?? "(none)"}' is not one of the permitted tools [{string.Join(", ", permittedTools)}].");
                 return null;
             }
 
@@ -335,6 +363,52 @@ public sealed class ClaudeClient
 
             return new ClaudeReconciliationResult(toolName, toolUse.Id, toolUse.Input, tokens, parsed?.StopReason);
         }
+    }
+
+    /// <summary>
+    /// Invokes Claude to translate the baseline report vocabulary into one target
+    /// language (WX-172).  Builds the two-block request (the cached translation
+    /// guidance system block + the user message carrying the target language and the
+    /// token list), forces the <c>translate_templates</c> tool, and returns its raw
+    /// tool_use input — an object with <c>cultureName</c> and a <c>translations</c>
+    /// array.  Validation of that input (same token set, placeholders preserved,
+    /// length/char hygiene, representability) is the caller's responsibility
+    /// (<see cref="TemplateTranslator"/>), which replays a rejected attempt via
+    /// <paramref name="corrections"/> exactly as the reconciler does.
+    /// </summary>
+    /// <param name="userMessageText">The user message: the target language name plus the JSON token list (token, englishPhrase, context, contextKind) to translate.</param>
+    /// <param name="corrections">Rejected prior attempts replayed as tool_use + tool_result so a validation retry carries its feedback to Claude; <see langword="null"/> on the first attempt.</param>
+    /// <param name="ct">Cancellation token propagated to the HTTP request so host shutdown aborts an in-flight call.</param>
+    /// <returns>The <c>translate_templates</c> tool's input plus token usage on success; <see langword="null"/> on transport, schema, or parse failure.</returns>
+    /// <sideeffects>Makes an HTTP POST request to the Anthropic Messages API. Writes error log entries on failure.</sideeffects>
+    public async Task<ClaudeReconciliationResult?> InvokeTranslationAsync(
+        string userMessageText,
+        IReadOnlyList<ReconciliationCorrection>? corrections = null,
+        CancellationToken ct = default)
+    {
+        var request = new
+        {
+            model = _model,
+            max_tokens = TranslationOutputTokens,
+            temperature = TranslatorTemperature,
+            // No persona and no per-recipient block: translation authors fixed vocabulary,
+            // not a report in Paul's voice. Just the cached guidance block.
+            system = new object[]
+            {
+                new
+                {
+                    type = "text",
+                    text = TranslatorPrompts.TranslationGuidanceText,
+                    cache_control = new { type = "ephemeral" },
+                },
+            },
+            tools = new[] { TranslatorPrompts.BuildTranslateTemplatesTool() },
+            tool_choice = new { type = "tool", name = "translate_templates" },
+            messages = BuildMessages(userMessageText, corrections),
+        };
+
+        return await SendForToolUseAsync(
+            request, new HashSet<string>(StringComparer.Ordinal) { "translate_templates" }, ct);
     }
 
     /// <summary>
