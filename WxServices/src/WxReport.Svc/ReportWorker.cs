@@ -91,8 +91,8 @@ public sealed class ReportWorker : BackgroundService
         _sendFailures = _meter.CreateCounter<long>("wxreport.send.failures.total", description: "Number of failed email sends.");
         _statePersistFailures = _meter.CreateCounter<long>("wxreport.send.state_persist_failures.total", description: "Post-send DB writes (the SentAtUtc stamp or the locality-baseline advance) that failed AFTER an email was already delivered — the send can't be un-sent, but the fact wasn't fully recorded, so the baseline may not advance and next cycle could resend. A first-class signal to alarm on, not a silent log line.");
         _claudeCalls = _meter.CreateCounter<long>("wxreport.claude.calls.total", description: "Number of Claude API calls.");
-        _claudeInputTokens = _meter.CreateCounter<long>("wxreport.claude.tokens.input.total", description: "Total billed input tokens (cached + uncached) across reconciliation calls.");
-        _claudeOutputTokens = _meter.CreateCounter<long>("wxreport.claude.tokens.output.total", description: "Total output tokens generated across reconciliation calls.");
+        _claudeInputTokens = _meter.CreateCounter<long>("wxreport.claude.tokens.input.total", description: "Total billed input tokens (cached + uncached) across reconciliation + template-generation calls.");
+        _claudeOutputTokens = _meter.CreateCounter<long>("wxreport.claude.tokens.output.total", description: "Total output tokens generated across reconciliation + template-generation calls.");
         _claudeCacheReadTokens = _meter.CreateCounter<long>("wxreport.claude.cache.read.total", description: "Total input tokens served from prior cache writes (cache hits).");
         _claudeCacheCreationTokens = _meter.CreateCounter<long>("wxreport.claude.cache.write.total", description: "Total input tokens written to the cache (cache misses with cacheable prefix).");
         _claudeToolUseSuccess = _meter.CreateCounter<long>("wxreport.claude.tool_use.success.total", description: "Number of reconciliation calls returning a parseable three-artifact tool_use response.");
@@ -445,88 +445,16 @@ public sealed class ReportWorker : BackgroundService
                 return;
             }
 
-            // WX-172: generate templates for any PENDING/FAILED language FIRST — ahead of the
-            // no-recipient / no-locality early returns below — so a freshly-enabled language on a
-            // system that has no recipients yet still gets generated (and becomes assignable). It
-            // runs in its own DbContext and is capped at one Claude call per cycle, so on a normal
-            // cycle this adds only a bounded, rare delay, and only when a language was just enabled.
+            // Reports FIRST: do the per-locality sends (a no-op when nothing is due). The send
+            // phase is its own method so its "no recipients / no localities" early-exits skip
+            // only the sends, NOT the generation below (WX-211).
+            await RunReportSendsAsync(ctx, cfg, smtp, claude_cfg, ct);
+
+            // WX-172 generation-on-enable, AFTER the sends (WX-211): a pending-language
+            // translation is a multi-second Claude call, so running it last means it never delays
+            // a report — it only extends the cycle's tail. Reached on every cycle (even one with no
+            // recipients), in its own DbContext, capped at one Claude call per cycle.
             await GeneratePendingLanguagesAsync(claude_cfg, ct);
-
-            // WX-123/WX-130: the expensive Claude reconciliation runs once per
-            // LOCALITY, then renders per recipient. Membership is read straight from
-            // the Recipients table (RecipientId, LocalityId, units, language); the
-            // locality owns the shared stations, timezone, send hours, and GFS
-            // centroid. A recipient with no locality gets no report and a logged
-            // ERROR (Paul's firm rule, WX-130) — WxMonitor surfaces it by email.
-            var recipients = await ctx.Recipients.OrderBy(r => r.Id).ToListAsync(ct);
-            if (recipients.Count == 0)
-            {
-                Logger.Debug("No recipients configured.");
-                _reportCycles.Add(1);
-                return;
-            }
-
-            var duplicateIds = recipients
-                .GroupBy(r => r.RecipientId, StringComparer.Ordinal)
-                .Where(g => g.Count() > 1)
-                .Select(g => g.Key)
-                .ToHashSet(StringComparer.Ordinal);
-            foreach (var id in duplicateIds)
-                Logger.Error($"Duplicate recipient Id '{id}' — all entries with this Id will be skipped.");
-
-            var membersByLocality = GroupMembersByLocality(recipients, duplicateIds);
-            if (membersByLocality.Count == 0)
-            {
-                Logger.Debug("No locality-assigned recipients to process.");
-                _reportCycles.Add(1);
-                return;
-            }
-
-            var localities = await ctx.Localities
-                .Where(l => membersByLocality.Keys.Contains(l.Id))
-                .ToDictionaryAsync(l => l.Id, ct);
-
-            // The Languages registry is cycle-invariant; load it once here and resolve
-            // every recipient's FK from it (WX-166), rather than re-querying per locality.
-            var langById = await ctx.Languages.ToDictionaryAsync(l => l.Id, ct);
-
-            // WX-171: refresh the localized-template cache once per cycle (cheap — a single
-            // ~200-row query through the store's atomic-swap seam), so a language enabled
-            // mid-run (WX-172 generate-on-enable) or a phrase edited since the last cycle
-            // (WX-173 review round-trip) is picked up within one cycle without a restart —
-            // and the per-recipient send gate below reads the current set, not a startup
-            // snapshot. Polling now; WX-179 replaces it with an event-driven trigger.
-            try
-            {
-                _templates.Reload();
-            }
-            catch (Exception ex)
-            {
-                // A failed refresh must not abort the cycle: the existing in-memory snapshot
-                // stays in force (last-known-good), so reports still render. Log and continue.
-                Logger.Error("Per-cycle language-template refresh failed; continuing with the previously loaded templates.", ex);
-            }
-
-            var reconciler = new ForecastReconciler(
-                new ClaudeClient(_claudeHttpClient, claude_cfg.ApiKey, claude_cfg.Model, _persona.Text), _templates);
-            var emailer = new SmtpSender(smtp, "WxReport");
-            var now = DateTime.UtcNow;
-            var reportsSent = 0;
-
-            foreach (var (localityId, members) in membersByLocality)
-            {
-                if (!localities.TryGetValue(localityId, out var locality))
-                {
-                    Logger.Error($"Locality Id={localityId} referenced by {members.Count} recipient(s) has no Localities row — skipping. (Membership FK integrity issue; check WxManager → Localities.)");
-                    continue;
-                }
-
-                reportsSent += await ProcessLocalityAsync(ctx, locality, members, reconciler, emailer, cfg, langById, now, ct);
-            }
-
-            Logger.Info(reportsSent > 0
-                ? $"Report cycle complete. {reportsSent} report(s) sent."
-                : "Report cycle complete. No reports due.");
 
             _reportCycles.Add(1);
 
@@ -536,6 +464,90 @@ public sealed class ReportWorker : BackgroundService
             _cycleDuration.Record(cycleSw.Elapsed.TotalSeconds);
             WriteHeartbeat(cfg.HeartbeatFile);
         }
+    }
+
+    /// <summary>
+    /// The report-send phase of a cycle (WX-211, extracted from <see cref="RunCycleAsync"/>): the
+    /// per-locality Claude reconciliation + per-recipient render/send. Returns early (sending
+    /// nothing) when there are no recipients or no locality-assigned members — those early-exits
+    /// skip only the sends, so the caller still runs WX-172 generation afterward.
+    /// </summary>
+    private async Task RunReportSendsAsync(
+        WeatherDataContext ctx, ReportConfig cfg, SmtpConfig smtp, ClaudeConfig claude_cfg, CancellationToken ct)
+    {
+        // WX-123/WX-130: the expensive Claude reconciliation runs once per LOCALITY, then renders
+        // per recipient. Membership is read straight from the Recipients table (RecipientId,
+        // LocalityId, units, language); the locality owns the shared stations, timezone, send
+        // hours, and GFS centroid. A recipient with no locality gets no report and a logged ERROR
+        // (Paul's firm rule, WX-130) — WxMonitor surfaces it by email.
+        var recipients = await ctx.Recipients.OrderBy(r => r.Id).ToListAsync(ct);
+        if (recipients.Count == 0)
+        {
+            Logger.Debug("No recipients configured.");
+            return;
+        }
+
+        var duplicateIds = recipients
+            .GroupBy(r => r.RecipientId, StringComparer.Ordinal)
+            .Where(g => g.Count() > 1)
+            .Select(g => g.Key)
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (var id in duplicateIds)
+            Logger.Error($"Duplicate recipient Id '{id}' — all entries with this Id will be skipped.");
+
+        var membersByLocality = GroupMembersByLocality(recipients, duplicateIds);
+        if (membersByLocality.Count == 0)
+        {
+            Logger.Debug("No locality-assigned recipients to process.");
+            return;
+        }
+
+        var localities = await ctx.Localities
+            .Where(l => membersByLocality.Keys.Contains(l.Id))
+            .ToDictionaryAsync(l => l.Id, ct);
+
+        // The Languages registry is cycle-invariant; load it once here and resolve
+        // every recipient's FK from it (WX-166), rather than re-querying per locality.
+        var langById = await ctx.Languages.ToDictionaryAsync(l => l.Id, ct);
+
+        // WX-171: refresh the localized-template cache once per cycle (cheap — a single
+        // ~200-row query through the store's atomic-swap seam), so a language enabled
+        // mid-run (WX-172 generate-on-enable) or a phrase edited since the last cycle
+        // (WX-173 review round-trip) is picked up within one cycle without a restart —
+        // and the per-recipient send gate below reads the current set, not a startup
+        // snapshot. Polling now; WX-179 replaces it with an event-driven trigger.
+        try
+        {
+            _templates.Reload();
+        }
+        catch (Exception ex)
+        {
+            // A failed refresh must not abort the cycle: the existing in-memory snapshot
+            // stays in force (last-known-good), so reports still render. Log and continue.
+            Logger.Error("Per-cycle language-template refresh failed; continuing with the previously loaded templates.", ex);
+        }
+
+        var reconciler = new ForecastReconciler(
+            // ApiKey is validated non-empty by RunCycleAsync before this method is called (WX-211).
+            new ClaudeClient(_claudeHttpClient, claude_cfg.ApiKey!, claude_cfg.Model, _persona.Text), _templates);
+        var emailer = new SmtpSender(smtp, "WxReport");
+        var now = DateTime.UtcNow;
+        var reportsSent = 0;
+
+        foreach (var (localityId, members) in membersByLocality)
+        {
+            if (!localities.TryGetValue(localityId, out var locality))
+            {
+                Logger.Error($"Locality Id={localityId} referenced by {members.Count} recipient(s) has no Localities row — skipping. (Membership FK integrity issue; check WxManager → Localities.)");
+                continue;
+            }
+
+            reportsSent += await ProcessLocalityAsync(ctx, locality, members, reconciler, emailer, cfg, langById, now, ct);
+        }
+
+        Logger.Info(reportsSent > 0
+            ? $"Report cycle complete. {reportsSent} report(s) sent."
+            : "Report cycle complete. No reports due.");
     }
 
     /// <summary>
@@ -572,6 +584,13 @@ public sealed class ReportWorker : BackgroundService
             .ToListAsync(ct);
         if (pending.Count == 0)
             return;
+
+        // Refresh the template cache before the self-heal check below, so the "already complete"
+        // shortcut (`_templates.MissingTokens`) reads current state regardless of whether the send
+        // phase reloaded this cycle (on a no-recipient cycle it returned before its own Reload).
+        // Only paid when there is pending generation work — i.e. just after a language was enabled.
+        try { _templates.Reload(); }
+        catch (Exception ex) { Logger.Error("WX-211: template refresh before generation failed; using the last-loaded snapshot.", ex); }
 
         // The baseline (en) rows are the source for every translation; load once.
         var baselineRows = await ctx.LanguageTemplates
@@ -632,12 +651,15 @@ public sealed class ReportWorker : BackgroundService
                 // Record the spend on the cost counters + the per-call DEBUG line — these are
                 // the heaviest single Claude calls, and the scarce LLM resource must be visible
                 // on the same dashboards the reconciler feeds (a failed attempt is still billed).
+                // One logical call per language generated (WX-211), matching how the reconciler
+                // counts a call regardless of its internal retries.
                 var usage = result switch
                 {
                     TranslateResult.Success su => su.Usage,
                     TranslateResult.Failure fa => fa.Usage,
                     _ => new TokenUsage(0, 0, 0, 0),
                 };
+                _claudeCalls.Add(1);
                 AddClaudeTokens(usage);
                 LogClaudeTokens($"translate:{iso}", usage, "WX-172 template generation");
 
@@ -1601,11 +1623,11 @@ public sealed class ReportWorker : BackgroundService
 
     // ── persistence helpers ───────────────────────────────────────────────────
 
-    /// <summary>WX-114: per-call token-usage DEBUG line — surfaces each Claude reconciliation's input/output/cache token split in the text log (the OTel counters carry the same totals for the dashboards, but not per call). <paramref name="label"/> identifies the locality (WX-130).</summary>
+    /// <summary>WX-114: per-call token-usage DEBUG line — surfaces each Claude call's input/output/cache token split in the text log (the OTel counters carry the same totals for the dashboards, but not per call). <paramref name="label"/> identifies the call (the locality for a reconciliation, or <c>translate:&lt;iso&gt;</c> for a WX-172 generation); <paramref name="context"/> names the call kind.</summary>
     private static void LogClaudeTokens(string label, TokenUsage tokens, string context) =>
-        Logger.Debug($"{label}: Claude reconciliation tokens [{context}] — in={tokens.InputTokens} out={tokens.OutputTokens} cache-read={tokens.CacheReadInputTokens} cache-write={tokens.CacheCreationInputTokens}.");
+        Logger.Debug($"{label}: Claude tokens [{context}] — in={tokens.InputTokens} out={tokens.OutputTokens} cache-read={tokens.CacheReadInputTokens} cache-write={tokens.CacheCreationInputTokens}.");
 
-    /// <summary>Adds a reconciliation call's token usage to the four OTel cost counters in one place (input / output / cache-read / cache-write).</summary>
+    /// <summary>Adds a Claude call's token usage to the four OTel cost counters in one place (input / output / cache-read / cache-write). Shared by reconciliation and WX-172 template generation.</summary>
     private void AddClaudeTokens(TokenUsage tokens)
     {
         _claudeInputTokens.Add(tokens.InputTokens);
