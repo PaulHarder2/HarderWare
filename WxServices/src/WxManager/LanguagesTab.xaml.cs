@@ -1,10 +1,13 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Threading;
 
 using MetarParser.Data;
 using MetarParser.Data.Entities;
 
 using Microsoft.EntityFrameworkCore;
+
+using WxServices.Logging;
 
 namespace WxManager;
 
@@ -21,27 +24,68 @@ public partial class LanguagesTab : UserControl
     private readonly DbContextOptions<WeatherDataContext> _dbOptions;
     private List<Language> _all = new();   // every registry row, refreshed on each change
 
+    // WX-212: while this tab is the visible one, poll the registry so a language that finishes
+    // generating service-side (PENDING -> READY/BLOCKED, WX-172) updates in place — without the
+    // operator having to switch tabs to re-trigger Loaded. Stopped on switch-away, so there is no
+    // background DB query while the operator is on another tab.
+    private const int AutoRefreshSeconds = 10;   // ~tracks the WxReport cycle that flips the status
+    private readonly DispatcherTimer _refreshTimer;
+    private bool _reloadInFlight;          // a reload (tick or explicit) is running right now
+    private bool _reloadQueued;            // another reload was requested while one was running
+    private bool _rebinding;               // suppress the SelectionChanged churn a rebind would fire
+
     public LanguagesTab()
     {
         _dbOptions = App.DbOptions;
         InitializeComponent();
-        Loaded += async (_, _) => await ReloadAsync();
+        _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(AutoRefreshSeconds) };
+        _refreshTimer.Tick += async (_, _) => await ReloadAsync();   // ReloadAsync self-guards and never throws
+        // The default WPF TabControl unloads a tab's content when you switch away and reloads it on
+        // return, so Loaded/Unloaded bracket "this tab is visible": Loaded reloads (fresh on entry)
+        // and starts the auto-refresh; Unloaded stops it, so there is no background DB query while
+        // the operator is on another tab. On return, Loaded reloads by itself — no separate restart.
+        Loaded += async (_, _) => { _refreshTimer.Start(); await ReloadAsync(); };
+        Unloaded += (_, _) => _refreshTimer.Stop();
     }
 
-    /// <summary>Reloads the registry and rebinds both lists, partitioned by IsEnabled.</summary>
+    /// <summary>
+    /// Reloads the registry and rebinds both lists, partitioned by IsEnabled. Single-flight with
+    /// coalescing (WX-212): if a reload is already running (e.g. an auto-refresh tick), the new
+    /// request just flags a final pass rather than running a second reload concurrently — so an
+    /// explicit reload after an enable/disable still reflects the just-saved state, and two reloads
+    /// never race on <see cref="_all"/>.
+    /// </summary>
     private async Task ReloadAsync()
     {
+        if (_reloadInFlight) { _reloadQueued = true; return; }
+        _reloadInFlight = true;
         try
         {
-            await using var ctx = new WeatherDataContext(_dbOptions);
-            _all = await ctx.Languages.OrderBy(l => l.DisplayName).ToListAsync();
+            do
+            {
+                _reloadQueued = false;
+                await using var ctx = new WeatherDataContext(_dbOptions);
+                var langs = await ctx.Languages.OrderBy(l => l.DisplayName).ToListAsync();
+                if (!IsLoaded) return;   // switched away / window closed mid-reload — drop this stale result (WX-212/CR)
+                _all = langs;
+                ApplyFilterAndBind();
+            }
+            while (_reloadQueued);
         }
         catch (Exception ex)
         {
+            // One catch for the query AND the rebind: ReloadAsync must never throw, since it runs
+            // from an async-void timer Tick / Loaded handler where an escaped exception would crash
+            // WxManager instead of surfacing. Log as well as the UI message, so an auto-refresh
+            // failure leaves a durable trace in the WxManager log and not just a transient
+            // StatusText (CR) — matching the other tabs' reload-failure logging.
+            Logger.Warn($"Languages tab reload failed: {ex.Message}");
             StatusText.Text = $"Could not load languages: {ex.Message}";
-            return;
         }
-        ApplyFilterAndBind();
+        finally
+        {
+            _reloadInFlight = false;
+        }
     }
 
     /// <summary>Rebinds the (filtered) AllLanguages list and the Supported list from <see cref="_all"/>.</summary>
@@ -52,16 +96,50 @@ public partial class LanguagesTab : UserControl
             || l.DisplayName.Contains(filter, StringComparison.OrdinalIgnoreCase)
             || l.IsoCode.Contains(filter, StringComparison.OrdinalIgnoreCase);
 
-        AllList.ItemsSource = _all.Where(l => !l.IsEnabled && Match(l)).ToList();
+        // WX-212: remember the current selections by ISO code before the rebind — the bound items
+        // are rebuilt every call (fresh row wrappers always; fresh Language entities on a reload),
+        // so a periodic auto-refresh would otherwise deselect the row the operator is reading.
+        var selectedAllIso = (AllList.SelectedItem as Language)?.IsoCode;
+        var selectedSupIso = (SupportedList.SelectedItem as SupportedLanguageRow)?.Language.IsoCode;
+
+        var allItems = _all.Where(l => !l.IsEnabled && Match(l)).ToList();
         // WX-172: the Supported list shows each enabled language's generation status; wrap
         // each in a row that carries the plain-text label and the operator guidance.
-        SupportedList.ItemsSource = _all.Where(l => l.IsEnabled)
+        var supportedItems = _all.Where(l => l.IsEnabled)
             .Select(l => new SupportedLanguageRow(l)).ToList();   // short; not filtered
-        DetailPanel.Visibility = Visibility.Collapsed;            // selection cleared by the rebind
+        // Swapping ItemsSource and re-selecting fires SupportedList_SelectionChanged (first with
+        // null when the source resets, then with the restored row), which would collapse-then-
+        // re-show the detail panel — a visible blink on every 10s tick. Guard the whole rebind with
+        // _rebinding and refresh the panel once at the end instead, so a live status change
+        // (e.g. [Generating…] -> [Ready]) updates in place without flicker. Restore is by ISO since
+        // the bound items are rebuilt each call.
+        _rebinding = true;
+        try
+        {
+            AllList.ItemsSource = allItems;
+            SupportedList.ItemsSource = supportedItems;
+            AllList.SelectedItem = selectedAllIso is null ? null
+                : allItems.FirstOrDefault(l => l.IsoCode == selectedAllIso);
+            SupportedList.SelectedItem = selectedSupIso is null ? null
+                : supportedItems.FirstOrDefault(r => r.Language.IsoCode == selectedSupIso);
+        }
+        finally
+        {
+            _rebinding = false;
+        }
+        UpdateDetailPanel();
     }
 
-    /// <summary>Shows the selected supported language's status + operator guidance in the detail panel.</summary>
     private void SupportedList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_rebinding)        // a rebind updates the panel once at its end (UpdateDetailPanel)
+            UpdateDetailPanel();
+    }
+
+    /// <summary>Shows the selected supported language's status + operator guidance in the detail
+    /// panel, or collapses it when nothing is selected. Shared by the user's SelectionChanged and
+    /// the end of a rebind, so the panel updates once, in place.</summary>
+    private void UpdateDetailPanel()
     {
         if (SupportedList.SelectedItem is SupportedLanguageRow row)
         {
