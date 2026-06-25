@@ -456,6 +456,11 @@ public sealed class ReportWorker : BackgroundService
             // recipients), in its own DbContext, capped at one Claude call per cycle.
             await GeneratePendingLanguagesAsync(claude_cfg, ct);
 
+            // The TRUE end-of-cycle marker — logged here, after BOTH the sends and the generation
+            // tail, not in the send phase (WX-211/CR): it must not claim the cycle completed while
+            // generation is still running, hung, or failing. (RunReportSendsAsync logs its own
+            // "Report send phase complete." for the sends.)
+            Logger.Info("Report cycle complete.");
             _reportCycles.Add(1);
 
         } // try
@@ -546,8 +551,8 @@ public sealed class ReportWorker : BackgroundService
         }
 
         Logger.Info(reportsSent > 0
-            ? $"Report cycle complete. {reportsSent} report(s) sent."
-            : "Report cycle complete. No reports due.");
+            ? $"Report send phase complete. {reportsSent} report(s) sent."
+            : "Report send phase complete. No reports due.");
     }
 
     /// <summary>

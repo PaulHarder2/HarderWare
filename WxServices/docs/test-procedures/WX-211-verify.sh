@@ -13,14 +13,16 @@
 #      tokens" lines -- that wording is gone (item C). The old binary logged it on every
 #      reconciliation, so any occurrence means the old binary is still live. This is the primary,
 #      always-on check; it does not need a generation to have happened.
-#   2. REORDER (item A): in any cycle that has BOTH a "Report cycle complete." line and a
-#      "generating templates" line, the generation MUST come after the complete. A generation before
-#      the complete in a send cycle is the OLD order. (Opportunistic -- only present once a language
-#      was generated post-deploy; the WX-211.md procedure enables one first.)
+#   2. REORDER (item A): in any cycle that has BOTH a "Report send phase complete." line and a
+#      "generating templates" line, the generation MUST come after the send-complete. A generation
+#      before it in a send cycle is the OLD order. PASS REQUIRES >= 1 generation since the deploy --
+#      without one this check is vacuous, so the script WAITs (the WX-211.md procedure enables a
+#      fresh language first).
 # Item B (the calls counter) is a metric, not a log line -- checked on Grafana per WX-211.md, not here.
 #
-# THE GATE: deterministic -- no time window. PASS needs >= MIN_CYCLES report cycles since the deploy
-# (so the new binary is proven live) and ZERO failure-signature lines. Until then -> WAIT.
+# THE GATE: deterministic -- no time window. PASS needs >= MIN_CYCLES report cycles AND >= 1
+# generation since the deploy (so the new binary is proven live AND the reorder was actually
+# exercised) and ZERO failure-signature lines. Until then -> WAIT.
 #
 # Log-reading verify (like WX-210). Reuses verify-lib.sh for the version-pinned deploy boundary, the
 # log window, and the PASS/FAIL/WAIT decision.
@@ -49,15 +51,17 @@ old_wording=$(printf '%s\n' "$POST" | cnt 'Claude reconciliation tokens')      #
 new_wording=$(printf '%s\n' "$POST" | cnt 'Claude tokens \[')                  # positive evidence: the new per-call wording
 generations=$(printf '%s\n' "$POST" | cnt 'WX-172: generating templates for')  # positive evidence: a generation ran post-deploy (the reorder is checkable when >0)
 
-# REORDER check (item A): a violation is a cycle that has a "Report cycle complete." AND a
-# "generating templates" line where the generation came BEFORE the complete (the old top-of-cycle
-# order). Cycles are delimited by "Starting report cycle." lines. (No apostrophes in this awk
-# program -- they would close the single-quoted block, WX-197.)
+# REORDER check (item A): a violation is a cycle that has a "Report send phase complete." marker AND
+# a "generating templates" line where the generation came BEFORE that send-complete (the old
+# top-of-cycle order). The send phase logs "Report send phase complete." (sends done); the cycle end
+# logs "Report cycle complete." after generation -- this check keys off the SEND marker, so it is the
+# generation-vs-sends order that is asserted. Cycles are delimited by "Starting report cycle." lines.
+# (No apostrophes in this awk program -- they would close the single-quoted block, WX-197.)
 reorder_violations=$(printf '%s\n' "$POST" | awk '
   function close_cycle() { if (have_complete && have_gen && gen_before) viol++ }
   /Starting report cycle\./        { if (seen_start) close_cycle(); seen_start=1; have_complete=0; have_gen=0; gen_before=0; next }
   !seen_start                      { next }
-  /Report cycle complete\./        { have_complete=1; next }
+  /Report send phase complete\./   { have_complete=1; next }
   /WX-172: generating templates for/ { have_gen=1; if (!have_complete) gen_before=1; next }
   END { if (seen_start) close_cycle(); print viol+0 }')
 
@@ -85,8 +89,12 @@ if [ "$generations" -eq 0 ]; then
   echo
 fi
 
-precond=$(( (cycles >= MIN_CYCLES || regression > 0) ? 1 : 0 ))
+# PASS requires the reorder to have been EXERCISED, not just un-violated: >= MIN_CYCLES cycles AND
+# >= 1 generation since the deploy. Without a generation the reorder check is vacuously 0, so the
+# script WAITs rather than PASSing on the old-wording signal alone (CR). A real failure signature
+# (regression > 0) still FAILs regardless.
+precond=$(( ((cycles >= MIN_CYCLES && generations >= 1) || regression > 0) ? 1 : 0 ))
 vl_verdict "$regression" "$cycles" \
   "a WX-211 failure signature is present: either a retired 'Claude reconciliation tokens' line (old binary, or item C not deployed) or a generation that ran BEFORE its cycle's send-complete (the old top-of-cycle order). Inspect wxreport-svc.log and RunCycleAsync/RunReportSendsAsync." \
   "generation runs off the send-path across $cycles report cycle(s): the retired token wording is gone and no generation preceded its cycle's send-complete (item A reorder holds; $generations generation(s) observed)." \
-  "$precond" "at least $MIN_CYCLES report cycles since the deploy (got $cycles)"
+  "$precond" "at least $MIN_CYCLES report cycles AND >= 1 generation since the deploy (cycles=$cycles, generations=$generations) -- enable a fresh language (WX-211.md §2) to exercise the reorder, then re-run"
