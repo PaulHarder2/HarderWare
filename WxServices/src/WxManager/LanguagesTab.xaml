@@ -6,10 +6,11 @@
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
         <TextBlock Grid.Row="0" TextWrapping="Wrap" Margin="0,0,0,8"
-                   Text="Languages a recipient may be assigned. Enable a language to make it selectable (only languages that have report templates can be enabled); disable it to remove it (blocked while any recipient is still assigned it)."/>
+                   Text="Languages a recipient may be assigned. Enable a language to support it — its report templates are generated automatically on the next report cycle, and it becomes assignable once Ready. Select a supported language to see its status. Disable is blocked while any recipient is still assigned it."/>
 
         <Grid Grid.Row="1">
             <Grid.ColumnDefinitions>
@@ -35,13 +36,31 @@
                         Click="DisableBtn_Click" ToolTip="Disable the selected language (move to All languages)"/>
             </StackPanel>
 
-            <!-- Supported (enabled) -->
+            <!-- Supported (enabled) — name + generation-status label per row -->
             <DockPanel Grid.Column="2" Margin="8,0,0,0">
                 <TextBlock DockPanel.Dock="Top" Text="Supported" FontWeight="SemiBold" Margin="0,0,0,4"/>
-                <ListBox x:Name="SupportedList" DisplayMemberPath="DisplayName"/>
+                <ListBox x:Name="SupportedList" SelectionChanged="SupportedList_SelectionChanged">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="{Binding Display}"/>
+                                <TextBlock Text="{Binding StatusLabel}" Margin="8,0,0,0" Foreground="Gray"/>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
             </DockPanel>
         </Grid>
 
-        <TextBlock Grid.Row="2" x:Name="StatusText" TextWrapping="Wrap" Margin="0,8,0,0"/>
+        <!-- Status / guidance for the selected supported language (WX-172) -->
+        <Border Grid.Row="2" x:Name="DetailPanel" Visibility="Collapsed" Margin="0,8,0,0"
+                Padding="8" BorderBrush="#FFCCCCCC" BorderThickness="1" Background="#FFF7F7F7">
+            <StackPanel>
+                <TextBlock x:Name="DetailHeader" FontWeight="SemiBold" TextWrapping="Wrap"/>
+                <TextBlock x:Name="DetailText" TextWrapping="Wrap" Margin="0,4,0,0"/>
+            </StackPanel>
+        </Border>
+
+        <TextBlock Grid.Row="3" x:Name="StatusText" TextWrapping="Wrap" Margin="0,8,0,0"/>
     </Grid>
 </UserControl>

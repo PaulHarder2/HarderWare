@@ -517,6 +517,13 @@ public sealed class ReportWorker : BackgroundService
                 reportsSent += await ProcessLocalityAsync(ctx, locality, members, reconciler, emailer, cfg, langById, now, ct);
             }
 
+            // WX-172 generation-on-enable: AFTER the sends (so a slow translation never
+            // delays a report cycle), generate templates for any language enabled but not
+            // yet generated. A newly-enabled language has no recipients until it reaches
+            // READY, so doing this last costs nothing this cycle; the next cycle's
+            // _templates.Reload() picks up the freshly-written phrases.
+            await GeneratePendingLanguagesAsync(claude_cfg, ct);
+
             Logger.Info(reportsSent > 0
                 ? $"Report cycle complete. {reportsSent} report(s) sent."
                 : "Report cycle complete. No reports due.");
@@ -528,6 +535,168 @@ public sealed class ReportWorker : BackgroundService
         {
             _cycleDuration.Record(cycleSw.Elapsed.TotalSeconds);
             WriteHeartbeat(cfg.HeartbeatFile);
+        }
+    }
+
+    /// <summary>
+    /// WX-172 generation-on-enable. For each enabled language not yet generated
+    /// (<see cref="Language.GeneratedAtUtc"/> IS NULL — a PENDING first enable or a prior
+    /// FAILED attempt), produce its localized templates from the baseline (en) set via one
+    /// Claude call and persist the outcome:
+    /// <list type="bullet">
+    ///   <item>READY — all tokens representable: rows written, <c>GeneratedAtUtc</c> set, <c>GenerationError</c> null.</item>
+    ///   <item>BLOCKED — ≥1 token not representable: rows written (the blocked ones <c>Representable=false</c>), <c>GeneratedAtUtc</c> set, <c>GenerationError</c> describing the offending tokens. Not retried (GeneratedAtUtc is set).</item>
+    ///   <item>FAILED — transport/parse/exhausted validation: <c>GenerationError</c> set, <c>GeneratedAtUtc</c> left null so the next cycle retries.</item>
+    /// </list>
+    /// The baseline (en) itself and any already-complete language (the seeded es, or a
+    /// migration-backfilled row that slipped through) is stamped READY without a Claude
+    /// call. Each language is isolated — one failure logs and never aborts the cycle or the
+    /// others.
+    /// </summary>
+    private async Task GeneratePendingLanguagesAsync(ClaudeConfig claudeCfg, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(claudeCfg.ApiKey))
+            return;   // no key — already warned at the cycle top; nothing to generate with
+
+        // Own DbContext: generation's tracking and SaveChanges are isolated from the
+        // cycle's per-locality context, so a trailing save can never sweep in a partial
+        // locality write, and the entities mutated here are fresh.
+        await using var ctx = new WeatherDataContext(_dbOptions);
+
+        // Scan PENDING (no error) before FAILED (error set) so a persistently-failing language
+        // can't starve a fresh enable out of the single per-cycle generation slot.
+        var pending = await ctx.Languages
+            .Where(l => l.IsEnabled && l.GeneratedAtUtc == null)   // PENDING or FAILED (both retry)
+            .OrderBy(l => l.GenerationError != null)
+            .ThenBy(l => l.IsoCode)
+            .ToListAsync(ct);
+        if (pending.Count == 0)
+            return;
+
+        // The baseline (en) rows are the source for every translation; load once.
+        var baselineRows = await ctx.LanguageTemplates
+            .Include(t => t.Language)
+            .Where(t => t.Language!.IsoCode == SupportedLanguages.BaselineCode)
+            .ToListAsync(ct);
+        var baselineByToken = baselineRows.Where(r => r.Representable).ToDictionary(r => r.Token, StringComparer.Ordinal);
+        if (baselineByToken.Count == 0)
+        {
+            Logger.Error("WX-172: baseline (en) templates are missing — cannot generate any language. Resolve the seed/migration.");
+            return;
+        }
+
+        var translator = new TemplateTranslator(
+            new ClaudeClient(_claudeHttpClient, claudeCfg.ApiKey, claudeCfg.Model, _persona.Text));
+
+        // At most ONE Claude-backed generation per cycle: it's a slow call and bounds both
+        // cycle latency (the heartbeat is written after this) and burst cost when several
+        // languages are enabled at once. Free READY-stamps (baseline / already-complete) do
+        // not count — they cost nothing — so the backlog of real generations drains one per
+        // cycle, harmlessly, since a not-yet-READY language has no recipients.
+        bool spentGeneration = false;
+
+        foreach (var lang in pending)
+        {
+            var iso = LanguageTemplateStore.CanonicalIso(lang.IsoCode);
+            try
+            {
+                // The baseline, or any language already carrying a complete representable
+                // set, is ready as-is — stamp it without spending a Claude call (the
+                // migration normally does this; this self-heals anything it missed). READY
+                // also requires a CultureName (date/number formatting); the baseline and the
+                // seeded languages always carry one. A complete-but-culture-less language is
+                // NOT stamped here — it falls through to generation, which supplies the
+                // culture, so READY never implies a silent en-US locale fallback (matching the
+                // WX-172-verify 'ready_no_culture' invariant).
+                bool complete = string.Equals(iso, SupportedLanguages.BaselineCode, StringComparison.Ordinal)
+                    || _templates.MissingTokens(iso, Tok.All).Count == 0;
+                if (complete && !string.IsNullOrWhiteSpace(lang.CultureName))
+                {
+                    lang.GeneratedAtUtc = DateTime.UtcNow;
+                    lang.GenerationError = null;
+                    await ctx.SaveChangesAsync(ct);
+                    Logger.Info($"WX-172: '{iso}' already has a complete template set — marked READY without generation.");
+                    continue;
+                }
+
+                if (spentGeneration)
+                {
+                    Logger.Info($"WX-172: deferring generation of '{iso}' to a later cycle (one generation per cycle).");
+                    continue;
+                }
+                spentGeneration = true;
+
+                Logger.Info($"WX-172: generating templates for '{iso}' ({lang.DisplayName})…");
+                var result = await translator.GenerateAsync(lang.DisplayName, iso, baselineRows, ct);
+
+                // Record the spend on the cost counters + the per-call DEBUG line — these are
+                // the heaviest single Claude calls, and the scarce LLM resource must be visible
+                // on the same dashboards the reconciler feeds (a failed attempt is still billed).
+                var usage = result switch
+                {
+                    TranslateResult.Success su => su.Usage,
+                    TranslateResult.Failure fa => fa.Usage,
+                    _ => new TokenUsage(0, 0, 0, 0),
+                };
+                AddClaudeTokens(usage);
+                LogClaudeTokens($"translate:{iso}", usage, "WX-172 template generation");
+
+                if (result is TranslateResult.Success s)
+                {
+                    // Replace any prior rows for this language (a partial from an earlier
+                    // attempt) with the freshly generated, validated set. Delete-then-save
+                    // BEFORE inserting, so a re-used (LanguageId, Token) can't collide with a
+                    // not-yet-deleted row under the unique index.
+                    var existing = await ctx.LanguageTemplates.Where(t => t.LanguageId == lang.Id).ToListAsync(ct);
+                    if (existing.Count > 0)
+                    {
+                        ctx.LanguageTemplates.RemoveRange(existing);
+                        await ctx.SaveChangesAsync(ct);
+                    }
+                    foreach (var tr in s.Translations)
+                    {
+                        var baseRow = baselineByToken[tr.Token];
+                        ctx.LanguageTemplates.Add(new LanguageTemplate
+                        {
+                            LanguageId = lang.Id,
+                            Token = tr.Token,
+                            Phrase = tr.Phrase,
+                            ContextInfo = tr.TranslatedContext,
+                            ContextKind = baseRow.ContextKind,   // kind is the token's, not the language's
+                            Note = tr.Note,
+                            Representable = tr.Representable,
+                            // ReviewedBy/ReviewedAtUtc left null — generated-but-unreviewed (WX-173 round-trip).
+                        });
+                    }
+
+                    var blocked = s.Translations.Where(t => !t.Representable).Select(t => t.Token).ToList();
+                    lang.CultureName = s.CultureName;
+                    lang.GeneratedAtUtc = DateTime.UtcNow;
+                    lang.GenerationError = blocked.Count == 0
+                        ? null
+                        : $"{blocked.Count} token(s) cannot be expressed in {lang.DisplayName} by simple substitution: "
+                          + $"{string.Join(", ", blocked)}. This needs a renderer/code change; it will not retry.";
+                    await ctx.SaveChangesAsync(ct);
+
+                    Logger.Info(blocked.Count == 0
+                        ? $"WX-172: '{iso}' generated and READY — {s.Translations.Count} token(s)."
+                        : $"WX-172: '{iso}' BLOCKED — {blocked.Count} of {s.Translations.Count} token(s) not representable: {string.Join(", ", blocked)}.");
+                }
+                else if (result is TranslateResult.Failure f)
+                {
+                    // FAILED: record the transient reason but leave GeneratedAtUtc null so
+                    // the next cycle retries. No rows are written on failure.
+                    lang.GenerationError = $"Generation failed (will retry next cycle): {f.Reason}";
+                    await ctx.SaveChangesAsync(ct);
+                    Logger.Error($"WX-172: '{iso}' generation FAILED — {f.Reason}");
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Isolate one language's failure from the rest of the cycle. Leave it PENDING
+                // (GeneratedAtUtc still null) so the next cycle retries.
+                Logger.Error($"WX-172: generation for '{iso}' threw; leaving it PENDING for the next cycle.", ex);
+            }
         }
     }
 

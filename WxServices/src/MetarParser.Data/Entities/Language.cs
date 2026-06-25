@@ -1,4 +1,30 @@
+using System.ComponentModel.DataAnnotations.Schema;
+
 namespace MetarParser.Data.Entities;
+
+/// <summary>
+/// The generation state of a <see cref="Language"/> (WX-172), derived from its
+/// <see cref="Language.IsEnabled"/>, <see cref="Language.GeneratedAtUtc"/>, and
+/// <see cref="Language.GenerationError"/> columns. Only <see cref="Ready"/> languages
+/// are assignable to recipients and rendered.
+/// </summary>
+public enum LanguageGenerationState
+{
+    /// <summary>Not enabled — not a SupportedLanguage.</summary>
+    Disabled,
+
+    /// <summary>Enabled but never generated yet — the service will generate it on its next cycle.</summary>
+    Pending,
+
+    /// <summary>Enabled, generated, and not blocked — assignable and renderable.</summary>
+    Ready,
+
+    /// <summary>Generated, but a token is not representable in this language (needs a renderer/code change); not auto-retried.</summary>
+    Blocked,
+
+    /// <summary>A transient generation error (transport/parse) — auto-retried on the next cycle.</summary>
+    Failed,
+}
 
 /// <summary>
 /// A language the product knows about for recipient reports. The full table is
@@ -54,4 +80,27 @@ public class Language
 
     /// <summary>The localized templates that render this language's reports (WX-167).</summary>
     public ICollection<LanguageTemplate> Templates { get; set; } = new List<LanguageTemplate>();
+
+    /// <summary>
+    /// The generation state derived from <see cref="IsEnabled"/>, <see cref="GeneratedAtUtc"/>,
+    /// and <see cref="GenerationError"/> (WX-172). Computed, never persisted. The encoding:
+    /// PENDING = (enabled, GeneratedAtUtc null, no error); READY = (enabled, GeneratedAtUtc set,
+    /// no error); BLOCKED = (enabled, GeneratedAtUtc set, error set); FAILED = (enabled,
+    /// GeneratedAtUtc null, error set).
+    /// </summary>
+    [NotMapped]
+    public LanguageGenerationState GenerationState =>
+        !IsEnabled ? LanguageGenerationState.Disabled
+        : GenerationError is not null
+            ? (GeneratedAtUtc is not null ? LanguageGenerationState.Blocked : LanguageGenerationState.Failed)
+        : GeneratedAtUtc is not null ? LanguageGenerationState.Ready
+        : LanguageGenerationState.Pending;
+
+    /// <summary>
+    /// True when this language is READY (WX-172): enabled, generated, and not blocked — the
+    /// only state in which a recipient may be assigned it and its reports render. Computed,
+    /// never persisted.
+    /// </summary>
+    [NotMapped]
+    public bool IsReady => GenerationState == LanguageGenerationState.Ready;
 }

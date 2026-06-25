@@ -1095,11 +1095,12 @@ public partial class RecipientsTab : UserControl
 
     /// <summary>
     /// Builds the Language dropdown (in-memory, no DB) from the <see cref="_allLanguages"/>
-    /// cache: the enabled ("supported") languages, preceded by a <c>(service default)</c>
-    /// sentinel (<c>Id 0</c>) that maps to a null <see cref="Recipient.LanguageId"/> — the
-    /// recipient then follows the service's configured default language.
+    /// cache: the READY languages (<see cref="Language.IsReady"/>), preceded by a
+    /// <c>(service default)</c> sentinel (<c>Id 0</c>) that maps to a null
+    /// <see cref="Recipient.LanguageId"/> — the recipient then follows the service's
+    /// configured default language.
     /// <para>
-    /// When <paramref name="ensureId"/> is the id of a language that is no longer enabled
+    /// When <paramref name="ensureId"/> is the id of a language that is no longer READY
     /// but is still assigned to the recipient being loaded, a marked copy is appended so
     /// the dropdown can bind to it — otherwise the field would show blank and the next
     /// Save would silently null a real assignment.
@@ -1109,15 +1110,21 @@ public partial class RecipientsTab : UserControl
     private void LoadLanguageOptions(long? ensureId = null)
     {
         var options = new List<Language> { new() { Id = 0, DisplayName = "(service default)" } };
-        options.AddRange(_allLanguages.Where(l => l.IsEnabled));   // already ordered by DisplayName
+        // WX-172: a recipient may only be assigned a READY language (enabled + generated +
+        // not blocked). A merely-enabled language still being generated (PENDING) or one
+        // that is BLOCKED/FAILED is not yet renderable, so it must not be offered.
+        options.AddRange(_allLanguages.Where(l => l.IsReady));   // already ordered by DisplayName
 
         if (ensureId is long id && id != 0 && options.All(l => l.Id != id))
         {
             var assigned = _allLanguages.FirstOrDefault(l => l.Id == id);
             if (assigned is not null)
             {
-                // A marked COPY — never mutate the shared cache entity.
-                options.Add(new Language { Id = assigned.Id, IsoCode = assigned.IsoCode, DisplayName = $"{assigned.DisplayName} (not enabled)" });
+                // A marked COPY — never mutate the shared cache entity. Keeps an
+                // already-assigned language selectable even if it is no longer READY (it was
+                // disabled, or became blocked after assignment), so the operator sees and can
+                // change it rather than have it silently vanish and the next Save null it.
+                options.Add(new Language { Id = assigned.Id, IsoCode = assigned.IsoCode, DisplayName = $"{assigned.DisplayName} (not ready)" });
             }
         }
         LanguageBox.ItemsSource = options;
