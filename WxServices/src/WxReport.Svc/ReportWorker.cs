@@ -669,6 +669,18 @@ public sealed class ReportWorker : BackgroundService
 
                 if (result is TranslateResult.Success s)
                 {
+                    // WX-222: the operator may have disabled (or deleted) this language during the
+                    // slow generation call. Persisting now would re-create templates on a disabled
+                    // language — the orphan WX-222 removes. Re-read the live flag (a scalar
+                    // projection bypasses the identity map) and discard the result if it's gone.
+                    var stillEnabled = await ctx.Languages.Where(l => l.Id == lang.Id)
+                        .Select(l => l.IsEnabled).FirstOrDefaultAsync(ct);
+                    if (!stillEnabled)
+                    {
+                        Logger.Info($"WX-172/WX-222: '{iso}' was disabled during generation — discarding the result, not persisting.");
+                        continue;
+                    }
+
                     // Replace any prior rows for this language (a partial from an earlier
                     // attempt) with the freshly generated, validated set. Delete-then-save
                     // BEFORE inserting, so a re-used (LanguageId, Token) can't collide with a

@@ -218,18 +218,40 @@ public partial class LanguagesTab : UserControl
             row.IsEnabled = enabled;
             if (enabled)
             {
-                // WX-172: requeue a not-ready language so the service (re)generates it. A
-                // BLOCKED/FAILED language (GenerationError set) is reset to PENDING — the
-                // recovery path after a blocking token's renderer/code fix lands, since a
-                // BLOCKED language has GeneratedAtUtc set and would otherwise never retry. A
-                // READY language keeps its templates and stays READY; a never-generated one is
-                // already PENDING. Disable leaves the generated state intact for quick re-enable.
+                // WX-172/WX-222: a re-enabled language is always needs-generation now — disable
+                // purges its templates and clears GeneratedAtUtc/GenerationError (and a never-
+                // generated one is already PENDING) — so it generates on the next cycle. The
+                // GenerationError reset is kept as defensive recovery for any hand-edited
+                // BLOCKED-while-disabled state.
                 if (row.GenerationError is not null)
                 {
                     row.GeneratedAtUtc = null;
                     row.GenerationError = null;
                 }
                 willGenerate = !row.IsReady;   // still not READY after the flip => generates next cycle
+            }
+            else
+            {
+                // WX-222: a language's templates exist iff it is enabled + generated. Purge on
+                // disable and revert to needs-generation, so a later re-enable regenerates a
+                // complete, CURRENT set (picking up any tokens or baseline changes added since)
+                // instead of silently reusing a now-incomplete one — and so a disabled language
+                // no longer loads and trips the startup completeness check (WX-171, Program.cs).
+                //
+                // Re-check the recipient guard inside THIS transaction: DisableBtn_Click checks it
+                // in a separate context, so a recipient assigned in the meantime (or a future
+                // caller that skips that guard) must not have its language purged out from under it.
+                var assigned = await ctx.Recipients.CountAsync(r => r.LanguageId == row.Id);
+                if (assigned > 0)
+                {
+                    StatusText.Text = $"Can't disable “{lang.DisplayName}”: {assigned} recipient(s) are still assigned it.";
+                    return;
+                }
+                var orphaned = await ctx.LanguageTemplates.Where(t => t.LanguageId == row.Id).ToListAsync();
+                if (orphaned.Count > 0)
+                    ctx.LanguageTemplates.RemoveRange(orphaned);
+                row.GeneratedAtUtc = null;
+                row.GenerationError = null;
             }
             await ctx.SaveChangesAsync();
         }
@@ -242,7 +264,7 @@ public partial class LanguagesTab : UserControl
             ? (willGenerate
                 ? $"Enabled “{lang.DisplayName}” — its report templates are queued for generation on an upcoming report cycle; it becomes assignable to recipients once ready."
                 : $"Enabled “{lang.DisplayName}” — ready; recipients can now be assigned it.")
-            : $"Disabled “{lang.DisplayName}”.";
+            : $"Disabled “{lang.DisplayName}” — its report templates were cleared; re-enabling will regenerate them.";
         await ReloadAsync();
     }
 }

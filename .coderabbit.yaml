@@ -26,6 +26,15 @@ reviews:
     # reviewed either, but the **/*.md cross-consistency guideline still catches stale
     # references from the DESIGN.md side (the two are cross-referenced).
     - "!WxServices/VERSIONS.md"
+    # WX-222: skip review of generated / snapshot files. The byte-for-byte golden HTML
+    # fixtures are re-recorded mechanically (the WX-184 relabel PR's 89-file golden diff
+    # drove a slow review and ~20 redundant "update the heading" comments), and the EF-
+    # scaffolded migration Designer + model-snapshot files are machine-generated, not hand-
+    # edited. The hand-written migration .cs (Up/Down) stays reviewable; CI still tests the
+    # goldens. This cuts CR's review surface — and time — on exactly our largest (renderer) PRs.
+    - "!WxServices/tests/**/Golden/Fixtures/**"
+    - "!WxServices/src/MetarParser.Data/Migrations/*.Designer.cs"
+    - "!WxServices/src/MetarParser.Data/Migrations/*ModelSnapshot.cs"
 
   # "assertive" gives more comprehensive feedback than the default
   # "chill" profile. Trade-off: more findings per PR, including some
