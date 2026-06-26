@@ -382,7 +382,8 @@ public sealed class ReportWorker : BackgroundService
                 var plainFallback = SnapshotDescriber.Describe(snapshot, tz, ToUnitPreferences(member));
 
                 var meteogramPath = FindMeteogramAbbrevPath(
-                    preferredIcaos.Count > 0 ? preferredIcaos[0] : "", member.TempUnit, locality.Timezone, plotsDir);
+                    preferredIcaos.Count > 0 ? preferredIcaos[0] : "", member.TempUnit, locality.Timezone,
+                    LanguageTemplateStore.CanonicalIso(langCode), plotsDir);
                 report = meteogramPath is not null
                     ? InsertMeteogramImage(report, templates)
                     : report.Replace("<!--meteogram-->", "", StringComparison.Ordinal);
@@ -1530,7 +1531,8 @@ public sealed class ReportWorker : BackgroundService
         var plainFallback = SnapshotDescriber.Describe(snapshot, tz, ToUnitPreferences(member));
 
         var meteogramPath = FindMeteogramAbbrevPath(
-            preferredIcaos.Count > 0 ? preferredIcaos[0] : "", member.TempUnit, locality.Timezone, plotsDir);
+            preferredIcaos.Count > 0 ? preferredIcaos[0] : "", member.TempUnit, locality.Timezone,
+            LanguageTemplateStore.CanonicalIso(langCode), plotsDir);
         var htmlToSend = meteogramPath is not null
             ? InsertMeteogramImage(report, templates)
             : report.Replace("<!--meteogram-->", "", StringComparison.Ordinal);
@@ -2304,8 +2306,9 @@ public sealed class ReportWorker : BackgroundService
     /// <param name="icao">ICAO station identifier to look up in the manifest.</param>
     /// <param name="tempUnit">Temperature unit (<c>"F"</c> or <c>"C"</c>) to match.</param>
     /// <param name="timezone">IANA timezone name to match (e.g. <c>"America/Chicago"</c>).</param>
+    /// <param name="language">Recipient's resolved language ISO code (WX-224) to match; a pre-WX-224 manifest entry with no Language property is treated as language-agnostic.</param>
     /// <param name="plotsDir">Directory where WxVis.Svc writes PNGs and manifest files.</param>
-    private static string? FindMeteogramAbbrevPath(string icao, string tempUnit, string timezone, string plotsDir)
+    private static string? FindMeteogramAbbrevPath(string icao, string tempUnit, string timezone, string language, string plotsDir)
     {
         if (string.IsNullOrWhiteSpace(icao) || !Directory.Exists(plotsDir))
             return null;
@@ -2329,6 +2332,12 @@ public sealed class ReportWorker : BackgroundService
                     if (!string.Equals(icaoProp.GetString(), icao, StringComparison.OrdinalIgnoreCase)) continue;
                     if (!string.Equals(tuProp.GetString(), tempUnit, StringComparison.OrdinalIgnoreCase)) continue;
                     if (!string.Equals(tzProp.GetString(), timezone, StringComparison.Ordinal)) continue;
+                    // WX-224: also match the recipient's language. Pre-WX-224 manifests carry no
+                    // Language property — treat those as language-agnostic so a report still finds
+                    // its meteogram during the deploy transition (until the next GFS run rewrites the
+                    // manifest in the new per-language format).
+                    if (entry.TryGetProperty("Language", out var langProp)
+                        && !string.Equals(langProp.GetString(), language, StringComparison.OrdinalIgnoreCase)) continue;
 
                     var file = fileAbbrevProp.GetString();
                     if (string.IsNullOrWhiteSpace(file)) continue;

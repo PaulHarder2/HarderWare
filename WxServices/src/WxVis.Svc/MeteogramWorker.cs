@@ -1,6 +1,9 @@
+using System.Globalization;
+using System.Text;
 using System.Text.Json;
 
 using MetarParser.Data;
+using MetarParser.Data.Entities;
 
 using Microsoft.EntityFrameworkCore;
 
@@ -18,8 +21,9 @@ namespace WxVis.Svc;
 /// Polls <c>GfsModelRuns</c> on the same interval as
 /// <see cref="ForecastMapWorker"/> (<c>WxVis:ForecastPollIntervalSeconds</c>).
 /// When a new complete run is detected, one pair of meteogram PNGs (24-hour and
-/// full-period) is rendered per unique <c>(MetarIcao, TempUnit)</c> combination
-/// found in the <c>Recipients</c> table.
+/// full-period) is rendered per unique <c>(MetarIcao, TempUnit, Timezone, Language)</c>
+/// combination found in the <c>Recipients</c> table — the language axis (WX-224)
+/// so the in-image labels are localized, and only for languages in actual demand.
 /// </para>
 /// <para>
 /// After all locations are rendered a manifest JSON file is written to the
@@ -36,6 +40,10 @@ public sealed class MeteogramWorker : BackgroundService
 
     // Model runs for which rendering is complete (all recipient locations done).
     private readonly HashSet<DateTime> _completedRuns = new();
+
+    // WX-224: the in-image meteogram label tokens MeteogramWorker resolves per language.
+    private static readonly string[] MeteogramTokenNames =
+        { MeteogramTokens.Wind, MeteogramTokens.Rh, MeteogramTokens.Temp };
 
     /// <summary>Initialises a new instance with the application configuration and DB options.</summary>
     /// <param name="config">Application configuration used to read <c>WxVis:*</c> settings each cycle.</param>
@@ -88,6 +96,7 @@ public sealed class MeteogramWorker : BackgroundService
     {
         DateTime latestCompleteRun;
         List<RecipientLocation> locations;
+        Dictionary<string, LangLabels> langData;
 
         using (var ctx = new WeatherDataContext(_dbOptions))
         {
@@ -105,6 +114,12 @@ public sealed class MeteogramWorker : BackgroundService
             // Remove stale tracking entries for older runs.
             _completedRuns.RemoveWhere(r => r < latestCompleteRun);
 
+            // WX-224: resolve each recipient's report language so we render one meteogram per
+            // language actually in demand at a location — not a blind per-language fan-out. The
+            // LanguageId -> IsoCode mapping mirrors ReportWorker.ResolveLanguageCode; a recipient
+            // with no language falls to English (the baseline / current Report:DefaultLanguage).
+            var langById = await ctx.Languages.ToDictionaryAsync(l => l.Id, ct);
+
             var recipientRows = await ctx.Recipients
                 .Where(r => r.Latitude != null
                          && r.Longitude != null
@@ -115,6 +130,7 @@ public sealed class MeteogramWorker : BackgroundService
                     r.LocalityName,
                     r.TempUnit,
                     r.Timezone,
+                    r.LanguageId,
                     Latitude = r.Latitude!.Value,
                     Longitude = r.Longitude!.Value,
                 })
@@ -126,9 +142,32 @@ public sealed class MeteogramWorker : BackgroundService
                 LocalityName = r.LocalityName ?? FirstIcao(r.MetarIcao!),
                 TempUnit = r.TempUnit,
                 Timezone = r.Timezone,
+                Language = ResolveIso(r.LanguageId, langById),
                 Latitude = r.Latitude,
                 Longitude = r.Longitude,
             }).ToList();
+
+            // Load the in-image label tokens for every language in demand, plus each one's
+            // CultureInfo-derived weekday abbreviations. Built once here, passed to meteogram.py
+            // per render. wind/rh/temp come from LanguageTemplates (fail-soft: a missing token
+            // omits its arg, so meteogram.py keeps the English default for that label); the day
+            // abbreviations come from CultureInfo, not a token.
+            var inDemand = locations.Select(l => l.Language).ToHashSet(StringComparer.Ordinal);
+            var tokenRows = await ctx.LanguageTemplates
+                .Where(t => MeteogramTokenNames.Contains(t.Token)
+                         && t.Language != null
+                         && inDemand.Contains(t.Language.IsoCode))
+                .Select(t => new { Iso = t.Language!.IsoCode, t.Token, t.Phrase })
+                .ToListAsync(ct);
+
+            var cultureByIso = langById.Values
+                .GroupBy(l => l.IsoCode, StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => g.First().CultureName, StringComparer.Ordinal);
+
+            langData = BuildLangData(
+                inDemand,
+                tokenRows.Select(t => (t.Iso, t.Token, t.Phrase)),
+                cultureByIso);
         }
 
         if (locations.Count == 0)
@@ -138,17 +177,18 @@ public sealed class MeteogramWorker : BackgroundService
             return;
         }
 
-        // De-duplicate on first ICAO + TempUnit + Timezone; use first locality name found.
+        // De-duplicate on first ICAO + TempUnit + Timezone + Language; use first locality name found.
         var unique = locations
             .Select(l => l with { Icao = FirstIcao(l.Icao) })
-            .GroupBy(l => (l.Icao, l.TempUnit, l.Timezone))
+            .GroupBy(l => (l.Icao, l.TempUnit, l.Timezone, l.Language))
             .Select(g => g.First())
             .OrderBy(l => l.Icao)
             .ThenBy(l => l.Timezone)
+            .ThenBy(l => l.Language, StringComparer.Ordinal)
             .ToList();
 
         Logger.Info($"MeteogramWorker: rendering meteograms for run {latestCompleteRun:yyyy-MM-dd HH}Z — " +
-                    $"{unique.Count} location(s).");
+                    $"{unique.Count} location/language combo(s).");
 
         var runTag = latestCompleteRun.ToString("yyyyMMdd_HH");
         var manifestEntries = new List<ManifestEntry>();
@@ -161,8 +201,8 @@ public sealed class MeteogramWorker : BackgroundService
             // Sanitize timezone for use in filenames: "America/Chicago" → "America-Chicago"
             var tzSafe = loc.Timezone.Replace('/', '-');
             var unitTag = loc.TempUnit.Equals("C", StringComparison.OrdinalIgnoreCase) ? "C" : "F";
-            var fileAbbrev = $"meteogram_{runTag}_{loc.Icao}_{tzSafe}_{unitTag}_abbrev.png";
-            var fileFull = $"meteogram_{runTag}_{loc.Icao}_{tzSafe}_{unitTag}_full.png";
+            var fileAbbrev = $"meteogram_{runTag}_{loc.Icao}_{tzSafe}_{unitTag}_{loc.Language}_abbrev.png";
+            var fileFull = $"meteogram_{runTag}_{loc.Icao}_{tzSafe}_{unitTag}_{loc.Language}_full.png";
             var pathAbbrev = Path.Combine(cfg.OutputDir, fileAbbrev);
             var pathFull = Path.Combine(cfg.OutputDir, fileFull);
 
@@ -171,12 +211,12 @@ public sealed class MeteogramWorker : BackgroundService
                 && File.GetLastWriteTimeUtc(pathAbbrev) > latestCompleteRun
                 && File.GetLastWriteTimeUtc(pathFull) > latestCompleteRun)
             {
-                Logger.Info($"MeteogramWorker: {loc.Icao}/{loc.Timezone} already rendered — skipping.");
-                manifestEntries.Add(new ManifestEntry(loc.Icao, loc.LocalityName, loc.TempUnit, loc.Timezone, fileAbbrev, fileFull));
+                Logger.Info($"MeteogramWorker: {loc.Icao}/{loc.Timezone}/{loc.Language} already rendered — skipping.");
+                manifestEntries.Add(new ManifestEntry(loc.Icao, loc.LocalityName, loc.TempUnit, loc.Timezone, loc.Language, fileAbbrev, fileFull));
                 continue;
             }
 
-            Logger.Info($"MeteogramWorker: rendering {loc.Icao} ({loc.LocalityName}) " +
+            Logger.Info($"MeteogramWorker: rendering {loc.Icao} ({loc.LocalityName}) [{loc.Language}] " +
                         $"lat={loc.Latitude:F2} lon={loc.Longitude:F2} unit={loc.TempUnit} tz={loc.Timezone}...");
 
             var scriptArgs =
@@ -188,7 +228,8 @@ public sealed class MeteogramWorker : BackgroundService
                 $"--temp-unit {loc.TempUnit} " +
                 $"--tz \"{loc.Timezone}\" " +
                 $"--out-abbrev \"{pathAbbrev}\" " +
-                $"--out-full \"{pathFull}\"";
+                $"--out-full \"{pathFull}\"" +
+                BuildLabelArgs(langData, loc.Language);
 
             var ok = await MapRenderer.RunAsync(
                 cfg.CondaPythonExe, cfg.ScriptDir,
@@ -198,11 +239,11 @@ public sealed class MeteogramWorker : BackgroundService
 
             if (ok)
             {
-                manifestEntries.Add(new ManifestEntry(loc.Icao, loc.LocalityName, loc.TempUnit, loc.Timezone, fileAbbrev, fileFull));
+                manifestEntries.Add(new ManifestEntry(loc.Icao, loc.LocalityName, loc.TempUnit, loc.Timezone, loc.Language, fileAbbrev, fileFull));
             }
             else
             {
-                Logger.Error($"MeteogramWorker: render failed for {loc.Icao} — will retry next poll.");
+                Logger.Error($"MeteogramWorker: render failed for {loc.Icao} [{loc.Language}] — will retry next poll.");
                 allOk = false;
             }
         }
@@ -234,6 +275,90 @@ public sealed class MeteogramWorker : BackgroundService
     private static string FirstIcao(string metarIcao)
         => metarIcao.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)[0];
 
+    /// <summary>
+    /// The recipient's effective report-language ISO code: the assigned language's
+    /// <see cref="Language.IsoCode"/>, or <c>"en"</c> (the baseline / service default) when the
+    /// recipient has none. Mirrors <c>ReportWorker.ResolveLanguageCode</c> so a recipient's
+    /// meteogram language matches their report language.
+    /// </summary>
+    private static string ResolveIso(long? languageId, IReadOnlyDictionary<long, Language> langById)
+        => languageId is long id && langById.TryGetValue(id, out var lang)
+            ? lang.IsoCode
+            : "en";
+
+    /// <summary>
+    /// Builds the per-language label set: the three in-image token phrases (wind/rh/temp, any of
+    /// which may be absent → English default in meteogram.py) and the seven CultureInfo weekday
+    /// abbreviations, for every ISO in demand.
+    /// </summary>
+    private static Dictionary<string, LangLabels> BuildLangData(
+        IEnumerable<string> isos,
+        IEnumerable<(string Iso, string Token, string Phrase)> tokenRows,
+        IReadOnlyDictionary<string, string?> cultureByIso)
+    {
+        var byIsoToken = tokenRows
+            .GroupBy(r => r.Iso, StringComparer.Ordinal)
+            .ToDictionary(
+                g => g.Key,
+                g => g.ToDictionary(r => r.Token, r => r.Phrase, StringComparer.Ordinal),
+                StringComparer.Ordinal);
+
+        var result = new Dictionary<string, LangLabels>(StringComparer.Ordinal);
+        foreach (var iso in isos.Distinct(StringComparer.Ordinal))
+        {
+            byIsoToken.TryGetValue(iso, out var phrases);
+            string? Get(string token) => phrases != null && phrases.TryGetValue(token, out var p) ? p : null;
+            cultureByIso.TryGetValue(iso, out var cultureName);
+            result[iso] = new LangLabels(
+                Get(MeteogramTokens.Wind),
+                Get(MeteogramTokens.Rh),
+                Get(MeteogramTokens.Temp),
+                DayAbbrevsFor(cultureName, iso));
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// The seven localized weekday abbreviations, Monday-first (index 0 = Monday, matching Python's
+    /// <c>datetime.weekday()</c>), trailing period stripped. Culture is resolved by the
+    /// <c>CultureName → IsoCode → Invariant</c> fallback chain so a missing/unsupported culture
+    /// degrades to the invariant (English-ish) names without erroring (WX-224 acceptance).
+    /// </summary>
+    private static string[] DayAbbrevsFor(string? cultureName, string iso)
+    {
+        var culture = SafeCulture(cultureName) ?? SafeCulture(iso) ?? CultureInfo.InvariantCulture;
+        var abbr = culture.DateTimeFormat.AbbreviatedDayNames; // .NET order: index 0 = Sunday
+        var mondayFirst = new string[7];
+        for (int i = 0; i < 7; i++)
+            mondayFirst[i] = abbr[(i + (int)DayOfWeek.Monday) % 7].TrimEnd('.');
+        return mondayFirst;
+    }
+
+    /// <summary>A <see cref="CultureInfo"/> for <paramref name="name"/>, or <see langword="null"/> if unresolvable.</summary>
+    private static CultureInfo? SafeCulture(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return null;
+        try { return CultureInfo.GetCultureInfo(name); }
+        catch (CultureNotFoundException) { return null; }
+    }
+
+    /// <summary>
+    /// The localization CLI args for meteogram.py — <c>--label-wind/-rh/-temp</c> (each omitted when
+    /// its token is absent, so the script keeps the English default) and <c>--day-labels</c> (the
+    /// seven Monday-first weekday abbreviations). Values are quoted; phrases are migration-seeded
+    /// vocabulary (no shell metacharacters by construction).
+    /// </summary>
+    private static string BuildLabelArgs(IReadOnlyDictionary<string, LangLabels> langData, string iso)
+    {
+        if (!langData.TryGetValue(iso, out var l)) return "";
+        var sb = new StringBuilder();
+        if (!string.IsNullOrEmpty(l.Wind)) sb.Append($" --label-wind \"{l.Wind}\"");
+        if (!string.IsNullOrEmpty(l.Rh)) sb.Append($" --label-rh \"{l.Rh}\"");
+        if (!string.IsNullOrEmpty(l.Temp)) sb.Append($" --label-temp \"{l.Temp}\"");
+        if (l.DayAbbrevs.Length == 7) sb.Append($" --day-labels \"{string.Join(",", l.DayAbbrevs)}\"");
+        return sb.ToString();
+    }
+
     /// <summary>Loads and returns the current <see cref="WxVisConfig"/>.</summary>
     private WxVisConfig LoadConfig()
     {
@@ -255,9 +380,13 @@ public sealed class MeteogramWorker : BackgroundService
         public string LocalityName { get; init; } = "";
         public string TempUnit { get; init; } = "F";
         public string Timezone { get; init; } = "UTC";
+        public string Language { get; init; } = "en";
         public double Latitude { get; init; }
         public double Longitude { get; init; }
     }
+
+    /// <summary>The resolved in-image labels for one language: chart token phrases (any may be null) and the seven Monday-first weekday abbreviations.</summary>
+    private sealed record LangLabels(string? Wind, string? Rh, string? Temp, string[] DayAbbrevs);
 
     /// <summary>One entry in the meteogram manifest JSON file.</summary>
     private record ManifestEntry(
@@ -265,6 +394,7 @@ public sealed class MeteogramWorker : BackgroundService
         string LocalityName,
         string TempUnit,
         string Timezone,
+        string Language,
         string FileAbbrev,
         string FileFull);
 }
