@@ -1164,7 +1164,6 @@ public class ForecastReconcilerTests
             narrativeLanguages: narrativeLanguages ?? new[] { "en" },
             tz: tz ?? Cdt,
             reportKind: reportKind,
-            previousMetarIcao: null,
             allowSkip: allowSkip,
             changedSinceLastSend: Array.Empty<TriggerSource>(),
             significanceCfg: new SignificanceGateConfig(),

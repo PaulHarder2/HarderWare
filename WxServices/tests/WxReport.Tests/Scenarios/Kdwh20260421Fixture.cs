@@ -357,7 +357,6 @@ internal static class Kdwh20260421Fixture
             narrativeLanguages: new[] { "en" },
             tz: CentralTz,
             reportKind: ReportKind.Unscheduled,
-            previousMetarIcao: null,
             allowSkip: true,
             // The 8:53 cycle is the canonical observation-only advance: a new METAR
             // over the 4:53 prior, no fresh TAF/GFS — exactly what WX-108's

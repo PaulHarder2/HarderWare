@@ -89,7 +89,7 @@ public static class StructuredReportRenderer
         var sb = new StringBuilder();
         sb.Append("<div style=\"max-width:600px;margin:0 auto;font-family:Arial,Helvetica,sans-serif;color:#1a3a5c;\">");
 
-        AppendHeader(sb, observation, localityTz, templates, culture, kind);
+        AppendHeader(sb, observation, templates, kind);
 
         // WX-189: the band shows whenever one is warranted — Claude's changeSummary
         // prose when present, else a deterministic line from the computed changes.
@@ -103,7 +103,7 @@ public static class StructuredReportRenderer
         else if (report.Changes.Count > 0)
             AppendChangeBand(sb, templates, HtmlText(RenderFallbackBand(report.Changes, templates, culture, localityTz)));
 
-        AppendCurrentConditions(sb, observation, recipient, templates);
+        AppendCurrentConditions(sb, observation, recipient, templates, localityTz, culture);
         AppendExtendedForecast(sb, finalSnapshot, observation.LocalityName, recipient, localityTz, templates, culture, nowUtc);
         AppendClosing(sb, templates, RenderProse(sections.Closing));
 
@@ -132,9 +132,9 @@ public static class StructuredReportRenderer
     {
         var sb = new StringBuilder();
         sb.Append("<div style=\"max-width:600px;margin:0 auto;font-family:Arial,Helvetica,sans-serif;color:#1a3a5c;\">");
-        AppendHeader(sb, observation, localityTz, templates, culture, ReportKind.Unscheduled);
+        AppendHeader(sb, observation, templates, ReportKind.Unscheduled);
         AppendHazardBanner(sb, finalSnapshot, localityTz, templates, culture, nowUtc);
-        AppendCurrentConditions(sb, observation, recipient, templates);
+        AppendCurrentConditions(sb, observation, recipient, templates, localityTz, culture);
         AppendExtendedForecast(sb, finalSnapshot, observation.LocalityName, recipient, localityTz, templates, culture, nowUtc);
         sb.Append("</div>");
         return sb.ToString();
@@ -295,17 +295,15 @@ public static class StructuredReportRenderer
     // ── header ──────────────────────────────────────────────────────────────
 
     private static void AppendHeader(
-        StringBuilder sb, WeatherSnapshot snap, TimeZoneInfo tz, TemplateSet t, CultureInfo culture, ReportKind kind)
+        StringBuilder sb, WeatherSnapshot snap, TemplateSet t, ReportKind kind)
     {
+        // WX-184: the header carries the locality and the report-type label only. The
+        // observation timestamp moved to the Current Conditions block (AppendCurrentConditions),
+        // where, beneath the "Reported Conditions" heading, it unambiguously reads as the
+        // observation time rather than an undated "what this is about" line — and is no
+        // longer rendered twice.
         sb.Append("<div style=\"background:#1a3a5c;color:#ffffff;text-align:left;padding:20px 24px;border-radius:6px 6px 0 0;\">");
         sb.Append($"<div style=\"font-weight:bold;font-size:22px;\">{HtmlText(snap.LocalityName)}</div>");
-        if (snap.ObservationAvailable)
-        {
-            var local = TimeZoneInfo.ConvertTimeFromUtc(
-                DateTime.SpecifyKind(snap.ObservationTimeUtc, DateTimeKind.Utc), tz);
-            var when = local.ToString("dddd, MMMM d, h:mm tt", culture);
-            sb.Append($"<div style=\"font-size:14px;color:#c8daea;\">{HtmlText(when)}</div>");
-        }
         var typeLabel = t.Get(ReportLabels.TokenFor(kind, LabelType.Header));
         sb.Append($"<div style=\"font-style:italic;font-size:13px;color:#a0bcd4;\">{HtmlText(typeLabel)}</div>");
         sb.Append("</div>");
@@ -323,17 +321,33 @@ public static class StructuredReportRenderer
     // ── current conditions ────────────────────────────────────────────────────
 
     private static void AppendCurrentConditions(
-        StringBuilder sb, WeatherSnapshot snap, Recipient recipient, TemplateSet t)
+        StringBuilder sb, WeatherSnapshot snap, Recipient recipient, TemplateSet t,
+        TimeZoneInfo tz, CultureInfo culture)
     {
         sb.Append("<div style=\"background:#f7f9fc;padding:20px 24px;\">");
         AppendSectionHeading(sb, t.Get(Tok.CurrentConditionsHeading));
 
-        // Station-attribution subtitle (WX-130, restored): name the observing
-        // station beneath the heading when it differs from the locality, so the
-        // reader knows "Current Conditions" came from, e.g., the nearby airport.
-        var subtitle = StationSubtitle(snap, t);
-        if (subtitle is not null)
-            sb.Append($"<div style=\"font-size:13px;font-style:italic;color:#6b8fa8;font-weight:normal;margin-top:2px;\">{HtmlText(subtitle)}</div>");
+        // Station + observation-time attribution beneath the heading (WX-130 station,
+        // WX-184 time): name the observing station when it differs from the locality,
+        // and show WHEN the observation was taken — so a reader judges freshness here,
+        // at the data, rather than inferring it from the header date. The time is the
+        // absolute local instant (no relative "X ago"), which keeps this line free of
+        // any new per-language vocabulary.
+        var station = StationSubtitle(snap, t);
+        var obsWhen = snap.ObservationAvailable
+            ? TimeZoneInfo.ConvertTimeFromUtc(
+                  DateTime.SpecifyKind(snap.ObservationTimeUtc, DateTimeKind.Utc), tz)
+              .ToString("ddd, MMM d, h:mm tt", culture)
+            : null;
+        var attribution = (station, obsWhen) switch
+        {
+            (not null, not null) => $"{station} · {obsWhen}",
+            (not null, null) => station,
+            (null, not null) => obsWhen,
+            _ => null,
+        };
+        if (attribution is not null)
+            sb.Append($"<div style=\"font-size:13px;font-style:italic;color:#6b8fa8;font-weight:normal;margin-top:2px;\">{HtmlText(attribution)}</div>");
 
         if (!snap.ObservationAvailable)
         {
@@ -414,6 +428,14 @@ public static class StructuredReportRenderer
         sb.Append("<div style=\"background:#ffffff;padding:20px 24px;\">");
         AppendSectionHeading(sb, string.Format(culture, t.Get(Tok.ForecastHeadingFormat), locationName));
 
+        // 24-hour clock legend (WX-190; repositioned WX-184): directly beneath the
+        // section rule and above the grid, so a reader meets the explanation before the
+        // XX-YY clock bands in the Conditions cell rather than after it. Left-justified
+        // and styled like the Current Conditions station line (13px italic #6b8fa8) — the
+        // report's other sub-heading caption. (Supersedes WX-195's centered styling that
+        // matched the meteogram caption; the two captions now live in different sections.)
+        sb.Append($"<div style=\"font-size:13px;color:#6b8fa8;font-style:italic;margin:2px 0 4px;\">{HtmlText(t.Get(Tok.GridTimeLegend))}</div>");
+
         sb.Append("<table style=\"width:100%;border-collapse:collapse;font-size:14px;margin-top:8px;\">");
         sb.Append("<tr style=\"background:#1a3a5c;color:#ffffff;\">");
         sb.Append($"<th style=\"padding:6px 10px;text-align:left;\">{HtmlText(t.Get(Tok.ColDate))}</th>");
@@ -436,12 +458,6 @@ public static class StructuredReportRenderer
             sb.Append($"<td style=\"padding:6px 10px;\">{condHtml}</td></tr>");
         }
         sb.Append("</table>");
-        // 24-hour clock legend (WX-190), directly beneath the grid where a reader meets
-        // an unfamiliar band label: the Conditions cell tiles each day into XX-YY clock
-        // bands, so the legend sits one glance away rather than in a distant footer. Styled
-        // to match the meteogram caption (WX-195) — centered, italic, 11px, #888 — so the
-        // report's two explanatory captions read as one consistent voice.
-        sb.Append($"<div style=\"text-align:center;font-size:11px;color:#888;font-style:italic;margin-top:6px;\">{HtmlText(t.Get(Tok.GridTimeLegend))}</div>");
         sb.Append("</div>");
     }
 
