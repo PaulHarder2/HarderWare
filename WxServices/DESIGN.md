@@ -533,7 +533,7 @@ The Anthropic Messages API is stateless: every call begins with no knowledge of 
 |---|---|---|
 | `AnalysisMapWorker` | After each METAR fetch cycle; one PNG per zoom level | `synoptic_{label}_{yyyyMMdd_HH}_z{N}.png` |
 | `ForecastMapWorker` | Progressively, as each forecast hour's data arrives; one PNG per zoom level | `forecast_{yyyyMMdd_HH}_f{NNN}_z{N}.png` |
-| `MeteogramWorker` | Once per complete GFS model run; one pair per unique (ICAO, TempUnit, Timezone) in Recipients | `meteogram_{yyyyMMdd_HH}_{ICAO}_{tzSafe}_{F\|C}_abbrev.png`, `meteogram_{yyyyMMdd_HH}_{ICAO}_{tzSafe}_{F\|C}_full.png`; manifest: `meteogram_manifest_{yyyyMMdd_HH}.json` |
+| `MeteogramWorker` | Once per complete GFS model run; one pair per unique (ICAO, TempUnit, Timezone, **Language**) in Recipients (WX-224 — only languages actually in demand render) | `meteogram_{yyyyMMdd_HH}_{ICAO}_{tzSafe}_{F\|C}_{lang}_abbrev.png`, `..._{lang}_full.png`; manifest: `meteogram_manifest_{yyyyMMdd_HH}.json` |
 
 All workers check for existing current output files before invoking Python; already-current files are skipped.
 
@@ -598,9 +598,9 @@ All workers check for existing current output files before invoking Python; alre
 **Meteogram (`meteogram.py`):**
 - Loaded via `db.load_gfs_nearby()` — queries GfsGrid within ±0.5° of the target lat/lon for all forecast hours of the run, then selects the nearest grid point per hour.
 - Two vertical panels: top (1/3 height) = wind barbs (always in knots); bottom (2/3 height) = temperature line (black, left axis) and relative humidity line (green, right axis, 0–100%).
-- Left axis: "T (°F)" or "T (°C)" depending on `--temp-unit`.  Right axis: "RH (%)" with tick labels rendered in green to match the RH line and axis label.
+- Left axis: "T (°F)" or "T (°C)" depending on `--temp-unit`.  Right axis: "RH (%)" with tick labels rendered in green to match the RH line and axis label. The "Wind"/"RH"/"T" labels are **localized per recipient language** (WX-224) via `--label-wind/-rh/-temp` (the °F/°C/% unit symbols stay); each defaults to its English value, so an unspecified arg leaves the chart unchanged.
 - Thin horizontal grid lines in the bottom panel at each temperature-axis tick position (light grey, `linewidth=0.4`); anchored to the temperature axis so tick labels are always round numbers. RH axis grid suppressed to avoid a second overlapping set of lines.
-- Time axis in recipient local time (`--tz`, IANA timezone name, e.g. `America/Chicago`). Bold vertical lines at every local midnight; day-of-week and day-of-month labels centred in each day's segment. X-axis ticks every 6 local hours, labelled HH:MM.
+- Time axis in recipient local time (`--tz`, IANA timezone name, e.g. `America/Chicago`). Bold vertical lines at every local midnight; day-of-week and day-of-month labels centred in each day's segment — the **weekday abbreviation is localized** (WX-224) via `--day-labels` (seven Monday-first abbreviations from the recipient language's `CultureInfo`; absent/malformed → the C locale). The day-of-month number is locale-neutral. X-axis ticks every 6 local hours, labelled HH:MM.
 - Barbs thinned automatically if spacing < 0.18" to prevent overlapping.
 - Abbreviated version (48-hour, emailed): first 48 hours, 10" wide × 3.0" @ 100 dpi → 1000 × 300 px.
 - Full-period version: all available hours, width scales with duration (10"–18") × 3.0" @ 100 dpi.
@@ -682,11 +682,11 @@ Each pane has its own toolbar docked to the top of the pane, immediately above t
 
 **Meteograms tab** — shows full-period meteograms for a selected GFS run:
 - Run selector ComboBox (newest first).
-- Recipient selector ComboBox (next to the Run selector) — lists all recipients from the database as `"recipientId — Name (Language)"`. Selecting a recipient scrolls to their meteogram and briefly highlights it with a coloured background (clears after 2 seconds). If no meteogram exists for the recipient in the current run a modal dialog is shown. Matching uses `(FirstIcao, TempUnit, Timezone)` — the same grouping key used by `MeteogramWorker`. `FindMeteogramAbbrevPath` also filters by `TempUnit` so each recipient gets the meteogram rendered in their configured temperature unit.
-- Vertically scrollable list of locations sorted by ICAO, each labelled `"KXXX — Locality (°F) · City"` where *City* is the city component of the IANA timezone (e.g. `· Chicago`). Multiple entries for the same ICAO are possible when recipients share a station but use different timezones or temperature units.
+- Recipient selector ComboBox (next to the Run selector) — lists all recipients from the database as `"recipientId — Name (Language)"`. Selecting a recipient scrolls to their meteogram and briefly highlights it with a coloured background (clears after 2 seconds). If no meteogram exists for the recipient in the current run a modal dialog is shown. Matching uses `(FirstIcao, TempUnit, Timezone)`. WX-224 added a **Language** axis to `MeteogramWorker`'s key, so the manifest now holds one entry per language per location; WxViewer's matching is **not yet language-aware**, so the recipient selector may scroll to a different-language rendering of the same location (a follow-up will add the language match — WxViewer is an internal tool, non-recipient-facing, so this is cosmetic). `FindMeteogramAbbrevPath` also filters by `TempUnit` so each recipient gets the meteogram rendered in their configured temperature unit.
+- Vertically scrollable list of locations sorted by ICAO, each labelled `"KXXX — Locality (°F) · City"` where *City* is the city component of the IANA timezone (e.g. `· Chicago`). Multiple entries for the same ICAO are possible when recipients share a station but use different timezones, temperature units, or languages (WX-224).
 - Each meteogram item has a **Recipients** button (left of the label) that opens a modal dialog listing every recipient who receives that meteogram: ID, Name, and Language.
 - Each meteogram image is independently horizontally scrollable (full-period images can be 1800 px wide).
-- Populated from `meteogram_manifest_{yyyyMMdd_HH}.json` files written by `MeteogramWorker`. Each manifest entry carries `Icao`, `LocalityName`, `TempUnit`, `Timezone`, `FileAbbrev`, and `FileFull`.
+- Populated from `meteogram_manifest_{yyyyMMdd_HH}.json` files written by `MeteogramWorker`. Each manifest entry carries `Icao`, `LocalityName`, `TempUnit`, `Timezone`, `Language` (WX-224), `FileAbbrev`, and `FileFull`.
 
 **File discovery (`MapFileScanner`):**
 - Scans the configured output directory for `synoptic_*_z*.png`, `forecast_*_z*.png`, and `meteogram_manifest_*.json` files on startup and whenever the directory changes.
