@@ -98,6 +98,10 @@ def render_meteogram(
     max_hours: int | None = None,
     fig_width: float = 12.0,
     dpi: int = 100,
+    label_wind: str = "Wind",
+    label_rh: str = "RH",
+    label_temp: str = "T",
+    day_abbrevs: list[str] | None = None,
 ) -> None:
     """
     Render a meteogram from a time-series DataFrame and save it to
@@ -125,6 +129,15 @@ def render_meteogram(
         Figure width in inches.  Height is fixed at 3.0".
     dpi:
         Output resolution.  Default 100.
+    label_wind, label_rh, label_temp:
+        Localized in-image labels for the Wind panel, the RH (%) axis, and the
+        temperature axis.  The unit suffixes ``(%)`` / ``(°F)`` / ``(°C)`` are
+        appended here and stay as-is.  Default to the English "Wind"/"RH"/"T"
+        (WX-224).
+    day_abbrevs:
+        Seven localized weekday abbreviations, Monday-first (index 0 = Monday,
+        matching :meth:`datetime.date.weekday`).  When ``None``, the day-of-week
+        ticks fall back to the C locale's ``strftime('%a')``.
     """
     df = series_df.copy()
     if max_hours is not None:
@@ -140,10 +153,10 @@ def render_meteogram(
     # ── Derived quantities ────────────────────────────────────────────────────
     if temp_unit == "F":
         tmp_display = df["TmpC"].values * 9.0 / 5.0 + 32.0
-        t_label     = "T (°F)"
+        t_label     = f"{label_temp} (°F)"
     else:
         tmp_display = df["TmpC"].values.copy()
-        t_label     = "T (°C)"
+        t_label     = f"{label_temp} (°C)"
 
     rh = _compute_rh(df["TmpC"].values, df["DwpC"].values)
 
@@ -192,7 +205,7 @@ def render_meteogram(
         )
 
     ax_wind.set_yticks([])
-    ax_wind.text(0.0, 0.97, "Wind", transform=ax_wind.transAxes,
+    ax_wind.text(0.0, 0.97, label_wind, transform=ax_wind.transAxes,
                  ha='right', va='top', fontsize=9, clip_on=False)
     for sp in ("top", "right", "left", "bottom"):
         ax_wind.spines[sp].set_visible(False)
@@ -207,7 +220,7 @@ def render_meteogram(
 
     ax_data.text(0.0, 1.12, t_label, transform=ax_data.transAxes,
                  ha='right', va='top', fontsize=9, clip_on=False)
-    ax_data.text(1.015, 1.12, "RH (%)", transform=ax_data.transAxes,
+    ax_data.text(1.015, 1.12, f"{label_rh} (%)", transform=ax_data.transAxes,
                  ha='left', va='top', fontsize=9, color='green', clip_on=False)
     ax_rh.set_ylim(0, 105)
     ax_rh.tick_params(axis="y", colors="green")
@@ -235,7 +248,10 @@ def render_meteogram(
     for i in range(len(seg_bounds) - 1):
         mid_fh  = (seg_bounds[i] + seg_bounds[i + 1]) / 2
         mid_vt  = (model_run.replace(tzinfo=utc_tz) + timedelta(hours=mid_fh)).astimezone(local_tz)
-        day_lbl = f"{mid_vt.strftime('%a')} {mid_vt.day}".upper()
+        # WX-224: localized weekday abbrev (Monday-first, index = weekday()); the day-of-month
+        # number is locale-neutral. Falls back to the C-locale strftime when no labels were passed.
+        abbrev  = day_abbrevs[mid_vt.weekday()] if day_abbrevs else mid_vt.strftime('%a')
+        day_lbl = f"{abbrev} {mid_vt.day}".upper()
         ax_wind.text(
             mid_fh, 0.90, day_lbl,
             ha="center", va="top",
@@ -282,7 +298,31 @@ if __name__ == "__main__":
                         help="Output path for the abbreviated (emailed) meteogram PNG")
     parser.add_argument("--out-full",  required=True,
                         help="Output path for the full-period meteogram PNG")
+    parser.add_argument("--label-wind", default="Wind",
+                        help="Localized label for the Wind panel (WX-224; default: Wind)")
+    parser.add_argument("--label-rh",   default="RH",
+                        help="Localized label for the RH axis; \"(%%)\" is appended (default: RH)")
+    parser.add_argument("--label-temp", default="T",
+                        help="Localized label for the temperature axis; \"(°F)\"/\"(°C)\" is appended (default: T)")
+    parser.add_argument("--day-labels", default=None,
+                        help="Seven comma-separated localized weekday abbreviations, Monday-first "
+                             "(e.g. \"lun,mar,mié,jue,vie,sáb,dom\"). Falls back to the C locale "
+                             "when absent or malformed.")
     args = parser.parse_args()
+
+    # Parse the localized weekday abbreviations: exactly seven, Monday-first. Anything else
+    # degrades to the C-locale strftime in render_meteogram (acceptance: a malformed/unsupported
+    # CultureName must not error).
+    day_abbrevs = None
+    if args.day_labels:
+        parts = [p.strip() for p in args.day_labels.split(",")]
+        if len(parts) == 7 and all(parts):
+            day_abbrevs = parts
+        else:
+            logger.warning(
+                f"--day-labels expected 7 non-empty comma-separated values, got {len(parts)}; "
+                f"falling back to the C locale for weekday names."
+            )
 
     engine = get_engine()
 
@@ -323,6 +363,10 @@ if __name__ == "__main__":
         max_hours=48,
         fig_width=10.0,
         dpi=100,
+        label_wind=args.label_wind,
+        label_rh=args.label_rh,
+        label_temp=args.label_temp,
+        day_abbrevs=day_abbrevs,
     )
 
     # Full-period version
@@ -335,4 +379,8 @@ if __name__ == "__main__":
         max_hours=None,
         fig_width=full_width,
         dpi=100,
+        label_wind=args.label_wind,
+        label_rh=args.label_rh,
+        label_temp=args.label_temp,
+        day_abbrevs=day_abbrevs,
     )

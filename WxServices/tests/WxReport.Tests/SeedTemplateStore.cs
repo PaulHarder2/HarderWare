@@ -17,9 +17,10 @@ namespace WxReport.Tests;
 /// <para>It scans EVERY migration, so the store mirrors the live DB state (seed + later inserts +
 /// relabels): any <c>InsertData</c> into <c>LanguageTemplates</c> (the WX-171 seed, the WX-223
 /// meteogram tokens, …) is picked up by the same row regex, and any post-seed phrase relabel
-/// (WX-184) is applied on top from that migration's <c>Up()</c>. A new InsertData vocabulary
-/// migration needs no change here; a second Relabel-style migration targeting a DIFFERENT token
-/// does (see <see cref="ParseRelabels"/>). Only InsertData rows / Relabel() calls match the
+/// (WX-184, WX-224) is applied on top from that migration's <c>Up()</c>. A new InsertData
+/// vocabulary migration needs no change here; a relabel migration also needs none as long as it
+/// uses one of the Relabel() shapes <see cref="ParseRelabels"/> parses (the WX-184 3-arg form, or
+/// the WX-224 4-arg form that names the token). Only InsertData rows / Relabel() calls match the
 /// patterns, so scanning every file is safe.</para>
 /// </summary>
 public static class SeedTemplateStore
@@ -81,18 +82,28 @@ public static class SeedTemplateStore
         }
     }
 
-    // (iso, token) -> relabeled phrase, read from the Up() of any post-seed relabel migration
-    // (WX-184). Parsed from source so the values can't drift from what ships. NOTE: the Relabel(...)
-    // helper does not name its token in its args, so this assumes the sole relabel to date targets
-    // CurrentConditionsHeading; a future migration relabelling a DIFFERENT token via a Relabel-style
-    // helper must extend this to read the token too.
+    // (iso, token) -> relabeled phrase, read from the Up() of any post-seed relabel migration so
+    // the test store mirrors the live DB (the values can't drift from what ships). Two helper
+    // shapes are parsed: the WX-184 3-arg Relabel(mb, iso, phrase) — implicitly the
+    // CurrentConditionsHeading token — and the WX-224 4-arg Relabel(mb, iso, token, phrase), which
+    // names the token explicitly (e.g. the MeteogramCaption gloss relabel). Param-name-agnostic, so
+    // either migration's local helper name matches.
     private static IReadOnlyDictionary<(string Iso, string Token), string> ParseRelabels(IEnumerable<string> migrations)
     {
         var map = new Dictionary<(string, string), string>();
-        var rx = new Regex("Relabel\\(migrationBuilder,\\s*\"([a-z]{2})\",\\s*\"([^\"]*)\"\\)");
+        // 4-arg: Relabel(_, "xx", "TokenName", "phrase"); token is letters/underscore.
+        var rx4 = new Regex("Relabel\\(\\w+,\\s*\"([a-z]{2})\",\\s*\"([A-Za-z_]+)\",\\s*\"([^\"]*)\"\\s*\\)");
+        // 3-arg (WX-184): Relabel(_, "xx", "phrase") -> CurrentConditionsHeading. The ")" right after
+        // the 2nd string keeps this from also matching a 4-arg call.
+        var rx3 = new Regex("Relabel\\(\\w+,\\s*\"([a-z]{2})\",\\s*\"([^\"]*)\"\\s*\\)");
         foreach (var src in migrations)
-            foreach (Match m in rx.Matches(UpBody(src)))
+        {
+            var up = UpBody(src);
+            foreach (Match m in rx4.Matches(up))
+                map[(m.Groups[1].Value, m.Groups[2].Value)] = m.Groups[3].Value;
+            foreach (Match m in rx3.Matches(up))
                 map[(m.Groups[1].Value, "CurrentConditionsHeading")] = m.Groups[2].Value;
+        }
         return map;
     }
 
