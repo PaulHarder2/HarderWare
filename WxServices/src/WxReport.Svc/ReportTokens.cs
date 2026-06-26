@@ -40,6 +40,8 @@ public static class Tok
     public const string HighLabel = "HighLabel";
     public const string InSummaryLabel = "InSummaryLabel";
     public const string LowLabel = "LowLabel";
+    public const string MeteogramAlt = "MeteogramAlt";
+    public const string MeteogramCaption = "MeteogramCaption";
     public const string NoObservationNote = "NoObservationNote";
     public const string PartAfternoon = "PartAfternoon";
     public const string PartEvening = "PartEvening";
