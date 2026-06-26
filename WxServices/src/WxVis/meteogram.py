@@ -89,6 +89,12 @@ def _nearest_point_series(df: pd.DataFrame, lat: float, lon: float) -> pd.DataFr
 
 # ── Rendering ─────────────────────────────────────────────────────────────────
 
+# Deterministic English weekday abbreviations (Monday-first, index = datetime.weekday()) for the
+# --day-labels fallback, so a missing/malformed list renders identically on every machine instead
+# of depending on the service's locale (WX-224).
+_EN_WEEKDAY_ABBR = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+
 def render_meteogram(
     series_df: pd.DataFrame,
     output_path: str,
@@ -249,8 +255,9 @@ def render_meteogram(
         mid_fh  = (seg_bounds[i] + seg_bounds[i + 1]) / 2
         mid_vt  = (model_run.replace(tzinfo=utc_tz) + timedelta(hours=mid_fh)).astimezone(local_tz)
         # WX-224: localized weekday abbrev (Monday-first, index = weekday()); the day-of-month
-        # number is locale-neutral. Falls back to the C-locale strftime when no labels were passed.
-        abbrev  = day_abbrevs[mid_vt.weekday()] if day_abbrevs else mid_vt.strftime('%a')
+        # number is locale-neutral. Falls back to a fixed English table (not locale-dependent
+        # strftime) when no labels were passed, so the fallback is deterministic across machines.
+        abbrev  = (day_abbrevs or _EN_WEEKDAY_ABBR)[mid_vt.weekday()]
         day_lbl = f"{abbrev} {mid_vt.day}".upper()
         ax_wind.text(
             mid_fh, 0.90, day_lbl,

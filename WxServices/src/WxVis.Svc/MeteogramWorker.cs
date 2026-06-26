@@ -336,7 +336,7 @@ public sealed class MeteogramWorker : BackgroundService
             // Strip the trailing period some cultures use (es "lun."), plus any comma/quote, so the
             // value can't break the comma-joined, double-quoted --day-labels CLI arg (defensive —
             // real cultures have neither, but AbbreviatedDayNames is an open set).
-            mondayFirst[i] = abbr[(i + (int)DayOfWeek.Monday) % 7].TrimEnd('.').Replace(",", "").Replace("\"", "");
+            mondayFirst[i] = CliSafe(abbr[(i + (int)DayOfWeek.Monday) % 7].TrimEnd('.').Replace(",", ""));
         return mondayFirst;
     }
 
@@ -358,12 +358,21 @@ public sealed class MeteogramWorker : BackgroundService
     {
         if (!langData.TryGetValue(iso, out var l)) return "";
         var sb = new StringBuilder();
-        if (!string.IsNullOrEmpty(l.Wind)) sb.Append($" --label-wind \"{l.Wind}\"");
-        if (!string.IsNullOrEmpty(l.Rh)) sb.Append($" --label-rh \"{l.Rh}\"");
-        if (!string.IsNullOrEmpty(l.Temp)) sb.Append($" --label-temp \"{l.Temp}\"");
+        if (!string.IsNullOrEmpty(l.Wind)) sb.Append($" --label-wind \"{CliSafe(l.Wind)}\"");
+        if (!string.IsNullOrEmpty(l.Rh)) sb.Append($" --label-rh \"{CliSafe(l.Rh)}\"");
+        if (!string.IsNullOrEmpty(l.Temp)) sb.Append($" --label-temp \"{CliSafe(l.Temp)}\"");
         if (l.DayAbbrevs.Length == 7) sb.Append($" --day-labels \"{string.Join(",", l.DayAbbrevs)}\"");
         return sb.ToString();
     }
+
+    /// <summary>
+    /// Strips the two characters that would corrupt a flat, double-quoted argv string passed to
+    /// <see cref="MapRenderer.RunAsync"/>: the double quote itself and the backslash (which could
+    /// escape the closing quote and shift later flags onto the wrong value). Chart labels and
+    /// weekday abbreviations never legitimately contain either; this guards a hand-edited or
+    /// generated <c>LanguageTemplates</c> phrase from breaking a language's render (WX-224 review).
+    /// </summary>
+    private static string CliSafe(string s) => s.Replace("\"", "").Replace("\\", "");
 
     /// <summary>Loads and returns the current <see cref="WxVisConfig"/>.</summary>
     private WxVisConfig LoadConfig()
