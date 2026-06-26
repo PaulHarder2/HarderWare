@@ -348,14 +348,19 @@ public class StructuredReportRendererTests
     [Fact]
     public void Grid_RendersTwentyFourHourClockLegend()
     {
-        // WX-190: the legend sits directly beneath the grid so a reader meeting an
-        // unfamiliar band label has the 24-hour-clock key one glance away.
+        // WX-190: the 24-hour-clock key is one glance from the band labels it explains.
+        // WX-184: it now sits ABOVE the grid — directly beneath the "Forecast for …"
+        // heading rule — left-justified to match the Current Conditions station line.
         var en = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), T("en"), C("en"), Utc, ReportKind.Scheduled, RenderNow);
         Assert.Contains("Times use a 24-hour clock: 00 = midnight, 12 = noon, 24 = midnight.", en);
         Assert.DoesNotContain("12 AM", en);  // the banned contradictory anchors never appear
         Assert.DoesNotContain("12 PM", en);
-        // WX-195: styled to match the meteogram caption — centered, italic, 11px, #888.
-        Assert.Contains("text-align:center;font-size:11px;color:#888;font-style:italic;margin-top:6px;\">Times use a 24-hour clock", en);
+        // WX-184: left-justified caption styling (matches the CC station line), not WX-195's centered form.
+        Assert.Contains("font-size:13px;color:#6b8fa8;font-style:italic;margin:2px 0 4px;\">Times use a 24-hour clock", en);
+        // WX-184: the legend precedes the forecast grid table (above it, not below).
+        var legendIdx = en.IndexOf("Times use a 24-hour clock", StringComparison.Ordinal);
+        var gridTableIdx = en.IndexOf("<table", en.IndexOf("Forecast for", StringComparison.Ordinal), StringComparison.Ordinal);
+        Assert.True(legendIdx >= 0 && legendIdx < gridTableIdx, "legend should render above the forecast grid");
     }
 
     [Fact]
@@ -395,7 +400,7 @@ public class StructuredReportRendererTests
         // (the grid cell says "Severe storms likely …", never "in your forecast").
         var expectedDay = nowUtc.ToString("dddd", System.Globalization.CultureInfo.GetCultureInfo("en-US"));
         Assert.Contains($"Severe storms in your forecast — {expectedDay} afternoon.", en);
-        Assert.Contains("Current Conditions", en);              // conditions table present
+        Assert.Contains("Reported Conditions", en);             // conditions table present (WX-184 relabel)
         Assert.Contains("Forecast for Spring", en);             // forecast grid present
         Assert.DoesNotContain("What's changed:", en);           // no change band
         Assert.DoesNotContain("In summary:", en);               // no closing/summary
@@ -427,7 +432,7 @@ public class StructuredReportRendererTests
     public void CurrentConditions_TableFromObservation()
     {
         var en = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), T("en"), C("en"), Utc, ReportKind.Scheduled, RenderNow);
-        Assert.Contains("Current Conditions", en);
+        Assert.Contains("Reported Conditions", en);   // WX-184 relabel (was "Current Conditions")
         Assert.Contains("Low overcast", en);          // overcast at 3000 ft
         Assert.Contains("S at 14 mph, gusting 25 mph", en);  // 180°, 12 kt→14 mph, gust 22 kt→25 mph
         Assert.Contains("Light rain", en);
@@ -439,11 +444,11 @@ public class StructuredReportRendererTests
     public void Spanish_UsesEsNarrativeAndLabels()
     {
         var es = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Spanish(), T("es"), C("es"), Utc, ReportKind.Scheduled, RenderNow);
-        Assert.Contains("Condiciones actuales", es);
+        Assert.Contains("Condiciones reportadas", es);  // WX-184 relabel (was "Condiciones actuales")
         Assert.Contains("En resumen:", es);
         Assert.Contains("Pronóstico para Spring", es);
         Assert.Contains("Máximas cerca de 34°C", es);  // es closing prose, metric temp
-        Assert.DoesNotContain("Current Conditions", es);
+        Assert.DoesNotContain("Reported Conditions", es);  // the es render never carries the English heading
     }
 
     [Fact]
@@ -486,7 +491,7 @@ public class StructuredReportRendererTests
         Assert.Contains("Spring", welcome);             // locality named
         Assert.Contains("7 AM and 12 PM", welcome);     // localized + joined send times
         // No weather content in a welcome-only email.
-        Assert.DoesNotContain("Current Conditions", welcome);
+        Assert.DoesNotContain("Reported Conditions", welcome);
         Assert.DoesNotContain("Forecast for", welcome);
         Assert.DoesNotContain("In summary:", welcome);
     }
@@ -591,7 +596,11 @@ public class StructuredReportRendererTests
         var en = StructuredReportRenderer.Render(Body(), TwoLocalDayForecast(), Observation(), Imperial(), T("en"), C("en"), Utc, ReportKind.Unscheduled, nowUtc);
 
         Assert.Contains("Jun 9", en);
-        Assert.DoesNotContain("Jun 8", en);   // wholly-past day gone (the full-month "June 8" header is not a "Jun 8" substring)
+        // Wholly-past day gone from the grid. Assert the grid's exact date-cell form
+        // ("ddd MMM d" → "Mon Jun 8"), not a bare "Jun 8": the header renders full-month
+        // "June 8" and the WX-184 Current Conditions obs-time line renders comma'd
+        // "Mon, Jun 8, 6:00 PM" — neither contains the space-separated grid form.
+        Assert.DoesNotContain("Mon Jun 8", en);
         // Exactly one day row survives (one "High:" per grid row): dropping the leading day
         // leaves no empty/placeholder row, and the retained day is whole.
         Assert.Equal(1, CountOccurrences(en, "High:"));
@@ -640,7 +649,7 @@ public class StructuredReportRendererTests
         var nowUtc = new DateTime(2026, 6, 9, 0, 0, 0, DateTimeKind.Utc);
         var en = StructuredReportRenderer.Render(Body(), TwoLocalDayForecast(), Observation(), Imperial(), T("en"), C("en"), Utc, ReportKind.Unscheduled, nowUtc);
 
-        Assert.DoesNotContain("Jun 8", en);
+        Assert.DoesNotContain("Mon Jun 8", en);  // dropped from the grid (see Grid_DropsWhollyPastDay for the substring-form rationale)
         Assert.Contains("Jun 9", en);
     }
 

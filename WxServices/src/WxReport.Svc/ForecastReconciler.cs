@@ -139,7 +139,6 @@ public sealed class ForecastReconciler
     /// <param name="narrativeLanguages">ISO 639-1 codes the structured report's narrative must carry (WX-128) — the distinct set of languages across the locality's recipients.  A returned narrative missing any of these (or carrying an extra one) fails closed.</param>
     /// <param name="tz">Locality timezone, used by <see cref="SnapshotDescriber"/> when emitting the structured observation/forecast text and by Claude when reasoning about local time.</param>
     /// <param name="reportKind">The kind of send (scheduled, unscheduled, or diagnostic) — drives the unscheduled-update change-summary instruction; the recipient-facing label is the renderer's concern.</param>
-    /// <param name="previousMetarIcao">ICAO of the previous report's station, when it differs from the current snapshot's station; <see langword="null"/> when no station change occurred.</param>
     /// <param name="allowSkip">When <see langword="true"/> (unscheduled, arrival-triggered cycles), Claude may decline to send via the <c>skip_send</c> tool, yielding a <see cref="ReconcileResult.NotNews"/>.  When <see langword="false"/> (scheduled / first / startup), the send is guaranteed and skipping is not offered.</param>
     /// <param name="changedSinceLastSend">Which inputs (METAR/TAF/GFS) are newer than they were at the last report actually delivered for this locality (WX-108).  Surfaced to Claude as <c>changed_since_last_sent_report</c> so the anti-reversal rule can bind on observation-only cycles.  Empty list means nothing advanced since the last send; treated as a first send when no prior send exists.</param>
     /// <param name="significanceCfg">Significance thresholds shared with the WX-114/160 gate; supplies the freeze/heat/wind-advisory and per-tier magnitude lines the WX-189 <see cref="DeterministicChangeDetector"/> applies to temperature and wind.</param>
@@ -157,7 +156,6 @@ public sealed class ForecastReconciler
         IReadOnlyList<string> narrativeLanguages,
         TimeZoneInfo tz,
         ReportKind reportKind,
-        string? previousMetarIcao,
         bool allowSkip,
         IReadOnlyList<TriggerSource> changedSinceLastSend,
         SignificanceGateConfig significanceCfg,
@@ -178,7 +176,7 @@ public sealed class ForecastReconciler
         }
 
         var systemPrompt = BuildReconcilerSystemPrompt(
-            snapshot, narrativeLanguages, reportKind, previousMetarIcao, allowSkip);
+            narrativeLanguages, reportKind, allowSkip);
 
         var userMessage = BuildUserMessage(
             snapshot, provisional, gfsModelRunUtc, tafIssuanceUtc, tafValidToUtc, prior, tz,
@@ -1463,20 +1461,9 @@ public sealed class ForecastReconciler
     // (changeSummary + closing); the content rules below scope the prose those
     // sections may carry.
     private static string BuildReconcilerSystemPrompt(
-        WeatherSnapshot snapshot, IReadOnlyList<string> narrativeLanguages,
-        ReportKind reportKind, string? previousMetarIcao, bool allowSkip)
+        IReadOnlyList<string> narrativeLanguages,
+        ReportKind reportKind, bool allowSkip)
     {
-        var currentStationLabel = snapshot.StationMunicipality ?? snapshot.StationName ?? snapshot.StationIcao;
-        var stationChangeInstruction = previousMetarIcao is not null
-            ? "Note: the weather data source has changed since the last report. "
-              + "The previous weather station had no recent data, "
-              + $"so this report uses conditions from {currentStationLabel} instead. "
-              + "Briefly acknowledge this in the narrative: on an unscheduled update, include one sentence "
-              + "in the changeSummary noting the station switch; on a scheduled report, include one "
-              + "sentence in the closing. Keep the tone matter-of-fact — this is routine fallback "
-              + "behaviour, not a cause for concern. "
-            : "";
-
         var changeAlertInstruction = reportKind switch
         {
             ReportKind.Unscheduled =>
@@ -1540,7 +1527,6 @@ public sealed class ForecastReconciler
             + "experience (strong storms, possible damaging winds or hail). "
             + "When precipitation is forecast near freezing temperatures, consider whether "
             + "snow, sleet, or a wintry mix is possible and mention it if so. "
-            + stationChangeInstruction
             + changeAlertInstruction
             + narrativeLanguageInstruction
             + skipInstruction;

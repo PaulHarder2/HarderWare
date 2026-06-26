@@ -299,7 +299,6 @@ public sealed class ReportWorker : BackgroundService
             priorSnapshot,
             narrativeLanguages, tz,
             reportKind: ReportKind.Diagnostic,
-            previousMetarIcao: null,
             allowSkip: false, // startup is an unconditional verification send — never skippable
             changedSinceLastSend: Array.Empty<TriggerSource>(), // unused on a guaranteed send
             significanceCfg: cfg.SignificanceGate,
@@ -921,14 +920,15 @@ public sealed class ReportWorker : BackgroundService
             : $"{label}: generating {reason} report.");
 
         // Station switch: the locality's primary station had no data and a fallback
-        // is in use; pass the previous ICAO so Claude can note it in the narrative.
+        // is in use. Logged for operability; per WX-184 the report no longer narrates
+        // the fallback (the renderer already names the station in Current Conditions).
         var previousMetarIcao = snapshot.ObservationAvailable
             && state.LastMetarIcao is not null
             && state.LastMetarIcao != snapshot.StationIcao
                 ? state.LastMetarIcao
                 : null;
         if (previousMetarIcao is not null)
-            Logger.Info($"{label}: METAR station changed {previousMetarIcao} → {snapshot.StationIcao} — noting in report.");
+            Logger.Info($"{label}: METAR station changed {previousMetarIcao} → {snapshot.StationIcao} (fallback station in use).");
 
         // Pre-Claude audit anchor (minimal-schema, WX-130): persist the GFS
         // provisional projection for the locality. On a Claude failure this orphan
@@ -1050,7 +1050,6 @@ public sealed class ReportWorker : BackgroundService
             priorSnapshot,
             narrativeLanguages, tz,
             reportKind: kind,
-            previousMetarIcao: previousMetarIcao,
             allowSkip: allowSkip,
             changedSinceLastSend: changedSinceLastSend,
             significanceCfg: cfg.SignificanceGate,
