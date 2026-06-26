@@ -334,11 +334,16 @@ public static class StructuredReportRenderer
         // absolute local instant (no relative "X ago"), which keeps this line free of
         // any new per-language vocabulary.
         var station = StationSubtitle(snap, t);
-        var obsWhen = snap.ObservationAvailable
-            ? TimeZoneInfo.ConvertTimeFromUtc(
-                  DateTime.SpecifyKind(snap.ObservationTimeUtc, DateTimeKind.Utc), tz)
-              .ToString("ddd, MMM d, h:mm tt", culture)
-            : null;
+        string? obsWhen = null;
+        if (snap.ObservationAvailable)
+        {
+            var obsLocal = TimeZoneInfo.ConvertTimeFromUtc(
+                DateTime.SpecifyKind(snap.ObservationTimeUtc, DateTimeKind.Utc), tz);
+            // Culture-aware short time ("t"), not a hardcoded "h:mm tt": 24-hour locales
+            // (de, da) define empty AM/PM designators, so "h:mm tt" would render an
+            // ambiguous 12-hour "6:00"; "t" honors each culture's clock convention.
+            obsWhen = $"{obsLocal.ToString("ddd, MMM d", culture)}, {obsLocal.ToString("t", culture)}";
+        }
         var attribution = (station, obsWhen) switch
         {
             (not null, not null) => $"{station} · {obsWhen}",
