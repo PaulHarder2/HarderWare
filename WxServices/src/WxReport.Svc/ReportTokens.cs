@@ -2,6 +2,7 @@ using System.Reflection;
 
 using log4net;
 
+using MetarParser.Data;
 using MetarParser.Data.Entities;
 
 namespace WxReport.Svc;
@@ -88,6 +89,11 @@ public static class Tok
     public const string FzraExpected = "fzra_expected";
     public const string FzraLikely = "fzra_likely";
     public const string FzraPossible = "fzra_possible";
+    // WX-224: in-image meteogram chart labels. The name strings live in MetarParser.Data
+    // (shared) so MeteogramWorker can reference them without a WxVis->WxReport dependency.
+    public const string MeteogramRh = MeteogramTokens.Rh;
+    public const string MeteogramTemp = MeteogramTokens.Temp;
+    public const string MeteogramWind = MeteogramTokens.Wind;
     public const string Rain = "rain";
     public const string RainExpected = "rain_expected";
     public const string RainFreezing = "rain_freezing";
