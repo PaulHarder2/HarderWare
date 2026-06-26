@@ -384,7 +384,7 @@ public sealed class ReportWorker : BackgroundService
                 var meteogramPath = FindMeteogramAbbrevPath(
                     preferredIcaos.Count > 0 ? preferredIcaos[0] : "", member.TempUnit, locality.Timezone, plotsDir);
                 report = meteogramPath is not null
-                    ? InsertMeteogramImage(report)
+                    ? InsertMeteogramImage(report, templates)
                     : report.Replace("<!--meteogram-->", "", StringComparison.Ordinal);
                 IReadOnlyDictionary<string, string>? inlineImages = meteogramPath is not null
                     ? new Dictionary<string, string> { ["meteogramAbbrev"] = meteogramPath }
@@ -1520,7 +1520,7 @@ public sealed class ReportWorker : BackgroundService
         var meteogramPath = FindMeteogramAbbrevPath(
             preferredIcaos.Count > 0 ? preferredIcaos[0] : "", member.TempUnit, locality.Timezone, plotsDir);
         var htmlToSend = meteogramPath is not null
-            ? InsertMeteogramImage(report)
+            ? InsertMeteogramImage(report, templates)
             : report.Replace("<!--meteogram-->", "", StringComparison.Ordinal);
         IReadOnlyDictionary<string, string>? inlineImages = meteogramPath is not null
             ? new Dictionary<string, string> { ["meteogramAbbrev"] = meteogramPath }
@@ -2342,16 +2342,18 @@ public sealed class ReportWorker : BackgroundService
     /// </summary>
     /// <param name="html">Claude-generated HTML report containing the sentinel.</param>
     /// <returns>Modified HTML string with the meteogram image included.</returns>
-    private static string InsertMeteogramImage(string html)
+    private static string InsertMeteogramImage(string html, TemplateSet t)
     {
-        const string img =
+        // WX-223: the caption + alt text localize from the recipient's templates (the
+        // chart image's in-figure labels localize separately — WX-224). HtmlEncode guards
+        // against a future translation carrying &, <, >, or a quote.
+        var alt = System.Net.WebUtility.HtmlEncode(t.Get(Tok.MeteogramAlt));
+        var caption = System.Net.WebUtility.HtmlEncode(t.Get(Tok.MeteogramCaption));
+        var img =
             "<p style=\"text-align:center;margin-top:16px\">" +
-            "<img src=\"cid:meteogramAbbrev\" style=\"width:100%;max-width:1000px\" " +
-            "alt=\"48-hour forecast meteogram\"><br>" +
+            $"<img src=\"cid:meteogramAbbrev\" style=\"width:100%;max-width:1000px\" alt=\"{alt}\"><br>" +
             "<span style=\"font-size:11px;color:#888;font-style:italic\">" +
-            "Forecast of temperature, humidity, and wind over time. " +
-            "Wind symbols point in the direction the wind is blowing, " +
-            "with more feathers indicating stronger winds." +
+            caption +
             "</span>" +
             "</p>";
 
