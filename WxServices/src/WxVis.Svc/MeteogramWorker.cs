@@ -115,10 +115,12 @@ public sealed class MeteogramWorker : BackgroundService
             _completedRuns.RemoveWhere(r => r < latestCompleteRun);
 
             // WX-224: resolve each recipient's report language so we render one meteogram per
-            // language actually in demand at a location — not a blind per-language fan-out. The
-            // LanguageId -> IsoCode mapping mirrors ReportWorker.ResolveLanguageCode; a recipient
-            // with no language falls to English (the baseline / current Report:DefaultLanguage).
+            // language actually in demand at a location — not a blind per-language fan-out. This
+            // mirrors ReportWorker.ResolveLanguageCode: a recipient's assigned LanguageId -> its
+            // IsoCode, else the Report:DefaultLanguage fallback. ToIetfTag yields a 2-letter iso,
+            // already canonical, so it matches ReportWorker's CanonicalIso-based manifest lookup.
             var langById = await ctx.Languages.ToDictionaryAsync(l => l.Id, ct);
+            var defaultIso = LanguageHelper.ToIetfTag(_config["Report:DefaultLanguage"]);
 
             var recipientRows = await ctx.Recipients
                 .Where(r => r.Latitude != null
@@ -142,7 +144,7 @@ public sealed class MeteogramWorker : BackgroundService
                 LocalityName = r.LocalityName ?? FirstIcao(r.MetarIcao!),
                 TempUnit = r.TempUnit,
                 Timezone = r.Timezone,
-                Language = ResolveIso(r.LanguageId, langById),
+                Language = ResolveIso(r.LanguageId, langById, defaultIso),
                 Latitude = r.Latitude,
                 Longitude = r.Longitude,
             }).ToList();
@@ -277,14 +279,15 @@ public sealed class MeteogramWorker : BackgroundService
 
     /// <summary>
     /// The recipient's effective report-language ISO code: the assigned language's
-    /// <see cref="Language.IsoCode"/>, or <c>"en"</c> (the baseline / service default) when the
-    /// recipient has none. Mirrors <c>ReportWorker.ResolveLanguageCode</c> so a recipient's
-    /// meteogram language matches their report language.
+    /// <see cref="Language.IsoCode"/>, or <paramref name="defaultIso"/> (the resolved
+    /// <c>Report:DefaultLanguage</c>) when the recipient has none. Mirrors
+    /// <c>ReportWorker.ResolveLanguageCode</c> so a recipient's meteogram language matches their
+    /// report language — and thus the manifest lookup in <c>FindMeteogramAbbrevPath</c>.
     /// </summary>
-    private static string ResolveIso(long? languageId, IReadOnlyDictionary<long, Language> langById)
+    private static string ResolveIso(long? languageId, IReadOnlyDictionary<long, Language> langById, string defaultIso)
         => languageId is long id && langById.TryGetValue(id, out var lang)
             ? lang.IsoCode
-            : "en";
+            : defaultIso;
 
     /// <summary>
     /// Builds the per-language label set: the three in-image token phrases (wind/rh/temp, any of
@@ -330,7 +333,10 @@ public sealed class MeteogramWorker : BackgroundService
         var abbr = culture.DateTimeFormat.AbbreviatedDayNames; // .NET order: index 0 = Sunday
         var mondayFirst = new string[7];
         for (int i = 0; i < 7; i++)
-            mondayFirst[i] = abbr[(i + (int)DayOfWeek.Monday) % 7].TrimEnd('.');
+            // Strip the trailing period some cultures use (es "lun."), plus any comma/quote, so the
+            // value can't break the comma-joined, double-quoted --day-labels CLI arg (defensive —
+            // real cultures have neither, but AbbreviatedDayNames is an open set).
+            mondayFirst[i] = abbr[(i + (int)DayOfWeek.Monday) % 7].TrimEnd('.').Replace(",", "").Replace("\"", "");
         return mondayFirst;
     }
 
