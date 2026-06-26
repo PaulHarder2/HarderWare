@@ -400,7 +400,7 @@ public class StructuredReportRendererTests
         // (the grid cell says "Severe storms likely …", never "in your forecast").
         var expectedDay = nowUtc.ToString("dddd", System.Globalization.CultureInfo.GetCultureInfo("en-US"));
         Assert.Contains($"Severe storms in your forecast — {expectedDay} afternoon.", en);
-        Assert.Contains("Current Conditions", en);              // conditions table present
+        Assert.Contains("Reported Conditions", en);             // conditions table present (WX-184 relabel)
         Assert.Contains("Forecast for Spring", en);             // forecast grid present
         Assert.DoesNotContain("What's changed:", en);           // no change band
         Assert.DoesNotContain("In summary:", en);               // no closing/summary
@@ -432,7 +432,7 @@ public class StructuredReportRendererTests
     public void CurrentConditions_TableFromObservation()
     {
         var en = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), T("en"), C("en"), Utc, ReportKind.Scheduled, RenderNow);
-        Assert.Contains("Current Conditions", en);
+        Assert.Contains("Reported Conditions", en);   // WX-184 relabel (was "Current Conditions")
         Assert.Contains("Low overcast", en);          // overcast at 3000 ft
         Assert.Contains("S at 14 mph, gusting 25 mph", en);  // 180°, 12 kt→14 mph, gust 22 kt→25 mph
         Assert.Contains("Light rain", en);
@@ -444,11 +444,11 @@ public class StructuredReportRendererTests
     public void Spanish_UsesEsNarrativeAndLabels()
     {
         var es = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Spanish(), T("es"), C("es"), Utc, ReportKind.Scheduled, RenderNow);
-        Assert.Contains("Condiciones actuales", es);
+        Assert.Contains("Condiciones reportadas", es);  // WX-184 relabel (was "Condiciones actuales")
         Assert.Contains("En resumen:", es);
         Assert.Contains("Pronóstico para Spring", es);
         Assert.Contains("Máximas cerca de 34°C", es);  // es closing prose, metric temp
-        Assert.DoesNotContain("Current Conditions", es);
+        Assert.DoesNotContain("Reported Conditions", es);  // the es render never carries the English heading
     }
 
     [Fact]
@@ -491,7 +491,7 @@ public class StructuredReportRendererTests
         Assert.Contains("Spring", welcome);             // locality named
         Assert.Contains("7 AM and 12 PM", welcome);     // localized + joined send times
         // No weather content in a welcome-only email.
-        Assert.DoesNotContain("Current Conditions", welcome);
+        Assert.DoesNotContain("Reported Conditions", welcome);
         Assert.DoesNotContain("Forecast for", welcome);
         Assert.DoesNotContain("In summary:", welcome);
     }
