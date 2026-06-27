@@ -129,4 +129,14 @@ public class JudgeResponseParserTests
         Assert.True(JudgeResponseParser.TryParse(raw, out var r, out _));
         Assert.Equal("de", r!.Language);
     }
+
+    [Fact]
+    public void TryParse_NullListElement_FailsContract_WithoutThrowing()
+    {
+        // System.Text.Json deserializes [null] to a null element — the contract check must reject it, not NRE.
+        var raw = """{ "language": "de", "vocabularyVerdicts": [ null ] }""";
+        Assert.False(JudgeResponseParser.TryParse(raw, out var r, out var err));
+        Assert.Null(r);
+        Assert.False(string.IsNullOrWhiteSpace(err));
+    }
 }

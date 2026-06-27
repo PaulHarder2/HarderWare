@@ -80,14 +80,14 @@ public static class JudgeResponseParser
         if (r.SelfReportedConfidence is { } c && (c.Level is null || c.Note is null))
             return "selfReportedConfidence is missing 'level' or 'note'.";
 
-        if (r.BackTranslations.Any(b => b.Scenario is null || b.English is null))
-            return "a backTranslations entry is missing 'scenario' or 'english'.";
+        if (r.BackTranslations.Any(b => b is null || b.Scenario is null || b.English is null))
+            return "a backTranslations entry is null or missing 'scenario' or 'english'.";
 
-        if (r.ReportFindings.Any(f => f.Scenario is null || f.Location is null || f.Problem is null || f.SuggestedFix is null))
-            return "a reportFindings entry is missing a required field.";
+        if (r.ReportFindings.Any(f => f is null || f.Scenario is null || f.Location is null || f.Problem is null || f.SuggestedFix is null))
+            return "a reportFindings entry is null or missing a required field.";
 
-        if (r.VocabularyVerdicts.Any(v => v.Token is null || v.Comment is null))
-            return "a vocabularyVerdicts entry is missing 'token' or 'comment'.";
+        if (r.VocabularyVerdicts.Any(v => v is null || v.Token is null || v.Comment is null))
+            return "a vocabularyVerdicts entry is null or missing 'token' or 'comment'.";
 
         return null;
     }
