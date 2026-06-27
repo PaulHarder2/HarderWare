@@ -1,5 +1,4 @@
 using System.Text;
-using System.Text.Encodings.Web;
 using System.Text.Json;
 
 namespace WxReport.Tools.TranslationQa;
@@ -33,16 +32,6 @@ public sealed record VocabularyPair(
 /// </summary>
 public static class JudgingPayload
 {
-    private static readonly JsonSerializerOptions JsonOpts = new()
-    {
-        WriteIndented = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        // Preserve native script (ü, ñ, ĵ, future CJK) literally instead of \uXXXX escaping — the
-        // target phrases are the very thing the judge reads. The payload is text pasted to an LLM
-        // (never embedded in HTML), so relaxed escaping is safe here.
-        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-    };
-
     /// <summary>Build the request document for one target language.</summary>
     public static string Build(
         string targetIso,
@@ -113,7 +102,7 @@ public static class JudgingPayload
 
         // ── Paired vocabulary ───────────────────────────────────────────────────────────────────────
         sb.Append("\n## Controlled vocabulary (English ↔ ").Append(langLabel).Append(")\n\n");
-        AppendFenced(sb, "json", JsonSerializer.Serialize(vocabulary, JsonOpts));
+        AppendFenced(sb, "json", JsonSerializer.Serialize(vocabulary, TranslationQaJson.Write));
 
         return sb.ToString();
     }

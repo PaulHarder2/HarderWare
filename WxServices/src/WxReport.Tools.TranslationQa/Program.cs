@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 
 using MetarParser.Data;
 using MetarParser.Data.Entities;
@@ -9,21 +10,44 @@ using Microsoft.Extensions.Configuration;
 using WxReport.Svc;
 using WxReport.Tools.TranslationQa;
 
-// WX-216 — live render harness. Drives the REAL report pipeline
-// (ForecastReconciler → ClaudeClient → StructuredReportRenderer) against the WX-215 exemplar
-// fixtures for English + a target language, and writes the rendered report HTML for the WX-214
-// translation-QA judge to audit. Replicates the production wiring in WxReport.Svc/ReportWorker.
+// WX-214 translation-QA harness. Two phases:
+//
+//   Phase 1 — GENERATE (WX-216/217): drive the REAL report pipeline (ForecastReconciler →
+//   ClaudeClient → StructuredReportRenderer) against the WX-215 fixtures for English + a target
+//   language; write the rendered HTML, the judging request (.request.md), the structured request
+//   (.request.json), and a pre-created paste target (.response.txt). Replicates WxReport.Svc/ReportWorker.
+//
+//   Phase 2 — JUDGE (WX-218): given --response <file> (the reply the operator pasted back from a
+//   non-Claude model), parse + validate it into a JudgeResponse and write <iso>.<stamp>.judged.json.
+//   No DB, no Claude.
 //
 // Usage:
 //   --lang <iso>        target language (required), e.g. de, es, eo, da
-//   --scenario <name>   warm-convective | winter-frozen (default: both)
-//   --out <dir>         output directory (default: C:\HarderWare\translation-qa)
+//   --scenario <name>   warm-convective | winter-frozen (default: both)   [generate]
+//   --out <dir>         output directory (default: C:\HarderWare\translation-qa)   [generate]
+//   --response <file>   parse a saved model reply instead of generating   [judge]
 
 var argMap = ParseArgs(args);
+
+// Ctrl-C cancels cleanly in either phase (the HttpClient timeout is the generate phase's hard backstop).
+using var cts = new CancellationTokenSource();
+Console.CancelKeyPress += (_, e) =>
+{
+    e.Cancel = true;
+    cts.Cancel();
+};
+
+// ── PHASE 2 — judge: parse a saved model reply into a validated JudgeResponse. Independent of --lang,
+// the DB, and Claude (the verdict's language comes from the reply), so handle it before the
+// generate-only --lang requirement. ──
+if (argMap.TryGetValue("response", out var responseFile) && !string.IsNullOrWhiteSpace(responseFile))
+    return await RunJudgePhaseAsync(responseFile, cts.Token);
+
+// ── PHASE 1 — generate (requires --lang) ─────────────────────────────────────────────────────────
 if (!argMap.TryGetValue("lang", out var targetIso) || string.IsNullOrWhiteSpace(targetIso))
 {
-    Console.Error.WriteLine("error: --lang <iso> is required (the target language to audit).");
-    Console.Error.WriteLine("usage: --lang <iso> [--scenario warm-convective|winter-frozen] [--out <dir>]");
+    Console.Error.WriteLine("error: --lang <iso> is required to generate (or pass --response <reply-file> to parse a reply).");
+    Console.Error.WriteLine("usage: --lang <iso> [--scenario warm-convective|winter-frozen] [--out <dir>]  |  --response <reply-file>");
     return 2;
 }
 // Canonicalize to the bare ISO the template/render contract is keyed on (e.g. es-419 → es, DE → de),
@@ -127,14 +151,6 @@ var tz = Exemplars.LocalityTz;
 // the judge isn't distracted by Fahrenheit in a German report. The same StructuredReport renders in
 // either unit (the renderer formats the quantity tokens per recipient).
 static Recipient RecipientFor(string lang) => lang == "en" ? Imperial() : Metric();
-
-// Ctrl-C cancels the in-flight Claude call cleanly (the HttpClient timeout is the hard backstop).
-using var cts = new CancellationTokenSource();
-Console.CancelKeyPress += (_, e) =>
-{
-    e.Cancel = true;
-    cts.Cancel();
-};
 
 var anyFailed = false;
 var rendered = new List<RenderedScenario>(); // WX-217: collected for the per-language judging request
@@ -249,7 +265,29 @@ else if (rendered.Count > 0)
 
     var requestPath = Path.Combine(outDir, $"{targetIso}.{stamp}.request.md");
     await File.WriteAllTextAsync(requestPath, JudgingPayload.Build(targetIso, targetDisplayName, rendered, vocabulary));
+
+    // Persist the structured request so the judge/artifact phases never re-reconcile (Claude is
+    // non-deterministic — the artifact must show exactly what the judge saw). WX-219 consumes this.
+    var requestJsonPath = Path.Combine(outDir, $"{targetIso}.{stamp}.request.json");
+    var requestObj = new JudgingRequest(targetIso, targetDisplayName, rendered, vocabulary);
+    await File.WriteAllTextAsync(requestJsonPath, JsonSerializer.Serialize(requestObj, TranslationQaJson.Write));
+
+    // Pre-create the response paste target so the operator just double-clicks it, pastes, and saves —
+    // no filename to invent, no file to create. .txt opens straight into Notepad.
+    var responseTxtPath = Path.Combine(outDir, $"{targetIso}.{stamp}.response.txt");
+    var rerun = $"dotnet run --project src\\WxReport.Tools.TranslationQa -- --lang {targetIso} --response \"{responseTxtPath}\"";
+    await File.WriteAllTextAsync(responseTxtPath,
+        "Paste the FULL reply from Copilot/ChatGPT here (replace this text), then save and close.\r\n" +
+        "Then run:\r\n  " + rerun + "\r\n");
+
     Console.WriteLine($"\n  → judging request  {requestPath}");
+    Console.WriteLine("\nNext steps:");
+    Console.WriteLine("  1. Open the request and paste it into Copilot or ChatGPT (a non-Claude model):");
+    Console.WriteLine($"       {requestPath}");
+    Console.WriteLine("  2. Paste the reply into this file (created for you) and save:");
+    Console.WriteLine($"       {responseTxtPath}");
+    Console.WriteLine("  3. Parse the reply:");
+    Console.WriteLine($"       {rerun}");
 }
 
 Console.WriteLine();
@@ -269,6 +307,56 @@ static Dictionary<string, string> ParseArgs(string[] args)
         map[key] = val;
     }
     return map;
+}
+
+// Phase 2: parse the operator's saved model reply into a validated JudgeResponse and persist it.
+static async Task<int> RunJudgePhaseAsync(string responseFile, CancellationToken ct)
+{
+    if (!File.Exists(responseFile))
+    {
+        Console.Error.WriteLine($"error: response file not found: {responseFile}");
+        return 1;
+    }
+
+    IJudge judge = new ManualPasteJudge(responseFile);
+    JudgeResponse verdict;
+    try
+    {
+        // The manual judge ignores the request markdown (it was pasted into the model by hand).
+        verdict = await judge.JudgeAsync(string.Empty, ct);
+    }
+    catch (JudgeParseException ex)
+    {
+        Console.Error.WriteLine($"error: couldn't parse the reply — {ex.Message}");
+        Console.Error.WriteLine("Open the response file, paste the model's full JSON reply, save, and re-run.");
+        return 1;
+    }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+    {
+        Console.Error.WriteLine($"error: couldn't read the response file '{responseFile}' — {ex.Message}");
+        return 1;
+    }
+
+    var judgedPath = JudgedPathFor(responseFile);
+    await File.WriteAllTextAsync(judgedPath, JsonSerializer.Serialize(verdict, TranslationQaJson.Write), ct);
+
+    var conf = verdict.SelfReportedConfidence;
+    Console.WriteLine($"Parsed verdict for '{verdict.Language}'.");
+    Console.WriteLine($"  confidence:          {(conf is null ? "(none reported)" : $"{conf.Level} — {conf.Note}")}");
+    Console.WriteLine($"  back-translations:   {verdict.BackTranslations.Count}");
+    Console.WriteLine($"  report findings:     {verdict.ReportFindings.Count}");
+    Console.WriteLine($"  vocabulary verdicts: {verdict.VocabularyVerdicts.Count}");
+    Console.WriteLine($"\n  → parsed verdict  {judgedPath}");
+    return 0;
+}
+
+// Name the parsed-verdict file from the response file: <iso>.<stamp>.response.txt → <iso>.<stamp>.judged.json
+static string JudgedPathFor(string responseFile)
+{
+    const string suffix = ".response.txt";
+    return responseFile.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)
+        ? string.Concat(responseFile.AsSpan(0, responseFile.Length - suffix.Length), ".judged.json")
+        : responseFile + ".judged.json";
 }
 
 static Recipient Imperial() => new()
