@@ -275,7 +275,7 @@ else if (rendered.Count > 0)
     // Pre-create the response paste target so the operator just double-clicks it, pastes, and saves —
     // no filename to invent, no file to create. .txt opens straight into Notepad.
     var responseTxtPath = Path.Combine(outDir, $"{targetIso}.{stamp}.response.txt");
-    var rerun = $"dotnet run --project src\\WxReport.Tools.TranslationQa -- --lang {targetIso} --response \"{responseTxtPath}\"";
+    var rerun = $"dotnet run --project src\\WxReport.Tools.TranslationQa -- --response \"{responseTxtPath}\"";
     await File.WriteAllTextAsync(responseTxtPath,
         "Paste the FULL reply from Copilot/ChatGPT here (replace this text), then save and close.\r\n" +
         "Then run:\r\n  " + rerun + "\r\n");
@@ -325,6 +325,11 @@ static async Task<int> RunJudgePhaseAsync(string responseFile, CancellationToken
         // The manual judge ignores the request markdown (it was pasted into the model by hand).
         verdict = await judge.JudgeAsync(string.Empty, ct);
     }
+    catch (OperationCanceledException) when (ct.IsCancellationRequested)
+    {
+        Console.Error.WriteLine("\nCancelled.");
+        return 130;
+    }
     catch (JudgeParseException ex)
     {
         Console.Error.WriteLine($"error: couldn't parse the reply — {ex.Message}");
@@ -338,7 +343,20 @@ static async Task<int> RunJudgePhaseAsync(string responseFile, CancellationToken
     }
 
     var judgedPath = JudgedPathFor(responseFile);
-    await File.WriteAllTextAsync(judgedPath, JsonSerializer.Serialize(verdict, TranslationQaJson.Write), ct);
+    try
+    {
+        await File.WriteAllTextAsync(judgedPath, JsonSerializer.Serialize(verdict, TranslationQaJson.Write), ct);
+    }
+    catch (OperationCanceledException) when (ct.IsCancellationRequested)
+    {
+        Console.Error.WriteLine("\nCancelled.");
+        return 130;
+    }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+    {
+        Console.Error.WriteLine($"error: parsed the reply but couldn't write '{judgedPath}' — {ex.Message}");
+        return 1;
+    }
 
     var conf = verdict.SelfReportedConfidence;
     Console.WriteLine($"Parsed verdict for '{verdict.Language}'.");

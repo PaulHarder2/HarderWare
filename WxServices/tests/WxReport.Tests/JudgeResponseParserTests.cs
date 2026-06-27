@@ -103,4 +103,30 @@ public class JudgeResponseParserTests
         Assert.Equal("de", r!.Language);
         Assert.Single(r.VocabularyVerdicts);
     }
+
+    [Fact]
+    public void TryParse_PrefixProseWithBraces_SkipsFragments_PicksRealObject()
+    {
+        // Leading prose with brace fragments ({token}, {0}) must not be mistaken for the payload.
+        var raw = "Note: I treated {token} and {0} as placeholders.\n\n" + FullJson;
+        Assert.True(JudgeResponseParser.TryParse(raw, out var r, out _));
+        Assert.Equal("de", r!.Language);
+        Assert.Single(r.VocabularyVerdicts);
+    }
+
+    [Fact]
+    public void TryParse_MissingLanguage_FailsContract()
+    {
+        Assert.False(JudgeResponseParser.TryParse("""{ "backTranslations": [] }""", out var r, out var err));
+        Assert.Null(r);
+        Assert.Contains("language", err);
+    }
+
+    [Fact]
+    public void TryParse_StrayEmptyObjectThenReal_PicksReal()
+    {
+        var raw = "{}\n\n" + FullJson;
+        Assert.True(JudgeResponseParser.TryParse(raw, out var r, out _));
+        Assert.Equal("de", r!.Language);
+    }
 }
