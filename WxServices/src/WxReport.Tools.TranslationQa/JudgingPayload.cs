@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 
 namespace WxReport.Tools.TranslationQa;
@@ -36,6 +37,10 @@ public static class JudgingPayload
     {
         WriteIndented = true,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        // Preserve native script (ü, ñ, ĵ, future CJK) literally instead of \uXXXX escaping — the
+        // target phrases are the very thing the judge reads. The payload is text pasted to an LLM
+        // (never embedded in HTML), so relaxed escaping is safe here.
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
 
     /// <summary>Build the request document for one target language.</summary>
