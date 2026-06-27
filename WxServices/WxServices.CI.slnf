@@ -12,6 +12,7 @@
       "src\\WxReport.Svc\\WxReport.Svc.csproj",
       "src\\WxServices.Common\\WxServices.Common.csproj",
       "src\\WxServices.Logging\\WxServices.Logging.csproj",
+      "src\\WxReport.Tools.TranslationQa\\WxReport.Tools.TranslationQa.csproj",
       "src\\WxVis.Svc\\WxVis.Svc.csproj",
       "tests\\MetarParser.Tests\\MetarParser.Tests.csproj",
       "tests\\TafParser.Tests\\TafParser.Tests.csproj",
