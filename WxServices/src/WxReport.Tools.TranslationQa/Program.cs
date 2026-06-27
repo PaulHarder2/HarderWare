@@ -137,6 +137,7 @@ Console.CancelKeyPress += (_, e) =>
 };
 
 var anyFailed = false;
+var rendered = new List<RenderedScenario>(); // WX-217: collected for the per-language judging request
 foreach (var scenario in scenarios)
 {
     Console.WriteLine($"\n=== {scenario.Name} — {scenario.Synopsis} ===");
@@ -192,6 +193,7 @@ foreach (var scenario in scenarios)
 
     Console.WriteLine($"  ✓ reconciled. Tokens: {success.Tokens}");
 
+    var htmlByLang = new Dictionary<string, string>(StringComparer.Ordinal);
     foreach (var lang in renderLangs)
     {
         var html = StructuredReportRenderer.Render(
@@ -204,11 +206,50 @@ foreach (var scenario in scenarios)
             tz,
             ReportKind.Diagnostic,
             scenario.AnchorDay);
+        htmlByLang[lang] = html;
 
         var path = Path.Combine(outDir, $"{scenario.Name}.{lang}.{stamp}.html");
         await File.WriteAllTextAsync(path, html);
         Console.WriteLine($"  → {(lang == "en" ? "reference" : "target  ")} [{lang}]  {path}");
     }
+
+    rendered.Add(new RenderedScenario(
+        scenario.Name,
+        scenario.Synopsis,
+        htmlByLang.GetValueOrDefault("en", ""),
+        htmlByLang.GetValueOrDefault(targetIso, htmlByLang.GetValueOrDefault("en", ""))));
+}
+
+// WX-217: assemble one judging request per language from the rendered reports + the paired vocabulary.
+if (targetIso == "en")
+{
+    Console.WriteLine("\n(no judging request: --lang en is the reference language, nothing to audit.)");
+}
+else if (rendered.Count > 0)
+{
+    List<VocabularyPair> vocabulary;
+    string? targetDisplayName;
+    await using (var ctx = new WeatherDataContext(dbOptions))
+    {
+        var enRows = await ctx.LanguageTemplates.Include(t => t.Language)
+            .Where(t => t.Language!.IsoCode == "en").AsNoTracking().ToListAsync(cts.Token);
+        var tgtRows = await ctx.LanguageTemplates.Include(t => t.Language)
+            .Where(t => t.Language!.IsoCode == targetIso).AsNoTracking().ToListAsync(cts.Token);
+        targetDisplayName = tgtRows.FirstOrDefault()?.Language?.DisplayName;
+        var tgtByToken = tgtRows.ToDictionary(t => t.Token, StringComparer.Ordinal);
+        vocabulary = enRows.OrderBy(e => e.Token, StringComparer.Ordinal).Select(e =>
+        {
+            tgtByToken.TryGetValue(e.Token, out var t);
+            return new VocabularyPair(
+                e.Token, e.Phrase, e.ContextInfo, e.ContextKind.ToString(),
+                t?.Phrase ?? "", t?.ContextInfo ?? "", t?.Representable ?? false, t?.Note,
+                Reviewed: t?.ReviewedBy is not null);
+        }).ToList();
+    }
+
+    var requestPath = Path.Combine(outDir, $"{targetIso}.{stamp}.request.md");
+    await File.WriteAllTextAsync(requestPath, JudgingPayload.Build(targetIso, targetDisplayName, rendered, vocabulary));
+    Console.WriteLine($"\n  → judging request  {requestPath}");
 }
 
 Console.WriteLine();
