@@ -1,15 +1,36 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
+    <!-- WX-216: a console harness that drives the real report pipeline against the WX-215
+         fixtures. Still the home of the exemplar fixtures (WX-215); the executable is the
+         live render harness. Tooling — ships in no service binary. -->
+    <OutputType>Exe</OutputType>
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>WxReport.Tools.TranslationQa</RootNamespace>
-    <!-- WX-214 translation-QA tooling. A library of exemplar pipeline inputs (WX-215);
-         the live render harness (WX-216) and downstream pieces reference it. Not a service. -->
     <IsPackable>false</IsPackable>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\MetarParser.Data\MetarParser.Data.csproj" />
     <ProjectReference Include="..\WxInterp\WxInterp.csproj" />
+    <!-- WX-216: the real pipeline types (ForecastReconciler, ClaudeClient,
+         StructuredReportRenderer, LanguageTemplateStore, ReportConfig, PersonaPrefix). -->
+    <ProjectReference Include="..\WxReport.Svc\WxReport.Svc.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Same runtime files the service loads, copied beside the harness so it reads the real
+         config, persona, and logging exactly as production does (relative paths match WxReport.Svc). -->
+    <Content Include="..\..\appsettings.shared.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>appsettings.shared.json</Link>
+    </Content>
+    <Content Include="..\..\log4net.shared.config">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>log4net.shared.config</Link>
+    </Content>
+    <Content Include="..\..\..\AboutPaul.md">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>AboutPaul.md</Link>
+    </Content>
   </ItemGroup>
 </Project>
