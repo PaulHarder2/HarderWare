@@ -26,7 +26,14 @@ if (!argMap.TryGetValue("lang", out var targetIso) || string.IsNullOrWhiteSpace(
     Console.Error.WriteLine("usage: --lang <iso> [--scenario warm-convective|winter-frozen] [--out <dir>]");
     return 2;
 }
-targetIso = targetIso.Trim().ToLowerInvariant();
+// Canonicalize to the bare ISO the template/render contract is keyed on (e.g. es-419 → es, DE → de),
+// so MissingTokens, ForLanguage, CultureFor, narrativeLanguages, and the en-dedup all agree.
+targetIso = LanguageTemplateStore.CanonicalIso(targetIso);
+if (string.IsNullOrWhiteSpace(targetIso))
+{
+    Console.Error.WriteLine("error: --lang did not resolve to a language code.");
+    return 2;
+}
 var outDir = argMap.TryGetValue("out", out var o) && !string.IsNullOrWhiteSpace(o)
     ? o
     : @"C:\HarderWare\translation-qa";
@@ -143,21 +150,30 @@ foreach (var scenario in scenarios)
         Body = scenario.Prior.Serialize(),
     };
 
-    var result = await reconciler.ReconcileAsync(
-        scenario.PrimaryObservation,
-        scenario.Provisional,
-        gfsModelRunUtc: scenario.AnchorDay.AddHours(-6),
-        tafIssuanceUtc: null,
-        tafValidToUtc: null,
-        prior: prior,
-        narrativeLanguages: renderLangs,
-        tz: tz,
-        reportKind: ReportKind.Diagnostic,
-        allowSkip: false,
-        changedSinceLastSend: Array.Empty<TriggerSource>(),
-        significanceCfg: reportCfg.SignificanceGate,
-        nowUtc: scenario.AnchorDay,
-        ct: cts.Token);
+    ReconcileResult result;
+    try
+    {
+        result = await reconciler.ReconcileAsync(
+            scenario.PrimaryObservation,
+            scenario.Provisional,
+            gfsModelRunUtc: scenario.AnchorDay.AddHours(-6),
+            tafIssuanceUtc: null,
+            tafValidToUtc: null,
+            prior: prior,
+            narrativeLanguages: renderLangs,
+            tz: tz,
+            reportKind: ReportKind.Diagnostic,
+            allowSkip: false,
+            changedSinceLastSend: Array.Empty<TriggerSource>(),
+            significanceCfg: reportCfg.SignificanceGate,
+            nowUtc: scenario.AnchorDay,
+            ct: cts.Token);
+    }
+    catch (OperationCanceledException)
+    {
+        Console.Error.WriteLine("\nCancelled.");
+        return 130; // conventional 128 + SIGINT
+    }
 
     if (result is not ReconcileResult.Success success)
     {
