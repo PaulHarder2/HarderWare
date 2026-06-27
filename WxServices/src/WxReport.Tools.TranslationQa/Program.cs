@@ -250,23 +250,36 @@ foreach (var scenario in scenarios)
     Console.WriteLine($"  ✓ reconciled. Tokens: {success.Tokens}");
 
     var htmlByLang = new Dictionary<string, string>(StringComparer.Ordinal);
-    foreach (var lang in renderLangs)
+    try
     {
-        var html = StructuredReportRenderer.Render(
-            success.StructuredReport,
-            success.FinalSnapshot,
-            scenario.PrimaryObservation,
-            RecipientFor(lang),
-            templates.ForLanguage(lang),
-            templates.CultureFor(lang),
-            tz,
-            ReportKind.Diagnostic,
-            scenario.AnchorDay);
-        htmlByLang[lang] = html;
+        foreach (var lang in renderLangs)
+        {
+            var html = StructuredReportRenderer.Render(
+                success.StructuredReport,
+                success.FinalSnapshot,
+                scenario.PrimaryObservation,
+                RecipientFor(lang),
+                templates.ForLanguage(lang),
+                templates.CultureFor(lang),
+                tz,
+                ReportKind.Diagnostic,
+                scenario.AnchorDay);
+            htmlByLang[lang] = html;
 
-        var path = Path.Combine(outDir, $"{scenario.Name}.{lang}.{stamp}.html");
-        await File.WriteAllTextAsync(path, html);
-        Console.WriteLine($"  → {(lang == "en" ? "reference" : "target  ")} [{lang}]  {path}");
+            var path = Path.Combine(outDir, $"{scenario.Name}.{lang}.{stamp}.html");
+            await File.WriteAllTextAsync(path, html, cts.Token);
+            Console.WriteLine($"  → {(lang == "en" ? "reference" : "target  ")} [{lang}]  {path}");
+        }
+    }
+    catch (OperationCanceledException)
+    {
+        Console.Error.WriteLine("\nCancelled.");
+        return 130;
+    }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+    {
+        Console.Error.WriteLine($"error: could not write the rendered report — {ex.Message}");
+        return 1;
     }
 
     rendered.Add(new RenderedScenario(
@@ -312,8 +325,13 @@ else if (rendered.Count > 0)
     var requestObj = new JudgingRequest(targetIso, targetDisplayName, rendered, vocabulary);
     try
     {
-        await File.WriteAllTextAsync(requestPath, requestMarkdown);
-        await File.WriteAllTextAsync(requestJsonPath, JsonSerializer.Serialize(requestObj, TranslationQaJson.Write));
+        await File.WriteAllTextAsync(requestPath, requestMarkdown, cts.Token);
+        await File.WriteAllTextAsync(requestJsonPath, JsonSerializer.Serialize(requestObj, TranslationQaJson.Write), cts.Token);
+    }
+    catch (OperationCanceledException)
+    {
+        Console.Error.WriteLine("\nCancelled.");
+        return 130;
     }
     catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
     {
@@ -369,7 +387,12 @@ else if (rendered.Count > 0)
         {
             await File.WriteAllTextAsync(responseTxtPath,
                 "Paste the FULL reply from Copilot/ChatGPT here (replace this text), then save and close.\r\n" +
-                "Then run:\r\n  " + rerun + "\r\n");
+                "Then run:\r\n  " + rerun + "\r\n", cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Error.WriteLine("\nCancelled.");
+            return 130;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
