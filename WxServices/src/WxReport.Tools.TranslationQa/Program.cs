@@ -16,16 +16,19 @@ using WxReport.Tools.TranslationQa;
 //   ClaudeClient → StructuredReportRenderer) against the WX-215 fixtures for English + a target
 //   language; write the rendered HTML, the judging request (.request.md), the structured request
 //   (.request.json), and a pre-created paste target (.response.txt). Replicates WxReport.Svc/ReportWorker.
+//   With --judge gemini (WX-227), it also judges automatically in the same run via the Gemini API and
+//   writes <iso>.<stamp>.judged.json — no paste, no chunks, full audit.
 //
-//   Phase 2 — JUDGE (WX-218): given --response <file> (the reply the operator pasted back from a
-//   non-Claude model), parse + validate it into a JudgeResponse and write <iso>.<stamp>.judged.json.
-//   No DB, no Claude.
+//   Phase 2 — JUDGE (WX-218): given --response <file> (a reply the operator pasted back from a
+//   non-Claude model by hand), parse + validate it into a JudgeResponse and write the judged.json.
+//   No DB, no Claude. This is the manual fallback to --judge gemini.
 //
 // Usage:
 //   --lang <iso>        target language (required), e.g. de, es, eo, da
 //   --scenario <name>   warm-convective | winter-frozen (default: both)   [generate]
 //   --out <dir>         output directory (default: C:\HarderWare\translation-qa)   [generate]
-//   --response <file>   parse a saved model reply instead of generating   [judge]
+//   --judge gemini      after generating, judge automatically via the Gemini API   [generate]
+//   --response <file>   parse a saved model reply instead of generating (manual fallback)   [judge]
 
 var argMap = ParseArgs(args);
 
@@ -73,10 +76,29 @@ if (argMap.TryGetValue("scenario", out var scn) && !string.IsNullOrWhiteSpace(sc
     }
 }
 
+// WX-227: optional automated judge. Validate early so a typo fails before the expensive Claude calls.
+var judgeProvider = argMap.GetValueOrDefault("judge");
+if (!string.IsNullOrWhiteSpace(judgeProvider) && !string.Equals(judgeProvider, "gemini", StringComparison.OrdinalIgnoreCase))
+{
+    Console.Error.WriteLine($"error: unknown --judge provider '{judgeProvider}'. Supported: gemini.");
+    return 2;
+}
+var autoJudgeGemini = string.Equals(judgeProvider, "gemini", StringComparison.OrdinalIgnoreCase);
+
 // ── wiring (mirrors WxReport.Svc/Program.cs + ReportWorker) ───────────────────────────────────
+// shared config beside the binary + the tool-local overlay at the InstallRoot, where the Gemini API
+// key lives (Option B — a dev-tool secret, never in the shared file or the DB).
+var sharedConfig = new ConfigurationBuilder()
+    .SetBasePath(AppContext.BaseDirectory)
+    .AddJsonFile("appsettings.shared.json", optional: false, reloadOnChange: false)
+    .Build();
+var installRoot = sharedConfig["InstallRoot"];
 var config = new ConfigurationBuilder()
     .SetBasePath(AppContext.BaseDirectory)
     .AddJsonFile("appsettings.shared.json", optional: false, reloadOnChange: false)
+    .AddJsonFile(
+        Path.Combine(string.IsNullOrWhiteSpace(installRoot) ? AppContext.BaseDirectory : installRoot, "appsettings.local.json"),
+        optional: true, reloadOnChange: false)
     .Build();
 
 var connectionString = config.GetConnectionString("WeatherData");
@@ -105,6 +127,19 @@ if (string.IsNullOrWhiteSpace(claudeCfg.ApiKey))
 {
     Console.Error.WriteLine("error: GlobalSettings.ClaudeApiKey is not set in the database — cannot make a live Claude call.");
     return 1;
+}
+
+// WX-227: when auto-judging, bind the Gemini config + fail fast on a missing key, before the Claude calls.
+GeminiConfig? geminiCfg = null;
+if (autoJudgeGemini)
+{
+    geminiCfg = new GeminiConfig();
+    config.GetSection("Gemini").Bind(geminiCfg);
+    if (string.IsNullOrWhiteSpace(geminiCfg.ApiKey))
+    {
+        Console.Error.WriteLine($"error: --judge gemini, but Gemini:ApiKey is not set in appsettings.local.json at {installRoot ?? "the InstallRoot"}.");
+        return 1;
+    }
 }
 
 // Persona prefix ships beside the binary (copied from AboutPaul.md), as in the service.
@@ -263,31 +298,72 @@ else if (rendered.Count > 0)
         }).ToList();
     }
 
+    var requestMarkdown = JudgingPayload.Build(targetIso, targetDisplayName, rendered, vocabulary);
     var requestPath = Path.Combine(outDir, $"{targetIso}.{stamp}.request.md");
-    await File.WriteAllTextAsync(requestPath, JudgingPayload.Build(targetIso, targetDisplayName, rendered, vocabulary));
+    await File.WriteAllTextAsync(requestPath, requestMarkdown);
 
     // Persist the structured request so the judge/artifact phases never re-reconcile (Claude is
     // non-deterministic — the artifact must show exactly what the judge saw). WX-219 consumes this.
     var requestJsonPath = Path.Combine(outDir, $"{targetIso}.{stamp}.request.json");
     var requestObj = new JudgingRequest(targetIso, targetDisplayName, rendered, vocabulary);
     await File.WriteAllTextAsync(requestJsonPath, JsonSerializer.Serialize(requestObj, TranslationQaJson.Write));
-
-    // Pre-create the response paste target so the operator just double-clicks it, pastes, and saves —
-    // no filename to invent, no file to create. .txt opens straight into Notepad.
-    var responseTxtPath = Path.Combine(outDir, $"{targetIso}.{stamp}.response.txt");
-    var rerun = $"dotnet run --project src\\WxReport.Tools.TranslationQa -- --response \"{responseTxtPath}\"";
-    await File.WriteAllTextAsync(responseTxtPath,
-        "Paste the FULL reply from Copilot/ChatGPT here (replace this text), then save and close.\r\n" +
-        "Then run:\r\n  " + rerun + "\r\n");
-
     Console.WriteLine($"\n  → judging request  {requestPath}");
-    Console.WriteLine("\nNext steps:");
-    Console.WriteLine("  1. Open the request and paste it into Copilot or ChatGPT (a non-Claude model):");
-    Console.WriteLine($"       {requestPath}");
-    Console.WriteLine("  2. Paste the reply into this file (created for you) and save:");
-    Console.WriteLine($"       {responseTxtPath}");
-    Console.WriteLine("  3. Parse the reply:");
-    Console.WriteLine($"       {rerun}");
+
+    if (autoJudgeGemini)
+    {
+        // WX-227: judge automatically via the Gemini API in this same run — the full request goes in one
+        // call and the full verdict comes back (no paste limit, no chunks).
+        Console.WriteLine($"Judging (en + {targetIso}) via the Gemini API ({geminiCfg!.Model}) …");
+        using var geminiHttp = new HttpClient { Timeout = TimeSpan.FromSeconds(geminiCfg.TimeoutSeconds) };
+        IJudge judge = new GeminiJudge(geminiHttp, geminiCfg);
+        try
+        {
+            var verdict = await judge.JudgeAsync(requestMarkdown, cts.Token);
+            var judgedPath = Path.Combine(outDir, $"{targetIso}.{stamp}.judged.json");
+            await File.WriteAllTextAsync(judgedPath, JsonSerializer.Serialize(verdict, TranslationQaJson.Write), cts.Token);
+            Console.WriteLine("  ✓ judged by Gemini.");
+            PrintVerdictSummary(verdict);
+            Console.WriteLine($"\n  → verdict  {judgedPath}");
+        }
+        catch (OperationCanceledException) when (cts.IsCancellationRequested)
+        {
+            Console.Error.WriteLine("\nCancelled.");
+            return 130;
+        }
+        catch (OperationCanceledException)
+        {
+            // HttpClient's own timeout surfaces as a TaskCanceledException whose token is NOT cts.
+            Console.Error.WriteLine($"error: the Gemini call timed out after {geminiCfg.TimeoutSeconds}s (raise Gemini:TimeoutSeconds for a large audit).");
+            return 1;
+        }
+        catch (JudgeParseException ex)
+        {
+            Console.Error.WriteLine($"error: Gemini judge failed — {ex.Message}");
+            return 1;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine($"error: could not write the verdict file — {ex.Message}");
+            return 1;
+        }
+    }
+    else
+    {
+        // Manual fallback (WX-218): pre-create the response paste target + print the cue card.
+        var responseTxtPath = Path.Combine(outDir, $"{targetIso}.{stamp}.response.txt");
+        var rerun = $"dotnet run --project src\\WxReport.Tools.TranslationQa -- --response \"{responseTxtPath}\"";
+        await File.WriteAllTextAsync(responseTxtPath,
+            "Paste the FULL reply from Copilot/ChatGPT here (replace this text), then save and close.\r\n" +
+            "Then run:\r\n  " + rerun + "\r\n");
+
+        Console.WriteLine("\nNext steps:");
+        Console.WriteLine("  1. Open the request and paste it into Copilot or ChatGPT (a non-Claude model):");
+        Console.WriteLine($"       {requestPath}");
+        Console.WriteLine("  2. Paste the reply into this file (created for you) and save:");
+        Console.WriteLine($"       {responseTxtPath}");
+        Console.WriteLine("  3. Parse the reply:");
+        Console.WriteLine($"       {rerun}");
+    }
 }
 
 Console.WriteLine();
@@ -358,14 +434,20 @@ static async Task<int> RunJudgePhaseAsync(string responseFile, CancellationToken
         return 1;
     }
 
-    var conf = verdict.SelfReportedConfidence;
     Console.WriteLine($"Parsed verdict for '{verdict.Language}'.");
+    PrintVerdictSummary(verdict);
+    Console.WriteLine($"\n  → parsed verdict  {judgedPath}");
+    return 0;
+}
+
+// Shared one-glance verdict summary (used by the manual parse phase and the Gemini auto-judge).
+static void PrintVerdictSummary(JudgeResponse verdict)
+{
+    var conf = verdict.SelfReportedConfidence;
     Console.WriteLine($"  confidence:          {(conf is null ? "(none reported)" : $"{conf.Level} — {conf.Note}")}");
     Console.WriteLine($"  back-translations:   {verdict.BackTranslations.Count}");
     Console.WriteLine($"  report findings:     {verdict.ReportFindings.Count}");
     Console.WriteLine($"  vocabulary verdicts: {verdict.VocabularyVerdicts.Count}");
-    Console.WriteLine($"\n  → parsed verdict  {judgedPath}");
-    return 0;
 }
 
 // Name the parsed-verdict file from the response file: <iso>.<stamp>.response.txt → <iso>.<stamp>.judged.json

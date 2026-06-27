@@ -32,4 +32,8 @@ public sealed class ManualPasteJudge(string replyFilePath) : IJudge
 }
 
 /// <summary>Thrown when a reply cannot be parsed into a <see cref="JudgeResponse"/>; carries an operator-facing reason.</summary>
-public sealed class JudgeParseException(string message) : Exception(message);
+public sealed class JudgeParseException : Exception
+{
+    public JudgeParseException(string message) : base(message) { }
+    public JudgeParseException(string message, Exception inner) : base(message, inner) { }
+}
