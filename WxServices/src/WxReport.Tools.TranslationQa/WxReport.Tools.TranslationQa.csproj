@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>WxReport.Tools.TranslationQa</RootNamespace>
+    <!-- WX-214 translation-QA tooling. A library of exemplar pipeline inputs (WX-215);
+         the live render harness (WX-216) and downstream pieces reference it. Not a service. -->
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\MetarParser.Data\MetarParser.Data.csproj" />
+    <ProjectReference Include="..\WxInterp\WxInterp.csproj" />
+  </ItemGroup>
+</Project>
