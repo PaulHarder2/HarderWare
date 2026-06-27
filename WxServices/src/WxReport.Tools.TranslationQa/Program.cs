@@ -93,12 +93,17 @@ var sharedConfig = new ConfigurationBuilder()
     .AddJsonFile("appsettings.shared.json", optional: false, reloadOnChange: false)
     .Build();
 var installRoot = sharedConfig["InstallRoot"];
+if (string.IsNullOrWhiteSpace(installRoot))
+{
+    // Resolve the overlay strictly from InstallRoot — never fall back to the binary dir, which would
+    // silently read a different appsettings.local.json (bin\… under dotnet run) and mask a config error.
+    Console.Error.WriteLine("error: InstallRoot missing from appsettings.shared.json.");
+    return 1;
+}
 var config = new ConfigurationBuilder()
     .SetBasePath(AppContext.BaseDirectory)
     .AddJsonFile("appsettings.shared.json", optional: false, reloadOnChange: false)
-    .AddJsonFile(
-        Path.Combine(string.IsNullOrWhiteSpace(installRoot) ? AppContext.BaseDirectory : installRoot, "appsettings.local.json"),
-        optional: true, reloadOnChange: false)
+    .AddJsonFile(Path.Combine(installRoot, "appsettings.local.json"), optional: true, reloadOnChange: false)
     .Build();
 
 var connectionString = config.GetConnectionString("WeatherData");
@@ -300,13 +305,21 @@ else if (rendered.Count > 0)
 
     var requestMarkdown = JudgingPayload.Build(targetIso, targetDisplayName, rendered, vocabulary);
     var requestPath = Path.Combine(outDir, $"{targetIso}.{stamp}.request.md");
-    await File.WriteAllTextAsync(requestPath, requestMarkdown);
 
     // Persist the structured request so the judge/artifact phases never re-reconcile (Claude is
     // non-deterministic — the artifact must show exactly what the judge saw). WX-219 consumes this.
     var requestJsonPath = Path.Combine(outDir, $"{targetIso}.{stamp}.request.json");
     var requestObj = new JudgingRequest(targetIso, targetDisplayName, rendered, vocabulary);
-    await File.WriteAllTextAsync(requestJsonPath, JsonSerializer.Serialize(requestObj, TranslationQaJson.Write));
+    try
+    {
+        await File.WriteAllTextAsync(requestPath, requestMarkdown);
+        await File.WriteAllTextAsync(requestJsonPath, JsonSerializer.Serialize(requestObj, TranslationQaJson.Write));
+    }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+    {
+        Console.Error.WriteLine($"error: could not write the judging request artifacts — {ex.Message}");
+        return 1;
+    }
     Console.WriteLine($"\n  → judging request  {requestPath}");
 
     if (autoJudgeGemini)
@@ -352,9 +365,17 @@ else if (rendered.Count > 0)
         // Manual fallback (WX-218): pre-create the response paste target + print the cue card.
         var responseTxtPath = Path.Combine(outDir, $"{targetIso}.{stamp}.response.txt");
         var rerun = $"dotnet run --project src\\WxReport.Tools.TranslationQa -- --response \"{responseTxtPath}\"";
-        await File.WriteAllTextAsync(responseTxtPath,
-            "Paste the FULL reply from Copilot/ChatGPT here (replace this text), then save and close.\r\n" +
-            "Then run:\r\n  " + rerun + "\r\n");
+        try
+        {
+            await File.WriteAllTextAsync(responseTxtPath,
+                "Paste the FULL reply from Copilot/ChatGPT here (replace this text), then save and close.\r\n" +
+                "Then run:\r\n  " + rerun + "\r\n");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine($"error: could not write the response paste target — {ex.Message}");
+            return 1;
+        }
 
         Console.WriteLine("\nNext steps:");
         Console.WriteLine("  1. Open the request and paste it into Copilot or ChatGPT (a non-Claude model):");

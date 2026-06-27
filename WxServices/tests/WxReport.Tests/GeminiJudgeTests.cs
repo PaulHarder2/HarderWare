@@ -17,9 +17,11 @@ public class GeminiJudgeTests
     {
         public string? ApiKeyHeader { get; private set; }
         public string? RequestBody { get; private set; }
+        public int Calls { get; private set; }
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
+            Calls++;
             ApiKeyHeader = request.Headers.TryGetValues("x-goog-api-key", out var v) ? v.FirstOrDefault() : null;
             RequestBody = request.Content is null ? null : await request.Content.ReadAsStringAsync(ct);
             return new HttpResponseMessage(status) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
@@ -69,8 +71,21 @@ public class GeminiJudgeTests
     [Fact]
     public async Task JudgeAsync_MissingKey_Throws_WithoutCallingApi()
     {
-        using var http = new HttpClient(new StubHandler(HttpStatusCode.OK, Envelope("{}")));
+        var handler = new StubHandler(HttpStatusCode.OK, Envelope("{}"));
+        using var http = new HttpClient(handler);
         await Assert.ThrowsAsync<JudgeParseException>(() => new GeminiJudge(http, new GeminiConfig { ApiKey = null }).JudgeAsync("x", CancellationToken.None));
+        Assert.Equal(0, handler.Calls); // failed fast before any HTTP call
+    }
+
+    [Fact]
+    public async Task JudgeAsync_CanceledToken_Propagates()
+    {
+        // A cancel (and, by the same path, the HttpClient timeout) must surface as OperationCanceledException
+        // — GeminiJudge only wraps transport errors, so cancellation propagates for the caller to handle.
+        using var http = new HttpClient(new StubHandler(HttpStatusCode.OK, Envelope("""{ "language": "de" }""")));
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => new GeminiJudge(http, Cfg()).JudgeAsync("x", cts.Token));
     }
 
     [Fact]
