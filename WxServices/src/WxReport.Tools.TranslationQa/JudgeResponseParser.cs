@@ -6,9 +6,10 @@ namespace WxReport.Tools.TranslationQa;
 /// WX-218 — the shared, source-agnostic core: turn a model's raw reply (a pasted Copilot/ChatGPT
 /// answer today, an API body later) into a validated <see cref="JudgeResponse"/>. Models routinely
 /// wrap their JSON in a ```` ```json ```` fence or surround it with prose (which can itself contain
-/// braces like <c>{token}</c> or <c>{0}</c>), so every balanced top-level object is tried in turn and
-/// the first one that both deserializes and satisfies the non-null contract wins. Tolerant by design;
-/// reports a clear, actionable error rather than throwing on a bad paste.
+/// braces like <c>{token}</c> or <c>{0}</c>), so every balanced top-level object is tried in turn and the
+/// richest object carrying a <c>language</c> field wins; its fields are then coerced so sparse-but-valid
+/// output is kept rather than rejected. Tolerant by design; reports a clear, actionable error rather than
+/// throwing on a bad paste.
 /// </summary>
 public static class JudgeResponseParser
 {
@@ -26,6 +27,8 @@ public static class JudgeResponseParser
 
         var sawCandidate = false;
         string? lastError = null;
+        JudgeResponse? best = null;
+        var bestScore = -1;
 
         foreach (var candidate in EnumerateJsonObjects(raw))
         {
@@ -45,23 +48,29 @@ public static class JudgeResponseParser
             if (parsed is null)
                 continue;
 
-            // Normalize omitted arrays to empty so callers never null-check (the judge may legitimately
-            // return no findings); then enforce the non-null contract on the required scalars.
-            var normalized = parsed with
+            // `language` is the gate that identifies an object as a verdict; a stray "{}" or a prose-brace
+            // fragment lacks it and is skipped.
+            if (string.IsNullOrWhiteSpace(parsed.Language))
             {
-                BackTranslations = parsed.BackTranslations ?? [],
-                ReportFindings = parsed.ReportFindings ?? [],
-                VocabularyVerdicts = parsed.VocabularyVerdicts ?? [],
-            };
-
-            var contractError = ContractViolation(normalized);
-            if (contractError is not null)
-            {
-                lastError = contractError;
-                continue; // e.g. a stray "{}" or non-verdict object — keep scanning for the real one
+                lastError = "a JSON object in the reply had no 'language' field (not the verdict).";
+                continue;
             }
 
-            response = normalized;
+            // A reply can carry more than one language-bearing object (e.g. a model echoes the schema before
+            // its real answer). Keep the richest — most verdicts/findings/back-translations — so a sparse
+            // echo never short-circuits the real verdict into a silently-empty audit.
+            var normalized = Normalize(parsed);
+            var score = normalized.VocabularyVerdicts.Count + normalized.ReportFindings.Count + normalized.BackTranslations.Count;
+            if (score > bestScore)
+            {
+                best = normalized;
+                bestScore = score;
+            }
+        }
+
+        if (best is not null)
+        {
+            response = best;
             return true;
         }
 
@@ -71,31 +80,35 @@ public static class JudgeResponseParser
         return false;
     }
 
-    /// <summary>Reject a payload that omitted a required (non-nullable) field — it deserialized to null. Returns null when valid.</summary>
-    private static string? ContractViolation(JudgeResponse r)
+    /// <summary>
+    /// Make a verdict safe for consumers without rejecting sparse-but-valid model output: normalize
+    /// omitted arrays to empty, drop null elements (and verdicts with no token, which can't be acted on),
+    /// and coerce omitted optional text to "" so nothing nulls downstream. The judge's output is advisory,
+    /// so a missing comment/finding-field is not a reason to discard the whole audit.
+    /// </summary>
+    private static JudgeResponse Normalize(JudgeResponse r) => r with
     {
-        if (string.IsNullOrWhiteSpace(r.Language))
-            return "the reply is missing the required 'language' field.";
-
-        if (r.SelfReportedConfidence is { } c && (c.Level is null || c.Note is null))
-            return "selfReportedConfidence is missing 'level' or 'note'.";
-
-        if (r.BackTranslations.Any(b => b is null || b.Scenario is null || b.English is null))
-            return "a backTranslations entry is null or missing 'scenario' or 'english'.";
-
-        if (r.ReportFindings.Any(f => f is null || f.Scenario is null || f.Location is null || f.Problem is null || f.SuggestedFix is null))
-            return "a reportFindings entry is null or missing a required field.";
-
-        if (r.VocabularyVerdicts.Any(v => v is null || v.Token is null || v.Comment is null))
-            return "a vocabularyVerdicts entry is null or missing 'token' or 'comment'.";
-
-        return null;
-    }
+        SelfReportedConfidence = r.SelfReportedConfidence is { } c
+            ? c with { Level = c.Level ?? "", Note = c.Note ?? "" }
+            : null,
+        BackTranslations = (r.BackTranslations ?? [])
+            .Where(b => b is not null)
+            .Select(b => b with { Scenario = b.Scenario ?? "", English = b.English ?? "" })
+            .ToList(),
+        ReportFindings = (r.ReportFindings ?? [])
+            .Where(f => f is not null)
+            .Select(f => f with { Scenario = f.Scenario ?? "", Location = f.Location ?? "", Problem = f.Problem ?? "", SuggestedFix = f.SuggestedFix ?? "" })
+            .ToList(),
+        VocabularyVerdicts = (r.VocabularyVerdicts ?? [])
+            .Where(v => v is not null && !string.IsNullOrWhiteSpace(v.Token))
+            .Select(v => v with { Comment = v.Comment ?? "" })
+            .ToList(),
+    };
 
     /// <summary>
     /// Yield every balanced top-level <c>{ … }</c> object in document order, correct through nesting and
     /// braces that appear inside JSON string values. Free-text braces in prose come out as their own
-    /// (usually invalid) candidates and are filtered by the deserialize/contract checks in TryParse.
+    /// (usually invalid) candidates and are filtered by the deserialize + language-gate checks in TryParse.
     /// </summary>
     private static IEnumerable<string> EnumerateJsonObjects(string raw)
     {

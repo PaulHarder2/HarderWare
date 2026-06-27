@@ -131,12 +131,40 @@ public class JudgeResponseParserTests
     }
 
     [Fact]
-    public void TryParse_NullListElement_FailsContract_WithoutThrowing()
+    public void TryParse_NullListElement_DroppedNotRejected()
     {
-        // System.Text.Json deserializes [null] to a null element — the contract check must reject it, not NRE.
+        // System.Text.Json deserializes [null] to a null element — it's dropped (no NRE), not a rejection.
         var raw = """{ "language": "de", "vocabularyVerdicts": [ null ] }""";
-        Assert.False(JudgeResponseParser.TryParse(raw, out var r, out var err));
-        Assert.Null(r);
-        Assert.False(string.IsNullOrWhiteSpace(err));
+        Assert.True(JudgeResponseParser.TryParse(raw, out var r, out _));
+        Assert.Empty(r!.VocabularyVerdicts);
+    }
+
+    [Fact]
+    public void TryParse_VerdictMissingComment_IsCoerced_NotRejected()
+    {
+        // Real models (Gemini) omit optional fields like 'comment' — that must NOT reject the whole audit.
+        var raw = """{ "language": "de", "vocabularyVerdicts": [ { "token": "rain_light", "accurate": true, "natural": true } ] }""";
+        Assert.True(JudgeResponseParser.TryParse(raw, out var r, out _));
+        Assert.Single(r!.VocabularyVerdicts);
+        Assert.Equal("", r.VocabularyVerdicts[0].Comment);
+    }
+
+    [Fact]
+    public void TryParse_VerdictMissingToken_IsDropped()
+    {
+        // A verdict with no token can't be associated with a term — drop it, don't reject the audit.
+        var raw = """{ "language": "de", "vocabularyVerdicts": [ { "accurate": true, "natural": true, "comment": "x" } ] }""";
+        Assert.True(JudgeResponseParser.TryParse(raw, out var r, out _));
+        Assert.Empty(r!.VocabularyVerdicts);
+    }
+
+    [Fact]
+    public void TryParse_MultipleLanguageObjects_PicksRichest()
+    {
+        // A model may echo a sparse schema object before its real answer (both carry "language"); the
+        // richest verdict must win, or the sparse echo would short-circuit into a silently-empty audit.
+        var raw = """{ "language": "de" }""" + "\n\n" + FullJson;
+        Assert.True(JudgeResponseParser.TryParse(raw, out var r, out _));
+        Assert.Single(r!.VocabularyVerdicts);
     }
 }
