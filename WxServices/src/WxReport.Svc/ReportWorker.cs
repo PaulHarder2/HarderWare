@@ -2373,7 +2373,7 @@ public sealed class ReportWorker : BackgroundService
         var img =
             "<p style=\"text-align:center;margin-top:16px\">" +
             $"<img src=\"cid:meteogramAbbrev\" style=\"width:100%;max-width:1000px\" alt=\"{alt}\"><br>" +
-            "<span style=\"font-size:11px;color:#888;font-style:italic\">" +
+            "<span style=\"font-size:13px;color:#6b8fa8;font-style:italic\">" +
             caption +
             "</span>" +
             "</p>";
