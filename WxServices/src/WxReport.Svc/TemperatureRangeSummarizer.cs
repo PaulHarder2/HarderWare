@@ -28,7 +28,9 @@ namespace WxReport.Svc;
 /// renderer converts each endpoint to the recipient's unit, so the prose stays
 /// unit-neutral. The per-day high/low is the max/min °C across the day's blocks —
 /// the same aggregation <see cref="StructuredReportRenderer"/> uses for the Extended
-/// Forecast grid — so the summary and the grid cannot disagree (WX-153 spine).
+/// Forecast grid — so a day's high/low figure matches the grid's (WX-153 spine). The day
+/// <em>set</em> can differ: WX-230 omits a partial day's non-extreme (a high with no
+/// afternoon, a low with no morning) from the summary, while the grid still shows that cell.
 /// </para>
 /// </summary>
 public static class TemperatureRangeSummarizer
@@ -43,6 +45,22 @@ public static class TemperatureRangeSummarizer
     public const double SplitThresholdC = 3.0;
 
     private const double Epsilon = 1e-9;
+
+    /// <summary>
+    /// Local start hour of the afternoon (peak-heating) 6-hour band. Blocks are local-aligned to
+    /// 00/06/12/18 (WX-155). Each daily extreme is gated on the band that holds it (WX-230):
+    /// <list type="bullet">
+    /// <item>the daily <b>maximum</b> sits in the 12:00–18:00 band, so a day has a genuine high only
+    ///   if it has THIS band (<c>local.Hour == 12</c>).</item>
+    /// <item>the daily <b>minimum</b> sits at ~dawn (06:00), in the morning half of the day, so a
+    ///   day has a genuine overnight low only if it has a band starting before this one
+    ///   (<c>local.Hour &lt; 12</c> — the pre-dawn 00:00 or morning 06:00 band). Using "before the
+    ///   afternoon" rather than exactly {0,6} is also robust to a DST-stepped pre-dawn boundary that
+    ///   lands at, e.g., local 01:00.</item>
+    /// </list>
+    /// At high latitudes the minimum can drift off dawn — a small, accepted error.
+    /// </summary>
+    private const int AfternoonBandLocalHour = 12;
 
     /// <summary>
     /// One characterized sub-period: an inclusive canonical-°C span
@@ -105,18 +123,35 @@ public static class TemperatureRangeSummarizer
     }
 
     /// <summary>
-    /// The per-local-day rounded-°C highs and lows the Extended Forecast grid shows,
-    /// in chronological order: each day's high/low is the max/min °C across all its
-    /// blocks, and a day whose every block has fully elapsed at
-    /// <paramref name="nowUtc"/> is dropped (WX-188) — mirroring
-    /// <see cref="StructuredReportRenderer"/>'s day aggregation so the summary and the
-    /// grid characterize the same days from the same figures.
+    /// The per-local-day RAW °C highs and lows for the temperature summary, in chronological
+    /// order. Each day's high/low is the max/min °C across all its blocks (mirroring
+    /// <see cref="StructuredReportRenderer"/>'s grid aggregation), and a day whose every block
+    /// has fully elapsed at <paramref name="nowUtc"/> is dropped (WX-188).
+    ///
+    /// <para>
+    /// Highs and lows are extracted ASYMMETRICALLY (WX-230), each gated on the band that holds its
+    /// extreme so a partial day can't contribute a bogus one:
+    /// <list type="bullet">
+    /// <item>a day contributes a HIGH only if it has its <b>afternoon</b> block (local 12:00–18:00).
+    ///   A partial TRAILING day whose horizon ends before its afternoon has only a pre-dawn/morning
+    ///   block, whose max is not a daytime high — counting it made the summary split off a phantom
+    ///   "cooldown" (a steady 99 °F week ending in a pre-dawn 83 °F).</item>
+    /// <item>a day contributes a LOW only if it has a <b>pre-dawn or morning</b> block (local 00:00
+    ///   or 06:00 — the dawn minimum sits on that boundary). A leading day (today, sent past the
+    ///   morning) whose earliest block is the afternoon has only daytime minima, not an overnight
+    ///   low — the mirror of the same defect.</item>
+    /// </list>
+    /// A day can therefore contribute a high, a low, both, or neither, so the returned series can
+    /// differ in length.
+    /// </para>
+    /// Values are RAW °C (no rounding here): the renderer converts and rounds once per recipient
+    /// unit, exactly as the grid does, so the two never disagree by a rounding step.
     /// </summary>
     public static (IReadOnlyList<double> HighsC, IReadOnlyList<double> LowsC) DailyHighsLows(
         ForecastSnapshotBody body, DateTime nowUtc, TimeZoneInfo tz)
     {
         var order = new List<DateOnly>();
-        var byDay = new Dictionary<DateOnly, (double Hi, double Lo, bool AnyLive)>();
+        var byDay = new Dictionary<DateOnly, (double Hi, double Lo, bool AnyLive, bool HasAfternoon, bool HasDawnWindow)>();
         // Sort by StartUtc rather than trust block order — final_snapshot is
         // Claude-emitted and the schema documents but does not enforce "earliest first".
         foreach (var b in body.Blocks.OrderBy(b => b.StartUtc))
@@ -126,26 +161,28 @@ public static class TemperatureRangeSummarizer
             // Share the renderer's exact elapsed-block predicate so the summary's day-set
             // and the Extended Forecast grid's cannot drift (WX-188).
             bool live = SevereBlocks.NotFullyElapsed(b, nowUtc);
+            bool afternoon = local.Hour == AfternoonBandLocalHour;
+            bool dawnWindow = local.Hour < AfternoonBandLocalHour;   // a morning-half block brackets the dawn minimum
             if (byDay.TryGetValue(day, out var cur))
-                byDay[day] = (Math.Max(cur.Hi, b.TemperatureCelsius.Max), Math.Min(cur.Lo, b.TemperatureCelsius.Min), cur.AnyLive || live);
+                byDay[day] = (Math.Max(cur.Hi, b.TemperatureCelsius.Max), Math.Min(cur.Lo, b.TemperatureCelsius.Min), cur.AnyLive || live, cur.HasAfternoon || afternoon, cur.HasDawnWindow || dawnWindow);
             else
             {
                 order.Add(day);
-                byDay[day] = (b.TemperatureCelsius.Max, b.TemperatureCelsius.Min, live);
+                byDay[day] = (b.TemperatureCelsius.Max, b.TemperatureCelsius.Min, live, afternoon, dawnWindow);
             }
         }
 
-        // RAW °C (no rounding here): the renderer converts and rounds once per recipient unit,
-        // exactly as the grid does, so the two never disagree by a rounding step.
         var highs = new List<double>();
         var lows = new List<double>();
         foreach (var day in order)
         {
             var d = byDay[day];
             if (!d.AnyLive)
-                continue;  // a wholly-past day is not on the grid, so not in the summary (WX-188)
-            highs.Add(d.Hi);
-            lows.Add(d.Lo);
+                continue;            // a wholly-past day is not on the grid, so not in the summary (WX-188)
+            if (d.HasAfternoon)
+                highs.Add(d.Hi);     // a real daytime high needs the afternoon (peak-heating) block
+            if (d.HasDawnWindow)
+                lows.Add(d.Lo);      // a real overnight low needs a pre-dawn/morning (morning-half) block
         }
         return (highs, lows);
     }
