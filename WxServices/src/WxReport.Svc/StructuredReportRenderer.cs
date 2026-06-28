@@ -84,7 +84,8 @@ public static class StructuredReportRenderer
         string RenderProse(string prose) => HtmlText(ReportTokens.Substitute(
             prose,
             (kind, value) => RenderQuantity(kind, value, recipient),
-            instant => RenderInstant(instant, localityTz, culture)));
+            instant => RenderInstant(instant, localityTz, culture),
+            (loC, hiC) => FormatTempRangeC(loC, hiC, recipient)));
 
         var sb = new StringBuilder();
         sb.Append("<div style=\"max-width:600px;margin:0 auto;font-family:Arial,Helvetica,sans-serif;color:#1a3a5c;\">");
@@ -880,6 +881,24 @@ public static class StructuredReportRenderer
         r.TempUnit == "C"
             ? $"{Math.Round(celsius).ToString("0", Inv)}°C"
             : $"{Math.Round(celsius * 9.0 / 5.0 + 32.0).ToString("0", Inv)}°F";
+
+    // WX-228: a temperature RANGE token ({q:temp_range:lo:hi}, canonical °C) — both
+    // endpoints converted and rounded independently to the recipient's unit and joined
+    // with an en-dash under a single unit suffix ("24–26°C" / "75–79°F"). Endpoints
+    // are ordered defensively, and a pair that collapses after rounding (e.g. a ±1 °C
+    // flat-week band that rounds to one °F value) renders as a single figure.
+    private static string FormatTempRangeC(double loC, double hiC, Recipient r)
+    {
+        bool celsius = r.TempUnit == "C";
+        int lo = (int)Math.Round(celsius ? loC : loC * 9.0 / 5.0 + 32.0);
+        int hi = (int)Math.Round(celsius ? hiC : hiC * 9.0 / 5.0 + 32.0);
+        if (lo > hi)
+            (lo, hi) = (hi, lo);
+        string unit = celsius ? "°C" : "°F";
+        return lo == hi
+            ? $"{lo.ToString(Inv)}{unit}"
+            : $"{lo.ToString(Inv)}–{hi.ToString(Inv)}{unit}";
+    }
 
     private static string FormatWindKt(double kt, Recipient r) =>
         r.WindSpeedUnit == "kph"

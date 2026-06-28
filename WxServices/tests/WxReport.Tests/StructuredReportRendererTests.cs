@@ -215,6 +215,30 @@ public class StructuredReportRendererTests
     }
 
     [Fact]
+    public void TempRangeToken_RendersOneConvertedSpan_PerRecipientUnit()
+    {
+        // WX-228: a {q:temp_range:lo:hi} token (canonical °C) renders as a single
+        // converted span under one unit suffix — 36–37 °C → 97–99 °F for an imperial
+        // recipient, kept as 36–37 °C for a metric one.
+        var report = new StructuredReportBody
+        {
+            Changes = [],
+            Narrative = new Dictionary<string, NarrativeSections>
+            {
+                ["en"] = new() { ChangeSummary = null, Closing = "Highs hold {q:temp_range:36:37} all week." },
+            },
+        };
+
+        var en = StructuredReportRenderer.Render(report, Forecast(), Observation(), Imperial(), T("en"), C("en"), Utc, ReportKind.Scheduled, RenderNow);
+        var me = StructuredReportRenderer.Render(report, Forecast(), Observation(), Metric(), T("en"), C("en"), Utc, ReportKind.Scheduled, RenderNow);
+
+        Assert.Contains("97–99°F", en);
+        Assert.DoesNotContain("°C", en);
+        Assert.Contains("36–37°C", me);
+        Assert.DoesNotContain("°F", me);
+    }
+
+    [Fact]
     public void FallbackBand_IsDirectionAware_WhenChangeSummaryAbsent()
     {
         // WX-189 (CodeRabbit #3): when the band must show (unscheduled) but the model's

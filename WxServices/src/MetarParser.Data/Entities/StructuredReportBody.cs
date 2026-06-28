@@ -317,6 +317,9 @@ public enum QuantityKind
 /// <item><c>{q:&lt;kind&gt;:&lt;value&gt;}</c> — a quantity in its kind's canonical
 /// unit (period decimal separator), e.g. <c>{q:temp:33.5}</c>, <c>{q:gust:30}</c>.
 /// Rendered in the recipient's units and locale.</item>
+/// <item><c>{q:temp_range:&lt;lo&gt;:&lt;hi&gt;}</c> — a temperature RANGE, two
+/// canonical-°C endpoints (low:high), e.g. <c>{q:temp_range:24:26}</c>.  Rendered as
+/// a single converted span in the recipient's unit ("24–26°C" / "75–79°F").  WX-228.</item>
 /// <item><c>{q:time:&lt;ISO-8601 UTC&gt;}</c> — an instant, e.g.
 /// <c>{q:time:2026-06-08T21:00:00Z}</c>.  Rendered in the locality timezone and
 /// the recipient's locale.</item>
@@ -449,6 +452,12 @@ public static partial class ReportTokens
                     throw new JsonException(
                         $"{where} contains token '{span.Value}' whose timestamp is not a full ISO-8601 UTC instant (yyyy-MM-ddTHH:mm:ssZ).");
             }
+            else if (kind == "temp_range")
+            {
+                if (!TryParseRange(value, out _, out _))
+                    throw new JsonException(
+                        $"{where} contains token '{span.Value}' whose value is not a 'lo:hi' pair of finite numbers.");
+            }
             else if (!QuantityKinds.Contains(kind))
             {
                 throw new JsonException($"{where} contains token '{span.Value}' with unknown quantity kind '{kind}'.");
@@ -505,6 +514,22 @@ public static partial class ReportTokens
             k => JsonNamingPolicy.SnakeCaseLower.ConvertName(k.ToString()), k => k, StringComparer.Ordinal);
 
     /// <summary>
+    /// Parses a <c>{q:temp_range:lo:hi}</c> token value — two colon-separated finite
+    /// numbers — into its low/high canonical-°C endpoints.  Shared by the validator
+    /// and the renderer so the grammar each enforces cannot drift (WX-228).
+    /// </summary>
+    private static bool TryParseRange(string value, out double lo, out double hi)
+    {
+        lo = hi = 0;
+        int sep = value.IndexOf(':');
+        if (sep <= 0 || sep >= value.Length - 1)
+            return false;
+        return double.TryParse(value.AsSpan(0, sep), NumberStyles.Float, CultureInfo.InvariantCulture, out lo)
+            && double.TryParse(value.AsSpan(sep + 1), NumberStyles.Float, CultureInfo.InvariantCulture, out hi)
+            && double.IsFinite(lo) && double.IsFinite(hi);
+    }
+
+    /// <summary>
     /// Substitute every token in <paramref name="text"/> using the SAME grammar
     /// the validator enforces (so the renderer and validator cannot drift): each
     /// <c>{q:&lt;kind&gt;:&lt;value&gt;}</c> quantity is handed to
@@ -520,7 +545,8 @@ public static partial class ReportTokens
     public static string Substitute(
         string text,
         Func<QuantityKind, double, string> renderQuantity,
-        Func<DateTime, string> renderTime)
+        Func<DateTime, string> renderTime,
+        Func<double, double, string>? renderRange = null)
     {
         var expanded = BraceSpanPattern().Replace(text, m =>
         {
@@ -540,6 +566,13 @@ public static partial class ReportTokens
                 return DateTime.TryParse(value, CultureInfo.InvariantCulture,
                     DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var instant)
                     ? renderTime(instant)
+                    : span;
+            }
+
+            if (kind == "temp_range")
+            {
+                return renderRange is not null && TryParseRange(value, out var lo, out var hi)
+                    ? renderRange(lo, hi)
                     : span;
             }
 

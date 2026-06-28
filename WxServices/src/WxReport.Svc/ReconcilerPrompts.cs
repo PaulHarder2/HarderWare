@@ -266,6 +266,8 @@ internal static class ReconcilerPrompts
             unit. Write a token the renderer substitutes in the recipient's own
             units and locale:
               {q:temp:33.5}    temperature, degrees Celsius
+              {q:temp_range:24:26}  a temperature RANGE, two °C endpoints
+                               (low:high); renders as one converted span
               {q:wind:22}      sustained wind, knots
               {q:gust:30}      gust, knots
               {q:pressure:1013.2}  pressure, hPa
@@ -289,6 +291,14 @@ internal static class ReconcilerPrompts
             unit system — no "in the low 90s", no "below freezing point of 32".
             Say "highs near {q:temp:33.5}", "gusts to {q:gust:30}". Relative or
             unit-free phrasing ("a sharp warm-up", "near freezing") is fine.
+          • Daily high/low summary: when you summarize daytime highs or overnight
+            lows in the closing, use the ready ranges given under
+            temperature_summary in the per-cycle data, written as their
+            {q:temp_range:lo:hi} tokens — verbatim. NEVER build a band by wrapping a
+            single {q:temp:...} point in vague words ("the upper {q:temp:36} range",
+            "highs in the low {q:temp:33}s"): a {q:temp_range:...} token already
+            renders a complete range in the recipient's units. You still phrase the
+            sentence (and any early/later split) natively and idiomatically.
           • Never write raw UTC block notation in prose. The 6-hour grid
             shorthand ("12-18Z", "18Z", "the 12-18Z block") is internal
             engineering notation; it must NEVER reach the reader. Express every

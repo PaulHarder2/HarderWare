@@ -507,4 +507,45 @@ public class StructuredReportBodyTests
 
         Assert.Equal("Despejando tras 9:00 p. m....", result);
     }
+
+    // ── WX-228: the temp_range token (a two-endpoint °C span) ────────────────
+
+    [Fact]
+    public void Validate_TempRange_WellFormed_Accepted() =>
+        // A 'lo:hi' pair of finite numbers validates like any other token (no throw).
+        ReportTokens.ValidateAndCollectAnchors("Highs hold {q:temp_range:24:26} all week.", "closing");
+
+    [Theory]
+    [InlineData("{q:temp_range:24}")]      // only one endpoint
+    [InlineData("{q:temp_range:24:}")]     // missing high
+    [InlineData("{q:temp_range::26}")]     // missing low
+    [InlineData("{q:temp_range:a:b}")]     // non-numeric
+    [InlineData("{q:temp_range:24:26:28}")] // three values
+    public void Validate_TempRange_Malformed_Throws(string token) =>
+        Assert.Throws<JsonException>(() => ReportTokens.ValidateAndCollectAnchors(token, "closing"));
+
+    [Fact]
+    public void Substitute_TempRange_RendersViaRangeCallback()
+    {
+        var result = ReportTokens.Substitute(
+            "Highs reach {q:temp_range:36:37} this week.",
+            (_, _) => "X",
+            _ => "noon",
+            (lo, hi) => $"[{lo}-{hi}]");
+
+        Assert.Equal("Highs reach [36-37] this week.", result);
+    }
+
+    [Fact]
+    public void Substitute_TempRange_NoRangeCallback_LeftVerbatim()
+    {
+        // The three-argument overload (callers with no range renderer) leaves a temp_range
+        // token untouched rather than crashing — substitution must never throw on a send.
+        var result = ReportTokens.Substitute(
+            "Highs reach {q:temp_range:36:37}.",
+            (_, _) => "X",
+            _ => "noon");
+
+        Assert.Equal("Highs reach {q:temp_range:36:37}.", result);
+    }
 }
