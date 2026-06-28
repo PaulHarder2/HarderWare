@@ -180,7 +180,7 @@ public sealed class ForecastReconciler
 
         var userMessage = BuildUserMessage(
             snapshot, provisional, gfsModelRunUtc, tafIssuanceUtc, tafValidToUtc, prior, tz,
-            changedSinceLastSend);
+            nowUtc, changedSinceLastSend);
 
         // WX-110: Claude intermittently returns a complete (untruncated) tool_use
         // that omits a required field or whose final_snapshot fails schema
@@ -1542,7 +1542,7 @@ public sealed class ForecastReconciler
     private static string BuildUserMessage(
         WeatherSnapshot snapshot, ForecastSnapshotBody provisional, DateTime? gfsModelRunUtc,
         DateTime? tafIssuanceUtc, DateTime? tafValidToUtc, ForecastSnapshot? prior,
-        TimeZoneInfo tz, IReadOnlyList<TriggerSource> changedSinceLastSend)
+        TimeZoneInfo tz, DateTime nowUtc, IReadOnlyList<TriggerSource> changedSinceLastSend)
     {
         var sb = new StringBuilder();
         sb.AppendLine("Reconcile the following inputs for this locality and emit your three artifacts via the submit_reconciled_report tool.");
@@ -1557,6 +1557,19 @@ public sealed class ForecastReconciler
         sb.AppendLine("provisional_snapshot.body:");
         sb.AppendLine(provisional.Serialize());
         sb.AppendLine();
+
+        // WX-228: deterministically characterize the per-day highs/lows into the one
+        // or two whole-°C ranges the closing should speak in, handed to Claude as ready
+        // {q:temp_range:...} tokens so it phrases the band natively instead of wrapping
+        // a single point value in fuzzy words ("the upper 97°F range"). Derived from the
+        // same per-day max/min the Extended Forecast grid renders, so the two agree.
+        var (highsC, lowsC) = TemperatureRangeSummarizer.DailyHighsLows(provisional, nowUtc, tz);
+        var temperatureGuidance = TemperatureRangeSummarizer.BuildPromptGuidance(highsC, lowsC);
+        if (temperatureGuidance.Length > 0)
+        {
+            sb.Append(temperatureGuidance);
+            sb.AppendLine();
+        }
 
         if (tafIssuanceUtc.HasValue && tafValidToUtc.HasValue)
         {
