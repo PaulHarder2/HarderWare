@@ -166,13 +166,14 @@ public class TemperatureRangeSummarizerTests
     public void DailyHighsLows_AggregatesPerLocalDayMaxMin_Raw()
     {
         // tz = UTC, so a local day equals a UTC day; high = max across the day's blocks, low = min,
-        // kept RAW (no rounding here — the renderer rounds once per unit, matching the grid).
+        // kept RAW (no rounding here — the renderer rounds once per unit, matching the grid). Each
+        // day carries an afternoon (local-12:00) block so its high is a genuine daytime high.
         var body = new ForecastSnapshotBody
         {
             Blocks =
             [
-                Blk(0, 20, 30), Blk(6, 22, 34.4),   // day 1: hi 34.4, lo 20
-                Blk(24, 18, 26), Blk(30, 19, 28),   // day 2: hi 28, lo 18
+                Blk(6, 20, 30), Blk(12, 22, 34.4),   // day 1: morning + afternoon → hi 34.4, lo 20
+                Blk(30, 18, 26), Blk(36, 19, 28),    // day 2: morning + afternoon → hi 28, lo 18
             ],
         };
         var (highs, lows) = TemperatureRangeSummarizer.DailyHighsLows(body, Now, TimeZoneInfo.Utc);
@@ -190,7 +191,7 @@ public class TemperatureRangeSummarizerTests
             Blocks =
             [
                 Blk(-48, 10, 15), Blk(-42, 11, 16),   // two days ago — fully elapsed, dropped
-                Blk(0, 20, 30), Blk(6, 22, 33),       // today — kept
+                Blk(6, 20, 30), Blk(12, 22, 33),      // today — morning + afternoon → kept, hi 33
             ],
         };
         var (highs, _) = TemperatureRangeSummarizer.DailyHighsLows(body, Now, TimeZoneInfo.Utc);
@@ -200,19 +201,88 @@ public class TemperatureRangeSummarizerTests
     [Fact]
     public void DailyHighsLows_BucketsByLocalDay_NotUtcDay()
     {
-        // A fixed −6h zone (no DST, ICU-independent): two blocks 6h apart that share a UTC day
-        // straddle the LOCAL midnight, so they must bucket into two local days, not one.
-        var tz = TimeZoneInfo.CreateCustomTimeZone("t-6", TimeSpan.FromHours(-6), "t-6", "t-6");
+        // A fixed +6h zone (no DST, ICU-independent): two blocks on the SAME UTC day land on two
+        // different LOCAL days — and both at a low-capable band (morning 06:00 / pre-dawn 00:00),
+        // so each yields a low. Under UTC they'd collapse to one day (min 10).
+        var tz = TimeZoneInfo.CreateCustomTimeZone("t+6", TimeSpan.FromHours(6), "t+6", "t+6");
         var body = new ForecastSnapshotBody
         {
             Blocks =
             [
-                Blk(0, 10, 20),   // UTC 00:00 → local 18:00 (prior local day)
-                Blk(6, 15, 30),   // UTC 06:00 → local 00:00 (next local day)
+                Blk(0, 10, 20),    // UTC 00:00 → local 06:00 (morning, local day D)
+                Blk(18, 15, 30),   // UTC 18:00 → local 00:00 (pre-dawn, local day D+1) — same UTC day
             ],
         };
-        var (highs, _) = TemperatureRangeSummarizer.DailyHighsLows(body, Now, tz);
-        // Two local days (20, 30); under UTC these would collapse to one day of 30.
-        Assert.Equal(new[] { 20.0, 30.0 }, highs);
+        var (_, lows) = TemperatureRangeSummarizer.DailyHighsLows(body, Now, tz);
+        Assert.Equal(new[] { 10.0, 15.0 }, lows);
+    }
+
+    [Fact]
+    public void DailyHighsLows_DayWithNoOvernightBlock_ExcludedFromLows_KeptForHighs()
+    {
+        // The mirror of the partial-trailing-day case: a leading day (today, sent past the morning)
+        // whose earliest block is the afternoon has only daytime minima — not an overnight low — so
+        // it must not feed the lows series (WX-230). It still has an afternoon, so its high is real.
+        var body = new ForecastSnapshotBody
+        {
+            Blocks =
+            [
+                Blk(12, 25, 37),  // 06-02 12:00 local — afternoon (peak) → real high 37, no overnight
+                Blk(18, 24, 33),  // 06-02 18:00 local — evening
+                Blk(24, 20, 28),  // 06-03 00:00 local — pre-dawn
+                Blk(30, 19, 26),  // 06-03 06:00 local — morning
+                Blk(36, 22, 35),  // 06-03 12:00 local — afternoon
+            ],
+        };
+        var (highs, lows) = TemperatureRangeSummarizer.DailyHighsLows(body, Now, TimeZoneInfo.Utc);
+        Assert.Equal(new[] { 37.0, 35.0 }, highs);   // both days have an afternoon
+        Assert.Equal(new[] { 19.0 }, lows);          // day 1's daytime min (24) excluded — no overnight block
+    }
+
+    // ── WX-230: a partial trailing day (no afternoon block) must not feed the highs ──
+
+    [Fact]
+    public void DailyHighsLows_PartialTrailingDay_ExcludedFromHighs_KeptForLows()
+    {
+        // The last local day has only a pre-dawn block (the GFS horizon ends before its
+        // afternoon). Its max is a pre-dawn temperature, NOT a daytime high — so it must not
+        // feed the highs series (WX-230); its min is still a valid low.
+        var body = new ForecastSnapshotBody
+        {
+            Blocks =
+            [
+                Blk(6, 24, 30),   // 06-02 06:00 local — morning
+                Blk(12, 28, 37),  // 06-02 12:00 local — afternoon (peak) → real high 37
+                Blk(18, 26, 33),  // 06-02 18:00 local — evening
+                Blk(24, 26, 28),  // 06-03 00:00 local — pre-dawn ONLY (no afternoon)
+            ],
+        };
+        var (highs, lows) = TemperatureRangeSummarizer.DailyHighsLows(body, Now, TimeZoneInfo.Utc);
+        Assert.Equal(new[] { 37.0 }, highs);        // only the day with an afternoon block
+        Assert.Equal(new[] { 24.0, 26.0 }, lows);   // both days contribute a low
+    }
+
+    [Fact]
+    public void Characterize_SteadyHeatWithPartialPreDawnLastDay_NoPhantomCooldown()
+    {
+        // The WX-230 case: five full ~37 °C days, then a pre-dawn-only trailing day whose 28 °C
+        // max is not a daytime high. Pre-fix the highs were [37,37,37,37,37,28] → a phantom
+        // two-period "cooldown"; now the partial day is excluded and the highs stay one band.
+        var blocks = new List<ForecastSnapshotBlock>();
+        for (int d = 0; d < 5; d++)
+        {
+            blocks.Add(Blk(d * 24 + 6, 26, 32));    // morning
+            blocks.Add(Blk(d * 24 + 12, 28, 37));   // afternoon (peak) → high 37
+            blocks.Add(Blk(d * 24 + 18, 27, 34));   // evening
+        }
+        blocks.Add(Blk(5 * 24, 26, 28));            // day 6: pre-dawn block only
+
+        var (highs, _) = TemperatureRangeSummarizer.DailyHighsLows(
+            new ForecastSnapshotBody { Blocks = blocks }, Now, TimeZoneInfo.Utc);
+        var periods = TemperatureRangeSummarizer.Characterize(highs);
+
+        Assert.Equal(5, highs.Count);               // the partial day dropped out of the highs
+        var one = Assert.Single(periods);           // one band — no phantom cooldown
+        Assert.Equal((36, 38), ((int)one.LowC, (int)one.HighC));
     }
 }
