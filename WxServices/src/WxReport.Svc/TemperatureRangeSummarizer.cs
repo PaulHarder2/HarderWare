@@ -3,8 +3,6 @@ using System.Text;
 
 using MetarParser.Data.Entities;
 
-using WxInterp;
-
 namespace WxReport.Svc;
 
 /// <summary>
@@ -125,7 +123,9 @@ public static class TemperatureRangeSummarizer
         {
             var local = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(b.StartUtc, DateTimeKind.Utc), tz);
             var day = DateOnly.FromDateTime(local);
-            bool live = b.StartUtc.AddHours(GfsSnapshotBuilder.BlockHours) > nowUtc;
+            // Share the renderer's exact elapsed-block predicate so the summary's day-set
+            // and the Extended Forecast grid's cannot drift (WX-188).
+            bool live = SevereBlocks.NotFullyElapsed(b, nowUtc);
             if (byDay.TryGetValue(day, out var cur))
                 byDay[day] = (Math.Max(cur.Hi, b.TemperatureCelsius.Max), Math.Min(cur.Lo, b.TemperatureCelsius.Min), cur.AnyLive || live);
             else

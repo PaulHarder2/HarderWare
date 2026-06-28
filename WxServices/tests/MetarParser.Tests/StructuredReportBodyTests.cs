@@ -521,6 +521,8 @@ public class StructuredReportBodyTests
     [InlineData("{q:temp_range::26}")]     // missing low
     [InlineData("{q:temp_range:a:b}")]     // non-numeric
     [InlineData("{q:temp_range:24:26:28}")] // three values
+    [InlineData("{q:temp_range:Infinity:30}")] // non-finite low (parses, but IsFinite rejects)
+    [InlineData("{q:temp_range:1:NaN}")]   // non-finite high
     public void Validate_TempRange_Malformed_Throws(string token) =>
         Assert.Throws<JsonException>(() => ReportTokens.ValidateAndCollectAnchors(token, "closing"));
 

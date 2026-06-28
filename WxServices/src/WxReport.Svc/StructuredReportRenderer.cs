@@ -890,14 +890,14 @@ public static class StructuredReportRenderer
     private static string FormatTempRangeC(double loC, double hiC, Recipient r)
     {
         bool celsius = r.TempUnit == "C";
-        int lo = (int)Math.Round(celsius ? loC : loC * 9.0 / 5.0 + 32.0);
-        int hi = (int)Math.Round(celsius ? hiC : hiC * 9.0 / 5.0 + 32.0);
+        double lo = Math.Round(celsius ? loC : loC * 9.0 / 5.0 + 32.0);
+        double hi = Math.Round(celsius ? hiC : hiC * 9.0 / 5.0 + 32.0);
         if (lo > hi)
             (lo, hi) = (hi, lo);
         string unit = celsius ? "°C" : "°F";
         return lo == hi
-            ? $"{lo.ToString(Inv)}{unit}"
-            : $"{lo.ToString(Inv)}–{hi.ToString(Inv)}{unit}";
+            ? $"{lo.ToString("0", Inv)}{unit}"
+            : $"{lo.ToString("0", Inv)}–{hi.ToString("0", Inv)}{unit}";
     }
 
     private static string FormatWindKt(double kt, Recipient r) =>

@@ -57,8 +57,10 @@ DB_NAME="${WX228_DB:-WeatherData}"
 #   (upper|lower|mid) <=6 chars then "{q:temp:"   -- "the upper {q:temp:36} range"
 #   "{q:temp:NN}" <=6 chars then "range"          -- the trailing band noun
 #   "{q:temp:NN}s"                                 -- the banned "in the low {q:temp:33}s" idiom
-# "{q:temp:" cannot match inside "{q:temp_range:" (":" vs "_" after "temp").
-BUG='\b(upper|lower|mid)[^.{}]{0,6}\{q:temp:|\{q:temp:[0-9.]+\}[^.{}]{0,6}\brange|\{q:temp:[0-9.]+\}s'
+# "{q:temp:" cannot match inside "{q:temp_range:" (":" vs "_" after "temp"). NUM admits a
+# leading minus so winter forms ("{q:temp:-2} range", "{q:temp:-5}s") are caught too.
+NUM='-?[0-9]+(\.[0-9]+)?'
+BUG="\b(upper|lower|mid)[^.{}]{0,6}\{q:temp:|\{q:temp:${NUM}\}[^.{}]{0,6}\brange|\{q:temp:${NUM}\}s"
 
 sqlq() {  # SQL -> rows on stdout (headerless, '|'-separated, CR-stripped). </dev/null so powershell can't drain the read loop's stdin.
   powershell.exe -NoProfile -Command \

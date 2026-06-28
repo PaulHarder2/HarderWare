@@ -196,4 +196,23 @@ public class TemperatureRangeSummarizerTests
         var (highs, _) = TemperatureRangeSummarizer.DailyHighsLows(body, Now, TimeZoneInfo.Utc);
         Assert.Equal(new[] { 33.0 }, highs);
     }
+
+    [Fact]
+    public void DailyHighsLows_BucketsByLocalDay_NotUtcDay()
+    {
+        // A fixed −6h zone (no DST, ICU-independent): two blocks 6h apart that share a UTC day
+        // straddle the LOCAL midnight, so they must bucket into two local days, not one.
+        var tz = TimeZoneInfo.CreateCustomTimeZone("t-6", TimeSpan.FromHours(-6), "t-6", "t-6");
+        var body = new ForecastSnapshotBody
+        {
+            Blocks =
+            [
+                Blk(0, 10, 20),   // UTC 00:00 → local 18:00 (prior local day)
+                Blk(6, 15, 30),   // UTC 06:00 → local 00:00 (next local day)
+            ],
+        };
+        var (highs, _) = TemperatureRangeSummarizer.DailyHighsLows(body, Now, tz);
+        // Two local days (20, 30); under UTC these would collapse to one day of 30.
+        Assert.Equal(new[] { 20.0, 30.0 }, highs);
+    }
 }
