@@ -1,8 +1,12 @@
 using System.IO;
+using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 
+using MetarParser.Data;
+
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Web.WebView2.Wpf;
 
 using WxServices.Common;
@@ -22,6 +26,7 @@ namespace WxManager;
 public partial class TranslationQaTab : UserControl
 {
     private readonly string _qaFolder;
+    private string _currentIso = ""; // the selected package's target language, for copy-to-DB
 
     public TranslationQaTab()
     {
@@ -58,19 +63,26 @@ public partial class TranslationQaTab : UserControl
             return;
         }
 
+        // Detach the handler while we repopulate so a programmatic re-select doesn't depend on
+        // SelectionChanged firing — record value-equality means re-selecting the same package would
+        // otherwise be a no-op and Refresh wouldn't re-read a changed judged.json from disk.
+        PackageSelector.SelectionChanged -= PackageSelector_SelectionChanged;
         PackageSelector.ItemsSource = refs;
         PackageSelector.DisplayMemberPath = nameof(JudgePackageRef.DisplayName);
 
         if (refs.Count == 0)
         {
             PackageSelector.SelectedItem = null;
+            PackageSelector.SelectionChanged += PackageSelector_SelectionChanged;
             ShowEmpty($"No judge packages found in {_qaFolder}.\n\nRun the TranslationQa tool (--judge gemini, or --response for a manual paste) to produce one.");
             return;
         }
 
         // Restore the prior selection if it still exists, else default to the newest (first).
-        PackageSelector.SelectedItem = refs.FirstOrDefault(r => r.JudgedPath == current) ?? refs[0];
-        // SelectionChanged drives LoadSelected.
+        var target = refs.FirstOrDefault(r => r.JudgedPath == current) ?? refs[0];
+        PackageSelector.SelectedItem = target;
+        PackageSelector.SelectionChanged += PackageSelector_SelectionChanged;
+        LoadSelected(target); // always reload from disk (Refresh re-reads the file)
     }
 
     private void PackageSelector_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -97,6 +109,7 @@ public partial class TranslationQaTab : UserControl
 
         var req = pkg.Request;
         var judged = pkg.Judged;
+        _currentIso = judged.Language;
 
         LangText.Text = "Language: " + (string.IsNullOrWhiteSpace(req.TargetDisplayName)
             ? judged.Language
@@ -323,24 +336,88 @@ public partial class TranslationQaTab : UserControl
         SubTabs.Visibility = Visibility.Collapsed;
     }
 
+    // Copy a verdict's suggestion into LanguageTemplates — the human adjudication step (the suggestion is
+    // never auto-applied; a person clicks). Guarded by the {n}-placeholder contract: a suggestion that
+    // would drop or change a format placeholder is refused, because that corrupts the renderer's template.
+    private async void CopyToDb_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button btn || btn.DataContext is not VocabRowVm row)
+            return;
+        if (string.IsNullOrEmpty(_currentIso) || string.IsNullOrWhiteSpace(row.Suggestion))
+            return;
+
+        if (!PlaceholdersMatch(row.EnglishPhrase, row.Suggestion))
+        {
+            MessageBox.Show(
+                "Cannot apply: the suggestion's {n} placeholders don't match the English contract — applying it " +
+                $"would break the template's format string.\n\nEnglish: {row.EnglishPhrase}\nSuggestion: {row.Suggestion}",
+                "Placeholder mismatch", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var confirm = MessageBox.Show(
+            $"Apply this suggestion to LanguageTemplates?\n\nLanguage: {_currentIso}\nToken: {row.Token}\n" +
+            $"New phrase: {row.Suggestion}\nReplaces: {row.TargetPhrase}",
+            "Copy suggestion to database", MessageBoxButton.YesNo, MessageBoxImage.Question);
+        if (confirm != MessageBoxResult.Yes)
+            return;
+
+        try
+        {
+            await using var ctx = new WeatherDataContext(App.DbOptions);
+            var tpl = await ctx.LanguageTemplates.Include(t => t.Language)
+                .FirstOrDefaultAsync(t => t.Language!.IsoCode == _currentIso && t.Token == row.Token);
+            if (tpl is null)
+            {
+                MessageBox.Show($"No LanguageTemplates row for {_currentIso} / {row.Token}.", "Not found",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            tpl.Phrase = row.Suggestion;
+            tpl.ReviewedBy = "WX-219 translation-QA review";
+            tpl.ReviewedAtUtc = DateTime.UtcNow;
+            await ctx.SaveChangesAsync();
+
+            btn.IsEnabled = false;
+            btn.Content = "applied";
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Update failed: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    // The {n} placeholder set the suggestion must preserve, defined by the English source format string.
+    private static bool PlaceholdersMatch(string english, string suggestion)
+    {
+        static IEnumerable<string> Placeholders(string s) =>
+            Regex.Matches(s, @"\{\d+\}").Select(m => m.Value).OrderBy(x => x, StringComparer.Ordinal);
+        return Placeholders(english).SequenceEqual(Placeholders(suggestion));
+    }
+
     /// <summary>Flat, display-ready row for the vocabulary <see cref="DataGrid"/>.</summary>
     public sealed class VocabRowVm
     {
         public string StatusLabel { get; init; } = "";
+        public Brush StatusBrush { get; init; } = Brushes.Gray;
         public string Token { get; init; } = "";
         public string EnglishPhrase { get; init; } = "";
         public string TargetPhrase { get; init; } = "";
         public string Comment { get; init; } = "";
         public string Suggestion { get; init; } = "";
+        public bool CanCopy { get; init; }
 
         public static VocabRowVm From(VocabularyRow r) => new()
         {
             StatusLabel = StatusText(r.Status) + (r.HasActionableSuggestion ? "  ✎" : ""),
+            StatusBrush = StatusBrushFor(r.Status),
             Token = r.Token,
             EnglishPhrase = r.EnglishPhrase,
             TargetPhrase = r.TargetPhrase,
             Comment = r.Verdict?.Comment ?? "",
             Suggestion = r.Verdict?.Suggestion ?? "",
+            CanCopy = r.HasActionableSuggestion,
         };
 
         private static string StatusText(VerdictStatus s) => s switch
@@ -352,5 +429,28 @@ public partial class TranslationQaTab : UserControl
             VerdictStatus.Unrepresentable => "unrepresentable",
             _ => s.ToString(),
         };
+
+        private static readonly Brush OkBrush = Frozen("#4caf50");
+        private static readonly Brush WarnBrush = Frozen("#d4a017");
+        private static readonly Brush WrongBrush = Frozen("#e05050");
+        private static readonly Brush NotJudgedBrush = Frozen("#808080");
+        private static readonly Brush UnrepBrush = Frozen("#c08040");
+
+        private static Brush StatusBrushFor(VerdictStatus s) => s switch
+        {
+            VerdictStatus.Ok => OkBrush,
+            VerdictStatus.Warn => WarnBrush,
+            VerdictStatus.Wrong => WrongBrush,
+            VerdictStatus.NotJudged => NotJudgedBrush,
+            VerdictStatus.Unrepresentable => UnrepBrush,
+            _ => NotJudgedBrush,
+        };
+
+        private static Brush Frozen(string hex)
+        {
+            var b = (Brush)new BrushConverter().ConvertFromString(hex)!;
+            b.Freeze();
+            return b;
+        }
     }
 }

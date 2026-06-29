@@ -38,14 +38,30 @@
             <TabItem Header="Vocabulary" x:Name="VocabTab">
                 <DataGrid x:Name="VocabGrid" AutoGenerateColumns="False" IsReadOnly="True"
                           SelectionMode="Single" GridLinesVisibility="Horizontal" HeadersVisibility="Column"
-                          CanUserResizeRows="False" BorderThickness="0">
+                          CanUserResizeRows="False" BorderThickness="0" RowHeaderWidth="0" Margin="10,0,0,0">
                     <DataGrid.Columns>
-                        <DataGridTextColumn Header="Status"  Binding="{Binding StatusLabel}" Width="120"/>
+                        <DataGridTextColumn Header="Status"  Binding="{Binding StatusLabel}" Width="120">
+                            <DataGridTextColumn.ElementStyle>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Margin" Value="6,0,0,0"/>
+                                    <Setter Property="FontWeight" Value="SemiBold"/>
+                                    <Setter Property="Foreground" Value="{Binding StatusBrush}"/>
+                                </Style>
+                            </DataGridTextColumn.ElementStyle>
+                        </DataGridTextColumn>
                         <DataGridTextColumn Header="Token"   Binding="{Binding Token}" Width="150"/>
                         <DataGridTextColumn Header="English" Binding="{Binding EnglishPhrase}" Width="140"/>
                         <DataGridTextColumn Header="Target"  Binding="{Binding TargetPhrase}" Width="150"/>
                         <DataGridTextColumn Header="Comment" Binding="{Binding Comment}" Width="*"/>
                         <DataGridTextColumn Header="Suggestion" Binding="{Binding Suggestion}" Width="160"/>
+                        <DataGridTemplateColumn Header="Apply" Width="110">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <Button Content="Copy → DB" Margin="4,2" Padding="6,1"
+                                            IsEnabled="{Binding CanCopy}" Click="CopyToDb_Click"/>
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
                     </DataGrid.Columns>
                 </DataGrid>
             </TabItem>
