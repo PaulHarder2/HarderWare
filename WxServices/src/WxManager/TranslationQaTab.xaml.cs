@@ -2,6 +2,7 @@ using System.IO;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Media;
 
 using MetarParser.Data;
@@ -123,7 +124,12 @@ public partial class TranslationQaTab : UserControl
             counts += $"   ·   Orphan verdicts: {pkg.OrphanVerdicts.Count}";
         CountsText.Text = counts;
 
-        VocabGrid.ItemsSource = pkg.Vocabulary.Select(VocabRowVm.From).ToList();
+        // Two-stage default sort: rows with a (non-blank) suggestion first, then alphabetical by token —
+        // so the actionable rows float to the top while staying alphabetised within each group.
+        VocabGrid.ItemsSource = pkg.Vocabulary.Select(VocabRowVm.From)
+            .OrderBy(v => string.IsNullOrWhiteSpace(v.Suggestion) ? 1 : 0)
+            .ThenBy(v => v.Token, StringComparer.Ordinal)
+            .ToList();
 
         // Rebuild the scenario sub-tabs (everything except the static Vocabulary tab), newest selection first.
         for (var i = SubTabs.Items.Count - 1; i >= 0; i--)
@@ -168,9 +174,11 @@ public partial class TranslationQaTab : UserControl
     private static TabItem BuildScenarioTab(RenderedScenario s, BackTranslation? back, IReadOnlyList<ReportFinding> findings, string targetLabel)
     {
         var root = new Grid { Margin = new Thickness(8) };
-        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });               // synopsis
-        root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) }); // triptych
-        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });               // findings
+        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });                  // synopsis
+        root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) }); // triptych (fills)
+        // Findings: a definite height bounds the RichTextBox so its scroll engages reliably (a star row
+        // doesn't constrain here — the WebView2 airspace siblings disrupt the nested-star height measure).
+        root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(280) });
 
         var synopsis = Label(s.Synopsis, 13, FontWeights.SemiBold, "#c8c8c8", wrap: true);
         Grid.SetRow(synopsis, 0);
@@ -192,37 +200,115 @@ public partial class TranslationQaTab : UserControl
         Grid.SetRow(triptych, 1);
         root.Children.Add(triptych);
 
-        var findingsPanel = new StackPanel { Margin = new Thickness(0, 8, 0, 0) };
-        findingsPanel.Children.Add(Heading($"Report findings ({findings.Count})"));
-        if (findings.Count == 0)
+        // Findings: a fixed header over a read-only RichTextBox. RichTextBox gives reliable scrolling
+        // (it never clips its content, unlike a bounded ScrollViewer over wrapped text) and makes all the
+        // findings text selectable/copyable; the FlowDocument keeps the per-location gold card and renders
+        // multiple findings at one location as a bulleted list (automatic hanging indent).
+        var findingsRegion = new Grid { Margin = new Thickness(0, 8, 0, 0) };
+        findingsRegion.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        findingsRegion.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+
+        var findingsHeader = Heading($"Report findings ({findings.Count})");
+        Grid.SetRow(findingsHeader, 0);
+        findingsRegion.Children.Add(findingsHeader);
+
+        var findingsBox = new RichTextBox(BuildFindingsDocument(findings))
         {
-            findingsPanel.Children.Add(Muted("(none)"));
-        }
-        else
-        {
-            foreach (var f in findings)
-            {
-                var card = new Border
-                {
-                    Background = (Brush)new BrushConverter().ConvertFromString("#241f14")!, // tan-tinted dark
-                    BorderBrush = (Brush)new BrushConverter().ConvertFromString("#e8a020")!,
-                    BorderThickness = new Thickness(3, 0, 0, 0),
-                    Padding = new Thickness(10, 6, 10, 6),
-                    Margin = new Thickness(0, 0, 0, 6),
-                };
-                var inner = new StackPanel();
-                inner.Children.Add(Label(f.Location, 12, FontWeights.SemiBold, "#e0c070", wrap: true));
-                inner.Children.Add(Body(f.Problem));
-                inner.Children.Add(Label("Suggested fix: " + f.SuggestedFix, 12, FontWeights.Normal, "#9fb89f", wrap: true));
-                card.Child = inner;
-                findingsPanel.Children.Add(card);
-            }
-        }
-        Grid.SetRow(findingsPanel, 2);
-        root.Children.Add(findingsPanel);
+            IsReadOnly = true,
+            IsDocumentEnabled = true,
+            BorderThickness = new Thickness(0),
+            Background = Brushes.Transparent,
+            Foreground = (Brush)new BrushConverter().ConvertFromString("#c8c8c8")!,
+            Padding = new Thickness(0),
+            VerticalScrollBarVisibility = ScrollBarVisibility.Visible,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+        };
+        Grid.SetRow(findingsBox, 1);
+        findingsRegion.Children.Add(findingsBox);
+        Grid.SetRow(findingsRegion, 2);
+        root.Children.Add(findingsRegion);
 
         return new TabItem { Header = s.Name, Content = root };
     }
+
+    // The findings as a selectable FlowDocument: one gold-accented Section per location; a location with
+    // several findings renders as a bulleted List (automatic hanging indent — the problem and its fix
+    // align beneath the bullet's text).
+    private static FlowDocument BuildFindingsDocument(IReadOnlyList<ReportFinding> findings)
+    {
+        var doc = new FlowDocument
+        {
+            FontFamily = new FontFamily("Segoe UI, Arial, sans-serif"),
+            FontSize = 13,
+            PagePadding = new Thickness(0),
+            Background = Brushes.Transparent,
+            Foreground = (Brush)new BrushConverter().ConvertFromString("#c8c8c8")!,
+        };
+
+        if (findings.Count == 0)
+        {
+            doc.Blocks.Add(new Paragraph(new Run("(none)"))
+            {
+                Foreground = (Brush)new BrushConverter().ConvertFromString("#909090")!,
+            });
+            return doc;
+        }
+
+        var gold = (Brush)new BrushConverter().ConvertFromString("#e0c070")!;
+        var goldBorder = (Brush)new BrushConverter().ConvertFromString("#e8a020")!;
+        var cardBg = (Brush)new BrushConverter().ConvertFromString("#241f14")!;
+        var fixBrush = (Brush)new BrushConverter().ConvertFromString("#9fb89f")!;
+
+        foreach (var group in findings.GroupBy(f => f.Location, StringComparer.OrdinalIgnoreCase))
+        {
+            var items = group.ToList();
+            var section = new Section
+            {
+                BorderBrush = goldBorder,
+                BorderThickness = new Thickness(3, 0, 0, 0),
+                Background = cardBg,
+                Padding = new Thickness(10, 6, 10, 6),
+                Margin = new Thickness(0, 0, 0, 6),
+            };
+            section.Blocks.Add(new Paragraph(new Run(group.Key))
+            {
+                Foreground = gold,
+                FontWeight = FontWeights.SemiBold,
+                Margin = new Thickness(0, 0, 0, 4),
+            });
+
+            if (items.Count == 1)
+            {
+                section.Blocks.Add(ProblemPara(items[0]));
+                section.Blocks.Add(FixPara(items[0], fixBrush));
+            }
+            else
+            {
+                var list = new List
+                {
+                    MarkerStyle = TextMarkerStyle.Disc,
+                    Margin = new Thickness(0),
+                    Padding = new Thickness(18, 0, 0, 0),
+                };
+                foreach (var f in items)
+                {
+                    var li = new ListItem();
+                    li.Blocks.Add(ProblemPara(f));
+                    li.Blocks.Add(FixPara(f, fixBrush));
+                    list.ListItems.Add(li);
+                }
+                section.Blocks.Add(list);
+            }
+            doc.Blocks.Add(section);
+        }
+        return doc;
+    }
+
+    private static Paragraph ProblemPara(ReportFinding f) =>
+        new(new Run(f.Problem)) { Margin = new Thickness(0, 0, 0, 2) };
+
+    private static Paragraph FixPara(ReportFinding f, Brush brush) =>
+        new(new Run("Suggested fix: " + f.SuggestedFix)) { Foreground = brush, Margin = new Thickness(0, 0, 0, 4) };
 
     // A report pane: WebView2 rendering the (inner) report HTML, wrapped in a minimal document shell.
     // WebView2 init is async; on failure (e.g. runtime absent) the pane shows the error rather than a blank.

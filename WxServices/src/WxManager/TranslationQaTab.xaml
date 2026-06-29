@@ -6,27 +6,23 @@
 
         <!-- ── Top bar: package selector + trust/common info (WX-219) ── -->
         <Border DockPanel.Dock="Top" Background="#1e1e1e" BorderBrush="#333333" BorderThickness="0,0,0,1" Padding="12,10">
-            <StackPanel>
-                <StackPanel Orientation="Horizontal">
-                    <TextBlock Text="Judge package:" Foreground="#c8c8c8" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                    <ComboBox x:Name="PackageSelector" Width="260" SelectionChanged="PackageSelector_SelectionChanged"/>
-                    <Button x:Name="RefreshButton" Content="Refresh" Margin="10,0,0,0" Padding="10,2" Click="RefreshButton_Click"/>
-                </StackPanel>
-
-                <!-- trust info, populated in code-behind -->
-                <WrapPanel x:Name="TrustPanel" Margin="0,8,0,0">
-                    <TextBlock x:Name="LangText"       Foreground="#c8c8c8" Margin="0,0,18,0"/>
-                    <TextBlock x:Name="SourceText"     Foreground="#c8c8c8" Margin="0,0,18,0"/>
-                    <Border x:Name="ConfidenceBadge" CornerRadius="3" Padding="6,1" Margin="0,0,8,0" Visibility="Collapsed">
-                        <TextBlock x:Name="ConfidenceText" Foreground="#ffffff" FontWeight="SemiBold"/>
-                    </Border>
-                    <TextBlock x:Name="ConfidenceNote" Foreground="#909090" FontStyle="Italic" VerticalAlignment="Center" Margin="0,0,18,0"/>
-                    <TextBlock x:Name="CountsText"     Foreground="#c8c8c8"/>
-                </WrapPanel>
-
-                <TextBlock Text="Verdicts are advisory for human adjudication — never auto-applied."
-                           Foreground="#909090" FontStyle="Italic" FontSize="11" Margin="0,6,0,0"/>
-            </StackPanel>
+            <!-- One thin line: selector + Refresh, then the trust info. Fixed items dock left, counts pin
+                 right, the variable-length confidence note fills the middle and ellipsises (full text on
+                 hover) so the row never wraps. -->
+            <DockPanel x:Name="TrustPanel" LastChildFill="True">
+                <TextBlock Text="Judge package:" DockPanel.Dock="Left" Foreground="#c8c8c8" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                <ComboBox x:Name="PackageSelector" DockPanel.Dock="Left" Width="240" VerticalAlignment="Center" SelectionChanged="PackageSelector_SelectionChanged"/>
+                <Button x:Name="RefreshButton" DockPanel.Dock="Left" Content="Refresh" Margin="10,0,20,0" Padding="10,2" VerticalAlignment="Center" Click="RefreshButton_Click"/>
+                <TextBlock x:Name="LangText"   DockPanel.Dock="Left" Foreground="#c8c8c8" VerticalAlignment="Center" Margin="0,0,18,0"/>
+                <TextBlock x:Name="SourceText" DockPanel.Dock="Left" Foreground="#c8c8c8" VerticalAlignment="Center" Margin="0,0,18,0"/>
+                <Border x:Name="ConfidenceBadge" DockPanel.Dock="Left" CornerRadius="3" Padding="6,1" Margin="0,0,12,0" VerticalAlignment="Center" Visibility="Collapsed">
+                    <TextBlock x:Name="ConfidenceText" Foreground="#ffffff" FontWeight="SemiBold"/>
+                </Border>
+                <TextBlock x:Name="CountsText" DockPanel.Dock="Right" Foreground="#c8c8c8" VerticalAlignment="Center" Margin="18,0,0,0"/>
+                <TextBlock x:Name="ConfidenceNote" Foreground="#909090" FontStyle="Italic" VerticalAlignment="Center"
+                           TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
+                           ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
+            </DockPanel>
         </Border>
 
         <!-- ── Empty-state message (shown when no package is selected / none found) ── -->

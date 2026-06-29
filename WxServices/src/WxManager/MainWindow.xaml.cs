@@ -1,5 +1,7 @@
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Interop;
 
 using WxServices.Common;
 
@@ -21,6 +23,80 @@ public partial class MainWindow : Window
         SetupTab.AllChecksPassed += OnAllChecksPassed;
         ConfigureTab.ConfigurationSaved += OnConfigurationSaved;
     }
+
+    // A WindowStyle=None + WindowChrome window maximizes over the taskbar unless WM_GETMINMAXINFO is
+    // handled to clamp the maximized bounds to the monitor work area. Without this the bottom of every
+    // maximized view sits behind the taskbar (surfaced by WX-219's bottom-anchored Report Findings).
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        var handle = new WindowInteropHelper(this).Handle;
+        HwndSource.FromHwnd(handle)?.AddHook(WindowProc);
+    }
+
+    private static IntPtr WindowProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        const int WM_GETMINMAXINFO = 0x0024;
+        if (msg == WM_GETMINMAXINFO)
+        {
+            ClampMaximizedToWorkArea(hwnd, lParam);
+            handled = true;
+        }
+        return IntPtr.Zero;
+    }
+
+    private static void ClampMaximizedToWorkArea(IntPtr hwnd, IntPtr lParam)
+    {
+        const int MONITOR_DEFAULTTONEAREST = 0x00000002;
+        var monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        if (monitor == IntPtr.Zero)
+            return;
+
+        var info = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+        if (!GetMonitorInfo(monitor, ref info))
+            return;
+
+        var mmi = Marshal.PtrToStructure<MINMAXINFO>(lParam);
+        var work = info.rcWork;
+        var mon = info.rcMonitor;
+        mmi.ptMaxPosition.x = work.left - mon.left;
+        mmi.ptMaxPosition.y = work.top - mon.top;
+        mmi.ptMaxSize.x = work.right - work.left;
+        mmi.ptMaxSize.y = work.bottom - work.top;
+        Marshal.StructureToPtr(mmi, lParam, true);
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct POINT { public int x; public int y; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT { public int left; public int top; public int right; public int bottom; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MINMAXINFO
+    {
+        public POINT ptReserved;
+        public POINT ptMaxSize;
+        public POINT ptMaxPosition;
+        public POINT ptMinTrackSize;
+        public POINT ptMaxTrackSize;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MONITORINFO
+    {
+        public int cbSize;
+        public RECT rcMonitor;
+        public RECT rcWork;
+        public uint dwFlags;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr MonitorFromWindow(IntPtr hwnd, int dwFlags);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
 
     private void OnAllChecksPassed()
     {
