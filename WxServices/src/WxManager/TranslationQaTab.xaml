@@ -53,8 +53,8 @@
                         <DataGridTemplateColumn Header="Apply" Width="110">
                             <DataGridTemplateColumn.CellTemplate>
                                 <DataTemplate>
-                                    <Button Content="Copy → DB" Margin="4,2" Padding="6,1"
-                                            IsEnabled="{Binding CanCopy}" Click="CopyToDb_Click"/>
+                                    <Button Content="{Binding ApplyLabel}" Margin="4,2" Padding="6,1"
+                                            IsEnabled="{Binding CanApply}" Click="CopyToDb_Click"/>
                                 </DataTemplate>
                             </DataGridTemplateColumn.CellTemplate>
                         </DataGridTemplateColumn>

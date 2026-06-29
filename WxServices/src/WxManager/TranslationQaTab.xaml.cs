@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.IO;
 using System.Text.RegularExpressions;
 using System.Windows;
@@ -18,11 +19,9 @@ namespace WxManager;
 /// <summary>
 /// WX-219 — the Translation-QA review tab. Reads judge packages (request.json + judged.json) from the
 /// translation-QA folder and presents, per scenario, the English reference / target report /
-/// back-translation, the report-level findings, and a joined vocabulary table. Source-agnostic: a
-/// package may come from the Gemini judge, a manual paste, or (later) a human reviewer (WX-173).
-///
-/// SKELETON (Phase 3): selector + trust bar + scenario sub-tabs (report panes stubbed) + the joined
-/// vocabulary grid. WebView2 report rendering is Phase 4; copy-to-DB is Phase 5.
+/// back-translation (the two reports in WebView2), the report-level findings, and a joined vocabulary
+/// table with a copy-suggestion-to-DB action. Source-agnostic: a package may come from the Gemini judge,
+/// a manual paste, or (later) a human reviewer (WX-173).
 /// </summary>
 public partial class TranslationQaTab : UserControl
 {
@@ -131,10 +130,17 @@ public partial class TranslationQaTab : UserControl
             .ThenBy(v => v.Token, StringComparer.Ordinal)
             .ToList();
 
-        // Rebuild the scenario sub-tabs (everything except the static Vocabulary tab), newest selection first.
+        // Rebuild the scenario sub-tabs (everything except the static Vocabulary tab). Dispose the outgoing
+        // tabs' WebView2 controls — each hosts a browser process that is not released just by removing the
+        // control from the tree, so without this a session of Refreshes / package switches leaks processes.
         for (var i = SubTabs.Items.Count - 1; i >= 0; i--)
             if (SubTabs.Items[i] is TabItem ti && ti != VocabTab)
+            {
+                if (ti.Tag is List<WebView2> webs)
+                    foreach (var w in webs)
+                        w.Dispose();
                 SubTabs.Items.RemoveAt(i);
+            }
 
         var targetLabel = string.IsNullOrWhiteSpace(req.TargetDisplayName) ? judged.Language : req.TargetDisplayName!;
         var insertAt = 0;
@@ -160,19 +166,22 @@ public partial class TranslationQaTab : UserControl
         ConfidenceText.Text = "confidence: " + confidence.Level;
         ConfidenceBadge.Background = (confidence.Level?.Trim().ToLowerInvariant()) switch
         {
-            "high" => new SolidColorBrush(Color.FromRgb(0x2e, 0x7d, 0x32)),   // green
-            "medium" => new SolidColorBrush(Color.FromRgb(0x8a, 0x6d, 0x00)), // amber
-            "low" => new SolidColorBrush(Color.FromRgb(0xa0, 0x20, 0x20)),    // red
-            _ => new SolidColorBrush(Color.FromRgb(0x3a, 0x3a, 0x3a)),        // unknown/grey
+            "high" => B("#2e7d32"),   // green
+            "medium" => B("#8a6d00"), // amber
+            "low" => B("#a02020"),    // red
+            _ => B("#3a3a3a"),        // unknown/grey
         };
         ConfidenceNote.Text = confidence.Note ?? string.Empty;
     }
 
     // Per scenario: synopsis, the side-by-side triptych (English | target | back-translation), then the
-    // report findings full-width below. The two reports render in WebView2; the back-translation is a
-    // matching light pane so the three read as a consistent triptych.
+    // report findings below. The two reports render in WebView2; the back-translation is a matching light
+    // pane so the three read as a consistent triptych. The tab's Tag carries its WebView2 controls so
+    // LoadSelected can dispose them when the tab is replaced.
     private static TabItem BuildScenarioTab(RenderedScenario s, BackTranslation? back, IReadOnlyList<ReportFinding> findings, string targetLabel)
     {
+        var webs = new List<WebView2>();
+
         var root = new Grid { Margin = new Thickness(8) };
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });                  // synopsis
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) }); // triptych (fills)
@@ -188,8 +197,8 @@ public partial class TranslationQaTab : UserControl
         for (var i = 0; i < 3; i++)
             triptych.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
-        var en = ReportFrame("English reference", s.EnglishHtml);
-        var tgt = ReportFrame($"{targetLabel} — target (under audit)", s.TargetHtml);
+        var en = ReportFrame("English reference", s.EnglishHtml, webs);
+        var tgt = ReportFrame($"{targetLabel} — target (under audit)", s.TargetHtml, webs);
         var bt = BackTranslationFrame("Back-translation → English", back);
         Grid.SetColumn(en, 0);
         Grid.SetColumn(tgt, 1);
@@ -218,7 +227,7 @@ public partial class TranslationQaTab : UserControl
             IsDocumentEnabled = true,
             BorderThickness = new Thickness(0),
             Background = Brushes.Transparent,
-            Foreground = (Brush)new BrushConverter().ConvertFromString("#c8c8c8")!,
+            Foreground = B("#c8c8c8"),
             Padding = new Thickness(0),
             VerticalScrollBarVisibility = ScrollBarVisibility.Visible,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
@@ -228,7 +237,7 @@ public partial class TranslationQaTab : UserControl
         Grid.SetRow(findingsRegion, 2);
         root.Children.Add(findingsRegion);
 
-        return new TabItem { Header = s.Name, Content = root };
+        return new TabItem { Header = s.Name, Content = root, Tag = webs };
     }
 
     // The findings as a selectable FlowDocument: one gold-accented Section per location; a location with
@@ -242,37 +251,29 @@ public partial class TranslationQaTab : UserControl
             FontSize = 13,
             PagePadding = new Thickness(0),
             Background = Brushes.Transparent,
-            Foreground = (Brush)new BrushConverter().ConvertFromString("#c8c8c8")!,
+            Foreground = B("#c8c8c8"),
         };
 
         if (findings.Count == 0)
         {
-            doc.Blocks.Add(new Paragraph(new Run("(none)"))
-            {
-                Foreground = (Brush)new BrushConverter().ConvertFromString("#909090")!,
-            });
+            doc.Blocks.Add(new Paragraph(new Run("(none)")) { Foreground = B("#909090") });
             return doc;
         }
-
-        var gold = (Brush)new BrushConverter().ConvertFromString("#e0c070")!;
-        var goldBorder = (Brush)new BrushConverter().ConvertFromString("#e8a020")!;
-        var cardBg = (Brush)new BrushConverter().ConvertFromString("#241f14")!;
-        var fixBrush = (Brush)new BrushConverter().ConvertFromString("#9fb89f")!;
 
         foreach (var group in findings.GroupBy(f => f.Location, StringComparer.OrdinalIgnoreCase))
         {
             var items = group.ToList();
             var section = new Section
             {
-                BorderBrush = goldBorder,
+                BorderBrush = B("#e8a020"),
                 BorderThickness = new Thickness(3, 0, 0, 0),
-                Background = cardBg,
+                Background = B("#241f14"), // tan-tinted dark
                 Padding = new Thickness(10, 6, 10, 6),
                 Margin = new Thickness(0, 0, 0, 6),
             };
             section.Blocks.Add(new Paragraph(new Run(group.Key))
             {
-                Foreground = gold,
+                Foreground = B("#e0c070"),
                 FontWeight = FontWeights.SemiBold,
                 Margin = new Thickness(0, 0, 0, 4),
             });
@@ -280,7 +281,7 @@ public partial class TranslationQaTab : UserControl
             if (items.Count == 1)
             {
                 section.Blocks.Add(ProblemPara(items[0]));
-                section.Blocks.Add(FixPara(items[0], fixBrush));
+                section.Blocks.Add(FixPara(items[0]));
             }
             else
             {
@@ -294,7 +295,7 @@ public partial class TranslationQaTab : UserControl
                 {
                     var li = new ListItem();
                     li.Blocks.Add(ProblemPara(f));
-                    li.Blocks.Add(FixPara(f, fixBrush));
+                    li.Blocks.Add(FixPara(f));
                     list.ListItems.Add(li);
                 }
                 section.Blocks.Add(list);
@@ -307,18 +308,20 @@ public partial class TranslationQaTab : UserControl
     private static Paragraph ProblemPara(ReportFinding f) =>
         new(new Run(f.Problem)) { Margin = new Thickness(0, 0, 0, 2) };
 
-    private static Paragraph FixPara(ReportFinding f, Brush brush) =>
-        new(new Run("Suggested fix: " + f.SuggestedFix)) { Foreground = brush, Margin = new Thickness(0, 0, 0, 4) };
+    private static Paragraph FixPara(ReportFinding f) =>
+        new(new Run("Suggested fix: " + f.SuggestedFix)) { Foreground = B("#9fb89f"), Margin = new Thickness(0, 0, 0, 4) };
 
     // A report pane: WebView2 rendering the (inner) report HTML, wrapped in a minimal document shell.
     // WebView2 init is async; on failure (e.g. runtime absent) the pane shows the error rather than a blank.
-    private static UIElement ReportFrame(string header, string innerHtml)
+    // The created control is registered in <paramref name="sink"/> so it can be disposed when the tab is replaced.
+    private static UIElement ReportFrame(string header, string innerHtml, ICollection<WebView2> sink)
     {
         var host = new Grid();
         var error = Label("", 12, FontWeights.Normal, "#c8c8c8", wrap: true);
         error.Margin = new Thickness(12);
         error.Visibility = Visibility.Collapsed;
         var web = new WebView2();
+        sink.Add(web);
         host.Children.Add(web);
         host.Children.Add(error);
 
@@ -346,7 +349,7 @@ public partial class TranslationQaTab : UserControl
         {
             Text = back?.English ?? "(no back-translation for this scenario)",
             TextWrapping = TextWrapping.Wrap,
-            Foreground = (Brush)new BrushConverter().ConvertFromString("#1a3a5c")!,
+            Foreground = B("#1a3a5c"),
             FontFamily = new FontFamily("Arial, Helvetica, sans-serif"),
             FontSize = 14,
             Margin = new Thickness(14),
@@ -354,7 +357,7 @@ public partial class TranslationQaTab : UserControl
         var scroller = new ScrollViewer
         {
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            Background = (Brush)new BrushConverter().ConvertFromString("#f0f4f8")!, // match the email body bg
+            Background = B("#f0f4f8"), // match the email body bg
             Content = text,
         };
         return Frame(header, scroller);
@@ -367,8 +370,8 @@ public partial class TranslationQaTab : UserControl
         var head = new TextBlock
         {
             Text = header,
-            Foreground = (Brush)new BrushConverter().ConvertFromString("#c8c8c8")!,
-            Background = (Brush)new BrushConverter().ConvertFromString("#1e1e1e")!,
+            Foreground = B("#c8c8c8"),
+            Background = B("#1e1e1e"),
             FontWeight = FontWeights.SemiBold,
             FontSize = 12,
             Padding = new Thickness(8, 4, 8, 4),
@@ -378,7 +381,7 @@ public partial class TranslationQaTab : UserControl
         dock.Children.Add(content);
         return new Border
         {
-            BorderBrush = (Brush)new BrushConverter().ConvertFromString("#3a3a3a")!,
+            BorderBrush = B("#3a3a3a"),
             BorderThickness = new Thickness(1),
             Margin = new Thickness(0, 0, 6, 0),
             Child = dock,
@@ -396,12 +399,6 @@ public partial class TranslationQaTab : UserControl
     private static TextBlock Heading(string text) =>
         Label(text, 13, FontWeights.Bold, "#a0bcd4", wrap: false, top: 12);
 
-    private static TextBlock Body(string text) =>
-        Label(text, 13, FontWeights.Normal, "#c8c8c8", wrap: true);
-
-    private static TextBlock Muted(string text) =>
-        Label(text, 12, FontWeights.Normal, "#909090", wrap: true);
-
     private static TextBlock Label(string text, double size, FontWeight weight, string fg, bool wrap, double top = 0)
     {
         return new TextBlock
@@ -409,7 +406,7 @@ public partial class TranslationQaTab : UserControl
             Text = text,
             FontSize = size,
             FontWeight = weight,
-            Foreground = (Brush)new BrushConverter().ConvertFromString(fg)!,
+            Foreground = B(fg),
             TextWrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap,
             Margin = new Thickness(0, top, 0, 2),
         };
@@ -465,8 +462,9 @@ public partial class TranslationQaTab : UserControl
             tpl.ReviewedAtUtc = DateTime.UtcNow;
             await ctx.SaveChangesAsync();
 
-            btn.IsEnabled = false;
-            btn.Content = "applied";
+            // Mark applied on the data item (not the recycled DataGrid button visual) so the disabled/
+            // "applied" state survives container recycling when the row scrolls out of view and back.
+            row.Applied = true;
         }
         catch (Exception ex)
         {
@@ -482,8 +480,23 @@ public partial class TranslationQaTab : UserControl
         return Placeholders(english).SequenceEqual(Placeholders(suggestion));
     }
 
+    // Shared, frozen, cached brushes for the fixed dark-theme palette — parsed once per color and reused
+    // (frozen brushes are thread-safe and shareable); used on the UI thread only.
+    private static readonly Dictionary<string, Brush> _brushes = new(StringComparer.Ordinal);
+
+    private static Brush B(string hex)
+    {
+        if (!_brushes.TryGetValue(hex, out var brush))
+        {
+            brush = (Brush)new BrushConverter().ConvertFromString(hex)!;
+            brush.Freeze();
+            _brushes[hex] = brush;
+        }
+        return brush;
+    }
+
     /// <summary>Flat, display-ready row for the vocabulary <see cref="DataGrid"/>.</summary>
-    public sealed class VocabRowVm
+    public sealed class VocabRowVm : INotifyPropertyChanged
     {
         public string StatusLabel { get; init; } = "";
         public Brush StatusBrush { get; init; } = Brushes.Gray;
@@ -492,7 +505,34 @@ public partial class TranslationQaTab : UserControl
         public string TargetPhrase { get; init; } = "";
         public string Comment { get; init; } = "";
         public string Suggestion { get; init; } = "";
+
+        /// <summary>Base eligibility: the verdict carries an actionable suggestion (set once at build).</summary>
         public bool CanCopy { get; init; }
+
+        private bool _applied;
+
+        /// <summary>Set true once the suggestion has been written to the DB. Notifies so the bound button
+        /// (which a recycled DataGrid container re-reads from the data item) reflects it after recycling.</summary>
+        public bool Applied
+        {
+            get => _applied;
+            set
+            {
+                if (_applied == value)
+                    return;
+                _applied = value;
+                OnChanged(nameof(Applied));
+                OnChanged(nameof(CanApply));
+                OnChanged(nameof(ApplyLabel));
+            }
+        }
+
+        public bool CanApply => CanCopy && !Applied;
+        public string ApplyLabel => Applied ? "applied" : "Copy → DB";
+
+        public event PropertyChangedEventHandler? PropertyChanged;
+
+        private void OnChanged(string name) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 
         public static VocabRowVm From(VocabularyRow r) => new()
         {
@@ -516,27 +556,14 @@ public partial class TranslationQaTab : UserControl
             _ => s.ToString(),
         };
 
-        private static readonly Brush OkBrush = Frozen("#4caf50");
-        private static readonly Brush WarnBrush = Frozen("#d4a017");
-        private static readonly Brush WrongBrush = Frozen("#e05050");
-        private static readonly Brush NotJudgedBrush = Frozen("#808080");
-        private static readonly Brush UnrepBrush = Frozen("#c08040");
-
         private static Brush StatusBrushFor(VerdictStatus s) => s switch
         {
-            VerdictStatus.Ok => OkBrush,
-            VerdictStatus.Warn => WarnBrush,
-            VerdictStatus.Wrong => WrongBrush,
-            VerdictStatus.NotJudged => NotJudgedBrush,
-            VerdictStatus.Unrepresentable => UnrepBrush,
-            _ => NotJudgedBrush,
+            VerdictStatus.Ok => B("#4caf50"),
+            VerdictStatus.Warn => B("#d4a017"),
+            VerdictStatus.Wrong => B("#e05050"),
+            VerdictStatus.NotJudged => B("#808080"),
+            VerdictStatus.Unrepresentable => B("#c08040"),
+            _ => B("#808080"),
         };
-
-        private static Brush Frozen(string hex)
-        {
-            var b = (Brush)new BrushConverter().ConvertFromString(hex)!;
-            b.Freeze();
-            return b;
-        }
     }
 }

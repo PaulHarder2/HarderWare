@@ -106,6 +106,17 @@ public static class JudgePackageStore
         var judged = JsonSerializer.Deserialize<JudgeResponse>(File.ReadAllText(pkg.JudgedPath), TranslationQaJson.Read)
             ?? throw new InvalidDataException($"judged.json deserialized to null: {pkg.JudgedPath}");
 
+        // Coerce omitted JSON arrays to empty (System.Text.Json leaves a missing array null despite the
+        // non-nullable annotation) so a hand-edited / out-of-band file with a dropped section still loads
+        // instead of NRE-ing the whole otherwise-valid package.
+        request = request with { Scenarios = request.Scenarios ?? [], Vocabulary = request.Vocabulary ?? [] };
+        judged = judged with
+        {
+            BackTranslations = judged.BackTranslations ?? [],
+            ReportFindings = judged.ReportFindings ?? [],
+            VocabularyVerdicts = judged.VocabularyVerdicts ?? [],
+        };
+
         var (rows, orphans) = JoinVocabulary(request, judged);
         return new JudgePackage(pkg, request, judged, rows, orphans);
     }
@@ -119,28 +130,34 @@ public static class JudgePackageStore
     public static (IReadOnlyList<VocabularyRow> rows, IReadOnlyList<VocabularyVerdict> orphans)
         JoinVocabulary(JudgingRequest request, JudgeResponse judged)
     {
+        var vocab = request.Vocabulary ?? [];
+        var verdicts = judged.VocabularyVerdicts ?? [];
+
         var verdictByToken = new Dictionary<string, VocabularyVerdict>(StringComparer.Ordinal);
-        foreach (var v in judged.VocabularyVerdicts)
+        foreach (var v in verdicts)
             verdictByToken[v.Token] = v; // last wins on the rare duplicate token
 
-        var rows = new List<VocabularyRow>(request.Vocabulary.Count);
+        var rows = new List<VocabularyRow>(vocab.Count);
         var matched = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var pair in request.Vocabulary)
+        foreach (var pair in vocab)
         {
             verdictByToken.TryGetValue(pair.Token, out var verdict);
             if (verdict is not null)
                 matched.Add(pair.Token);
 
             var status = DeriveStatus(pair, verdict);
-            var actionable = verdict?.Suggestion is { Length: > 0 } s
-                && !string.Equals(s, pair.TargetPhrase, StringComparison.Ordinal);
+            // Same emptiness test the copy-to-DB click guard uses (IsNullOrWhiteSpace), so a whitespace-only
+            // suggestion never enables a button whose handler would then no-op.
+            var suggestion = verdict?.Suggestion;
+            var actionable = !string.IsNullOrWhiteSpace(suggestion)
+                && !string.Equals(suggestion, pair.TargetPhrase, StringComparison.Ordinal);
 
             rows.Add(new VocabularyRow(
                 pair.Token, pair.EnglishPhrase, pair.EnglishContext, pair.TargetPhrase,
                 pair.Representable, pair.Note, pair.Reviewed, verdict, status, actionable));
         }
 
-        var orphans = judged.VocabularyVerdicts.Where(v => !matched.Contains(v.Token)).ToList();
+        var orphans = verdicts.Where(v => !matched.Contains(v.Token)).ToList();
         return (rows, orphans);
     }
 
