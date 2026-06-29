@@ -3,6 +3,8 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 
+using Microsoft.Web.WebView2.Wpf;
+
 using WxServices.Common;
 using WxServices.Common.TranslationQa;
 
@@ -115,12 +117,13 @@ public partial class TranslationQaTab : UserControl
             if (SubTabs.Items[i] is TabItem ti && ti != VocabTab)
                 SubTabs.Items.RemoveAt(i);
 
+        var targetLabel = string.IsNullOrWhiteSpace(req.TargetDisplayName) ? judged.Language : req.TargetDisplayName!;
         var insertAt = 0;
         foreach (var s in req.Scenarios)
         {
             var back = judged.BackTranslations.FirstOrDefault(b => string.Equals(b.Scenario, s.Name, StringComparison.OrdinalIgnoreCase));
             var findings = judged.ReportFindings.Where(f => string.Equals(f.Scenario, s.Name, StringComparison.OrdinalIgnoreCase)).ToList();
-            SubTabs.Items.Insert(insertAt++, BuildScenarioTab(s, back, findings));
+            SubTabs.Items.Insert(insertAt++, BuildScenarioTab(s, back, findings, targetLabel));
         }
         SubTabs.SelectedIndex = 0;
     }
@@ -146,26 +149,41 @@ public partial class TranslationQaTab : UserControl
         ConfidenceNote.Text = confidence.Note ?? string.Empty;
     }
 
-    // A stubbed report pane (Phase 4 replaces these two with WebView2). Back-translation + findings are real.
-    private static TabItem BuildScenarioTab(RenderedScenario s, BackTranslation? back, IReadOnlyList<ReportFinding> findings)
+    // Per scenario: synopsis, the side-by-side triptych (English | target | back-translation), then the
+    // report findings full-width below. The two reports render in WebView2; the back-translation is a
+    // matching light pane so the three read as a consistent triptych.
+    private static TabItem BuildScenarioTab(RenderedScenario s, BackTranslation? back, IReadOnlyList<ReportFinding> findings, string targetLabel)
     {
-        var stack = new StackPanel { Margin = new Thickness(12) };
+        var root = new Grid { Margin = new Thickness(8) };
+        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });               // synopsis
+        root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) }); // triptych
+        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });               // findings
 
-        stack.Children.Add(Label(s.Synopsis, 13, FontWeights.SemiBold, "#c8c8c8", wrap: true));
+        var synopsis = Label(s.Synopsis, 13, FontWeights.SemiBold, "#c8c8c8", wrap: true);
+        Grid.SetRow(synopsis, 0);
+        root.Children.Add(synopsis);
 
-        stack.Children.Add(Heading("English reference  /  target report"));
-        stack.Children.Add(Stub($"[ both reports render side-by-side here in Phase 4 (WebView2) — " +
-            $"English {s.EnglishHtml.Length:N0} chars, target {s.TargetHtml.Length:N0} chars ]"));
+        var triptych = new Grid { Margin = new Thickness(0, 6, 0, 0) };
+        for (var i = 0; i < 3; i++)
+            triptych.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
-        stack.Children.Add(Heading("Back-translation → English"));
-        stack.Children.Add(back is null
-            ? Muted("(no back-translation for this scenario)")
-            : Body(back.English));
+        var en = ReportFrame("English reference", s.EnglishHtml);
+        var tgt = ReportFrame($"{targetLabel} — target (under audit)", s.TargetHtml);
+        var bt = BackTranslationFrame("Back-translation → English", back);
+        Grid.SetColumn(en, 0);
+        Grid.SetColumn(tgt, 1);
+        Grid.SetColumn(bt, 2);
+        triptych.Children.Add(en);
+        triptych.Children.Add(tgt);
+        triptych.Children.Add(bt);
+        Grid.SetRow(triptych, 1);
+        root.Children.Add(triptych);
 
-        stack.Children.Add(Heading($"Report findings ({findings.Count})"));
+        var findingsPanel = new StackPanel { Margin = new Thickness(0, 8, 0, 0) };
+        findingsPanel.Children.Add(Heading($"Report findings ({findings.Count})"));
         if (findings.Count == 0)
         {
-            stack.Children.Add(Muted("(none)"));
+            findingsPanel.Children.Add(Muted("(none)"));
         }
         else
         {
@@ -184,16 +202,97 @@ public partial class TranslationQaTab : UserControl
                 inner.Children.Add(Body(f.Problem));
                 inner.Children.Add(Label("Suggested fix: " + f.SuggestedFix, 12, FontWeights.Normal, "#9fb89f", wrap: true));
                 card.Child = inner;
-                stack.Children.Add(card);
+                findingsPanel.Children.Add(card);
             }
         }
+        Grid.SetRow(findingsPanel, 2);
+        root.Children.Add(findingsPanel);
 
-        return new TabItem
+        return new TabItem { Header = s.Name, Content = root };
+    }
+
+    // A report pane: WebView2 rendering the (inner) report HTML, wrapped in a minimal document shell.
+    // WebView2 init is async; on failure (e.g. runtime absent) the pane shows the error rather than a blank.
+    private static UIElement ReportFrame(string header, string innerHtml)
+    {
+        var host = new Grid();
+        var error = Label("", 12, FontWeights.Normal, "#c8c8c8", wrap: true);
+        error.Margin = new Thickness(12);
+        error.Visibility = Visibility.Collapsed;
+        var web = new WebView2();
+        host.Children.Add(web);
+        host.Children.Add(error);
+
+        var html = WrapReportHtml(innerHtml);
+        web.Loaded += async (_, _) =>
         {
-            Header = s.Name,
-            Content = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = stack },
+            try
+            {
+                await web.EnsureCoreWebView2Async();
+                web.NavigateToString(html);
+            }
+            catch (Exception ex)
+            {
+                web.Visibility = Visibility.Collapsed;
+                error.Text = "Report could not be rendered (WebView2): " + ex.Message;
+                error.Visibility = Visibility.Visible;
+            }
+        };
+        return Frame(header, host);
+    }
+
+    private static UIElement BackTranslationFrame(string header, BackTranslation? back)
+    {
+        var text = new TextBlock
+        {
+            Text = back?.English ?? "(no back-translation for this scenario)",
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = (Brush)new BrushConverter().ConvertFromString("#1a3a5c")!,
+            FontFamily = new FontFamily("Arial, Helvetica, sans-serif"),
+            FontSize = 14,
+            Margin = new Thickness(14),
+        };
+        var scroller = new ScrollViewer
+        {
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            Background = (Brush)new BrushConverter().ConvertFromString("#f0f4f8")!, // match the email body bg
+            Content = text,
+        };
+        return Frame(header, scroller);
+    }
+
+    // A framed pane: a dark header strip above the content, bordered to read as one of the triptych.
+    private static Border Frame(string header, UIElement content)
+    {
+        var dock = new DockPanel();
+        var head = new TextBlock
+        {
+            Text = header,
+            Foreground = (Brush)new BrushConverter().ConvertFromString("#c8c8c8")!,
+            Background = (Brush)new BrushConverter().ConvertFromString("#1e1e1e")!,
+            FontWeight = FontWeights.SemiBold,
+            FontSize = 12,
+            Padding = new Thickness(8, 4, 8, 4),
+        };
+        DockPanel.SetDock(head, Dock.Top);
+        dock.Children.Add(head);
+        dock.Children.Add(content);
+        return new Border
+        {
+            BorderBrush = (Brush)new BrushConverter().ConvertFromString("#3a3a3a")!,
+            BorderThickness = new Thickness(1),
+            Margin = new Thickness(0, 0, 6, 0),
+            Child = dock,
         };
     }
+
+    // Wrap the stored inner report HTML in a minimal document so WebView2 renders it as the recipient sees
+    // it (the inner HTML is a centered 600px-wide body; this adds the doc shell + the email page background).
+    private static string WrapReportHtml(string innerBody) =>
+        "<!DOCTYPE html><html><head><meta charset=\"utf-8\">" +
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"></head>" +
+        "<body style=\"margin:0;padding:12px;background:#f0f4f8;font-family:Arial,Helvetica,sans-serif;\">" +
+        innerBody + "</body></html>";
 
     private static TextBlock Heading(string text) =>
         Label(text, 13, FontWeights.Bold, "#a0bcd4", wrap: false, top: 12);
@@ -203,19 +302,6 @@ public partial class TranslationQaTab : UserControl
 
     private static TextBlock Muted(string text) =>
         Label(text, 12, FontWeights.Normal, "#909090", wrap: true);
-
-    private static UIElement Stub(string text)
-    {
-        return new Border
-        {
-            Background = (Brush)new BrushConverter().ConvertFromString("#222222")!,
-            BorderBrush = (Brush)new BrushConverter().ConvertFromString("#3a3a3a")!,
-            BorderThickness = new Thickness(1),
-            Padding = new Thickness(10, 8, 10, 8),
-            Margin = new Thickness(0, 4, 0, 0),
-            Child = Label(text, 12, FontWeights.Normal, "#909090", wrap: true),
-        };
-    }
 
     private static TextBlock Label(string text, double size, FontWeight weight, string fg, bool wrap, double top = 0)
     {

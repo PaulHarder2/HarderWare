@@ -13,7 +13,8 @@
     <!-- 8.0.2 floor required transitively by OpenTelemetry.Exporter.OpenTelemetryProtocol
          (via WxServices.Common, WX-159); patch-level bump, resolves the NU1605 downgrade. -->
     <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="8.0.2" />
-    <PackageReference Include="Microsoft.Extensions.Configuration.Json"   Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4022.49" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\MetarParser.Data\MetarParser.Data.csproj" />
