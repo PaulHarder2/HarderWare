@@ -207,7 +207,7 @@ public partial class VocabularyTab : UserControl
             await using var ctx = new WeatherDataContext(App.DbOptions);
             // Baseline only the rows actually written, with the note normalized to what was persisted
             // (whitespace-only is stored as NULL -> "") so a skipped/blank value isn't shown as saved-as-typed.
-            var written = new List<(VocabEditRow Row, string Phrase, string Note)>();
+            var written = new List<(VocabEditRow Row, string Phrase, string RawNote, string PersistedNote)>();
             foreach (var s in snapshot)
             {
                 var tpl = await ctx.LanguageTemplates.FirstOrDefaultAsync(t => t.Id == s.Row.Id);
@@ -218,11 +218,17 @@ public partial class VocabularyTab : UserControl
                 tpl.Note = persistedNote.Length == 0 ? null : persistedNote;
                 tpl.ReviewedBy = "WX-233 vocabulary editor";
                 tpl.ReviewedAtUtc = DateTime.UtcNow;
-                written.Add((s.Row, s.Phrase, persistedNote));
+                written.Add((s.Row, s.Phrase, s.Note, persistedNote));
             }
             await ctx.SaveChangesAsync();
             foreach (var w in written)
-                w.Row.SetBaseline(w.Phrase, w.Note); // baseline = what we persisted; a mid-save edit stays dirty
+            {
+                // A whitespace-only note is persisted as "" — reflect that in the cell, unless the operator
+                // kept editing during the save (then leave their newer value to stay dirty).
+                if (string.Equals(w.Row.Note, w.RawNote, StringComparison.Ordinal))
+                    w.Row.Note = w.PersistedNote;
+                w.Row.SetBaseline(w.Phrase, w.PersistedNote); // baseline = what we persisted; a mid-save edit stays dirty
+            }
             UpdateSaveState($"Saved {written.Count} change(s) at {DateTime.Now:HH:mm:ss}.");
         }
         catch (Exception ex)
