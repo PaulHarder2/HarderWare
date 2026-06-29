@@ -67,9 +67,10 @@ public static class JudgePackageStore
     private const string RequestSuffix = ".request.json";
 
     /// <summary>
-    /// Discover packages in <paramref name="folder"/>: every <c>&lt;iso&gt;.&lt;stamp&gt;.judged.json</c>
-    /// that has a sibling <c>&lt;iso&gt;.&lt;stamp&gt;.request.json</c>, newest stamp first. Returns empty
-    /// if the folder is absent (the consumer shows "no packages" rather than throwing).
+    /// Discover packages in <paramref name="folder"/>: each per-check subfolder named
+    /// <c>&lt;iso&gt;.&lt;stamp&gt;</c> that holds both <c>&lt;iso&gt;.&lt;stamp&gt;.judged.json</c> and
+    /// <c>&lt;iso&gt;.&lt;stamp&gt;.request.json</c> (WX-232), newest stamp first. Returns empty if the
+    /// folder is absent (the consumer shows "no packages" rather than throwing).
     /// </summary>
     public static IReadOnlyList<JudgePackageRef> Discover(string folder)
     {
@@ -77,21 +78,19 @@ public static class JudgePackageStore
             return [];
 
         var refs = new List<JudgePackageRef>();
-        foreach (var judged in Directory.EnumerateFiles(folder, "*" + JudgedSuffix))
+        foreach (var sub in Directory.EnumerateDirectories(folder))
         {
-            var name = Path.GetFileName(judged);
-            var stem = name[..^JudgedSuffix.Length]; // "<iso>.<stamp>"
-            var dot = stem.IndexOf('.');
-            if (dot <= 0 || dot == stem.Length - 1)
+            var name = Path.GetFileName(sub); // "<iso>.<stamp>"
+            var dot = name.IndexOf('.');
+            if (dot <= 0 || dot == name.Length - 1)
                 continue; // not "<iso>.<stamp>"
 
-            var iso = stem[..dot];
-            var stamp = stem[(dot + 1)..];
-            var requestPath = Path.Combine(folder, stem + RequestSuffix);
-            if (!File.Exists(requestPath))
-                continue; // a verdict with no request can't be displayed
+            var judgedPath = Path.Combine(sub, name + JudgedSuffix);
+            var requestPath = Path.Combine(sub, name + RequestSuffix);
+            if (!File.Exists(judgedPath) || !File.Exists(requestPath))
+                continue; // need both the request and the verdict to display a package
 
-            refs.Add(new JudgePackageRef(iso, stamp, requestPath, judged));
+            refs.Add(new JudgePackageRef(name[..dot], name[(dot + 1)..], requestPath, judgedPath));
         }
 
         // Newest first by stamp (yyyyMMdd-HHmmss sorts lexicographically), then iso for stability.

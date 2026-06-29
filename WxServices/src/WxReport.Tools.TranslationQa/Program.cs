@@ -183,8 +183,20 @@ using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(claudeCfg.Timeo
 http.DefaultRequestHeaders.Add("User-Agent", "WxReport-TranslationQA/1.0");
 var reconciler = new ForecastReconciler(new ClaudeClient(http, claudeCfg.ApiKey!, claudeCfg.Model, persona.Text), templates);
 
-Directory.CreateDirectory(outDir);
 var stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
+// WX-232: each check's files live in their own per-check subfolder "<iso>.<stamp>", named
+// "<lang>.<stamp>.<purpose>.<ext>" within it (purpose = a scenario name, request, response, judged).
+var packageDir = Path.Combine(outDir, $"{targetIso}.{stamp}");
+try
+{
+    Directory.CreateDirectory(packageDir); // also creates outDir as its parent
+}
+catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+{
+    // ArgumentException covers a malformed --out (invalid path characters) as well as IO/permission faults.
+    Console.Error.WriteLine($"error: could not create the output directory '{packageDir}' — {ex.Message}");
+    return 1;
+}
 var tz = Exemplars.LocalityTz;
 
 // Unit prefs are language-neutral; give each render natural units (en→imperial, target→metric) so
@@ -266,7 +278,7 @@ foreach (var scenario in scenarios)
                 scenario.AnchorDay);
             htmlByLang[lang] = html;
 
-            var path = Path.Combine(outDir, $"{scenario.Name}.{lang}.{stamp}.html");
+            var path = Path.Combine(packageDir, $"{lang}.{stamp}.{scenario.Name}.html");
             await File.WriteAllTextAsync(path, html, cts.Token);
             Console.WriteLine($"  → {(lang == "en" ? "reference" : "target  ")} [{lang}]  {path}");
         }
@@ -317,11 +329,11 @@ else if (rendered.Count > 0)
     }
 
     var requestMarkdown = JudgingPayload.Build(targetIso, targetDisplayName, rendered, vocabulary);
-    var requestPath = Path.Combine(outDir, $"{targetIso}.{stamp}.request.md");
+    var requestPath = Path.Combine(packageDir, $"{targetIso}.{stamp}.request.md");
 
     // Persist the structured request so the judge/artifact phases never re-reconcile (Claude is
     // non-deterministic — the artifact must show exactly what the judge saw). WX-219 consumes this.
-    var requestJsonPath = Path.Combine(outDir, $"{targetIso}.{stamp}.request.json");
+    var requestJsonPath = Path.Combine(packageDir, $"{targetIso}.{stamp}.request.json");
     var requestObj = new JudgingRequest(targetIso, targetDisplayName, rendered, vocabulary);
     try
     {
@@ -352,7 +364,7 @@ else if (rendered.Count > 0)
             var verdict = (await judge.JudgeAsync(requestMarkdown, cts.Token))
                 with
             { JudgedBy = $"gemini ({geminiCfg.Model})" }; // WX-219: stamp the package source
-            var judgedPath = Path.Combine(outDir, $"{targetIso}.{stamp}.judged.json");
+            var judgedPath = Path.Combine(packageDir, $"{targetIso}.{stamp}.judged.json");
             await File.WriteAllTextAsync(judgedPath, JsonSerializer.Serialize(verdict, TranslationQaJson.Write), cts.Token);
             Console.WriteLine("  ✓ judged by Gemini.");
             PrintVerdictSummary(verdict);
@@ -383,7 +395,7 @@ else if (rendered.Count > 0)
     else
     {
         // Manual fallback (WX-218): pre-create the response paste target + print the cue card.
-        var responseTxtPath = Path.Combine(outDir, $"{targetIso}.{stamp}.response.txt");
+        var responseTxtPath = Path.Combine(packageDir, $"{targetIso}.{stamp}.response.txt");
         var rerun = $"dotnet run --project src\\WxReport.Tools.TranslationQa -- --response \"{responseTxtPath}\"";
         try
         {
