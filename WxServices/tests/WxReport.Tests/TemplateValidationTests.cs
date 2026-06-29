@@ -13,6 +13,8 @@ public class TemplateValidationTests
     [InlineData(", gusting {0}", ", Böen {0}", true)]           // {0} preserved
     [InlineData("{0} at {1}", "{0} mit {1}", true)]             // both preserved
     [InlineData("{1} {0}", "{0} {1}", true)]                    // order/position irrelevant — same set
+    [InlineData("{0} {0}", "{0}", true)]                        // source repeats, candidate uses once — same set
+    [InlineData(", gusting {0}", "{0}-böig, {0}", true)]        // candidate repeats — multiplicity ignored
     [InlineData(", gusting {0}", ", böig", false)]              // dropped {0}
     [InlineData("Clear", "Klar {0}", false)]                    // added {0}
     [InlineData("{0} at {1}", "{0} mit", false)]                // dropped {1}

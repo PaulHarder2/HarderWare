@@ -10,15 +10,18 @@ namespace WxServices.Common.TranslationQa;
 public static partial class TemplateValidation
 {
     /// <summary>
-    /// True when <paramref name="candidate"/> preserves exactly the <c>{n}</c> format placeholders of the
-    /// English source <paramref name="english"/> — same set, ignoring order/repetition position. A phrase
-    /// that drops or adds a placeholder would break the renderer's <c>string.Format</c> contract.
+    /// True when <paramref name="candidate"/> uses exactly the same <em>set</em> of distinct <c>{n}</c>
+    /// format placeholders as the English source <paramref name="english"/> — order and repetition are
+    /// ignored (a translation may legitimately use <c>{0}</c> once where the source repeats it, or vice
+    /// versa). Dropping an index (information loss) or adding one (an out-of-range <c>string.Format</c>
+    /// argument) is rejected.
     /// </summary>
     public static bool PlaceholdersMatch(string english, string candidate) =>
         Placeholders(english).SequenceEqual(Placeholders(candidate));
 
     private static IEnumerable<string> Placeholders(string s) =>
-        PlaceholderRegex().Matches(s ?? "").Select(m => m.Value).OrderBy(x => x, StringComparer.Ordinal);
+        PlaceholderRegex().Matches(s ?? "").Select(m => m.Value)
+            .Distinct(StringComparer.Ordinal).OrderBy(x => x, StringComparer.Ordinal);
 
     [GeneratedRegex(@"\{\d+\}")]
     private static partial Regex PlaceholderRegex();

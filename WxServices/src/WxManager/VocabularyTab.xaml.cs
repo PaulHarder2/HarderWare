@@ -23,6 +23,7 @@ public partial class VocabularyTab : UserControl
 {
     private List<VocabEditRow> _rows = new();
     private string _currentIso = "";
+    private int _loadVersion; // bumped per load; only the latest load may publish (guards overlapping selections)
 
     public VocabularyTab()
     {
@@ -60,7 +61,10 @@ public partial class VocabularyTab : UserControl
             if (LangSelector.SelectedItem is LangItem sel)
                 await LoadTemplatesAsync(sel.Iso);
             else
+            {
+                ClearRows();
                 StatusText.Text = "No generated languages found.";
+            }
         }
         catch (Exception ex)
         {
@@ -90,52 +94,75 @@ public partial class VocabularyTab : UserControl
 
     private async Task LoadTemplatesAsync(string iso)
     {
+        var version = ++_loadVersion;
         try
         {
-            await using var ctx = new WeatherDataContext(App.DbOptions);
-            var enSource = await ctx.LanguageTemplates
-                .Where(t => t.Language!.IsoCode == "en")
-                .ToDictionaryAsync(t => t.Token, t => t.Phrase);
-
-            foreach (var old in _rows) // drop subscriptions from the previous language
+            List<VocabEditRow> newRows;
+            await using (var ctx = new WeatherDataContext(App.DbOptions))
             {
-                old.PropertyChanged -= OnRowChanged;
-                old.ErrorsChanged -= OnRowErrorsChanged;
+                var enSource = await ctx.LanguageTemplates
+                    .Where(t => t.Language!.IsoCode == "en")
+                    .ToDictionaryAsync(t => t.Token, t => t.Phrase);
+
+                newRows = (await ctx.LanguageTemplates.Include(t => t.Language)
+                        .Where(t => t.Language!.IsoCode == iso)
+                        .OrderBy(t => t.Token)
+                        .AsNoTracking()
+                        .ToListAsync())
+                    .Select(t => new VocabEditRow(enSource.GetValueOrDefault(t.Token, ""))
+                    {
+                        Id = t.Id,
+                        Token = t.Token,
+                        ContextInfo = t.ContextInfo,
+                        Representable = t.Representable,
+                        OriginalPhrase = t.Phrase,
+                        OriginalNote = t.Note ?? "",
+                        Phrase = t.Phrase,
+                        Note = t.Note ?? "",
+                    })
+                    .ToList();
             }
 
-            _rows = (await ctx.LanguageTemplates.Include(t => t.Language)
-                    .Where(t => t.Language!.IsoCode == iso)
-                    .OrderBy(t => t.Token)
-                    .AsNoTracking()
-                    .ToListAsync())
-                .Select(t => new VocabEditRow(enSource.GetValueOrDefault(t.Token, ""))
-                {
-                    Id = t.Id,
-                    Token = t.Token,
-                    ContextInfo = t.ContextInfo,
-                    Representable = t.Representable,
-                    OriginalPhrase = t.Phrase,
-                    OriginalNote = t.Note ?? "",
-                    Phrase = t.Phrase,
-                    Note = t.Note ?? "",
-                })
-                .ToList();
+            if (version != _loadVersion)
+                return; // a newer selection superseded this load — don't publish stale rows
 
-            foreach (var r in _rows)
+            DetachRows(); // drop subscriptions from the previous language
+            foreach (var r in newRows)
             {
                 r.Revalidate(); // flag any already-invalid existing data (e.g. an empty phrase) at load
                 r.PropertyChanged += OnRowChanged;
                 r.ErrorsChanged += OnRowErrorsChanged;
             }
 
+            _rows = newRows;
             _currentIso = iso;
             VocabGrid.ItemsSource = _rows;
             UpdateSaveState($"{_rows.Count} tokens for {iso}.");
         }
         catch (Exception ex)
         {
+            if (version != _loadVersion)
+                return;
+            ClearRows(); // don't leave the previous language's rows editable behind a failed load
             StatusText.Text = "Error loading templates: " + ex.Message;
         }
+    }
+
+    private void DetachRows()
+    {
+        foreach (var old in _rows)
+        {
+            old.PropertyChanged -= OnRowChanged;
+            old.ErrorsChanged -= OnRowErrorsChanged;
+        }
+    }
+
+    private void ClearRows()
+    {
+        DetachRows();
+        _rows = new List<VocabEditRow>();
+        _currentIso = "";
+        VocabGrid.ItemsSource = null;
     }
 
     private void OnRowChanged(object? sender, PropertyChangedEventArgs e) => UpdateSaveState();
@@ -178,19 +205,25 @@ public partial class VocabularyTab : UserControl
         try
         {
             await using var ctx = new WeatherDataContext(App.DbOptions);
+            // Baseline only the rows actually written, with the note normalized to what was persisted
+            // (whitespace-only is stored as NULL -> "") so a skipped/blank value isn't shown as saved-as-typed.
+            var written = new List<(VocabEditRow Row, string Phrase, string Note)>();
             foreach (var s in snapshot)
             {
                 var tpl = await ctx.LanguageTemplates.FirstOrDefaultAsync(t => t.Id == s.Row.Id);
                 if (tpl is null)
                     continue;
+                var persistedNote = string.IsNullOrWhiteSpace(s.Note) ? "" : s.Note;
                 tpl.Phrase = s.Phrase;
-                tpl.Note = string.IsNullOrWhiteSpace(s.Note) ? null : s.Note;
+                tpl.Note = persistedNote.Length == 0 ? null : persistedNote;
                 tpl.ReviewedBy = "WX-233 vocabulary editor";
                 tpl.ReviewedAtUtc = DateTime.UtcNow;
+                written.Add((s.Row, s.Phrase, persistedNote));
             }
             await ctx.SaveChangesAsync();
-            foreach (var s in snapshot)
-                s.Row.SetBaseline(s.Phrase, s.Note); // baseline = what we wrote, so a mid-save edit stays dirty
+            foreach (var w in written)
+                w.Row.SetBaseline(w.Phrase, w.Note); // baseline = what we persisted; a mid-save edit stays dirty
+            UpdateSaveState($"Saved {written.Count} change(s) at {DateTime.Now:HH:mm:ss}.");
         }
         catch (Exception ex)
         {
@@ -198,8 +231,6 @@ public partial class VocabularyTab : UserControl
             MessageBox.Show($"Save failed: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
             return;
         }
-
-        UpdateSaveState($"Saved {snapshot.Count} change(s) at {DateTime.Now:HH:mm:ss}.");
     }
 
     // When the user clicks back into a Phrase cell that's currently flagged invalid, restore the pre-edit
