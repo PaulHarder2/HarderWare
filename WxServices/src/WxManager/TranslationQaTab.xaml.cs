@@ -1,6 +1,5 @@
 using System.ComponentModel;
 using System.IO;
-using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
@@ -436,7 +435,7 @@ public partial class TranslationQaTab : UserControl
         if (string.IsNullOrEmpty(_currentIso) || string.IsNullOrWhiteSpace(row.Suggestion))
             return;
 
-        if (!PlaceholdersMatch(row.EnglishPhrase, row.Suggestion))
+        if (!TemplateValidation.PlaceholdersMatch(row.EnglishPhrase, row.Suggestion))
         {
             MessageBox.Show(
                 "Cannot apply: the suggestion's {n} placeholders don't match the English contract — applying it " +
@@ -490,14 +489,6 @@ public partial class TranslationQaTab : UserControl
         {
             MessageBox.Show($"Update failed: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
         }
-    }
-
-    // The {n} placeholder set the suggestion must preserve, defined by the English source format string.
-    private static bool PlaceholdersMatch(string english, string suggestion)
-    {
-        static IEnumerable<string> Placeholders(string s) =>
-            Regex.Matches(s, @"\{\d+\}").Select(m => m.Value).OrderBy(x => x, StringComparer.Ordinal);
-        return Placeholders(english).SequenceEqual(Placeholders(suggestion));
     }
 
     // Shared, frozen, cached brushes for the fixed dark-theme palette — parsed once per color and reused
