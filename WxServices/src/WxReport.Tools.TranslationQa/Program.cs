@@ -191,8 +191,9 @@ try
 {
     Directory.CreateDirectory(packageDir); // also creates outDir as its parent
 }
-catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
 {
+    // ArgumentException covers a malformed --out (invalid path characters) as well as IO/permission faults.
     Console.Error.WriteLine($"error: could not create the output directory '{packageDir}' — {ex.Message}");
     return 1;
 }
