@@ -1,0 +1,54 @@
+<UserControl x:Class="WxManager.TranslationQaTab"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Background="#1a1a1a">
+    <DockPanel LastChildFill="True">
+
+        <!-- ── Top bar: package selector + trust/common info (WX-219) ── -->
+        <Border DockPanel.Dock="Top" Background="#1e1e1e" BorderBrush="#333333" BorderThickness="0,0,0,1" Padding="12,10">
+            <StackPanel>
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="Judge package:" Foreground="#c8c8c8" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                    <ComboBox x:Name="PackageSelector" Width="260" SelectionChanged="PackageSelector_SelectionChanged"/>
+                    <Button x:Name="RefreshButton" Content="Refresh" Margin="10,0,0,0" Padding="10,2" Click="RefreshButton_Click"/>
+                </StackPanel>
+
+                <!-- trust info, populated in code-behind -->
+                <WrapPanel x:Name="TrustPanel" Margin="0,8,0,0">
+                    <TextBlock x:Name="LangText"       Foreground="#c8c8c8" Margin="0,0,18,0"/>
+                    <TextBlock x:Name="SourceText"     Foreground="#c8c8c8" Margin="0,0,18,0"/>
+                    <Border x:Name="ConfidenceBadge" CornerRadius="3" Padding="6,1" Margin="0,0,8,0" Visibility="Collapsed">
+                        <TextBlock x:Name="ConfidenceText" Foreground="#ffffff" FontWeight="SemiBold"/>
+                    </Border>
+                    <TextBlock x:Name="ConfidenceNote" Foreground="#909090" FontStyle="Italic" VerticalAlignment="Center" Margin="0,0,18,0"/>
+                    <TextBlock x:Name="CountsText"     Foreground="#c8c8c8"/>
+                </WrapPanel>
+
+                <TextBlock Text="Verdicts are advisory for human adjudication — never auto-applied."
+                           Foreground="#909090" FontStyle="Italic" FontSize="11" Margin="0,6,0,0"/>
+            </StackPanel>
+        </Border>
+
+        <!-- ── Empty-state message (shown when no package is selected / none found) ── -->
+        <TextBlock x:Name="EmptyState" DockPanel.Dock="Top" Foreground="#909090" Margin="14,16"
+                   TextWrapping="Wrap" Visibility="Collapsed"/>
+
+        <!-- ── Sub-tabs: one per scenario (added in code-behind), then Vocabulary ── -->
+        <TabControl x:Name="SubTabs">
+            <TabItem Header="Vocabulary" x:Name="VocabTab">
+                <DataGrid x:Name="VocabGrid" AutoGenerateColumns="False" IsReadOnly="True"
+                          SelectionMode="Single" GridLinesVisibility="Horizontal" HeadersVisibility="Column"
+                          CanUserResizeRows="False" BorderThickness="0">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Status"  Binding="{Binding StatusLabel}" Width="120"/>
+                        <DataGridTextColumn Header="Token"   Binding="{Binding Token}" Width="150"/>
+                        <DataGridTextColumn Header="English" Binding="{Binding EnglishPhrase}" Width="140"/>
+                        <DataGridTextColumn Header="Target"  Binding="{Binding TargetPhrase}" Width="150"/>
+                        <DataGridTextColumn Header="Comment" Binding="{Binding Comment}" Width="*"/>
+                        <DataGridTextColumn Header="Suggestion" Binding="{Binding Suggestion}" Width="160"/>
+                    </DataGrid.Columns>
+                </DataGrid>
+            </TabItem>
+        </TabControl>
+    </DockPanel>
+</UserControl>

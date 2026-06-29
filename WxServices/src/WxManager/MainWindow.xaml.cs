@@ -28,6 +28,7 @@ public partial class MainWindow : Window
         RecipientsTabItem.IsEnabled = true;
         LocalitiesTabItem.IsEnabled = true;
         LanguagesTabItem.IsEnabled = true;
+        TranslationQaTabItem.IsEnabled = true;
         AnnouncementTabItem.IsEnabled = true;
     }
 
@@ -38,6 +39,7 @@ public partial class MainWindow : Window
         RecipientsTabItem.IsEnabled = false;
         LocalitiesTabItem.IsEnabled = false;
         LanguagesTabItem.IsEnabled = false;
+        TranslationQaTabItem.IsEnabled = false;
         AnnouncementTabItem.IsEnabled = false;
         ConfigureTabItem.IsEnabled = false;
         MainTabs.SelectedIndex = 0; // switch to Setup tab

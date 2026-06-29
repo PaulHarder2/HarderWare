@@ -1,10 +1,14 @@
 using System.Text.Encodings.Web;
 using System.Text.Json;
 
-namespace WxReport.Tools.TranslationQa;
+namespace WxServices.Common.TranslationQa;
 
-/// <summary>Shared JSON options for the translation-QA tool.</summary>
-internal static class TranslationQaJson
+/// <summary>
+/// Shared JSON options for the translation-QA judge package. Lives in Common (WX-219) so the producer
+/// (the TranslationQa tool) writes and the consumer (the WxManager review tab) reads with identical
+/// settings — same casing, same escaping — and the two can never drift.
+/// </summary>
+public static class TranslationQaJson
 {
     /// <summary>
     /// Writer: indented, camelCase, native script preserved literally (ü, ñ, ĵ, future CJK) instead of
@@ -18,7 +22,7 @@ internal static class TranslationQaJson
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     });
 
-    /// <summary>Reader: tolerant of property-name casing in a pasted model reply.</summary>
+    /// <summary>Reader: tolerant of property-name casing in a pasted model reply or a hand-edited file.</summary>
     public static readonly JsonSerializerOptions Read = Frozen(new()
     {
         PropertyNameCaseInsensitive = true,
