@@ -385,6 +385,9 @@
             <TabItem x:Name="TranslationQaTabItem" Header="Translation QA" IsEnabled="False">
                 <local:TranslationQaTab/>
             </TabItem>
+            <TabItem x:Name="VocabularyTabItem" Header="Vocabulary" IsEnabled="False">
+                <local:VocabularyTab/>
+            </TabItem>
             <TabItem x:Name="AnnouncementTabItem" Header="Announcement" IsEnabled="False">
                 <local:AnnouncementTab/>
             </TabItem>

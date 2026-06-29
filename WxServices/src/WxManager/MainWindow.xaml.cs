@@ -105,6 +105,7 @@ public partial class MainWindow : Window
         LocalitiesTabItem.IsEnabled = true;
         LanguagesTabItem.IsEnabled = true;
         TranslationQaTabItem.IsEnabled = true;
+        VocabularyTabItem.IsEnabled = true;
         AnnouncementTabItem.IsEnabled = true;
     }
 
@@ -116,6 +117,7 @@ public partial class MainWindow : Window
         LocalitiesTabItem.IsEnabled = false;
         LanguagesTabItem.IsEnabled = false;
         TranslationQaTabItem.IsEnabled = false;
+        VocabularyTabItem.IsEnabled = false;
         AnnouncementTabItem.IsEnabled = false;
         ConfigureTabItem.IsEnabled = false;
         MainTabs.SelectedIndex = 0; // switch to Setup tab

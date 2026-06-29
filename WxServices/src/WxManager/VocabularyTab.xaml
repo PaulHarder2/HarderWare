@@ -1,0 +1,61 @@
+<UserControl x:Class="WxManager.VocabularyTab"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Background="#1a1a1a">
+    <DockPanel LastChildFill="True">
+
+        <!-- Top bar: language selector + Save + status (WX-233) -->
+        <Border DockPanel.Dock="Top" Background="#1e1e1e" BorderBrush="#333333" BorderThickness="0,0,0,1" Padding="12,10">
+            <DockPanel LastChildFill="True">
+                <TextBlock Text="Language:" DockPanel.Dock="Left" Foreground="#c8c8c8" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                <ComboBox x:Name="LangSelector" DockPanel.Dock="Left" Width="200" VerticalAlignment="Center" SelectionChanged="LangSelector_SelectionChanged"/>
+                <Button x:Name="SaveButton" DockPanel.Dock="Left" Content="Save changes" Margin="14,0,0,0" Padding="12,3" VerticalAlignment="Center" Click="SaveButton_Click"/>
+                <TextBlock x:Name="StatusText" Foreground="#909090" VerticalAlignment="Center" Margin="14,0,0,0"
+                           TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
+            </DockPanel>
+        </Border>
+
+        <TextBlock DockPanel.Dock="Bottom" Foreground="#6b8fa8" FontSize="11" FontStyle="Italic" Margin="12,4"
+                   Text="Edit Phrase and Note. Token, English source, Context, and Representable are read-only (cross-language — change via migration). A Phrase that drops a {n} placeholder is blocked on save."/>
+
+        <!-- Editable: Phrase, Note. Read-only: everything else. -->
+        <DataGrid x:Name="VocabGrid" AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False"
+                  SelectionMode="Single" GridLinesVisibility="Horizontal" HeadersVisibility="Column"
+                  RowHeaderWidth="0" BorderThickness="0" Margin="10,0,0,0"
+                  BeginningEdit="VocabGrid_BeginningEdit">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="Token"           Binding="{Binding Token}"        IsReadOnly="True" Width="160"/>
+                <DataGridTextColumn Header="English (source)" Binding="{Binding English}"      IsReadOnly="True" Width="1.3*"/>
+                <DataGridTextColumn x:Name="PhraseColumn" Header="Phrase" Width="1.3*"
+                                    Binding="{Binding Phrase, UpdateSourceTrigger=PropertyChanged, ValidatesOnNotifyDataErrors=True}">
+                    <DataGridTextColumn.ElementStyle>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="ToolTipService.InitialShowDelay" Value="200"/>
+                            <Setter Property="ToolTipService.ShowDuration" Value="20000"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding HasPhraseError}" Value="True">
+                                    <Setter Property="Background" Value="#5a2020"/>
+                                    <Setter Property="ToolTip" Value="{Binding PhraseErrorText}"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </DataGridTextColumn.ElementStyle>
+                    <DataGridTextColumn.EditingElementStyle>
+                        <Style TargetType="TextBox">
+                            <Setter Property="ToolTipService.InitialShowDelay" Value="200"/>
+                            <Setter Property="ToolTipService.ShowDuration" Value="20000"/>
+                            <Style.Triggers>
+                                <Trigger Property="Validation.HasError" Value="True">
+                                    <Setter Property="ToolTip" Value="{Binding (Validation.Errors)[0].ErrorContent, RelativeSource={RelativeSource Self}}"/>
+                                </Trigger>
+                            </Style.Triggers>
+                        </Style>
+                    </DataGridTextColumn.EditingElementStyle>
+                </DataGridTextColumn>
+                <DataGridTextColumn Header="Note"            Binding="{Binding Note}"          Width="*"/>
+                <DataGridTextColumn Header="Context"         Binding="{Binding ContextInfo}"   IsReadOnly="True" Width="*"/>
+                <DataGridCheckBoxColumn Header="Repr."       Binding="{Binding Representable}"  IsReadOnly="True" Width="56"/>
+            </DataGrid.Columns>
+        </DataGrid>
+    </DockPanel>
+</UserControl>
