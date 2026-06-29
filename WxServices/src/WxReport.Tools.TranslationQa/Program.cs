@@ -349,7 +349,9 @@ else if (rendered.Count > 0)
         IJudge judge = new GeminiJudge(geminiHttp, geminiCfg);
         try
         {
-            var verdict = await judge.JudgeAsync(requestMarkdown, cts.Token);
+            var verdict = (await judge.JudgeAsync(requestMarkdown, cts.Token))
+                with
+            { JudgedBy = $"gemini ({geminiCfg.Model})" }; // WX-219: stamp the package source
             var judgedPath = Path.Combine(outDir, $"{targetIso}.{stamp}.judged.json");
             await File.WriteAllTextAsync(judgedPath, JsonSerializer.Serialize(verdict, TranslationQaJson.Write), cts.Token);
             Console.WriteLine("  ✓ judged by Gemini.");
@@ -443,7 +445,9 @@ static async Task<int> RunJudgePhaseAsync(string responseFile, CancellationToken
     try
     {
         // The manual judge ignores the request markdown (it was pasted into the model by hand).
-        verdict = await judge.JudgeAsync(string.Empty, ct);
+        verdict = (await judge.JudgeAsync(string.Empty, ct))
+            with
+        { JudgedBy = "manual-paste" }; // WX-219: stamp the package source
     }
     catch (OperationCanceledException) when (ct.IsCancellationRequested)
     {

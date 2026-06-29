@@ -16,6 +16,13 @@
     <!-- WX-216: the real pipeline types (ForecastReconciler, ClaudeClient,
          StructuredReportRenderer, LanguageTemplateStore, ReportConfig, PersonaPrefix). -->
     <ProjectReference Include="..\WxReport.Svc\WxReport.Svc.csproj" />
+    <!-- WX-219: the shared judge-package contract (JudgeResponse / JudgingRequest /
+         RenderedScenario / VocabularyPair) lives in Common so the WxManager review tab
+         consumes the same types this tool produces. -->
+    <ProjectReference Include="..\WxServices.Common\WxServices.Common.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Using Include="WxServices.Common.TranslationQa" />
   </ItemGroup>
   <ItemGroup>
     <!-- Same runtime files the service loads, copied beside the harness so it reads the real

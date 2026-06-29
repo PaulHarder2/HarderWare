@@ -1,4 +1,4 @@
-namespace WxReport.Tools.TranslationQa;
+namespace WxServices.Common.TranslationQa;
 
 /// <summary>The independent model's self-reported fluency / how far to trust its review.</summary>
 public sealed record JudgeConfidence(string Level, string Note);
@@ -15,12 +15,20 @@ public sealed record VocabularyVerdict(string Token, bool Accurate, bool Natural
 /// <summary>
 /// WX-218 — the parsed, validated verdict an independent (non-Claude) model returns for a judging
 /// request. Mirrors the response shape WX-217's preamble dictates. Produced from a manual paste today
-/// (<see cref="ManualPasteJudge"/>) and, in future, an automated non-Claude API behind the same
-/// <see cref="IJudge"/> seam.
+/// (the ManualPasteJudge) and, in future, an automated non-Claude API behind the same IJudge seam.
+///
+/// Lives in WxServices.Common (WX-219) as the shared judge-package contract: the TranslationQa tool
+/// (and WX-173's reviewer app) <i>produce</i> it; the WxManager review tab <i>consumes</i> it.
+///
+/// <para><see cref="JudgedBy"/> (WX-219) records the package's source/identity — set by the producer
+/// when the verdict is written (e.g. <c>gemini (model)</c>, <c>manual-paste</c>, or a human reviewer's
+/// name from WX-173). Optional and last so existing/legacy packages without it deserialize cleanly
+/// (rendered as an unknown source).</para>
 /// </summary>
 public sealed record JudgeResponse(
     string Language,
     JudgeConfidence? SelfReportedConfidence,
     IReadOnlyList<BackTranslation> BackTranslations,
     IReadOnlyList<ReportFinding> ReportFindings,
-    IReadOnlyList<VocabularyVerdict> VocabularyVerdicts);
+    IReadOnlyList<VocabularyVerdict> VocabularyVerdicts,
+    string? JudgedBy = null);
