@@ -3,24 +3,6 @@ using System.Text.Json;
 
 namespace WxReport.Tools.TranslationQa;
 
-/// <summary>One scenario's rendered report pair — the English reference and the target rendering.</summary>
-public sealed record RenderedScenario(string Name, string Synopsis, string EnglishHtml, string TargetHtml);
-
-/// <summary>
-/// One controlled-vocabulary token, its English source paired with the target-language rendering and the
-/// generation metadata the judge needs to assess the term in context.
-/// </summary>
-public sealed record VocabularyPair(
-    string Token,
-    string EnglishPhrase,
-    string EnglishContext,
-    string ContextKind,
-    string TargetPhrase,
-    string TargetContext,
-    bool Representable,
-    string? Note,
-    bool Reviewed);
-
 /// <summary>
 /// WX-217 — assembles the judging request: the single self-describing document an independent (non-Claude)
 /// model is handed to audit a target language. It bundles an instruction preamble (the asks + the exact

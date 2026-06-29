@@ -1,4 +1,4 @@
-namespace WxReport.Tools.TranslationQa;
+namespace WxServices.Common.TranslationQa;
 
 /// <summary>The independent model's self-reported fluency / how far to trust its review.</summary>
 public sealed record JudgeConfidence(string Level, string Note);
@@ -15,8 +15,10 @@ public sealed record VocabularyVerdict(string Token, bool Accurate, bool Natural
 /// <summary>
 /// WX-218 — the parsed, validated verdict an independent (non-Claude) model returns for a judging
 /// request. Mirrors the response shape WX-217's preamble dictates. Produced from a manual paste today
-/// (<see cref="ManualPasteJudge"/>) and, in future, an automated non-Claude API behind the same
-/// <see cref="IJudge"/> seam.
+/// (the ManualPasteJudge) and, in future, an automated non-Claude API behind the same IJudge seam.
+///
+/// Lives in WxServices.Common (WX-219) as the shared judge-package contract: the TranslationQa tool
+/// (and WX-173's reviewer app) <i>produce</i> it; the WxManager review tab <i>consumes</i> it.
 /// </summary>
 public sealed record JudgeResponse(
     string Language,
