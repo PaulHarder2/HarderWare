@@ -130,17 +130,8 @@ public partial class TranslationQaTab : UserControl
             .ThenBy(v => v.Token, StringComparer.Ordinal)
             .ToList();
 
-        // Rebuild the scenario sub-tabs (everything except the static Vocabulary tab). Dispose the outgoing
-        // tabs' WebView2 controls — each hosts a browser process that is not released just by removing the
-        // control from the tree, so without this a session of Refreshes / package switches leaks processes.
-        for (var i = SubTabs.Items.Count - 1; i >= 0; i--)
-            if (SubTabs.Items[i] is TabItem ti && ti != VocabTab)
-            {
-                if (ti.Tag is List<WebView2> webs)
-                    foreach (var w in webs)
-                        w.Dispose();
-                SubTabs.Items.RemoveAt(i);
-            }
+        // Rebuild the scenario sub-tabs (dispose the outgoing tabs' WebView2 browser processes first).
+        DisposeScenarioTabs();
 
         var targetLabel = string.IsNullOrWhiteSpace(req.TargetDisplayName) ? judged.Language : req.TargetDisplayName!;
         var insertAt = 0;
@@ -414,9 +405,25 @@ public partial class TranslationQaTab : UserControl
 
     private void ShowEmpty(string message)
     {
+        DisposeScenarioTabs(); // an error/empty state after a loaded package must still release its WebViews
         EmptyState.Text = message;
         EmptyState.Visibility = Visibility.Visible;
         SubTabs.Visibility = Visibility.Collapsed;
+    }
+
+    // Remove every scenario sub-tab (all but the static Vocabulary tab) and dispose its WebView2 controls —
+    // each hosts a browser process not released just by removing the control from the tree. Called on both
+    // the rebuild path (LoadSelected) and the error/empty path (ShowEmpty) so neither leaks processes.
+    private void DisposeScenarioTabs()
+    {
+        for (var i = SubTabs.Items.Count - 1; i >= 0; i--)
+            if (SubTabs.Items[i] is TabItem ti && ti != VocabTab)
+            {
+                if (ti.Tag is List<WebView2> webs)
+                    foreach (var w in webs)
+                        w.Dispose();
+                SubTabs.Items.RemoveAt(i);
+            }
     }
 
     // Copy a verdict's suggestion into LanguageTemplates — the human adjudication step (the suggestion is
@@ -455,6 +462,19 @@ public partial class TranslationQaTab : UserControl
                 MessageBox.Show($"No LanguageTemplates row for {_currentIso} / {row.Token}.", "Not found",
                     MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
+            }
+
+            // The confirm dialog showed the package's snapshot of the current phrase (row.TargetPhrase). If
+            // the DB drifted since the package was produced, overwriting would silently discard the
+            // intervening edit — surface the divergence and let the operator decide.
+            if (!string.Equals(tpl.Phrase, row.TargetPhrase, StringComparison.Ordinal))
+            {
+                var proceed = MessageBox.Show(
+                    "The database value changed since this QA package was produced.\n\n" +
+                    $"Current DB value: {tpl.Phrase}\nPackage reviewed:  {row.TargetPhrase}\n\nOverwrite anyway?",
+                    "Value changed", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+                if (proceed != MessageBoxResult.Yes)
+                    return;
             }
 
             tpl.Phrase = row.Suggestion;

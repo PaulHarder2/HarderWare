@@ -117,6 +117,16 @@ public static class JudgePackageStore
             VocabularyVerdicts = judged.VocabularyVerdicts ?? [],
         };
 
+        // Enforce the required-field contract that System.Text.Json's nullability-blind binding can't: a
+        // hand-edited package with a blank language or a token-less entry should fail fast here, naming the
+        // file/field, rather than NRE opaquely inside JoinVocabulary (Token is the join key).
+        if (string.IsNullOrWhiteSpace(judged.Language))
+            throw new InvalidDataException($"judged.json is missing required 'language': {pkg.JudgedPath}");
+        if (request.Vocabulary.Any(v => string.IsNullOrEmpty(v.Token)))
+            throw new InvalidDataException($"request.json has a vocabulary entry with no 'token': {pkg.RequestPath}");
+        if (judged.VocabularyVerdicts.Any(v => string.IsNullOrEmpty(v.Token)))
+            throw new InvalidDataException($"judged.json has a vocabulary verdict with no 'token': {pkg.JudgedPath}");
+
         var (rows, orphans) = JoinVocabulary(request, judged);
         return new JudgePackage(pkg, request, judged, rows, orphans);
     }

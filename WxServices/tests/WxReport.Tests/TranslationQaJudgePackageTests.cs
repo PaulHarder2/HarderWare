@@ -126,6 +126,7 @@ public class TranslationQaJudgePackageTests
             var pkg = JudgePackageStore.Load(JudgePackageStore.Discover(dir).Single());
 
             Assert.Equal("de", pkg.Judged.Language);
+            Assert.Equal("gemini-test", pkg.Judged.JudgedBy); // source stamp survives the round-trip
             Assert.Equal("German", pkg.Request.TargetDisplayName);
             Assert.Single(pkg.Vocabulary);
             Assert.Equal(VerdictStatus.Ok, pkg.Vocabulary[0].Status);
@@ -149,6 +150,6 @@ public class TranslationQaJudgePackageTests
             JsonSerializer.Serialize(new JudgingRequest(iso, "German", Array.Empty<RenderedScenario>(), [Pair("A", "alpha")]), TranslationQaJson.Write));
         File.WriteAllText(Path.Combine(dir, $"{iso}.{stamp}.judged.json"),
             JsonSerializer.Serialize(new JudgeResponse(iso, null, Array.Empty<BackTranslation>(), Array.Empty<ReportFinding>(),
-                [new VocabularyVerdict("A", true, true, "", null)]), TranslationQaJson.Write));
+                [new VocabularyVerdict("A", true, true, "", null)], JudgedBy: "gemini-test"), TranslationQaJson.Write));
     }
 }
