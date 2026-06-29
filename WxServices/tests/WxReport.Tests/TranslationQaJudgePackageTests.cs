@@ -94,8 +94,9 @@ public class TranslationQaJudgePackageTests
         {
             WritePair(dir, "de", "20260101-000000");
             WritePair(dir, "es", "20260102-000000"); // newer
-            // a verdict with no sibling request → not a usable package
-            File.WriteAllText(Path.Combine(dir, "fr.20260103-000000.judged.json"),
+            // a subfolder with a verdict but no request → not a usable package
+            var frSub = Directory.CreateDirectory(Path.Combine(dir, "fr.20260103-000000")).FullName;
+            File.WriteAllText(Path.Combine(frSub, "fr.20260103-000000.judged.json"),
                 JsonSerializer.Serialize(Verdicts(), TranslationQaJson.Write));
 
             var refs = JudgePackageStore.Discover(dir);
@@ -144,11 +145,15 @@ public class TranslationQaJudgePackageTests
         return dir;
     }
 
+    // A package is a per-check subfolder "<iso>.<stamp>" holding "<iso>.<stamp>.request.json" +
+    // "<iso>.<stamp>.judged.json" (WX-232).
     private static void WritePair(string dir, string iso, string stamp)
     {
-        File.WriteAllText(Path.Combine(dir, $"{iso}.{stamp}.request.json"),
+        var name = $"{iso}.{stamp}";
+        var sub = Directory.CreateDirectory(Path.Combine(dir, name)).FullName;
+        File.WriteAllText(Path.Combine(sub, $"{name}.request.json"),
             JsonSerializer.Serialize(new JudgingRequest(iso, "German", Array.Empty<RenderedScenario>(), [Pair("A", "alpha")]), TranslationQaJson.Write));
-        File.WriteAllText(Path.Combine(dir, $"{iso}.{stamp}.judged.json"),
+        File.WriteAllText(Path.Combine(sub, $"{name}.judged.json"),
             JsonSerializer.Serialize(new JudgeResponse(iso, null, Array.Empty<BackTranslation>(), Array.Empty<ReportFinding>(),
                 [new VocabularyVerdict("A", true, true, "", null)], JudgedBy: "gemini-test"), TranslationQaJson.Write));
     }
