@@ -183,12 +183,19 @@ using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(claudeCfg.Timeo
 http.DefaultRequestHeaders.Add("User-Agent", "WxReport-TranslationQA/1.0");
 var reconciler = new ForecastReconciler(new ClaudeClient(http, claudeCfg.ApiKey!, claudeCfg.Model, persona.Text), templates);
 
-Directory.CreateDirectory(outDir);
 var stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
 // WX-232: each check's files live in their own per-check subfolder "<iso>.<stamp>", named
 // "<lang>.<stamp>.<purpose>.<ext>" within it (purpose = a scenario name, request, response, judged).
 var packageDir = Path.Combine(outDir, $"{targetIso}.{stamp}");
-Directory.CreateDirectory(packageDir);
+try
+{
+    Directory.CreateDirectory(packageDir); // also creates outDir as its parent
+}
+catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+{
+    Console.Error.WriteLine($"error: could not create the output directory '{packageDir}' — {ex.Message}");
+    return 1;
+}
 var tz = Exemplars.LocalityTz;
 
 // Unit prefs are language-neutral; give each render natural units (en→imperial, target→metric) so
