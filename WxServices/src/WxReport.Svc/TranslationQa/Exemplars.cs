@@ -2,7 +2,7 @@ using MetarParser.Data.Entities;
 
 using WxInterp;
 
-namespace WxReport.Tools.TranslationQa;
+namespace WxReport.Svc.TranslationQa;
 
 /// <summary>
 /// WX-215 — vocabulary-maximizing exemplar pipeline inputs for the WX-214 translation-QA harness.

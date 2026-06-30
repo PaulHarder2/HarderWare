@@ -1,7 +1,7 @@
 using MetarParser.Data.Entities;
 
 using WxReport.Svc;
-using WxReport.Tools.TranslationQa;
+using WxReport.Svc.TranslationQa;
 
 using Xunit;
 

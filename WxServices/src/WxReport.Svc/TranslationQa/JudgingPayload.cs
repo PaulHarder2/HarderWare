@@ -1,7 +1,9 @@
 using System.Text;
 using System.Text.Json;
 
-namespace WxReport.Tools.TranslationQa;
+using WxServices.Common.TranslationQa;
+
+namespace WxReport.Svc.TranslationQa;
 
 /// <summary>
 /// WX-217 — assembles the judging request: the single self-describing document an independent (non-Claude)

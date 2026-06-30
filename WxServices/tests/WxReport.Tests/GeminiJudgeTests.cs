@@ -2,7 +2,7 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 
-using WxReport.Tools.TranslationQa;
+using WxReport.Svc.TranslationQa;
 
 using Xunit;
 

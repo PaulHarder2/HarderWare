@@ -76,6 +76,9 @@ public sealed class WeatherDataContext : DbContext
     /// <summary>The <c>GlobalSettings</c> table — single row (Id = 1) storing application-wide secrets (Claude API key, SMTP credentials).</summary>
     public DbSet<GlobalSettings> GlobalSettings => Set<GlobalSettings>();
 
+    /// <summary>The <c>QaRerunRequests</c> table — one row per language tracking a service-side "Rerun QA" judge-package regeneration (WX-235).</summary>
+    public DbSet<QaRerunRequest> QaRerunRequests => Set<QaRerunRequest>();
+
     /// <summary>The <c>RecipientStates</c> table — one row per email recipient, tracking last send time and snapshot fingerprint.</summary>
     public DbSet<RecipientState> RecipientStates => Set<RecipientState>();
 
@@ -412,9 +415,34 @@ public sealed class WeatherDataContext : DbContext
             e.HasKey(x => x.Id);
 
             e.Property(x => x.ClaudeApiKey).HasMaxLength(500);
+            e.Property(x => x.GeminiApiKey).HasMaxLength(500);
             e.Property(x => x.SmtpUsername).HasMaxLength(200);
             e.Property(x => x.SmtpPassword).HasMaxLength(200);
             e.Property(x => x.SmtpFromAddress).HasMaxLength(200);
+        });
+
+        // ── QaRerunRequests (WX-235) ─────────────────────────────────────────
+        // One row per language, transitioned in place (not appended), so IsoCode is unique:
+        // WxManager writes Running on the button press; the WxReport.Svc worker claims it
+        // (Status = Running AND StartedAtUtc IS NULL → set StartedAtUtc) and writes the terminal state.
+        modelBuilder.Entity<QaRerunRequest>(e =>
+        {
+            e.ToTable("QaRerunRequests");
+            e.HasKey(x => x.Id);
+
+            e.Property(x => x.IsoCode).HasMaxLength(2).IsRequired();   // ISO 639-1 is exactly two letters
+            e.Property(x => x.Status)
+             .HasConversion<string>()      // store the enum name ("Running"/"Succeeded"/"Failed"), not its ordinal
+             .HasMaxLength(12)
+             .IsRequired();
+            e.Property(x => x.RequestedAtUtc).IsRequired();
+            e.Property(x => x.ResultStamp).HasMaxLength(40);
+            e.Property(x => x.Error).HasMaxLength(1000);
+            e.Property(x => x.RequestedBy).HasMaxLength(100);
+
+            e.HasIndex(x => x.IsoCode)
+             .IsUnique()
+             .HasDatabaseName("UX_QaRerunRequests_IsoCode");
         });
 
         // ── RecipientStates ──────────────────────────────────────────────────

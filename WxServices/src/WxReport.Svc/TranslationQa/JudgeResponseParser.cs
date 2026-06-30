@@ -1,6 +1,8 @@
 using System.Text.Json;
 
-namespace WxReport.Tools.TranslationQa;
+using WxServices.Common.TranslationQa;
+
+namespace WxReport.Svc.TranslationQa;
 
 /// <summary>
 /// WX-218 — the shared, source-agnostic core: turn a model's raw reply (a pasted Copilot/ChatGPT

@@ -14,6 +14,9 @@ public class GlobalSettings
     /// <summary>Claude API key used by WxReport.Svc for weather report generation.</summary>
     public string? ClaudeApiKey { get; set; }
 
+    /// <summary>Gemini API key used by WxReport.Svc's translation-QA judge when regenerating a judge package (WX-235).</summary>
+    public string? GeminiApiKey { get; set; }
+
     /// <summary>SMTP account username (typically a Gmail address).</summary>
     public string? SmtpUsername { get; set; }
 
