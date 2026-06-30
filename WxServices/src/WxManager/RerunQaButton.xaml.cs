@@ -56,6 +56,9 @@ public partial class RerunQaButton : UserControl
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
+        // Idempotent: WPF can raise Loaded without a matching Unloaded (re-parenting / template rebuild),
+        // so unsubscribe-then-subscribe guarantees exactly one handler.
+        App.QaRerunCoordinator.StatusChanged -= OnCoordinatorChanged;
         App.QaRerunCoordinator.StatusChanged += OnCoordinatorChanged;
         Render();
     }
@@ -78,6 +81,7 @@ public partial class RerunQaButton : UserControl
         var iso = Iso;
         if (string.IsNullOrEmpty(iso))
             return;
+        Btn.IsEnabled = false;   // synchronous guard so a fast double-click can't double-submit during the await
         try
         {
             await App.QaRerunCoordinator.RequestRerunAsync(iso);
@@ -86,6 +90,7 @@ public partial class RerunQaButton : UserControl
         {
             // A failed request write is reflected by the next poll; don't crash the UI thread.
         }
+        Render();   // sync to actual coordinator state (a no-op request, already-running, or a failed write all resolve here)
     }
 
     private void Render()

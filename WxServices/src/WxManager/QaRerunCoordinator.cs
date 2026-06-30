@@ -30,6 +30,7 @@ public sealed class QaRerunCoordinator
     private readonly DispatcherTimer _timer;
     private readonly Dictionary<string, QaRerunView> _byIso = new(System.StringComparer.Ordinal);
     private bool _pollInFlight;
+    private int _requestVersion;   // bumped by RequestRerunAsync; lets a poll detect that its snapshot was overtaken
 
     /// <summary>Raised (on the UI thread) with the ISO code of a language whose rerun state just changed.</summary>
     public event System.Action<string>? StatusChanged;
@@ -47,7 +48,7 @@ public sealed class QaRerunCoordinator
     public QaRerunView StatusFor(string iso) =>
         iso is not null && _byIso.TryGetValue(iso, out var v) ? v : QaRerunView.None;
 
-    /// <summary>True while a language's regeneration is in flight (Requested/Running).</summary>
+    /// <summary>True while a language's regeneration is in flight (<see cref="QaRerunStatus.Running"/>).</summary>
     public bool IsInFlight(string iso) => StatusFor(iso).Status == QaRerunStatus.Running;
 
     /// <summary>
@@ -82,6 +83,7 @@ public sealed class QaRerunCoordinator
         }
 
         _byIso[iso] = new QaRerunView(QaRerunStatus.Running, null, null, null);
+        _requestVersion++;   // any poll currently awaiting its DB read now holds a stale snapshot
         StatusChanged?.Invoke(iso);
     }
 
@@ -92,9 +94,15 @@ public sealed class QaRerunCoordinator
         _pollInFlight = true;
         try
         {
+            var versionBefore = _requestVersion;
             List<QaRerunRequest> rows;
             await using (var ctx = new WeatherDataContext(_dbOptions))
                 rows = await ctx.QaRerunRequests.AsNoTracking().ToListAsync();
+
+            // If an operator request mutated state during our read, our snapshot predates that optimistic
+            // Running write — applying it would revert the just-locked button. Skip; the next poll re-reads.
+            if (_requestVersion != versionBefore)
+                return;
 
             var fresh = rows.ToDictionary(
                 r => r.IsoCode,

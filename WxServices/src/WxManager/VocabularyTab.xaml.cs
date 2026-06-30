@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Controls;
 
 using MetarParser.Data;
+using MetarParser.Data.Entities;
 
 using Microsoft.EntityFrameworkCore;
 
@@ -23,6 +24,7 @@ public partial class VocabularyTab : UserControl
 {
     private List<VocabEditRow> _rows = new();
     private string _currentIso = "";
+    private QaRerunStatus? _lastRerunStatus; // last rerun status seen for _currentIso (gates the reload-on-press)
     private int _loadVersion; // bumped per load; only the latest load may publish (guards overlapping selections)
 
     public VocabularyTab()
@@ -31,6 +33,30 @@ public partial class VocabularyTab : UserControl
         // Only IsVisibleChanged drives the (re)load — it fires on first show and on each return to the tab.
         // A dirty-guard in LoadLanguagesAsync keeps a return-to-tab from discarding unsaved edits.
         IsVisibleChanged += async (_, e) => { if (e.NewValue is true) await LoadLanguagesAsync(); };
+
+        // WX-235: subscribe to the shared rerun coordinator only while this tab is loaded (no leak).
+        // Unsubscribe-then-subscribe is idempotent — WPF can raise Loaded without a matching Unloaded.
+        Loaded += (_, _) =>
+        {
+            App.QaRerunCoordinator.StatusChanged -= OnRerunStatusChanged;
+            App.QaRerunCoordinator.StatusChanged += OnRerunStatusChanged;
+        };
+        Unloaded += (_, _) => App.QaRerunCoordinator.StatusChanged -= OnRerunStatusChanged;
+    }
+
+    // ── WX-235: "Rerun QA" wiring ──
+    private void OnRerunStatusChanged(string iso)
+    {
+        if (!string.Equals(iso, _currentIso, StringComparison.Ordinal))
+            return;
+        var v = App.QaRerunCoordinator.StatusFor(iso);
+        // Lock the grid while this language is regenerating (any edit would immediately re-stale the package).
+        VocabGrid.IsReadOnly = v.Status == QaRerunStatus.Running;
+        // Reload-from-DB on press: when the rerun begins, snap the grid to the committed DB state — dropping any
+        // unsaved edits — so what the service judges is exactly what is shown.
+        if (v.Status == QaRerunStatus.Running && _lastRerunStatus != QaRerunStatus.Running)
+            _ = LoadTemplatesAsync(iso);
+        _lastRerunStatus = v.Status;
     }
 
     private async Task LoadLanguagesAsync()
@@ -138,6 +164,10 @@ public partial class VocabularyTab : UserControl
             _currentIso = iso;
             VocabGrid.ItemsSource = _rows;
             UpdateSaveState($"{_rows.Count} tokens for {iso}.");
+            // WX-235: keep the Rerun QA button + in-flight read-only gate in sync with the loaded language.
+            RerunButton.Iso = iso;
+            _lastRerunStatus = App.QaRerunCoordinator.StatusFor(iso).Status;
+            VocabGrid.IsReadOnly = App.QaRerunCoordinator.IsInFlight(iso);
         }
         catch (Exception ex)
         {
