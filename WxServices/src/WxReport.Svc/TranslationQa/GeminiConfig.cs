@@ -1,4 +1,4 @@
-namespace WxReport.Tools.TranslationQa;
+namespace WxReport.Svc.TranslationQa;
 
 /// <summary>
 /// WX-227 — configuration for the Gemini API judge. The <see cref="ApiKey"/> (and optionally a model

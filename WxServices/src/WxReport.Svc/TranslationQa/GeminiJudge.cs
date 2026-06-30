@@ -1,7 +1,9 @@
 using System.Text;
 using System.Text.Json;
 
-namespace WxReport.Tools.TranslationQa;
+using WxServices.Common.TranslationQa;
+
+namespace WxReport.Svc.TranslationQa;
 
 /// <summary>
 /// WX-227 — the automated, non-Claude judge: POSTs the full judging request to the Gemini
@@ -13,6 +15,8 @@ namespace WxReport.Tools.TranslationQa;
 /// </summary>
 public sealed class GeminiJudge(HttpClient http, GeminiConfig config) : IJudge
 {
+    public string SourceLabel => $"gemini ({config.Model})";
+
     public async Task<JudgeResponse> JudgeAsync(string requestMarkdown, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(config.ApiKey))

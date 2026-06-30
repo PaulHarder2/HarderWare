@@ -12,7 +12,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\MetarParser.Data\MetarParser.Data.csproj" />
-    <ProjectReference Include="..\WxInterp\WxInterp.csproj" />
     <!-- WX-216: the real pipeline types (ForecastReconciler, ClaudeClient,
          StructuredReportRenderer, LanguageTemplateStore, ReportConfig, PersonaPrefix). -->
     <ProjectReference Include="..\WxReport.Svc\WxReport.Svc.csproj" />

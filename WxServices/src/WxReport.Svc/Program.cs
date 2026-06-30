@@ -15,6 +15,7 @@ using Microsoft.Extensions.FileProviders;
 using OpenTelemetry.Metrics;
 
 using WxReport.Svc;
+using WxReport.Svc.TranslationQa;
 
 using WxServices.Common;
 using WxServices.Logging;
@@ -105,6 +106,7 @@ var host = Host.CreateDefaultBuilder(args)
             c.Timeout = TimeSpan.FromSeconds(claudeTimeoutSeconds);
         });
         services.AddHostedService<ReportWorker>();
+        services.AddHostedService<QaRerunWorker>();   // WX-235: service-side "Rerun QA" regeneration
     })
     .Build();
 

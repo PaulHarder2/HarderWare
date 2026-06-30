@@ -1,4 +1,4 @@
-using WxReport.Tools.TranslationQa;
+using WxReport.Svc.TranslationQa;
 
 using Xunit;
 
