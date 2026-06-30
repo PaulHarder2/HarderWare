@@ -64,12 +64,22 @@ public sealed class QaRerunCoordinator
         if (string.IsNullOrWhiteSpace(iso) || IsInFlight(iso))
             return;
 
+        // Publish the in-flight state SYNCHRONOUSLY, before the first await: the other tab's same-language
+        // button must observe Running immediately. If we waited until after the DB round-trip, a click on the
+        // other tab during the await would still see idle, submit a second rerun, and collide on the unique
+        // IsoCode index. Roll the optimistic publish back if the write fails.
+        var previous = StatusFor(iso);
+        _byIso[iso] = new QaRerunView(QaRerunStatus.Running, null, null, null);
+        _requestVersion++;
+        StatusChanged?.Invoke(iso);
+
         var now = System.DateTime.UtcNow;
-        await using (var ctx = new WeatherDataContext(_dbOptions))
+        try
         {
+            await using var ctx = new WeatherDataContext(_dbOptions);
             var row = await ctx.QaRerunRequests.FirstOrDefaultAsync(r => r.IsoCode == iso);
             if (row is { Status: QaRerunStatus.Running })
-                return;   // already running at the DB
+                return;   // already running at the DB — our optimistic Running already matches reality
             if (row is null)
             {
                 row = new QaRerunRequest { IsoCode = iso };
@@ -84,10 +94,18 @@ public sealed class QaRerunCoordinator
             row.RequestedBy = System.Environment.UserName;
             await ctx.SaveChangesAsync();
         }
-
-        _byIso[iso] = new QaRerunView(QaRerunStatus.Running, null, null, null);
-        _requestVersion++;   // any poll currently awaiting its DB read now holds a stale snapshot
-        StatusChanged?.Invoke(iso);
+        catch
+        {
+            // The optimistic publish never reached the DB — restore the prior view and notify so the button
+            // reverts, then rethrow so the caller (OnClick) can surface the failure.
+            if (previous == QaRerunView.None)
+                _byIso.Remove(iso);
+            else
+                _byIso[iso] = previous;
+            _requestVersion++;
+            StatusChanged?.Invoke(iso);
+            throw;
+        }
     }
 
     private async Task PollAsync()

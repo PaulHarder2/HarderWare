@@ -189,6 +189,16 @@ AI-reviewer independence matters here: CodeRabbit is OpenAI, Claude is Anthropic
 
 CodeRabbit's behavior is tuned via `.coderabbit.yaml` at the repo root (added in WX-32). The config enables the `assertive` review profile, high-level summaries, Jira-issue linking, effort estimates, and per-path guidance for C#, Python, Markdown, and PowerShell. Tune as needed; changes to the yaml are themselves PRs through this same workflow.
 
+### 9a. Never trust an "all clear" — verify the actual review state by hand
+
+**Standing policy (added 2026-06-30):** every time CodeRabbit *appears* clear — the `check-cr.sh` poller prints a short/empty finding list, the GitHub check shows a green ✓, or a summary "looks done" — treat that as *unconfirmed* and do a complete manual recheck against the API before acting on it (hash-fill, merge, or telling Paul it's green). The convenience signals are flaky in **both** directions; the authoritative state is only what these queries show:
+
+1. **Every review, with its state and commit.** `gh api repos/<owner>/<repo>/pulls/<N>/reviews --jq '.[] | {id, author: .user.login, state, commit: .commit_id[0:7], submitted: .submitted_at}'`. The *effective* review is the latest one **on the head commit**. An earlier-commit `CHANGES_REQUESTED` stays **sticky** — it holds `reviewDecision`/`mergeStateStatus` at `CHANGES_REQUESTED`/`BLOCKED` even after the newest review is only `COMMENTED` — and is cleared by **dismissing that specific review id** at merge time, *not* by assuming it's irrelevant.
+2. **The full latest-review body, including every collapsed `<summary>` section.** The poller parses the inline list and **misses** findings folded into `⚠️ Outside diff range comments`, `♻️ Duplicate comments`, and `🧹 Nitpick`. Read the raw body (`gh api .../pulls/<N>/reviews/<id> --jq '.body'`) and scan those sections — a Major correctness finding can live there (e.g. WX-235's "publish in-flight state before the await" was an *outside-diff* comment the poller never showed).
+3. **Every inline comment on the head commit, read in full.** `gh api .../pulls/<N>/comments --paginate` filtered to the head SHA. A finding re-posted on the new commit is **not** necessarily unaddressed, and one the poller dropped is **not** necessarily accepted — distinguish only by the literal **`✅ Addressed in commit <sha>`** marker CodeRabbit appends, and by reading the comment text (a re-post often carries a *refined* ask, e.g. a TOCTOU re-check the first fix missed).
+
+Only after this pass — not the poller's verdict — is CodeRabbit "clear." *Reason: on WX-235 (PR #149) the poller reported one open finding when three were materially open, including a Major concurrency bug; the green-looking state was an artifact of a stale sticky review plus collapsed sections. `check-cr.sh` is a triage aid, never the source of truth.*
+
 ## 10. Hash-fill commit
 
 When CodeRabbit is clean, add a **separate commit** whose sole change is filling in the v1.N.N commit hash in `VERSIONS.md` (replacing `_pending_`). The hash to record is the SHA of the commit that introduced the `Directory.Build.props` version bump — equivalently, the feature branch's HEAD at the moment *before* this hash-fill commit is added. It is never the hash-fill commit itself, and never the merge commit.

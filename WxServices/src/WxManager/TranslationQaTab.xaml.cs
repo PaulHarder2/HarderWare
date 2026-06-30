@@ -529,6 +529,17 @@ public partial class TranslationQaTab : UserControl
                     return;
             }
 
+            // Re-check in-flight at the point of write: a rerun may have started while a confirmation dialog
+            // above was open (the grid-disable gate can't reach an already-open modal). Don't overwrite the
+            // DB the worker is now judging — the handler-entry guard alone can't close this window.
+            if (App.QaRerunCoordinator.IsInFlight(_currentIso))
+            {
+                MessageBox.Show(
+                    "Rerun QA started for this language while the dialog was open — wait for it to finish before copying suggestions to the database.",
+                    "Rerun QA in progress", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
             tpl.Phrase = row.Suggestion;
             tpl.ReviewedBy = "WX-219 translation-QA review";
             tpl.ReviewedAtUtc = DateTime.UtcNow;

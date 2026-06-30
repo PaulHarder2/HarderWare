@@ -200,9 +200,11 @@ public partial class VocabularyTab : UserControl
         _currentIso = "";
         VocabGrid.ItemsSource = null;
         // No language loaded → the button has nothing to act on; clear its binding and the gate state so it
-        // doesn't keep showing a prior language's status.
+        // doesn't keep showing a prior language's status, and drop any in-flight lock the prior language held.
         RerunButton.Iso = "";
         _lastRerunStatus = null;
+        VocabGrid.IsReadOnly = false;
+        SaveButton.IsEnabled = false;
     }
 
     private void OnRowChanged(object? sender, PropertyChangedEventArgs e) => UpdateSaveState();
