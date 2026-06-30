@@ -109,9 +109,16 @@ public sealed class QaRerunWorker : BackgroundService
         Logger.Info($"QaRerunWorker claimed QA rerun for '{claim.IsoCode}' (id {claim.Id}); generating …");
         try
         {
-            var stamp = await GenerateAsync(claim.IsoCode, ct);
-            await CompleteAsync(claim.Id, claim.ClaimedAtUtc, QaRerunStatus.Succeeded, resultStamp: stamp, error: null, ct);
-            Logger.Info($"QaRerunWorker completed QA rerun for '{claim.IsoCode}' → {stamp}.");
+            var result = await GenerateAsync(claim.IsoCode, ct);
+            var (status, stamp, error) = OutcomeFor(result);
+            // Generation is done (the package is either produced or definitively not) — record the terminal
+            // state durably with None, like the failure path below. If shutdown raced the recording with ct,
+            // the claim would be released and the just-produced package re-run on restart (a duplicate).
+            await CompleteAsync(claim.Id, claim.ClaimedAtUtc, status, resultStamp: stamp, error: error, CancellationToken.None);
+            if (status == QaRerunStatus.Succeeded)
+                Logger.Info($"QaRerunWorker completed QA rerun for '{claim.IsoCode}' → {stamp}.");
+            else
+                Logger.Warn($"QaRerunWorker QA rerun for '{claim.IsoCode}' produced no judged package; marked Failed.");
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -128,7 +135,7 @@ public sealed class QaRerunWorker : BackgroundService
     }
 
     /// <summary>Build the pipeline dependencies (keys from <see cref="GlobalSettings"/>) and run the generation.</summary>
-    private async Task<string> GenerateAsync(string iso, CancellationToken ct)
+    private async Task<TranslationQaRunner.Result> GenerateAsync(string iso, CancellationToken ct)
     {
         var installRoot = _config["InstallRoot"];
         if (string.IsNullOrWhiteSpace(installRoot))
@@ -179,7 +186,28 @@ public sealed class QaRerunWorker : BackgroundService
             m => Logger.Info($"[QA rerun {iso}] {m}"),
             ct);
 
-        return result.Stamp;
+        return result;
+    }
+
+    /// <summary>
+    /// Map a completed generation to its terminal state. A run is a success ONLY if it produced a judged
+    /// package (<see cref="TranslationQaRunner.Result.Judged"/> — the package's visibility marker) AND every
+    /// scenario reconciled (<see cref="TranslationQaRunner.Result.AnyScenarioFailed"/> is false). A run that
+    /// produced no package, or only a partial one (some scenarios failed), is a FAILED regeneration — never a
+    /// ✓ over a missing/partial package that would silently supersede the prior complete one (WX-235). A
+    /// shutdown-cancelled run never reaches here — it throws <see cref="OperationCanceledException"/> and its
+    /// claim is released for re-run on the next start.
+    /// </summary>
+    internal static (QaRerunStatus Status, string? Stamp, string? Error) OutcomeFor(TranslationQaRunner.Result result)
+    {
+        if (result.Judged && !result.AnyScenarioFailed)
+            return (QaRerunStatus.Succeeded, result.Stamp, null);
+
+        // Distinguish no-package-at-all from a partial package so the operator's ⚠ tooltip is honest.
+        var reason = !result.Judged
+            ? "Regeneration produced no judged package."
+            : $"Regenerated package is incomplete — {result.ScenariosRendered} scenario(s) rendered but one or more failed to reconcile.";
+        return (QaRerunStatus.Failed, null, reason);
     }
 
     /// <summary>Record the terminal state on the claimed row (guarded against a swept/re-queued row by the claim stamp).</summary>

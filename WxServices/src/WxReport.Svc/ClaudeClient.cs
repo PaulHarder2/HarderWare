@@ -263,9 +263,14 @@ public sealed class ClaudeClient
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
-                // Genuine host-shutdown cancellation — abort promptly, do not retry.
+                // Genuine host-shutdown cancellation — abort promptly, do not retry, and PROPAGATE it. A
+                // swallowed null here is indistinguishable from a real Claude failure: it surfaces as a
+                // spurious "reconciliation failed" on the report cycle (WX-100 returned null) and, worse, lets
+                // the QA-rerun worker mark a shutdown-interrupted run Succeeded over an empty package (WX-235
+                // step 9). Propagating lets the worker release its claim and re-run on restart, and lets the
+                // report cycle's stoppingToken-filtered catches unwind quietly.
                 Logger.Info("Claude API request canceled by host shutdown.");
-                return null;
+                throw;
             }
             catch (Exception ex) when (attempt < maxAttempts && ex is HttpRequestException)
             {
