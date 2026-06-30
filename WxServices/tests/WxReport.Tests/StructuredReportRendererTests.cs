@@ -278,13 +278,18 @@ public class StructuredReportRendererTests
     {
         var en = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), T("en"), C("en"), Utc, ReportKind.Scheduled, RenderNow);
 
-        // Two local days → two High/Low pairs.
+        // Two local days → two Low/High pairs (WX-236: Low printed above High).
         Assert.Equal(2, CountOccurrences(en, "High:"));
-        // Day 1 (Jun 8): max 33°C→91°F, min 24°C→75°F. Day 2 (Jun 9): 28°C→82°F, 20°C→68°F.
-        Assert.Contains("91°F", en);
-        Assert.Contains("75°F", en);
-        Assert.Contains("82°F", en);
-        Assert.Contains("68°F", en);
+        // Forecast() is two PARTIAL days (WX-234 gating): Jun 8 has only afternoon+evening blocks
+        // (12Z, 18Z) — an afternoon high but no pre-dawn/morning low; Jun 9 has only overnight+morning
+        // blocks (00Z, 06Z) — a dawn low but no afternoon high. So each day shows one numeric extreme
+        // and one em dash, not the pre-WX-234 four numeric values.
+        Assert.Contains("91°F", en);          // Jun 8 High: 33°C (afternoon block present)
+        Assert.Contains("68°F", en);          // Jun 9 Low: 20°C (morning block present)
+        Assert.DoesNotContain("75°F", en);    // Jun 8 Low suppressed — no pre-dawn/morning block
+        Assert.DoesNotContain("82°F", en);    // Jun 9 High suppressed — no afternoon block
+        Assert.Contains("Low: —", en);        // Jun 8's suppressed low renders as an em dash
+        Assert.Contains("High: —", en);       // Jun 9's suppressed high renders as an em dash
         Assert.Contains("Forecast for Spring", en);
     }
 
@@ -651,6 +656,88 @@ public class StructuredReportRendererTests
 
         Assert.Contains("High: 91°F", en);        // whole-day max, drawn from the elapsed morning block
         Assert.DoesNotContain("High: 82°F", en);  // not a remaining-blocks-only max (that would be the bug)
+    }
+
+    // WX-234 / WX-236: three consecutive local days exercising the daily-extreme gating —
+    //  • Jun 8 LEADING partial: afternoon + evening only (12Z, 18Z), no pre-dawn/morning → no Low.
+    //  • Jun 9 FULL: all four blocks → both extremes.
+    //  • Jun 10 TRAILING partial: pre-dawn + morning only (00Z, 06Z), no afternoon → no High.
+    private static ForecastSnapshotBody PartialEdgeDaysForecast() => new()
+    {
+        Blocks =
+        [
+            new() { StartUtc = new(2026, 6, 8, 12, 0, 0, DateTimeKind.Utc), SkyState = SkyState.Clear, Obscuration = Obscuration.None, TemperatureCelsius = new(25, 32), WindKt = new(4, 9), PrecipExpectation = PrecipExpectation.None, PrecipPhenomenon = null, SevereFlag = false },
+            new() { StartUtc = new(2026, 6, 8, 18, 0, 0, DateTimeKind.Utc), SkyState = SkyState.Clear, Obscuration = Obscuration.None, TemperatureCelsius = new(23, 29), WindKt = new(3, 8), PrecipExpectation = PrecipExpectation.None, PrecipPhenomenon = null, SevereFlag = false },
+            new() { StartUtc = new(2026, 6, 9, 0, 0, 0, DateTimeKind.Utc), SkyState = SkyState.Clear, Obscuration = Obscuration.None, TemperatureCelsius = new(19, 25), WindKt = new(2, 6), PrecipExpectation = PrecipExpectation.None, PrecipPhenomenon = null, SevereFlag = false },
+            new() { StartUtc = new(2026, 6, 9, 6, 0, 0, DateTimeKind.Utc), SkyState = SkyState.Clear, Obscuration = Obscuration.None, TemperatureCelsius = new(18, 24), WindKt = new(3, 7), PrecipExpectation = PrecipExpectation.None, PrecipPhenomenon = null, SevereFlag = false },
+            new() { StartUtc = new(2026, 6, 9, 12, 0, 0, DateTimeKind.Utc), SkyState = SkyState.Clear, Obscuration = Obscuration.None, TemperatureCelsius = new(26, 34), WindKt = new(5, 11), PrecipExpectation = PrecipExpectation.None, PrecipPhenomenon = null, SevereFlag = false },
+            new() { StartUtc = new(2026, 6, 9, 18, 0, 0, DateTimeKind.Utc), SkyState = SkyState.Clear, Obscuration = Obscuration.None, TemperatureCelsius = new(22, 28), WindKt = new(3, 8), PrecipExpectation = PrecipExpectation.None, PrecipPhenomenon = null, SevereFlag = false },
+            new() { StartUtc = new(2026, 6, 10, 0, 0, 0, DateTimeKind.Utc), SkyState = SkyState.PartlyCloudy, Obscuration = Obscuration.None, TemperatureCelsius = new(20, 26), WindKt = new(2, 6), PrecipExpectation = PrecipExpectation.None, PrecipPhenomenon = null, SevereFlag = false },
+            new() { StartUtc = new(2026, 6, 10, 6, 0, 0, DateTimeKind.Utc), SkyState = SkyState.Clear, Obscuration = Obscuration.None, TemperatureCelsius = new(21, 27), WindKt = new(3, 7), PrecipExpectation = PrecipExpectation.None, PrecipPhenomenon = null, SevereFlag = false },
+        ],
+    };
+
+    [Fact]
+    public void Grid_TemperatureCell_RendersLowBeforeHigh()  // WX-236
+    {
+        // The grid's daypart columns run chronologically (00-06 … 18-24); the Low we report is this
+        // morning's minimum — the earliest point of the day — so the pair must read Low above High.
+        // UniformClearForecast is one FULL day, so both extremes are numeric (no em dash to confuse
+        // the ordering): low 18°C → 64°F, high 31°C → 88°F.
+        var en = StructuredReportRenderer.Render(Body(), UniformClearForecast(), Observation(), Imperial(), T("en"), C("en"), Utc, ReportKind.Scheduled, RenderNow);
+
+        int lowIdx = en.IndexOf("Low: 64°F", StringComparison.Ordinal);
+        int highIdx = en.IndexOf("High: 88°F", StringComparison.Ordinal);
+        Assert.True(lowIdx >= 0 && highIdx >= 0, "both extremes present in the grid");
+        Assert.True(lowIdx < highIdx, "Low must render above High in the grid temperature cell");
+    }
+
+    [Fact]
+    public void Grid_PartialDay_SuppressesUnsupportedExtreme_AsEmDash()  // WX-234
+    {
+        var en = StructuredReportRenderer.Render(Body(), PartialEdgeDaysForecast(), Observation(), Imperial(), T("en"), C("en"), Utc, ReportKind.Scheduled, RenderNow);
+
+        // Jun 8 LEADING partial (afternoon+evening only): a daytime high (32°C → 90°F), no overnight low.
+        Assert.Contains("90°F", en);
+        Assert.Contains("Low: —", en);        // its suppressed overnight low is an em dash
+        // Jun 10 TRAILING partial (pre-dawn+morning only): a dawn low (20°C → 68°F), no daytime high —
+        // the WX-234 pseudo-high case.
+        Assert.Contains("68°F", en);
+        Assert.Contains("High: —", en);       // its suppressed daytime high is an em dash
+        // The FULL middle day (Jun 9) shows both numeric extremes — never an em dash.
+        Assert.Contains("Low: 64°F", en);     // 18°C
+        Assert.Contains("High: 93°F", en);    // 34°C
+    }
+
+    [Fact]
+    public void Grid_And_Summary_GateExtremesByTheSameRule()  // WX-234
+    {
+        // Same body, one DayPartBands rule: the grid's numeric (non-em-dash) highs/lows must equal the
+        // counts TemperatureRangeSummarizer.DailyHighsLows feeds the prose, so the two cannot drift.
+        var body = PartialEdgeDaysForecast();
+        var en = StructuredReportRenderer.Render(Body(), body, Observation(), Imperial(), T("en"), C("en"), Utc, ReportKind.Scheduled, RenderNow);
+        var (highs, lows) = TemperatureRangeSummarizer.DailyHighsLows(body, RenderNow, Utc);
+
+        int rows = CountOccurrences(en, "High:");               // one Low/High label pair per grid row
+        int emDashHighs = CountOccurrences(en, "High: —");
+        int emDashLows = CountOccurrences(en, "Low: —");
+        Assert.Equal(highs.Count, rows - emDashHighs);          // grid numeric highs == summary highs
+        Assert.Equal(lows.Count, rows - emDashLows);            // grid numeric lows  == summary lows
+    }
+
+    [Fact]
+    public void DayPartBands_GatesAfternoonAndDawnWindow()  // WX-234 (shared predicate)
+    {
+        // The afternoon (peak-heating) 12:00 band holds the daily high; the morning-half bands
+        // (pre-dawn 00:00, morning 06:00) bracket the dawn low. Evening (18:00) holds neither.
+        Assert.True(DayPartBands.HasAfternoon(12));
+        Assert.False(DayPartBands.HasAfternoon(0));
+        Assert.False(DayPartBands.HasAfternoon(6));
+        Assert.False(DayPartBands.HasAfternoon(18));
+        Assert.True(DayPartBands.HasDawnWindow(0));
+        Assert.True(DayPartBands.HasDawnWindow(6));
+        Assert.False(DayPartBands.HasDawnWindow(12));
+        Assert.False(DayPartBands.HasDawnWindow(18));
     }
 
     [Fact]

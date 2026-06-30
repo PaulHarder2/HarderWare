@@ -454,7 +454,11 @@ public static class StructuredReportRenderer
         {
             var bg = row++ % 2 == 0 ? "#f7f9fc" : "#ffffff";
             var date = day.Date.ToString("ddd MMM d", culture);
-            var temps = $"{HtmlText(t.Get(Tok.HighLabel))}: {FormatTempC(day.MaxTempC, recipient)}<br/>{HtmlText(t.Get(Tok.LowLabel))}: {FormatTempC(day.MinTempC, recipient)}";
+            // WX-236: Low before High — the grid's daypart columns run chronologically (00-06 … 18-24),
+            // and the Low we report is this morning's minimum (the earliest point of the day), the High
+            // the afternoon maximum. Printing min→max matches that time-arrow, so the reader doesn't
+            // mistake the morning low for a next-morning low.
+            var temps = $"{HtmlText(t.Get(Tok.LowLabel))}: {FormatTempC(day.MinTempC, recipient)}<br/>{HtmlText(t.Get(Tok.HighLabel))}: {FormatTempC(day.MaxTempC, recipient)}";
             var wind = FormatWindKt(day.MaxWindKt, recipient);
             var condHtml = ConditionsCellHtml(day, t);
             sb.Append($"<tr style=\"background:{bg};\">");
@@ -482,15 +486,19 @@ public static class StructuredReportRenderer
     // ── per-day aggregation ───────────────────────────────────────────────────
 
     /// <summary>
-    /// One local calendar day's forecast.  High/low/wind span the whole day (computed from ALL
-    /// blocks); <see cref="Bands"/> carries only the day's still-live 6-hour blocks in chronological
-    /// order (one per local day-part, WX-155; fully-elapsed blocks dropped per WX-195), from which
-    /// the Conditions cell tiles the remaining clock bands (WX-190).
+    /// One local calendar day's forecast.  Wind spans the whole day; high/low span the whole day too
+    /// when present, but each is <see langword="null"/> on a partial day that lacks the band holding
+    /// that extreme — no afternoon (peak-heating) block → no <see cref="MaxTempC"/>; no pre-dawn/morning
+    /// block → no <see cref="MinTempC"/> (WX-234, the same <see cref="DayPartBands"/> gating the
+    /// temperature summary uses). The grid renders a suppressed extreme as an em dash.
+    /// <see cref="Bands"/> carries only the day's still-live 6-hour blocks in chronological order (one
+    /// per local day-part, WX-155; fully-elapsed blocks dropped per WX-195), from which the Conditions
+    /// cell tiles the remaining clock bands (WX-190).
     /// </summary>
     private sealed record DaySummary(
         DateOnly Date,
-        double MaxTempC,
-        double MinTempC,
+        double? MaxTempC,
+        double? MinTempC,
         int MaxWindKt,
         IReadOnlyList<(int Hour, ForecastSnapshotBlock Block)> Bands);
 
@@ -510,6 +518,10 @@ public static class StructuredReportRenderer
     /// much of the day remains (a 1 PM report still reports this morning's low as today's low),
     /// but its <c>Bands</c> (the Conditions tiling) carry only the still-live blocks, so today
     /// leads with the current day-part, not one already past (WX-195).
+    /// A <em>partial</em> day's high or low is <see langword="null"/> when it lacks the band holding
+    /// that extreme (no afternoon block → no high; no pre-dawn/morning block → no low), gated via
+    /// <see cref="DayPartBands"/> exactly as the temperature summary is, so the two never disagree
+    /// (WX-234).
     /// Days are returned in chronological order.
     /// </summary>
     private static IEnumerable<DaySummary> AggregateDays(ForecastSnapshotBody body, TimeZoneInfo tz, DateTime nowUtc)
@@ -547,10 +559,18 @@ public static class StructuredReportRenderer
             // WX-176/WX-188: high/low/peak wind span the WHOLE calendar day — computed from ALL
             // blocks, including any already elapsed — so a midday report still reports this
             // morning's low as today's low. Only the Conditions tiling (liveBands) is trimmed.
+            // WX-234: but a PARTIAL day contributes an extreme only if it holds the band that extreme
+            // lives in — a high needs the afternoon (peak-heating) block, a low needs a pre-dawn/morning
+            // block — else the day's max/min is a pseudo-extreme (a trailing day's morning "high"). The
+            // suppressed extreme is null here and renders as an em dash. Shares DayPartBands with the
+            // temperature summary (TemperatureRangeSummarizer.DailyHighsLows) so the grid and the prose
+            // gate identically and cannot drift.
+            bool hasAfternoon = blocks.Any(x => DayPartBands.HasAfternoon(x.Hour));
+            bool hasDawnWindow = blocks.Any(x => DayPartBands.HasDawnWindow(x.Hour));
             yield return new DaySummary(
                 day,
-                blocks.Max(x => x.Block.TemperatureCelsius.Max),
-                blocks.Min(x => x.Block.TemperatureCelsius.Min),
+                hasAfternoon ? blocks.Max(x => x.Block.TemperatureCelsius.Max) : null,
+                hasDawnWindow ? blocks.Min(x => x.Block.TemperatureCelsius.Min) : null,
                 blocks.Max(x => x.Block.WindKt.Max),
                 liveBands);
         }
@@ -876,6 +896,12 @@ public static class StructuredReportRenderer
         QuantityKind.PrecipMm => FormatPrecipMm(value, r),
         _ => value.ToString(Inv),
     };
+
+    // WX-234: a gated-out daily extreme (a partial day with no afternoon block has no high; with no
+    // pre-dawn/morning block, no low — see DayPartBands) renders as an em dash rather than a
+    // pseudo-temperature. Language-neutral punctuation, so no localized token is needed.
+    private static string FormatTempC(double? celsius, Recipient r) =>
+        celsius is double c ? FormatTempC(c, r) : "—";
 
     private static string FormatTempC(double celsius, Recipient r) =>
         r.TempUnit == "C"
