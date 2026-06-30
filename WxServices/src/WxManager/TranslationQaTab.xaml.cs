@@ -485,6 +485,8 @@ public partial class TranslationQaTab : UserControl
             return;
         if (string.IsNullOrEmpty(_currentIso) || string.IsNullOrWhiteSpace(row.Suggestion))
             return;
+        if (App.QaRerunCoordinator.IsInFlight(_currentIso))
+            return;   // a rerun is regenerating this language — don't mutate the DB it's judging; the grid disable is the visual gate, this is the handler-level backstop
 
         if (!TemplateValidation.PlaceholdersMatch(row.EnglishPhrase, row.Suggestion))
         {

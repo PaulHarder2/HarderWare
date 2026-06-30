@@ -8,6 +8,8 @@ using MetarParser.Data.Entities;
 
 using Microsoft.EntityFrameworkCore;
 
+using WxServices.Logging;
+
 namespace WxManager;
 
 /// <summary>
@@ -31,6 +33,7 @@ public sealed class QaRerunCoordinator
     private readonly Dictionary<string, QaRerunView> _byIso = new(System.StringComparer.Ordinal);
     private bool _pollInFlight;
     private int _requestVersion;   // bumped by RequestRerunAsync; lets a poll detect that its snapshot was overtaken
+    private string? _lastPollError; // throttles poll-failure logging to once per distinct error message
 
     /// <summary>Raised (on the UI thread) with the ISO code of a language whose rerun state just changed.</summary>
     public event System.Action<string>? StatusChanged;
@@ -123,10 +126,19 @@ public sealed class QaRerunCoordinator
                 _byIso.Remove(iso);
                 StatusChanged?.Invoke(iso);
             }
+
+            _lastPollError = null;   // a clean poll re-arms logging so a later recurrence is recorded again
         }
-        catch
+        catch (System.Exception ex)
         {
-            // Never throw from the timer tick; transient DB hiccups resolve on the next poll.
+            // Never throw from the timer tick; transient DB hiccups resolve on the next poll. But a persistent
+            // failure (e.g. the table missing pre-migration) would otherwise be invisible — the UI just stops
+            // updating — so log it once per distinct error rather than every PollSeconds.
+            if (ex.Message != _lastPollError)
+            {
+                _lastPollError = ex.Message;
+                Logger.Error("QaRerunCoordinator poll failed; rerun status may be stale until it recovers.", ex);
+            }
         }
         finally
         {

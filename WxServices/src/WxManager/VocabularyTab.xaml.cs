@@ -50,12 +50,18 @@ public partial class VocabularyTab : UserControl
         if (!string.Equals(iso, _currentIso, StringComparison.Ordinal))
             return;
         var v = App.QaRerunCoordinator.StatusFor(iso);
+        var running = v.Status == QaRerunStatus.Running;
         // Lock the grid while this language is regenerating (any edit would immediately re-stale the package).
-        VocabGrid.IsReadOnly = v.Status == QaRerunStatus.Running;
+        VocabGrid.IsReadOnly = running;
         // Reload-from-DB on press: when the rerun begins, snap the grid to the committed DB state — dropping any
         // unsaved edits — so what the service judges is exactly what is shown.
-        if (v.Status == QaRerunStatus.Running && _lastRerunStatus != QaRerunStatus.Running)
+        if (running && _lastRerunStatus != QaRerunStatus.Running)
             _ = LoadTemplatesAsync(iso);
+        // Gate saving too, not just editing: a save mid-rerun would write to the very DB the service is judging.
+        if (running)
+            SaveButton.IsEnabled = false;
+        else
+            UpdateSaveState();   // run ended — restore Save's enabled state from the current dirty/valid counts
         _lastRerunStatus = v.Status;
     }
 
@@ -193,6 +199,10 @@ public partial class VocabularyTab : UserControl
         _rows = new List<VocabEditRow>();
         _currentIso = "";
         VocabGrid.ItemsSource = null;
+        // No language loaded → the button has nothing to act on; clear its binding and the gate state so it
+        // doesn't keep showing a prior language's status.
+        RerunButton.Iso = "";
+        _lastRerunStatus = null;
     }
 
     private void OnRowChanged(object? sender, PropertyChangedEventArgs e) => UpdateSaveState();
@@ -217,6 +227,8 @@ public partial class VocabularyTab : UserControl
 
     private async void SaveButton_Click(object sender, RoutedEventArgs e)
     {
+        if (App.QaRerunCoordinator.IsInFlight(_currentIso))
+            return;   // a rerun is regenerating this language — don't write to the DB it's judging; the disabled button is the visual gate, this is the backstop
         VocabGrid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true); // flush the in-progress cell
         SaveButton.IsEnabled = false; // guard against a double-save while the write is in flight
 

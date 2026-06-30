@@ -86,11 +86,14 @@ public partial class RerunQaButton : UserControl
         {
             await App.QaRerunCoordinator.RequestRerunAsync(iso);
         }
-        catch
+        catch (Exception ex)
         {
-            // A failed request write is reflected by the next poll; don't crash the UI thread.
+            // The write never landed, so no row exists for a later poll to report — surface the failure on the
+            // button instead of silently reverting to idle (which reads as "nothing happened"). Still re-pressable.
+            ShowFailed("Couldn't queue the rerun: " + ex.Message);
+            return;
         }
-        Render();   // sync to actual coordinator state (a no-op request, already-running, or a failed write all resolve here)
+        Render();   // sync to actual coordinator state (a no-op request or an already-running language resolve here)
     }
 
     private void Render()
@@ -111,6 +114,9 @@ public partial class RerunQaButton : UserControl
                 ShowIdle();
                 break;
         }
+        // With no language selected the button can only no-op; disable it rather than let a click silently return.
+        if (string.IsNullOrEmpty(Iso))
+            Btn.IsEnabled = false;
         _lastStatus = v.Status;
     }
 
