@@ -6,6 +6,7 @@ using System.Windows.Documents;
 using System.Windows.Media;
 
 using MetarParser.Data;
+using MetarParser.Data.Entities;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Web.WebView2.Wpf;
@@ -26,6 +27,7 @@ public partial class TranslationQaTab : UserControl
 {
     private readonly string _qaFolder;
     private string _currentIso = ""; // the selected package's target language, for copy-to-DB
+    private QaRerunStatus? _lastRerunStatus; // last rerun status seen for _currentIso (gates the ✓ auto-reload to a live completion)
 
     public TranslationQaTab()
     {
@@ -43,9 +45,52 @@ public partial class TranslationQaTab : UserControl
 
         Loaded += (_, _) => Reload();
         IsVisibleChanged += (_, e) => { if (e.NewValue is true) Reload(); };
+
+        // WX-235: subscribe to the shared rerun coordinator only while this tab is loaded (no leak).
+        // Unsubscribe-then-subscribe is idempotent — WPF can raise Loaded without a matching Unloaded.
+        Loaded += (_, _) =>
+        {
+            App.QaRerunCoordinator.StatusChanged -= OnRerunStatusChanged;
+            App.QaRerunCoordinator.StatusChanged += OnRerunStatusChanged;
+        };
+        Unloaded += (_, _) => App.QaRerunCoordinator.StatusChanged -= OnRerunStatusChanged;
     }
 
     private void RefreshButton_Click(object sender, RoutedEventArgs e) => Reload();
+
+    // ── WX-235: "Rerun QA" wiring ──
+    private void OnRerunStatusChanged(string iso)
+    {
+        if (!string.Equals(iso, _currentIso, StringComparison.Ordinal))
+            return;
+        ApplyRerunGate();
+        var v = App.QaRerunCoordinator.StatusFor(iso);
+        // Guarded auto-reload: only when THIS tab's selected language just completed, show its fresh package.
+        if (v.Status == QaRerunStatus.Succeeded && _lastRerunStatus == QaRerunStatus.Running)
+            SelectFreshPackage(iso, v.ResultStamp);
+        _lastRerunStatus = v.Status;
+    }
+
+    // While a rerun is in flight for the shown language, lock the vocabulary grid (incl. its Copy→DB buttons).
+    private void ApplyRerunGate() =>
+        VocabGrid.IsEnabled = string.IsNullOrEmpty(_currentIso) || !App.QaRerunCoordinator.IsInFlight(_currentIso);
+
+    // Re-discover packages and select the freshly-regenerated one for <iso> (its run stamp, else newest for the iso).
+    private void SelectFreshPackage(string iso, string? stamp)
+    {
+        IReadOnlyList<JudgePackageRef> refs;
+        try { refs = JudgePackageStore.Discover(_qaFolder); }
+        catch { Reload(); return; }
+        var target = (stamp is null ? null : refs.FirstOrDefault(r => r.Iso == iso && r.Stamp == stamp))
+                     ?? refs.Where(r => r.Iso == iso).OrderByDescending(r => r.Stamp, StringComparer.Ordinal).FirstOrDefault();
+        if (target is null) { Reload(); return; }
+        PackageSelector.SelectionChanged -= PackageSelector_SelectionChanged;
+        PackageSelector.ItemsSource = refs;
+        PackageSelector.DisplayMemberPath = nameof(JudgePackageRef.DisplayName);
+        PackageSelector.SelectedItem = target;
+        PackageSelector.SelectionChanged += PackageSelector_SelectionChanged;
+        LoadSelected(target);
+    }
 
     private void Reload()
     {
@@ -109,6 +154,9 @@ public partial class TranslationQaTab : UserControl
         var req = pkg.Request;
         var judged = pkg.Judged;
         _currentIso = judged.Language;
+        RerunButton.Iso = _currentIso;
+        _lastRerunStatus = App.QaRerunCoordinator.StatusFor(_currentIso).Status;
+        ApplyRerunGate();
 
         LangText.Text = "Language: " + (string.IsNullOrWhiteSpace(req.TargetDisplayName)
             ? judged.Language
@@ -405,6 +453,9 @@ public partial class TranslationQaTab : UserControl
     private void ShowEmpty(string message)
     {
         DisposeScenarioTabs(); // an error/empty state after a loaded package must still release its WebViews
+        _currentIso = "";
+        RerunButton.Iso = "";
+        ApplyRerunGate();
         EmptyState.Text = message;
         EmptyState.Visibility = Visibility.Visible;
         SubTabs.Visibility = Visibility.Collapsed;
@@ -434,6 +485,8 @@ public partial class TranslationQaTab : UserControl
             return;
         if (string.IsNullOrEmpty(_currentIso) || string.IsNullOrWhiteSpace(row.Suggestion))
             return;
+        if (App.QaRerunCoordinator.IsInFlight(_currentIso))
+            return;   // a rerun is regenerating this language — don't mutate the DB it's judging; the grid disable is the visual gate, this is the handler-level backstop
 
         if (!TemplateValidation.PlaceholdersMatch(row.EnglishPhrase, row.Suggestion))
         {
@@ -474,6 +527,17 @@ public partial class TranslationQaTab : UserControl
                     "Value changed", MessageBoxButton.YesNo, MessageBoxImage.Warning);
                 if (proceed != MessageBoxResult.Yes)
                     return;
+            }
+
+            // Re-check in-flight at the point of write: a rerun may have started while a confirmation dialog
+            // above was open (the grid-disable gate can't reach an already-open modal). Don't overwrite the
+            // DB the worker is now judging — the handler-entry guard alone can't close this window.
+            if (App.QaRerunCoordinator.IsInFlight(_currentIso))
+            {
+                MessageBox.Show(
+                    "Rerun QA started for this language while the dialog was open — wait for it to finish before copying suggestions to the database.",
+                    "Rerun QA in progress", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
             }
 
             tpl.Phrase = row.Suggestion;
