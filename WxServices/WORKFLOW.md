@@ -57,6 +57,17 @@ This is cheap board hygiene — a 2-second API call — but it serves two purpos
 - **Honest status for anyone reading the project.** A ticket that's been worked on for an hour but still shows "To Do" is a lie of omission.
 - **A cue to keep the human in the loop.** Paul has commented that AI assistants tend to "dumb down the human in the loop" unless the workflow structurally resists that pull. A missed In Progress transition is a small signal that the AI-human pair is drifting into autopilot — catching it early is worth more than the transition itself.
 
+### Bundled tickets — link and annotate
+
+**Added 2026-06-30** (WX-234 + WX-236).
+
+When two or more tickets are deliberately bundled into a **single PR/branch** (allowed throughout this workflow — see §4, §7a.5), record the bundle in Jira at branch-creation time, not at PR-open:
+
+1. **Link** the tickets to each other (`Relates`).
+2. **Comment on each** ticket naming the bundle: which other ticket(s) it ships with, the shared branch, *why* they're bundled (e.g. they edit the same code region and share one golden re-record), and that all of them transition to In Review when the PR opens.
+
+Without this, each ticket's own history hides that it never got a dedicated PR, and a reader who lands on one ticket can't tell why a single PR closed several. It's the same paper-trail ethic as §4's "document off-scope fixes in the ticket." The shared §13 verification artifact for a bundled PR is covered separately in §7a, point 5.
+
 ## 4. Commit
 
 Write a full detailed multi-line commit message explaining the *why*, not just the *what*. Include a `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>` trailer so attribution is consistent across the history.

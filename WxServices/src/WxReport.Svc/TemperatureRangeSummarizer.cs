@@ -47,22 +47,6 @@ public static class TemperatureRangeSummarizer
     private const double Epsilon = 1e-9;
 
     /// <summary>
-    /// Local start hour of the afternoon (peak-heating) 6-hour band. Blocks are local-aligned to
-    /// 00/06/12/18 (WX-155). Each daily extreme is gated on the band that holds it (WX-230):
-    /// <list type="bullet">
-    /// <item>the daily <b>maximum</b> sits in the 12:00–18:00 band, so a day has a genuine high only
-    ///   if it has THIS band (<c>local.Hour == 12</c>).</item>
-    /// <item>the daily <b>minimum</b> sits at ~dawn (06:00), in the morning half of the day, so a
-    ///   day has a genuine overnight low only if it has a band starting before this one
-    ///   (<c>local.Hour &lt; 12</c> — the pre-dawn 00:00 or morning 06:00 band). Using "before the
-    ///   afternoon" rather than exactly {0,6} is also robust to a DST-stepped pre-dawn boundary that
-    ///   lands at, e.g., local 01:00.</item>
-    /// </list>
-    /// At high latitudes the minimum can drift off dawn — a small, accepted error.
-    /// </summary>
-    private const int AfternoonBandLocalHour = 12;
-
-    /// <summary>
     /// One characterized sub-period: an inclusive canonical-°C span
     /// [<see cref="LowC"/>, <see cref="HighC"/>] over the contiguous forecast days
     /// [<see cref="StartDay"/>, <see cref="EndDay"/>] (0-based indices into the input
@@ -161,8 +145,8 @@ public static class TemperatureRangeSummarizer
             // Share the renderer's exact elapsed-block predicate so the summary's day-set
             // and the Extended Forecast grid's cannot drift (WX-188).
             bool live = SevereBlocks.NotFullyElapsed(b, nowUtc);
-            bool afternoon = local.Hour == AfternoonBandLocalHour;
-            bool dawnWindow = local.Hour < AfternoonBandLocalHour;   // a morning-half block brackets the dawn minimum
+            bool afternoon = DayPartBands.HasAfternoon(local.Hour);     // the peak-heating band that holds the daily high (WX-230/234)
+            bool dawnWindow = DayPartBands.HasDawnWindow(local.Hour);   // a morning-half block brackets the dawn minimum
             if (byDay.TryGetValue(day, out var cur))
                 byDay[day] = (Math.Max(cur.Hi, b.TemperatureCelsius.Max), Math.Min(cur.Lo, b.TemperatureCelsius.Min), cur.AnyLive || live, cur.HasAfternoon || afternoon, cur.HasDawnWindow || dawnWindow);
             else
