@@ -24,6 +24,9 @@ public partial class App : Application
     /// <summary>EF Core options pointing at the WeatherData SQL Server database.</summary>
     public static DbContextOptions<WeatherDataContext> DbOptions { get; private set; } = null!;
 
+    /// <summary>WX-235 — app-lifetime owner of "Rerun QA" state, shared by the Translation-QA and Vocabulary tabs.</summary>
+    public static QaRerunCoordinator QaRerunCoordinator { get; private set; } = null!;
+
     /// <summary>Loaded application configuration (shared + local overrides).</summary>
     public static IConfiguration? Configuration { get; private set; }
 
@@ -157,6 +160,9 @@ public partial class App : Application
         DbOptions = new DbContextOptionsBuilder<WeatherDataContext>()
             .UseSqlServer(connStr)
             .Options;
+
+        // WX-235: one app-lifetime coordinator (starts its 10s poll, rehydrates any in-flight rerun from the DB).
+        QaRerunCoordinator = new QaRerunCoordinator(DbOptions);
 
         FetchHomeLat = TryParseDouble(config["Fetch:HomeLatitude"]);
         FetchHomeLon = TryParseDouble(config["Fetch:HomeLongitude"]);
