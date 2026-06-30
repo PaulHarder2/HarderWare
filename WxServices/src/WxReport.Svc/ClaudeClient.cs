@@ -150,7 +150,9 @@ public sealed class ClaudeClient
     /// retry/backoff, and returns the selected tool's name and raw tool_use
     /// input JSON plus token-usage metadata.  Returns <see langword="null"/> on
     /// HTTP failure, on a missing or wrong-named tool_use block, or on
-    /// response-parse failure.
+    /// response-parse failure.  A host-shutdown cancellation (the request <c>ct</c>
+    /// is signalled) is NOT a null case: it propagates as
+    /// <see cref="OperationCanceledException"/> (WX-235).
     ///
     /// <para>
     /// Schema validation of the returned input is the caller's responsibility:
@@ -184,7 +186,7 @@ public sealed class ClaudeClient
     /// the cached prompt prefix — stays byte-identical across cycles.
     /// </param>
     /// <param name="ct">Cancellation token propagated to the HTTP request so that host shutdown aborts an in-flight API call.</param>
-    /// <returns>The chosen tool's name and input plus token usage on success; <see langword="null"/> on transport, schema, or parse failure.</returns>
+    /// <returns>The chosen tool's name and input plus token usage on success; <see langword="null"/> on transport, schema, or parse failure. A host-shutdown cancellation (signalled <c>ct</c>) throws <see cref="OperationCanceledException"/> rather than returning null (WX-235).</returns>
     /// <sideeffects>Makes an HTTP POST request to the Anthropic Messages API. Writes error log entries on failure.</sideeffects>
     public async Task<ClaudeReconciliationResult?> InvokeReconciliationAsync(
         string perRecipientSystemPrompt,
@@ -243,6 +245,11 @@ public sealed class ClaudeClient
     /// Shared by the reconciliation (<see cref="InvokeReconciliationAsync"/>) and
     /// translation (<see cref="InvokeTranslationAsync"/>) calls — the request shape and
     /// permitted-tool set differ, the POST/parse contract does not.
+    /// <para>
+    /// A host-shutdown cancellation (the request <c>ct</c> is signalled) is NOT one of the <see langword="null"/>
+    /// cases above — it propagates as <see cref="OperationCanceledException"/> so callers can distinguish a
+    /// clean shutdown from a genuine failure (WX-235).
+    /// </para>
     /// </summary>
     private async Task<ClaudeReconciliationResult?> SendForToolUseAsync(
         object request, IReadOnlySet<string> permittedTools, CancellationToken ct)
@@ -263,9 +270,14 @@ public sealed class ClaudeClient
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
-                // Genuine host-shutdown cancellation — abort promptly, do not retry.
+                // Genuine host-shutdown cancellation — abort promptly, do not retry, and PROPAGATE it. A
+                // swallowed null here is indistinguishable from a real Claude failure: it surfaces as a
+                // spurious "reconciliation failed" on the report cycle (WX-100 returned null) and, worse, lets
+                // the QA-rerun worker mark a shutdown-interrupted run Succeeded over an empty package (WX-235
+                // step 9). Propagating lets the worker release its claim and re-run on restart, and lets the
+                // report cycle's stoppingToken-filtered catches unwind quietly.
                 Logger.Info("Claude API request canceled by host shutdown.");
-                return null;
+                throw;
             }
             catch (Exception ex) when (attempt < maxAttempts && ex is HttpRequestException)
             {
@@ -379,7 +391,7 @@ public sealed class ClaudeClient
     /// <param name="userMessageText">The user message: the target language name plus the JSON token list (token, englishPhrase, context, contextKind) to translate.</param>
     /// <param name="corrections">Rejected prior attempts replayed as tool_use + tool_result so a validation retry carries its feedback to Claude; <see langword="null"/> on the first attempt.</param>
     /// <param name="ct">Cancellation token propagated to the HTTP request so host shutdown aborts an in-flight call.</param>
-    /// <returns>The <c>translate_templates</c> tool's input plus token usage on success; <see langword="null"/> on transport, schema, or parse failure.</returns>
+    /// <returns>The <c>translate_templates</c> tool's input plus token usage on success; <see langword="null"/> on transport, schema, or parse failure. A host-shutdown cancellation (signalled <c>ct</c>) throws <see cref="OperationCanceledException"/> rather than returning null (WX-235).</returns>
     /// <sideeffects>Makes an HTTP POST request to the Anthropic Messages API. Writes error log entries on failure.</sideeffects>
     public async Task<ClaudeReconciliationResult?> InvokeTranslationAsync(
         string userMessageText,

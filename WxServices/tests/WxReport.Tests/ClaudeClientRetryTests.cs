@@ -9,8 +9,9 @@ using Xunit;
 namespace WxReport.Tests;
 
 // WX-100: classification of failures in ClaudeClient's send loop.
-//   * a host-shutdown cancellation (request token signalled) aborts immediately
-//     and is NOT retried;
+//   * a host-shutdown cancellation (request token signalled) aborts immediately,
+//     is NOT retried, and PROPAGATES so callers can distinguish it from a real
+//     failure (WX-235 — the QA-rerun worker releases its claim and re-runs);
 //   * an HttpClient timeout (TaskCanceledException, token NOT signalled) is NOT
 //     retried either — the dedicated Claude client's generous timeout makes a
 //     timeout a real stall, so the pass fails and recovers next cycle rather than
@@ -171,7 +172,7 @@ public class ClaudeClientRetryTests
     }
 
     [Fact(Timeout = 10_000)]
-    public async Task HostShutdownCancellation_IsNotRetried()
+    public async Task HostShutdownCancellation_Propagates_NotRetried()
     {
         using var cts = new CancellationTokenSource();
         var started = new TaskCompletionSource();
@@ -190,9 +191,12 @@ public class ClaudeClientRetryTests
         var call = client.InvokeReconciliationAsync("rules", "payload", allowSkip: false, narrativeLanguages: new[] { "en" }, ct: cts.Token);
         await started.Task;
         cts.Cancel();
-        var result = await call;
 
-        Assert.Null(result); // shutdown surfaces as a failed reconciliation
+        // WX-235: a host-shutdown cancellation must PROPAGATE (not be swallowed as a null "failed
+        // reconciliation"), so callers can tell a clean shutdown from a real failure — the QA-rerun worker
+        // releases its claim and re-runs on restart rather than marking a half-run Succeeded over an empty
+        // package. ThrowsAny because the underlying throw is a TaskCanceledException (an OperationCanceledException).
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await call);
         Assert.Equal(1, calls); // aborted immediately — no retry attempts
     }
 
