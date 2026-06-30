@@ -79,6 +79,10 @@ public static class TranslationQaRunner
         var stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmssfff", CultureInfo.InvariantCulture);
         // WX-232: each check's files live in their own per-check subfolder "<iso>.<stamp>".
         var packageDir = Path.Combine(outDir, $"{targetIso}.{stamp}");
+        if (Directory.Exists(packageDir))
+            // Unreachable in practice (the service serializes per language, a run takes seconds, and the stamp
+            // is millisecond-precise) — but fail loud rather than silently mix/overwrite artifacts if it ever does.
+            throw new InvalidOperationException($"package directory already exists, refusing to overwrite: {packageDir}");
         Directory.CreateDirectory(packageDir); // also creates outDir as its parent
         var tz = Exemplars.LocalityTz;
 

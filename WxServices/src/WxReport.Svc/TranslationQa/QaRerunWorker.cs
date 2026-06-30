@@ -194,8 +194,10 @@ public sealed class QaRerunWorker : BackgroundService
     {
         try
         {
+            // Bound the best-effort release so a slow/unreachable DB can't hang the host's shutdown window.
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             await using var ctx = new WeatherDataContext(_dbOptions);
-            await QaRerunStore.ReleaseClaimAsync(ctx, id, claimedAtUtc, CancellationToken.None);
+            await QaRerunStore.ReleaseClaimAsync(ctx, id, claimedAtUtc, cts.Token);
         }
         catch (Exception ex)
         {
