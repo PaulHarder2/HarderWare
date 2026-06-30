@@ -224,4 +224,9 @@ static async Task ValidateConfigAsync(DbContextOptions<WeatherDataContext> dbOpt
                     "Use WxManager → Configure to set credentials.");
     else
         Logger.Info("Configuration validated.");
+
+    // WX-235: the Gemini key gates only operator "Rerun QA" regenerations, not report sending — flag it
+    // separately so a missing key is visible at startup without implying reports are blocked.
+    if (string.IsNullOrWhiteSpace(gs?.GeminiApiKey))
+        Logger.Warn("GlobalSettings.GeminiApiKey is not set — operator 'Rerun QA' regenerations (WX-235) will fail until it is configured; report sending is unaffected.");
 }

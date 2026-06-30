@@ -115,7 +115,10 @@ public sealed class QaRerunWorker : BackgroundService
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            throw;   // shutdown — leave the row Running for the next start's sweep/claim
+            // Shutdown mid-run: release the claim so the next start re-runs the request, rather than stranding
+            // it Running until the 30-min sweep (which would leave the operator's button "running" meanwhile).
+            await ReleaseClaimAsync(claim.Id, claim.ClaimedAtUtc);
+            throw;
         }
         catch (Exception ex)
         {
@@ -154,6 +157,13 @@ public sealed class QaRerunWorker : BackgroundService
         var reconciler = new ForecastReconciler(
             new ClaudeClient(_claudeHttpClient, claudeCfg.ApiKey!, claudeCfg.Model, _persona.Text), _templates);
 
+        if (geminiCfg.TimeoutSeconds <= 0)
+        {
+            // HttpClient.Timeout rejects zero/negative with ArgumentOutOfRangeException; a misconfigured
+            // Gemini:TimeoutSeconds override must not crash the rerun at client creation.
+            Logger.Warn($"Gemini:TimeoutSeconds={geminiCfg.TimeoutSeconds} is not positive; using {new GeminiConfig().TimeoutSeconds}s.");
+            geminiCfg.TimeoutSeconds = new GeminiConfig().TimeoutSeconds;
+        }
         using var geminiHttp = new HttpClient { Timeout = TimeSpan.FromSeconds(geminiCfg.TimeoutSeconds) };
         IJudge judge = new GeminiJudge(geminiHttp, geminiCfg);
 
@@ -177,6 +187,20 @@ public sealed class QaRerunWorker : BackgroundService
     {
         await using var ctx = new WeatherDataContext(_dbOptions);
         await QaRerunStore.CompleteAsync(ctx, id, claimedAtUtc, status, resultStamp, error, DateTime.UtcNow, ct);
+    }
+
+    /// <summary>Release a claim on shutdown (StartedAtUtc → null) so the request re-runs on the next start. Best-effort: a release failure during shutdown is logged, not thrown.</summary>
+    private async Task ReleaseClaimAsync(long id, DateTime claimedAtUtc)
+    {
+        try
+        {
+            await using var ctx = new WeatherDataContext(_dbOptions);
+            await QaRerunStore.ReleaseClaimAsync(ctx, id, claimedAtUtc, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            Logger.Error("QaRerunWorker failed to release a claim during shutdown.", ex);
+        }
     }
 
     private static string Trim(string s) => s.Length <= 1000 ? s : s[..1000];

@@ -198,4 +198,32 @@ public class QaRerunStoreTests
             Assert.Null(row.CompletedAtUtc);
         }
     }
+
+    [Fact]
+    public async Task ReleaseClaim_ReturnsRowToUnclaimedRunning_SoItReruns()
+    {
+        using var conn = new SqliteConnection("DataSource=:memory:");
+        conn.Open();
+        var db = NewDb(conn);
+        long id;
+        await using (var ctx = new WeatherDataContext(db))
+        {
+            var row = Running("de", T0, startedAt: T0); // claimed at T0
+            ctx.QaRerunRequests.Add(row);
+            await ctx.SaveChangesAsync();
+            id = row.Id;
+        }
+
+        await using (var ctx = new WeatherDataContext(db))
+            await QaRerunStore.ReleaseClaimAsync(ctx, id, claimedAtUtc: T0, ct: default);
+
+        // Back to an unclaimed Running row — the next poll will re-claim and re-run it.
+        await using (var read = new WeatherDataContext(db))
+        {
+            var row = await read.QaRerunRequests.SingleAsync(r => r.Id == id);
+            Assert.Equal(QaRerunStatus.Running, row.Status);
+            Assert.Null(row.StartedAtUtc);
+            Assert.Null(row.CompletedAtUtc);
+        }
+    }
 }

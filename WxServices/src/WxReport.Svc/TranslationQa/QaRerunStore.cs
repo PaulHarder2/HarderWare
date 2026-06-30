@@ -45,40 +45,40 @@ public static class QaRerunStore
     /// crash mid-execution. Returns the number recovered. Unclaimed Running rows (StartedAtUtc null) are left
     /// alone for the worker to pick up.
     /// </summary>
-    public static async Task<int> SweepStuckAsync(WeatherDataContext ctx, DateTime cutoff, DateTime nowUtc, string reason, CancellationToken ct)
-    {
-        var stuck = await ctx.QaRerunRequests
+    public static async Task<int> SweepStuckAsync(WeatherDataContext ctx, DateTime cutoff, DateTime nowUtc, string reason, CancellationToken ct) =>
+        // One atomic UPDATE …WHERE so a row completing/re-queuing concurrently isn't clobbered after a read.
+        await ctx.QaRerunRequests
             .Where(r => r.Status == QaRerunStatus.Running && r.StartedAtUtc != null && r.StartedAtUtc < cutoff)
-            .ToListAsync(ct);
-        if (stuck.Count == 0)
-            return 0;
-        foreach (var r in stuck)
-        {
-            r.Status = QaRerunStatus.Failed;
-            r.Error = reason;
-            r.CompletedAtUtc = nowUtc;
-        }
-        await ctx.SaveChangesAsync(ct);
-        return stuck.Count;
-    }
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(r => r.Status, QaRerunStatus.Failed)
+                .SetProperty(r => r.Error, reason)
+                .SetProperty(r => r.CompletedAtUtc, (DateTime?)nowUtc), ct);
 
     /// <summary>
     /// Record the terminal state (<see cref="QaRerunStatus.Succeeded"/> + stamp, or <see cref="QaRerunStatus.Failed"/>
     /// + error) on a claimed row — but only if it is still the run we claimed: still
     /// <see cref="QaRerunStatus.Running"/> with the same <see cref="QaRerunRequest.StartedAtUtc"/> as
-    /// <paramref name="claimedAtUtc"/>. If the row was swept to Failed or re-queued by the operator while the
-    /// run was in flight, the stale completion is a no-op rather than clobbering the newer state.
+    /// <paramref name="claimedAtUtc"/>. A single atomic UPDATE …WHERE, so if the row was swept to Failed or
+    /// re-queued by the operator while the run was in flight, the stale completion no-ops (matches 0 rows)
+    /// rather than clobbering the newer state — no read-then-write window.
     /// </summary>
-    public static async Task CompleteAsync(WeatherDataContext ctx, long id, DateTime claimedAtUtc, QaRerunStatus status, string? resultStamp, string? error, DateTime nowUtc, CancellationToken ct)
-    {
-        var row = await ctx.QaRerunRequests
-            .FirstOrDefaultAsync(r => r.Id == id && r.Status == QaRerunStatus.Running && r.StartedAtUtc == claimedAtUtc, ct);
-        if (row is null)
-            return;
-        row.Status = status;
-        row.ResultStamp = resultStamp;
-        row.Error = error;
-        row.CompletedAtUtc = nowUtc;
-        await ctx.SaveChangesAsync(ct);
-    }
+    public static async Task CompleteAsync(WeatherDataContext ctx, long id, DateTime claimedAtUtc, QaRerunStatus status, string? resultStamp, string? error, DateTime nowUtc, CancellationToken ct) =>
+        await ctx.QaRerunRequests
+            .Where(r => r.Id == id && r.Status == QaRerunStatus.Running && r.StartedAtUtc == claimedAtUtc)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(r => r.Status, status)
+                .SetProperty(r => r.ResultStamp, resultStamp)
+                .SetProperty(r => r.Error, error)
+                .SetProperty(r => r.CompletedAtUtc, (DateTime?)nowUtc), ct);
+
+    /// <summary>
+    /// Return a claimed row to the unclaimed <see cref="QaRerunStatus.Running"/> state
+    /// (<see cref="QaRerunRequest.StartedAtUtc"/> → null) so the next poll re-runs it — used on shutdown so a
+    /// mid-run request isn't stranded Running until the 30-min stuck-sweep. Guarded on the claim stamp, so it
+    /// no-ops if the row already moved on.
+    /// </summary>
+    public static async Task ReleaseClaimAsync(WeatherDataContext ctx, long id, DateTime claimedAtUtc, CancellationToken ct) =>
+        await ctx.QaRerunRequests
+            .Where(r => r.Id == id && r.Status == QaRerunStatus.Running && r.StartedAtUtc == claimedAtUtc)
+            .ExecuteUpdateAsync(s => s.SetProperty(r => r.StartedAtUtc, (DateTime?)null), ct);
 }

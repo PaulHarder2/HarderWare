@@ -74,7 +74,9 @@ public static class TranslationQaRunner
                     $"(e.g. {string.Join(", ", missing.Take(5))}). Enable + generate it before auditing.");
         }
 
-        var stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
+        // Millisecond precision so two runs of the same language can't collide on the same "<iso>.<stamp>"
+        // folder (the service serializes per language, but the dev tool could be scripted to fire quickly).
+        var stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmssfff", CultureInfo.InvariantCulture);
         // WX-232: each check's files live in their own per-check subfolder "<iso>.<stamp>".
         var packageDir = Path.Combine(outDir, $"{targetIso}.{stamp}");
         Directory.CreateDirectory(packageDir); // also creates outDir as its parent
@@ -192,8 +194,12 @@ public static class TranslationQaRunner
         {
             Log($"Judging (en + {targetIso}) via {judge.SourceLabel} …");
             var verdict = (await judge.JudgeAsync(requestMarkdown, ct)) with { JudgedBy = judge.SourceLabel };
-            await File.WriteAllTextAsync(Path.Combine(packageDir, $"{targetIso}.{stamp}.judged.json"),
-                JsonSerializer.Serialize(verdict, TranslationQaJson.Write), ct);
+            // Publish judged.json atomically — it is the package's visibility marker (JudgePackageStore.Discover
+            // requires it), so write a temp file then rename, so a concurrent reader never sees partial JSON.
+            var judgedPath = Path.Combine(packageDir, $"{targetIso}.{stamp}.judged.json");
+            var judgedTmp = judgedPath + ".tmp";
+            await File.WriteAllTextAsync(judgedTmp, JsonSerializer.Serialize(verdict, TranslationQaJson.Write), ct);
+            File.Move(judgedTmp, judgedPath, overwrite: true);
             judged = true;
             Log("  ✓ judged.");
         }
