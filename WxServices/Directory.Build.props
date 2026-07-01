@@ -1,14 +1,14 @@
 <Project>
   <!--
-    Redirects MSBuild output outside of the Dropbox tree so that build artifacts
-    are never synced to Dropbox. All obj/ and bin/ folders go under
+    Redirects MSBuild output outside of the source tree so that build artifacts
+    never clutter the working tree. All obj/ and bin/ folders go under
     $(BuildCacheRoot). This file is automatically picked up by MSBuild for every
     project in this solution.
 
-    Windows-only: the redirect is a Windows-specific concern (the source tree
-    lives in Dropbox on the developer's Windows machine). On Linux/macOS hosts
-    — including the CI runner — fall back to MSBuild's defaults so the absolute
-    Windows path doesn't get spliced into a non-existent location.
+    Windows-only: the redirect points at an absolute Windows path, so it is a
+    Windows-specific concern. On Linux/macOS hosts — including the CI runner —
+    fall back to MSBuild's defaults so the absolute Windows path doesn't get
+    spliced into a non-existent location.
   -->
   <PropertyGroup Condition="'$(OS)' == 'Windows_NT'">
     <BuildCacheRoot>C:\HarderWare\BuildCache\WxServices</BuildCacheRoot>
