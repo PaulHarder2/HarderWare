@@ -266,6 +266,12 @@ internal static class ReconcilerPrompts
             may inflect it for grammatical agreement (gender/number) and adjust its
             capitalization to fit the word's position in the sentence, but do not
             replace it with a synonym — and compose the sentence naturally around it.
+            The probability words — possible, likely, and expected — name distinct
+            forecast-confidence tiers and are NOT interchangeable: render the tier
+            the source states with that tier's own approved word, never a higher- or
+            lower-confidence one, and never use an "is expected" / "is forecast" verb
+            construction (e.g. Spanish "se espera") in place of the anchored word for
+            "likely" or "possible".
           • Quantity tokens: inside narrative prose, NEVER write a number with a
             unit. Write a token the renderer substitutes in the recipient's own
             units and locale:
