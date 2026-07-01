@@ -175,8 +175,11 @@ public sealed class ForecastReconciler
             prior = null;
         }
 
+        // WX-238: approved-vocabulary glossary for the free-composed narrative, anchoring it on the
+        // curated LanguageTemplates terms (incl. English) instead of free-generating a synonym.
+        var vocabularyGlossary = NarrativeGlossary.Build(_templates, narrativeLanguages);
         var systemPrompt = BuildReconcilerSystemPrompt(
-            narrativeLanguages, reportKind, allowSkip);
+            narrativeLanguages, reportKind, allowSkip, vocabularyGlossary);
 
         var userMessage = BuildUserMessage(
             snapshot, provisional, gfsModelRunUtc, tafIssuanceUtc, tafValidToUtc, prior, tz,
@@ -1460,9 +1463,11 @@ public sealed class ForecastReconciler
     // from the structured report. Claude writes only the two judgment sections
     // (changeSummary + closing); the content rules below scope the prose those
     // sections may carry.
-    private static string BuildReconcilerSystemPrompt(
+    // internal (not private) so ReconcilerSystemPromptTests can assert the vocabulary glossary
+    // actually reaches the assembled prompt — the WX-238 no-op-regression guard.
+    internal static string BuildReconcilerSystemPrompt(
         IReadOnlyList<string> narrativeLanguages,
-        ReportKind reportKind, bool allowSkip)
+        ReportKind reportKind, bool allowSkip, string vocabularyGlossary)
     {
         var changeAlertInstruction = reportKind switch
         {
@@ -1529,6 +1534,10 @@ public sealed class ForecastReconciler
             + "snow, sleet, or a wintry mix is possible and mention it if so. "
             + changeAlertInstruction
             + narrativeLanguageInstruction
+            // WX-238: the per-report approved-vocabulary glossary (uncached block; empty when no
+            // glossary tokens/phrases resolve). The cached guidance already tells the narrative to
+            // honor it; this supplies the actual per-language terms.
+            + (string.IsNullOrEmpty(vocabularyGlossary) ? "" : "\n\n" + vocabularyGlossary + "\n")
             + skipInstruction;
     }
 

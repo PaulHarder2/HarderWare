@@ -261,7 +261,11 @@ internal static class ReconcilerPrompts
             deterministically from the data, so do NOT narrate them here. Write
             each language natively and idiomatically — never translate
             word-for-word — but keep the meteorological content identical across
-            languages.
+            languages. When an "Approved vocabulary for this report" glossary is
+            provided below, use its approved wording for each listed concept — you
+            may inflect it for grammatical agreement (gender/number) and adjust its
+            capitalization to fit the word's position in the sentence, but do not
+            replace it with a synonym — and compose the sentence naturally around it.
           • Quantity tokens: inside narrative prose, NEVER write a number with a
             unit. Write a token the renderer substitutes in the recipient's own
             units and locale:
