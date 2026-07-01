@@ -282,7 +282,7 @@ The procedure for a schema change inside a normal ticket:
    dotnet ef migrations add <DescriptiveName> --project src/MetarParser.Data/MetarParser.Data.csproj
    ```
 
-   On the Windows developer machine `--msbuildprojectextensionspath 'C:\HarderWare\BuildCache\WxServices\MetarParser.Data\obj'` is also needed because `Directory.Build.props` redirects `obj/` outside the Dropbox tree.
+   On the Windows developer machine `--msbuildprojectextensionspath 'C:\HarderWare\BuildCache\WxServices\MetarParser.Data\obj'` is also needed because `Directory.Build.props` redirects `obj/` outside the source tree.
 
 4. Review the generated migration in `src/MetarParser.Data/Migrations/`. EF emits a faithful but sometimes verbose representation of the change — hand-edit it if a more efficient or readable form exists, but never change its *semantic* effect.
 5. Commit both the migration file and any model changes together.
@@ -314,13 +314,6 @@ A uniform, tooling-based replacement for this manual step (a dedicated migrator 
 
 ## Known friction
 
-### Dropbox-induced git lock failures on push
+_None currently._
 
-Dropbox's file watcher occasionally locks `.git/refs/remotes/origin/*.lock` or `.git/config.lock` during push. The push itself almost always reaches GitHub regardless — the failure is purely in updating local git state.
-
-Two symptom families:
-
-- **`error: could not lock config file`** or **`fatal: Unable to write new index file`** — the push proceeded but the upstream-tracking config did not get written. Recovery: `rm` the stale zero-byte lock file under `.git/` and re-run the tracking command (e.g. `git branch --set-upstream-to=origin/<branch>`).
-- **`error: update_ref failed for ref 'refs/remotes/origin/<branch>'`** — the push reached GitHub but the local `refs/remotes/origin/<branch>` file did not get written, so `git branch -vv` shows no tracking and `gh pr create` rejects the branch with *"you must first push the current branch to a remote."* Recovery: `git fetch origin <branch>:refs/remotes/origin/<branch> --force` (or simply `git fetch origin`) to repopulate the local tracking ref from the remote, then re-run the failed command.
-
-Neither symptom indicates a problem with git, GitHub, or the commit itself — the commit is on the remote and visible to `git ls-remote`. The only thing the lock blocked is local bookkeeping.
+The long-standing item here — Dropbox's file watcher intermittently locking `.git/config.lock` or `.git/refs/remotes/origin/*.lock` during a push, so the push reached GitHub but the local ref/upstream write failed — was **resolved in WX-241** by moving the repo out of the Dropbox tree to `C:\Code`. The dedicated recovery tooling (`git-push-safe.sh`, `clean-git-locks.sh`, and `pr-merge.sh`'s lock-clearing logic) was retired at the same time. If you ever see a stray zero-byte `*.lock` under `.git/` (e.g. inherited from an old clone), remove it and re-sync — in **PowerShell**: `Get-ChildItem -Path .git -Recurse -Filter *.lock | Remove-Item -Force`, then `git fetch origin` (WSL / Git Bash equivalent: `find .git -name '*.lock' -delete`).
