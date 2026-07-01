@@ -28,4 +28,16 @@ public class ReconcilerSystemPromptTests
         // The per-report glossary header lives only in the appended block; empty glossary → absent.
         Assert.DoesNotContain("Approved vocabulary for this report", prompt);
     }
+
+    [Fact]
+    public void Guidance_LocksProbabilityTierRule_AgainstSilentDrop()
+    {
+        // WX-238 (reopened): the probability-tier rule was added after a QA-only regression — the
+        // narrative rendered English "likely" as the un-anchored "se espera" (the *expected*
+        // register) — slipped past the suite. Lock the distinctive phrasing so a future prompt edit
+        // can't silently drop the tier-substitution constraint (CodeRabbit).
+        var guidance = ReconcilerPrompts.ReconciliationGuidanceText;
+        Assert.Contains("NOT interchangeable", guidance);
+        Assert.Contains("se espera", guidance);
+    }
 }
