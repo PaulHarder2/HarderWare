@@ -48,9 +48,14 @@ public sealed class LanguageTemplateStore
     // readers always see a consistent set.
     private sealed record Snapshot(
         IReadOnlyDictionary<string, LanguagePhrases> ByIso,
-        IReadOnlyDictionary<string, string> CultureByIso);
+        IReadOnlyDictionary<string, string> CultureByIso,
+        IReadOnlySet<string> GlossaryTokens);
 
     private readonly Func<IReadOnlyList<LanguageTemplate>> _load;
+    // WX-238: the language-neutral concept tokens whose approved phrase is injected into the
+    // reconciler prompt glossary. Optional loader (empty when a caller — e.g. a unit test —
+    // supplies none), reloaded alongside the templates.
+    private readonly Func<IReadOnlyList<string>> _loadGlossary;
     private readonly object _gate = new();
     private volatile Snapshot _snapshot;
     private volatile bool _stale;
@@ -60,15 +65,28 @@ public sealed class LanguageTemplateStore
     /// rows to cache (each with its <see cref="LanguageTemplate.Language"/> populated) — in
     /// production a query over <c>WeatherDataContext.LanguageTemplates</c> with the language
     /// included; in tests, a fixed list. It is invoked again on every <see cref="Reload"/>.
+    /// <paramref name="loadGlossaryTokens"/> (WX-238) returns the language-neutral concept tokens
+    /// to anchor in the reconciler prompt glossary (in production a query over
+    /// <c>PromptGlossaryTokens</c>); null/omitted yields an empty glossary set.
     /// </summary>
-    public LanguageTemplateStore(Func<IReadOnlyList<LanguageTemplate>> load)
+    public LanguageTemplateStore(
+        Func<IReadOnlyList<LanguageTemplate>> load,
+        Func<IReadOnlyList<string>>? loadGlossaryTokens = null)
     {
         _load = load ?? throw new ArgumentNullException(nameof(load));
-        _snapshot = Build(_load());
+        _loadGlossary = loadGlossaryTokens ?? (static () => Array.Empty<string>());
+        _snapshot = Build(_load(), _loadGlossary());
     }
 
     /// <summary>The ISO codes that have at least one loaded template.</summary>
     public IReadOnlySet<string> LoadedLanguages => Current().ByIso.Keys.ToHashSet(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The language-neutral concept tokens whose approved phrase the reconciler injects into its
+    /// prompt as an anchoring glossary (WX-238). Validated against <c>Tok.All</c> at load; empty
+    /// when no glossary loader was supplied.
+    /// </summary>
+    public IReadOnlySet<string> GlossaryTokens => Current().GlossaryTokens;
 
     /// <summary>
     /// Canonicalizes a requested code to the bare lower-case ISO 639-1 part the cache is keyed
@@ -184,7 +202,7 @@ public sealed class LanguageTemplateStore
     {
         lock (_gate)
         {
-            _snapshot = Build(_load());
+            _snapshot = Build(_load(), _loadGlossary());
             _stale = false;
         }
     }
@@ -202,14 +220,14 @@ public sealed class LanguageTemplateStore
         {
             if (_stale)
             {
-                _snapshot = Build(_load());
+                _snapshot = Build(_load(), _loadGlossary());
                 _stale = false;
             }
             return _snapshot;
         }
     }
 
-    private static Snapshot Build(IReadOnlyList<LanguageTemplate> rows)
+    private static Snapshot Build(IReadOnlyList<LanguageTemplate> rows, IReadOnlyList<string> glossaryTokens)
     {
         var phrases = new Dictionary<string, Dictionary<string, string>>(StringComparer.Ordinal);
         var blocked = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
@@ -254,7 +272,30 @@ public sealed class LanguageTemplateStore
 
         Logger.Info($"LanguageTemplateStore loaded {loaded} template(s) across {byIso.Count} language(s)"
             + (skipped > 0 ? $"; skipped {skipped} unkeyable row(s)" : "") + ".");
-        return new Snapshot(byIso, cultures);
+
+        // WX-238: the prompt-glossary concept tokens, validated against the renderer's token
+        // contract (Tok.All). A row naming an unknown/renamed token is a curation defect — drop it
+        // and log loudly (fail-closed) rather than silently carry a token no phrase will resolve.
+        var glossary = new HashSet<string>(StringComparer.Ordinal);
+        var unknown = new List<string>();
+        foreach (var token in glossaryTokens)
+        {
+            if (string.IsNullOrEmpty(token))
+                continue;
+            if (Tok.All.Contains(token))
+                glossary.Add(token);
+            else
+                unknown.Add(token);
+        }
+        if (unknown.Count > 0)
+            Logger.Error($"LanguageTemplateStore: {unknown.Count} PromptGlossaryToken(s) name unknown token(s) "
+                + $"(not in the renderer's Tok contract) and were dropped: "
+                + $"{string.Join(", ", unknown.OrderBy(t => t, StringComparer.Ordinal))}. "
+                + "Fix the PromptGlossaryTokens table or reconcile the token rename.");
+        if (glossary.Count > 0)
+            Logger.Info($"LanguageTemplateStore loaded {glossary.Count} prompt-glossary token(s).");
+
+        return new Snapshot(byIso, cultures, glossary);
     }
 }
 

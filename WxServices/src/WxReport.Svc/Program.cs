@@ -67,14 +67,20 @@ var host = Host.CreateDefaultBuilder(args)
         services.AddSingleton(sp =>
         {
             var opts = sp.GetRequiredService<DbContextOptions<WeatherDataContext>>();
-            return new LanguageTemplateStore(() =>
-            {
-                using var ctx = new WeatherDataContext(opts);
-                return ctx.LanguageTemplates
-                    .Include(t => t.Language)
-                    .AsNoTracking()
-                    .ToList();
-            });
+            return new LanguageTemplateStore(
+                () =>
+                {
+                    using var ctx = new WeatherDataContext(opts);
+                    return ctx.LanguageTemplates
+                        .Include(t => t.Language)
+                        .AsNoTracking()
+                        .ToList();
+                },
+                () =>   // WX-238: the concept tokens to anchor in the reconciler prompt glossary.
+                {
+                    using var ctx = new WeatherDataContext(opts);
+                    return ctx.PromptGlossaryTokens.AsNoTracking().Select(g => g.Token).ToList();
+                });
         });
 
         // Geocoding + airport-lookup client. Keeps the 100s HttpClient default so a

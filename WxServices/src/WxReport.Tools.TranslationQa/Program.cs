@@ -154,11 +154,17 @@ if (!File.Exists(personaPath))
 var persona = new PersonaPrefix(await File.ReadAllTextAsync(personaPath));
 
 // DB-backed template store (the production path, not the test seed).
-var templates = new LanguageTemplateStore(() =>
-{
-    using var ctx = new WeatherDataContext(dbOptions);
-    return ctx.LanguageTemplates.Include(t => t.Language).AsNoTracking().ToList();
-});
+var templates = new LanguageTemplateStore(
+    () =>
+    {
+        using var ctx = new WeatherDataContext(dbOptions);
+        return ctx.LanguageTemplates.Include(t => t.Language).AsNoTracking().ToList();
+    },
+    () =>   // WX-238: same prompt-glossary tokens as the service, so the QA re-run exercises the fix.
+    {
+        using var ctx = new WeatherDataContext(dbOptions);
+        return ctx.PromptGlossaryTokens.AsNoTracking().Select(g => g.Token).ToList();
+    });
 
 using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(claudeCfg.TimeoutSeconds) };
 http.DefaultRequestHeaders.Add("User-Agent", "WxReport-TranslationQA/1.0");

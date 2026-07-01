@@ -127,6 +127,20 @@ public static class Tok
     public const string WmixLikely = "wmix_likely";
     public const string WmixPossible = "wmix_possible";
 
+    // WX-238: standalone phenomenon + probability vocabulary for the free-composed narrative. The
+    // deterministic renderer uses the fused composites above (e.g. sev_storms_possible) because it
+    // can't glue phrases safely across languages; the narrative (where Claude handles grammar)
+    // anchors on these SEPARATED axes instead — phenomenon ("severe storms") + probability
+    // ("possible") — so it composes "severe storms are possible" from approved parts. These are
+    // never rendered; they exist as first-class vocabulary (completeness-checked, seeded in every
+    // language) purely for the prompt glossary.
+    public const string Storms = "storms";
+    public const string SevereStorms = "severe_storms";
+    public const string SevereWeather = "severe_weather";
+    public const string ProbPossible = "possible";
+    public const string ProbLikely = "likely";
+    public const string ProbExpected = "expected";
+
     private static readonly IReadOnlySet<string> _all =
         typeof(Tok).GetFields(BindingFlags.Public | BindingFlags.Static)
             .Where(f => f.IsLiteral && f.FieldType == typeof(string))

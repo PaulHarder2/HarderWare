@@ -70,6 +70,9 @@ public sealed class WeatherDataContext : DbContext
     /// <summary>The <c>LanguageTemplates</c> table — token-keyed localized report strings; supersedes the interim hard-coded <c>ReportVocabulary</c> (WX-167).</summary>
     public DbSet<LanguageTemplate> LanguageTemplates => Set<LanguageTemplate>();
 
+    /// <summary>The <c>PromptGlossaryTokens</c> table — language-neutral concept tokens whose approved phrase is injected into the reconciler prompt as an anchoring glossary (WX-238).</summary>
+    public DbSet<PromptGlossaryToken> PromptGlossaryTokens => Set<PromptGlossaryToken>();
+
     /// <summary>The <c>Localities</c> table — one row per curated locality grouping co-located recipients for batched report generation (WX-123).</summary>
     public DbSet<Locality> Localities => Set<Locality>();
 
@@ -385,6 +388,22 @@ public sealed class WeatherDataContext : DbContext
             e.HasIndex(x => new { x.LanguageId, x.Token })
              .IsUnique()
              .HasDatabaseName("UX_LanguageTemplates_LanguageId_Token");
+        });
+
+        // ── PromptGlossaryTokens (WX-238) ────────────────────────────────────
+
+        modelBuilder.Entity<PromptGlossaryToken>(e =>
+        {
+            e.ToTable("PromptGlossaryTokens");
+            e.HasKey(x => x.Id);
+
+            e.Property(x => x.Token).HasMaxLength(60).IsRequired();
+            e.Property(x => x.Note).HasMaxLength(1000);
+
+            // One row per concept (language-neutral). The set the reconciler's glossary is built from.
+            e.HasIndex(x => x.Token)
+             .IsUnique()
+             .HasDatabaseName("UX_PromptGlossaryTokens_Token");
         });
 
         // ── Localities ───────────────────────────────────────────────────────
