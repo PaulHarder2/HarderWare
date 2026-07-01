@@ -70,8 +70,8 @@ if [ -z "$es_html" ] || [ ! -f "$es_html" ]; then
     missing=1
 else
     echo "es: $(basename "$es_html")"
-    check_present "$es_html" "helada"    "freezing drizzle -> approved 'helada'"
-    check_absent  "$es_html" "engelante" "freezing drizzle drift 'engelante'"
+    check_present "$es_html" "llovizna helada"  "freezing drizzle -> approved 'llovizna helada'"
+    check_absent  "$es_html" "engelante"        "freezing drizzle drift 'engelante'"
 fi
 echo
 
@@ -82,7 +82,7 @@ if [ -z "$da_html" ] || [ ! -f "$da_html" ]; then
     missing=1
 else
     echo "da: $(basename "$da_html")"
-    check_present "$da_html" "frysende"                "freezing drizzle -> approved 'frysende stovregn'"
+    check_present "$da_html" "frysende støvregn"       "freezing drizzle -> approved 'frysende støvregn'"
     check_present "$da_html" "vinterblandingsnedslag"  "wintry mix -> approved 'vinterblandingsnedslag'"
 fi
 echo

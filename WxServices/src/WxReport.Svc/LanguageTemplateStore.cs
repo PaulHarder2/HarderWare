@@ -84,9 +84,10 @@ public sealed class LanguageTemplateStore
     /// <summary>
     /// The language-neutral concept tokens whose approved phrase the reconciler injects into its
     /// prompt as an anchoring glossary (WX-238). Validated against <c>Tok.All</c> at load; empty
-    /// when no glossary loader was supplied.
+    /// when no glossary loader was supplied. Returns a defensive copy (like <see cref="BlockedTokens"/>)
+    /// so a caller can't downcast the shared snapshot's set and mutate it in place.
     /// </summary>
-    public IReadOnlySet<string> GlossaryTokens => Current().GlossaryTokens;
+    public IReadOnlySet<string> GlossaryTokens => new HashSet<string>(Current().GlossaryTokens, StringComparer.Ordinal);
 
     /// <summary>
     /// Canonicalizes a requested code to the bare lower-case ISO 639-1 part the cache is keyed
