@@ -18,7 +18,8 @@
   and exits non-zero. No silent failure.
 
   Offsite destinations are a pluggable, config-driven list keyed by Type. Only 'file'
-  (a Windows path -- covers Dropbox / OneDrive / UNC / mapped drives) is implemented;
+  (a Windows path -- covers Dropbox / OneDrive / UNC shares; not user-mapped drives, since the
+  task runs as SYSTEM) is implemented;
   'sftp' / 'ftp' / 's3' are recognized and throw a clear "not implemented" so the seam
   is obvious when we add them.
 

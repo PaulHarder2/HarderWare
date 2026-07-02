@@ -53,8 +53,9 @@ $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
 
 # Nightly full at 08:00. The trigger fires at LOCAL time; this box runs in UTC (WX design), so
 # 08:00 local == 08:00 UTC. Warn if that ever stops being true so the schedule doesn't silently drift.
-if ([TimeZoneInfo]::Local.BaseUtcOffset -ne [TimeSpan]::Zero) {
-  Write-Warning ("Host time zone is not UTC (offset {0}); the daily trigger fires at 08:00 LOCAL, not UTC -- adjust -At or set the host to UTC." -f [TimeZoneInfo]::Local.BaseUtcOffset)
+$hostTz = [TimeZoneInfo]::Local
+if ($hostTz.GetUtcOffset((Get-Date)) -ne [TimeSpan]::Zero -or $hostTz.SupportsDaylightSavingTime) {
+  Write-Warning ("Host time zone is not pure UTC (id '{0}', current offset {1}, DST={2}); the daily trigger fires at 08:00 LOCAL, which may not equal 08:00 UTC -- adjust -At or set the host to UTC." -f $hostTz.Id, $hostTz.GetUtcOffset((Get-Date)), $hostTz.SupportsDaylightSavingTime)
 }
 $trigger = New-ScheduledTaskTrigger -Daily -At '08:00'
 
@@ -87,7 +88,10 @@ if ($cfg -and $cfg.Differential -and $cfg.Differential.Enabled) {
     -Description "Intra-day differential backup of WeatherData every $hours h (SIMPLE recovery). WX-248." | Out-Null
   Write-Output "Registered task: $diffName (every ${hours}h)"
 } else {
-  Unregister-ScheduledTask -TaskName $diffName -Confirm:$false -ErrorAction SilentlyContinue
+  if (Get-ScheduledTask -TaskName $diffName -ErrorAction SilentlyContinue) {
+    Unregister-ScheduledTask -TaskName $diffName -Confirm:$false -ErrorAction SilentlyContinue
+    Write-Output "Removed stale differential task."
+  }
   Write-Output "Differential backups disabled -- no diff task."
 }
 

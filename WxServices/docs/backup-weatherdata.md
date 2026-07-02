@@ -60,7 +60,9 @@ Recovery model is `SIMPLE` / full-only by design — no point-in-time / log back
 | `Destinations` | list of offsite sinks; each `{ Type, Target, … }` |
 
 **Destinations** are pluggable by `Type`. Only **`file`** is implemented — a Windows path, which
-already covers Dropbox / OneDrive / UNC shares (`\\host\share`) / mapped drives. `sftp` / `ftp` /
+already covers Dropbox / OneDrive / UNC shares (`\\host\share`). *Not* user-mapped drive letters —
+the task runs as **SYSTEM**, which doesn't inherit an interactive user's mapped drives; use a UNC
+path instead. `sftp` / `ftp` /
 `s3` are recognized and throw a clear "not implemented" (the seam for later). Multiple destinations
 fan out. Remote-transport credentials, when those land, belong in a gitignored overlay — never in
 this committed file.
@@ -69,7 +71,8 @@ this committed file.
 
 - **Scripts:** source in the repo `tools/`; runtime copies in `C:\HarderWare\backup\`.
 - **Backups:** staging `C:\HarderWare\backups`; offsite `C:\Users\PaulH\Dropbox\PH\WxBackups`.
-- **Log:** `C:\HarderWare\Logs\weatherdata-backup.log` (UTC). A failure also drops a
+- **Log:** `C:\HarderWare\Logs\weatherdata-backup.log` (UTC — a descriptive task-log name, like the
+  watchdog's `service-watchdog.log`, rather than the `wx*-svc.log` *service* pattern). A failure also drops a
   `weatherdata-backup.FAILED` sentinel and exits non-zero (surfaced to log monitoring).
 - **File naming:** `WeatherData-{full|diff}-{yyyyMMdd-HHmmss-fff}.{bak|dif}`, timestamp in **UTC**.
 
