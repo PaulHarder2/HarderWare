@@ -1,7 +1,8 @@
 # Restoring the WeatherData database
 
 Recovery runbook for the `WeatherData` SQL Server (Express) database from a backup produced
-by `tools/Backup-WeatherData.ps1` (WX-248). **A backup you have never restored is not a
+by `tools/Backup-WeatherData.ps1` (WX-248). Setup & operations of the backup itself:
+[`backup-weatherdata.md`](backup-weatherdata.md). **A backup you have never restored is not a
 backup** — the WX-248 acceptance drill (below) proves this path works; this runbook is what
 you follow when it's for real.
 
