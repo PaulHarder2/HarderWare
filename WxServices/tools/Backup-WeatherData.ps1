@@ -57,7 +57,9 @@ if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir -Forc
 
 function Write-Log {
   param([string]$Level, [string]$Message)
-  $ts = (Get-Date).ToUniversalTime().ToString('yyyy/MM/dd HH:mm:ss.fff')
+  # Literal '-' date separator (culture-independent) to match the other HarderWare logs; a bare
+  # 'yyyy/MM/dd' uses the culture's date-separator placeholder, which renders '/' under SYSTEM (WX-248).
+  $ts = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss.fff')
   $line = '{0} {1,-5} {2}' -f $ts, $Level, $Message
   # Best-effort file write, but never fully silent: surface a log-dir failure (perms/full disk)
   # to the warning stream so it leaves a trace instead of vanishing.
