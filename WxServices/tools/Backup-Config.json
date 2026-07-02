@@ -1,0 +1,10 @@
+{
+  "SqlServer": ".\\SQLEXPRESS",
+  "Database": "WeatherData",
+  "LocalStagingDir": "C:\\HarderWare\\backups",
+  "RetentionDays": 14,
+  "Differential": { "Enabled": false, "EveryHours": 6 },
+  "Destinations": [
+    { "Type": "file", "Target": "C:\\Users\\PaulH\\Dropbox\\PH\\WxBackups" }
+  ]
+}
