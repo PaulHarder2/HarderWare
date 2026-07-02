@@ -68,16 +68,18 @@ Run in **Windows PowerShell** (not WSL — `dotnet` is on the Windows PATH) from
 
 ### Preferred: automated Gemini judge (one command)
 
-**Precondition:** a Gemini API key (Google AI Studio, free tier) in the **InstallRoot** overlay
-`C:\HarderWare\appsettings.local.json`:
+**Precondition:** the Gemini API key (Google AI Studio, free tier) set **in the database** via
+**WxManager → Configure** — the tool reads it from `GlobalSettings.GeminiApiKey` (WX-235), *not*
+from a config file. The DB must also be reachable and `GlobalSettings.ClaudeApiKey` set (the
+generate phase still makes the real Claude reconciliation calls). An optional `Gemini` section in
+the InstallRoot overlay `C:\HarderWare\appsettings.local.json` supplies only non-secret overrides
+(model, request timeout) — never the key, which is always overwritten by the DB value:
 
 ```json
-{ "Gemini": { "ApiKey": "AIza…", "Model": "gemini-2.5-flash" } }
+{ "Gemini": { "Model": "gemini-2.5-flash" } }
 ```
 
-`Model` is optional. The key is never committed or logged. The DB must be reachable and
-`GlobalSettings.ClaudeApiKey` set (the generate phase still makes the real Claude reconciliation
-calls).
+`Model` is optional (defaults to a flash model). The key never appears in any config file.
 
 ```powershell
 cd C:\Code\HarderWare\WxServices
