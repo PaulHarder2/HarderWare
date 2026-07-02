@@ -46,7 +46,7 @@ RESTORE DATABASE [WeatherData_restoretest]
 
 Sanity-check row counts, then drop the scratch DB when done:
 ```powershell
-sqlcmd -S .\SQLEXPRESS -E -C -Q "SELECT COUNT(*) AS Recipients FROM WeatherData_restoretest.dbo.Recipients;"
+sqlcmd -S .\SQLEXPRESS -E -C -Q "SELECT COUNT(*) AS LanguageTemplates FROM WeatherData_restoretest.dbo.LanguageTemplates;"
 sqlcmd -S .\SQLEXPRESS -E -C -Q "DROP DATABASE [WeatherData_restoretest];"
 ```
 

@@ -51,11 +51,12 @@ Recovery model is `SIMPLE` / full-only by design — no point-in-time / log back
 
 | Field | Meaning |
 |---|---|
+| `InstallRoot` | HarderWare base (default `C:\HarderWare`); logs and the default staging dir derive from it |
 | `SqlServer` | instance (default `.\SQLEXPRESS`) |
 | `Database` | DB name (default `WeatherData`) |
-| `LocalStagingDir` | where `BACKUP` writes first (`C:\HarderWare\backups`) |
+| `LocalStagingDir` | where `BACKUP` writes first (default `<InstallRoot>\backups`) |
 | `RetentionDays` | prune backups older than this, locally and offsite (default 14) |
-| `Differential` | `{ Enabled, EveryHours }` — off by default |
+| `Differential` | `{ Enabled, EveryHours }` — off by default; when enabled, **re-run `Register-BackupTask.ps1`** to add the differential task |
 | `Destinations` | list of offsite sinks; each `{ Type, Target, … }` |
 
 **Destinations** are pluggable by `Type`. Only **`file`** is implemented — a Windows path, which

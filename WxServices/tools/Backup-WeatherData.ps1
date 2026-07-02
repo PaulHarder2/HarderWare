@@ -50,7 +50,7 @@ if ([string]::IsNullOrWhiteSpace($ConfigPath)) {
 }
 
 # ---- logging (HarderWare format: UTC yyyy/MM/dd HH:mm:ss.fff LEVEL message) ----
-$LogDir = 'C:\HarderWare\Logs'
+$LogDir = 'C:\HarderWare\Logs'   # bootstrap default; re-pointed under InstallRoot after config load
 $LogFile = Join-Path $LogDir 'weatherdata-backup.log'
 if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir -Force | Out-Null }
 
@@ -58,14 +58,24 @@ function Write-Log {
   param([string]$Level, [string]$Message)
   $ts = (Get-Date).ToUniversalTime().ToString('yyyy/MM/dd HH:mm:ss.fff')
   $line = '{0} {1,-5} {2}' -f $ts, $Level, $Message
-  try { Add-Content -Path $LogFile -Value $line } catch {}
+  # Best-effort file write, but never fully silent: surface a log-dir failure (perms/full disk)
+  # to the warning stream so it leaves a trace instead of vanishing.
+  try { Add-Content -Path $LogFile -Value $line } catch { Write-Warning "log write failed: $($_.Exception.Message)" }
   Write-Host $line
 }
 
 function Fail {
   param([string]$Message)
   Write-Log 'ERROR' $Message
-  try { Set-Content -Path (Join-Path $LogDir 'weatherdata-backup.FAILED') -Value ((Get-Date).ToUniversalTime().ToString('o') + ' ' + $Message) } catch {}
+  $sentinel = Join-Path $LogDir 'weatherdata-backup.FAILED'
+  $stampMsg = (Get-Date).ToUniversalTime().ToString('o') + ' ' + $Message
+  try { Set-Content -Path $sentinel -Value $stampMsg }
+  catch {
+    # Primary log dir unwritable -- drop a fallback sentinel in TEMP and surface to the error
+    # stream so the failure is never fully silent (the non-zero exit is the last-resort signal).
+    try { Set-Content -Path (Join-Path $env:TEMP 'weatherdata-backup.FAILED') -Value $stampMsg } catch {}
+    try { Write-Error "backup FAILED; sentinel write to $sentinel failed: $Message" } catch {}
+  }
   exit 1
 }
 
@@ -81,10 +91,17 @@ catch { Fail "Config is not valid JSON ($ConfigPath): $($_.Exception.Message)" }
 
 $server = if ($cfg.SqlServer) { [string]$cfg.SqlServer } else { '.\SQLEXPRESS' }
 $dbName = if ($cfg.Database) { [string]$cfg.Database } else { 'WeatherData' }
-$staging = [string]$cfg.LocalStagingDir
 $retentionDays = [int]$cfg.RetentionDays
-if ([string]::IsNullOrWhiteSpace($staging)) { Fail 'Config.LocalStagingDir is required.' }
 if ($retentionDays -le 0) { $retentionDays = 14 }
+
+# InstallRoot mirrors the services' base (appsettings.shared.json); logs + default staging derive
+# from it rather than hardcoding, per DEVELOPER-README. Re-point logging now that config is loaded.
+$installRoot = if ($cfg.InstallRoot) { [string]$cfg.InstallRoot } else { 'C:\HarderWare' }
+$LogDir = Join-Path $installRoot 'Logs'
+$LogFile = Join-Path $LogDir 'weatherdata-backup.log'
+if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir -Force | Out-Null }
+
+$staging = if ($cfg.LocalStagingDir) { [string]$cfg.LocalStagingDir } else { Join-Path $installRoot 'backups' }
 if (-not (Test-Path $staging)) { New-Item -ItemType Directory -Path $staging -Force | Out-Null }
 
 $ext = if ($Type -eq 'Diff') { 'dif' } else { 'bak' }
@@ -169,7 +186,7 @@ function Remove-OldBackups {
       Write-Log 'INFO' "retain (diff-chain base) $($f.FullName)"; continue
     }
     try { Remove-Item $f.FullName -Force; Write-Log 'INFO' "pruned $($f.FullName)" }
-    catch { Write-Log 'WARN' "prune failed for $($f.FullName): $($f.Exception.Message)" }
+    catch { Write-Log 'WARN' "prune failed for $($f.FullName): $($_.Exception.Message)" }
   }
 }
 Remove-OldBackups -dir $staging

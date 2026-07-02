@@ -1,4 +1,5 @@
 {
+  "InstallRoot": "C:\\HarderWare",
   "SqlServer": ".\\SQLEXPRESS",
   "Database": "WeatherData",
   "LocalStagingDir": "C:\\HarderWare\\backups",
