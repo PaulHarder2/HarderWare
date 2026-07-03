@@ -556,19 +556,23 @@ public sealed class ReportWorker : BackgroundService
     }
 
     /// <summary>
-    /// WX-172 generation-on-enable. For each enabled language not yet generated
-    /// (<see cref="Language.GeneratedAtUtc"/> IS NULL — a PENDING first enable or a prior
-    /// FAILED attempt), produce its localized templates from the baseline (en) set via one
-    /// Claude call and persist the outcome:
+    /// WX-172 generation-on-enable, generalized to the WX-250 top-up rule. For each ENABLED
+    /// language, compute the baseline tokens it is <em>missing a row for</em> and translate
+    /// only that subset via one Claude call, persisting the outcome:
     /// <list type="bullet">
-    ///   <item>READY — all tokens representable: rows written, <c>GeneratedAtUtc</c> set, <c>GenerationError</c> null.</item>
-    ///   <item>BLOCKED — ≥1 token not representable: rows written (the blocked ones <c>Representable=false</c>), <c>GeneratedAtUtc</c> set, <c>GenerationError</c> describing the offending tokens. Not retried (GeneratedAtUtc is set).</item>
+    ///   <item>READY — every baseline token now has a representable row: <c>GeneratedAtUtc</c> set, <c>GenerationError</c> null.</item>
+    ///   <item>BLOCKED — ≥1 row not representable (across the FULL set, not just this pass): <c>GeneratedAtUtc</c> set, <c>GenerationError</c> naming the offending tokens.</item>
     ///   <item>FAILED — transport/parse/exhausted validation: <c>GenerationError</c> set, <c>GeneratedAtUtc</c> left null so the next cycle retries.</item>
     /// </list>
-    /// The baseline (en) itself and any already-complete language (the seeded es, or a
-    /// migration-backfilled row that slipped through) is stamped READY without a Claude
-    /// call. Each language is isolated — one failure logs and never aborts the cycle or the
-    /// others.
+    /// The one rule covers a fresh enable (every token missing → full translate), a new baseline
+    /// token reaching an already-generated language (top-up of just that token), and a FAILED
+    /// retry. "Missing" is computed from actual rows, so a BLOCKED or a curated/REVIEWED row both
+    /// count as <em>present</em> and are never re-translated or overwritten — top-up is
+    /// <see cref="ApplyTopUpAsync">fill-only</see> (WX-250: never clobber a present token). A
+    /// BLOCKED token is therefore <em>not</em> re-attempted here — recovering it is the deliberate
+    /// re-enable path in WX-253. The baseline (en) and any already-complete language is stamped
+    /// READY without a Claude call. Each language is isolated — one failure logs and never aborts
+    /// the cycle or the others.
     /// </summary>
     private async Task GeneratePendingLanguagesAsync(ClaudeConfig claudeCfg, CancellationToken ct)
     {
@@ -580,24 +584,17 @@ public sealed class ReportWorker : BackgroundService
         // locality write, and the entities mutated here are fresh.
         await using var ctx = new WeatherDataContext(_dbOptions);
 
-        // Scan PENDING (no error) before FAILED (error set) so a persistently-failing language
-        // can't starve a fresh enable out of the single per-cycle generation slot.
-        var pending = await ctx.Languages
-            .Where(l => l.IsEnabled && l.GeneratedAtUtc == null)   // PENDING or FAILED (both retry)
-            .OrderBy(l => l.GenerationError != null)
-            .ThenBy(l => l.IsoCode)
-            .ToListAsync(ct);
-        if (pending.Count == 0)
+        // WX-250: scan EVERY enabled language, not only the never-generated ones — a token added
+        // to the en baseline reaches already-READY languages by top-up. (Blocked languages are
+        // filtered back out below: their blocked tokens have rows, so they have no MISSING rows.)
+        var enabled = await ctx.Languages.Where(l => l.IsEnabled).ToListAsync(ct);
+        if (enabled.Count == 0)
             return;
 
-        // Refresh the template cache before the self-heal check below, so the "already complete"
-        // shortcut (`_templates.MissingTokens`) reads current state regardless of whether the send
-        // phase reloaded this cycle (on a no-recipient cycle it returned before its own Reload).
-        // Only paid when there is pending generation work — i.e. just after a language was enabled.
-        try { _templates.Reload(); }
-        catch (Exception ex) { Logger.Error("WX-211: template refresh before generation failed; using the last-loaded snapshot.", ex); }
-
-        // The baseline (en) rows are the source for every translation; load once.
+        // The baseline (en) rows are the source for every translation; load once. Generation
+        // computes completeness straight from these DB rows, so it needs no _templates.Reload()
+        // here — the send phase already refreshed the render cache this cycle, and this pass reads
+        // the DB directly, so the redundant second rebuild is dropped (WX-250).
         var baselineRows = await ctx.LanguageTemplates
             .Include(t => t.Language)
             .Where(t => t.Language!.IsoCode == SupportedLanguages.BaselineCode)
@@ -605,59 +602,96 @@ public sealed class ReportWorker : BackgroundService
         var baselineByToken = baselineRows.Where(r => r.Representable).ToDictionary(r => r.Token, StringComparer.Ordinal);
         if (baselineByToken.Count == 0)
         {
-            Logger.Error("WX-172: baseline (en) templates are missing — cannot generate any language. Resolve the seed/migration.");
+            Logger.Error("WX-172/WX-250: baseline (en) templates are missing — cannot generate any language. Resolve the seed/migration.");
             return;
         }
+
+        // The tokens each enabled language already has a row for — one query. A present row (blocked
+        // or reviewed) is never re-touched, so MISSING is exactly the NO-ROW baseline tokens. Read
+        // straight from the DB, so this pass needs no template-cache reload.
+        var enabledIds = enabled.Select(l => l.Id).ToList();
+        var presentByLang = (await ctx.LanguageTemplates
+                .Where(t => enabledIds.Contains(t.LanguageId))
+                .Select(t => new { t.LanguageId, t.Token })
+                .ToListAsync(ct))
+            .GroupBy(t => t.LanguageId)
+            .ToDictionary(g => g.Key, g => g.Select(x => x.Token).ToHashSet(StringComparer.Ordinal));
+
+        // Compute each language's missing (no-row) baseline tokens, then order so the ONE per-cycle
+        // generation slot goes to the most urgent: a formerly-READY language now missing a token is
+        // actively SUPPRESSING live reports (fail-closed), so it outranks a fresh PENDING enable (no
+        // recipients yet), which outranks a prior FAILED attempt. Free READY-stamps (nothing missing)
+        // cost no Claude call and are handled regardless of the slot.
+        var noTokens = new HashSet<string>(StringComparer.Ordinal);
+        var work = enabled
+            .Select(l =>
+            {
+                var iso = LanguageTemplateStore.CanonicalIso(l.IsoCode);
+                var present = presentByLang.TryGetValue(l.Id, out var s) ? s : noTokens;
+                var missing = baselineByToken.Keys.Where(t => !present.Contains(t))
+                    .OrderBy(t => t, StringComparer.Ordinal).ToList();
+                return (lang: l, iso, missing);
+            })
+            .OrderBy(w => GenerationSlotTier(w.lang, w.missing.Count))
+            .ThenBy(w => w.iso, StringComparer.Ordinal)
+            .ToList();
 
         var translator = new TemplateTranslator(
             new ClaudeClient(_claudeHttpClient, claudeCfg.ApiKey, claudeCfg.Model, _persona.Text));
 
-        // At most ONE Claude-backed generation per cycle: it's a slow call and bounds both
-        // cycle latency (the heartbeat is written after this) and burst cost when several
-        // languages are enabled at once. Free READY-stamps (baseline / already-complete) do
-        // not count — they cost nothing — so the backlog of real generations drains one per
-        // cycle, harmlessly, since a not-yet-READY language has no recipients.
+        // At most ONE Claude-backed generation per cycle: it's a slow call and bounds both cycle
+        // latency (the heartbeat is written after this) and burst cost. Free READY-stamps do not
+        // count — they cost nothing — so a backlog of real generations drains one per cycle.
         bool spentGeneration = false;
 
-        foreach (var lang in pending)
+        foreach (var (lang, iso, missing) in work)
         {
-            var iso = LanguageTemplateStore.CanonicalIso(lang.IsoCode);
             try
             {
-                // The baseline, or any language already carrying a complete representable
-                // set, is ready as-is — stamp it without spending a Claude call (the
-                // migration normally does this; this self-heals anything it missed). READY
-                // also requires a CultureName (date/number formatting); the baseline and the
-                // seeded languages always carry one. A complete-but-culture-less language is
-                // NOT stamped here — it falls through to generation, which supplies the
-                // culture, so READY never implies a silent en-US locale fallback (matching the
-                // WX-172-verify 'ready_no_culture' invariant).
-                bool complete = string.Equals(iso, SupportedLanguages.BaselineCode, StringComparison.Ordinal)
-                    || _templates.MissingTokens(iso, Tok.All).Count == 0;
-                if (complete && !string.IsNullOrWhiteSpace(lang.CultureName))
+                // Nothing missing: either already stamped and stable (nothing to do), or a
+                // complete-but-unstamped language (baseline en, or a seed the backfill missed)
+                // that just needs a free READY stamp — no Claude call. READY requires a
+                // CultureName; a complete-but-culture-less language is NOT stamped READY here, so
+                // READY never implies a silent en-US locale fallback (WX-172 'ready_no_culture').
+                if (missing.Count == 0)
                 {
-                    lang.GeneratedAtUtc = DateTime.UtcNow;
-                    lang.GenerationError = null;
-                    await ctx.SaveChangesAsync(ct);
-                    Logger.Info($"WX-172: '{iso}' already has a complete template set — marked READY without generation.");
+                    // Only an unstamped, culture-bearing language is a stamp candidate — the common
+                    // already-stamped case does no work and no query. Complete ⇔ no blocked rows
+                    // (missing.Count==0 already means every baseline token has a row); the baseline en
+                    // is complete by definition. The blocked check is a cheap AnyAsync run only for
+                    // this rare candidate, not for every language every cycle.
+                    if (lang.GeneratedAtUtc == null && !string.IsNullOrWhiteSpace(lang.CultureName))
+                    {
+                        bool complete = string.Equals(iso, SupportedLanguages.BaselineCode, StringComparison.Ordinal)
+                            || !await ctx.LanguageTemplates.AnyAsync(t => t.LanguageId == lang.Id && !t.Representable, ct);
+                        if (complete)
+                        {
+                            lang.GeneratedAtUtc = DateTime.UtcNow;
+                            lang.GenerationError = null;
+                            await ctx.SaveChangesAsync(ct);
+                            Logger.Info($"WX-172/WX-250: '{iso}' already has a complete template set — marked READY without generation.");
+                        }
+                    }
                     continue;
                 }
 
                 if (spentGeneration)
                 {
-                    Logger.Info($"WX-172: deferring generation of '{iso}' to a later cycle (one generation per cycle).");
+                    Logger.Info($"WX-250: deferring generation of '{iso}' ({missing.Count} missing token(s)) to a later cycle (one generation per cycle).");
                     continue;
                 }
                 spentGeneration = true;
 
-                Logger.Info($"WX-172: generating templates for '{iso}' ({lang.DisplayName})…");
-                var result = await translator.GenerateAsync(lang.DisplayName, iso, baselineRows, ct);
+                // Translate ONLY the missing subset. GenerateAsync validates completeness against
+                // whatever baseline list it's given, so the subset is the whole top-up change.
+                var subset = baselineRows.Where(r => r.Representable && missing.Contains(r.Token)).ToList();
+                Logger.Info($"WX-250: generating {subset.Count} missing token(s) for '{iso}' ({lang.DisplayName})…");
+                var result = await translator.GenerateAsync(lang.DisplayName, iso, subset, ct);
 
-                // Record the spend on the cost counters + the per-call DEBUG line — these are
-                // the heaviest single Claude calls, and the scarce LLM resource must be visible
-                // on the same dashboards the reconciler feeds (a failed attempt is still billed).
-                // One logical call per language generated (WX-211), matching how the reconciler
-                // counts a call regardless of its internal retries.
+                // Record the spend on the cost counters + the per-call DEBUG line — these are the
+                // heaviest single Claude calls, and the scarce LLM resource must be visible on the
+                // same dashboards the reconciler feeds (a failed attempt is still billed). One
+                // logical call per language, matching how the reconciler counts a call.
                 var usage = result switch
                 {
                     TranslateResult.Success su => su.Usage,
@@ -666,14 +700,14 @@ public sealed class ReportWorker : BackgroundService
                 };
                 _claudeCalls.Add(1);
                 AddClaudeTokens(usage);
-                LogClaudeTokens($"translate:{iso}", usage, "WX-172 template generation");
+                LogClaudeTokens($"translate:{iso}", usage, "WX-250 template generation");
 
                 if (result is TranslateResult.Success s)
                 {
                     // WX-222: the operator may have disabled (or deleted) this language during the
                     // slow generation call. Persisting now would re-create templates on a disabled
-                    // language — the orphan WX-222 removes. Re-read the live flag (a scalar
-                    // projection bypasses the identity map) and discard the result if it's gone.
+                    // language. Re-read the live flag (a scalar projection bypasses the identity
+                    // map) and discard the result if it's gone.
                     var stillEnabled = await ctx.Languages.Where(l => l.Id == lang.Id)
                         .Select(l => l.IsEnabled).FirstOrDefaultAsync(ct);
                     if (!stillEnabled)
@@ -682,66 +716,126 @@ public sealed class ReportWorker : BackgroundService
                         continue;
                     }
 
-                    // Replace any prior rows for this language (a partial from an earlier
-                    // attempt) with the freshly generated, validated set. Delete-then-save
-                    // BEFORE inserting, so a re-used (LanguageId, Token) can't collide with a
-                    // not-yet-deleted row under the unique index.
-                    var existing = await ctx.LanguageTemplates.Where(t => t.LanguageId == lang.Id).ToListAsync(ct);
-                    if (existing.Count > 0)
-                    {
-                        ctx.LanguageTemplates.RemoveRange(existing);
-                        await ctx.SaveChangesAsync(ct);
-                    }
-                    foreach (var tr in s.Translations)
-                    {
-                        var baseRow = baselineByToken[tr.Token];
-                        ctx.LanguageTemplates.Add(new LanguageTemplate
-                        {
-                            LanguageId = lang.Id,
-                            Token = tr.Token,
-                            Phrase = tr.Phrase,
-                            // A Hint context is a language-neutral English gloss that must stay
-                            // English in every language; keep the baseline's verbatim rather than
-                            // Claude's (which the guidance tells it to echo unchanged anyway).
-                            ContextInfo = baseRow.ContextKind == TemplateContextKind.Hint
-                                ? baseRow.ContextInfo
-                                : tr.TranslatedContext,
-                            ContextKind = baseRow.ContextKind,   // kind is the token's, not the language's
-                            Note = tr.Note,
-                            Representable = tr.Representable,
-                            // ReviewedBy/ReviewedAtUtc left null — generated-but-unreviewed (WX-173 round-trip).
-                        });
-                    }
-
-                    var blocked = s.Translations.Where(t => !t.Representable).Select(t => t.Token).ToList();
-                    lang.CultureName = s.CultureName;
-                    lang.GeneratedAtUtc = DateTime.UtcNow;
-                    lang.GenerationError = blocked.Count == 0
-                        ? null
-                        : FitGenerationError($"{blocked.Count} token(s) cannot be expressed in {lang.DisplayName} by simple substitution: "
-                          + $"{string.Join(", ", blocked)}. This needs a renderer/code change; it will not retry.");
-                    await ctx.SaveChangesAsync(ct);
-
-                    Logger.Info(blocked.Count == 0
-                        ? $"WX-172: '{iso}' generated and READY — {s.Translations.Count} token(s)."
-                        : $"WX-172: '{iso}' BLOCKED — {blocked.Count} of {s.Translations.Count} token(s) not representable: {string.Join(", ", blocked)}.");
+                    var inserted = await ApplyTopUpAsync(ctx, lang, s.Translations, s.CultureName, baselineByToken, DateTime.UtcNow, ct);
+                    Logger.Info(lang.GenerationError == null
+                        ? $"WX-250: '{iso}' topped up {inserted.Count} token(s) — READY."
+                        : $"WX-250: '{iso}' topped up {inserted.Count} token(s) — BLOCKED ({lang.GenerationError}).");
                 }
                 else if (result is TranslateResult.Failure f)
                 {
-                    // FAILED: record the transient reason but leave GeneratedAtUtc null so
-                    // the next cycle retries. No rows are written on failure.
-                    lang.GenerationError = FitGenerationError($"Generation failed (will retry next cycle): {f.Reason}");
-                    await ctx.SaveChangesAsync(ct);
-                    Logger.Error($"WX-172: '{iso}' generation FAILED — {f.Reason}");
+                    // Record the transient reason ONLY on a never-generated language (PENDING → the
+                    // FAILED state; both leave GeneratedAtUtc null so the next cycle retries). A
+                    // formerly-READY language whose top-up fails transiently must NOT be stamped with
+                    // a persistent-looking error: its GeneratedAtUtc is already set, so an error would
+                    // read as BLOCKED / "will not retry" and demote its slot priority. It keeps its
+                    // rows, stays READY, and retries next cycle because its missing token is still
+                    // missing. No rows are written on failure either way.
+                    if (lang.GeneratedAtUtc == null)
+                    {
+                        lang.GenerationError = FitGenerationError($"Generation failed (will retry next cycle): {f.Reason}");
+                        await ctx.SaveChangesAsync(ct);
+                    }
+                    Logger.Error($"WX-250: '{iso}' generation FAILED — {f.Reason}");
                 }
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 // Isolate one language's failure from the rest of the cycle. Leave it PENDING
                 // (GeneratedAtUtc still null) so the next cycle retries.
-                Logger.Error($"WX-172: generation for '{iso}' threw; leaving it PENDING for the next cycle.", ex);
+                Logger.Error($"WX-250: generation for '{iso}' threw; leaving it PENDING for the next cycle.", ex);
             }
         }
+    }
+
+    // WX-250 slot priority (lower = more urgent for the single per-cycle generation call). A
+    // formerly-READY language now missing a token is fail-closed SUPPRESSING live reports, so it
+    // must out-prioritize a fresh PENDING enable (no recipients yet) and a prior FAILED attempt.
+    // Nothing-missing languages need no Claude call and sort last.
+    private static int GenerationSlotTier(Language lang, int missingCount) => missingCount == 0
+        ? 99                                      // no Claude call needed — free stamp / already stable
+        : lang.GenerationState switch
+        {
+            LanguageGenerationState.Ready => 0,   // was READY, now missing a token → suppressing live reports
+            LanguageGenerationState.Pending => 1, // fresh enable, no recipients yet
+            _ => 2,                               // Failed / Blocked — a prior partial or failed retry
+        };
+
+    /// <summary>
+    /// WX-250 fill-only top-up. Inserts a row for each freshly translated token the language does
+    /// <em>not</em> already have, and NEVER touches a token that already exists — reviewed or not,
+    /// representable or blocked: a present row is real content, so a translated token that collides
+    /// with one is dropped, not applied (the never-clobber guarantee). Then re-stamps the language
+    /// READY/BLOCKED from its FULL row set (existing + inserted), <em>not</em> just this pass's
+    /// subset — so a clean top-up onto a language with a pre-existing blocked token correctly stays
+    /// BLOCKED. Returns the tokens actually inserted (for logging). Extracted as the testable seam
+    /// for the WX-250 unit trio (no Claude call required to exercise it).
+    /// </summary>
+    internal static async Task<IReadOnlyList<string>> ApplyTopUpAsync(
+        WeatherDataContext ctx,
+        Language lang,
+        IReadOnlyList<TranslatedToken> translations,
+        string cultureName,
+        IReadOnlyDictionary<string, LanguageTemplate> baselineByToken,
+        DateTime nowUtc,
+        CancellationToken ct)
+    {
+        // Existing rows, up front and in ONE query: which tokens are present (fill-only skips
+        // these) and which are blocked. Reading representability now — rather than re-querying the
+        // DB after the insert — lets the blocked set be computed in memory, so the inserts and the
+        // Language stamp below persist in a SINGLE SaveChanges (a save failure can never leave rows
+        // inserted without the matching stamp).
+        var existing = await ctx.LanguageTemplates
+            .Where(t => t.LanguageId == lang.Id)
+            .Select(t => new { t.Token, t.Representable })
+            .ToListAsync(ct);
+        var present = existing.Select(r => r.Token).ToHashSet(StringComparer.Ordinal);
+        // The FULL blocked set (existing blocked + any not-representable token inserted below), NOT
+        // just this pass's subset: a clean top-up onto a language with a PRE-EXISTING blocked token
+        // must stay BLOCKED. Fill-only never removes a row, so existing blocked tokens all persist.
+        var blocked = existing.Where(r => !r.Representable).Select(r => r.Token).ToHashSet(StringComparer.Ordinal);
+
+        var inserted = new List<string>();
+        foreach (var tr in translations)
+        {
+            if (present.Contains(tr.Token))
+                continue;   // fill-only: a present token (reviewed or not, representable or blocked) is never touched
+            if (!baselineByToken.TryGetValue(tr.Token, out var baseRow))
+                continue;   // not a baseline token — defensive; the validator already guarantees membership
+            ctx.LanguageTemplates.Add(new LanguageTemplate
+            {
+                LanguageId = lang.Id,
+                Token = tr.Token,
+                Phrase = tr.Phrase,
+                // A Hint context is a language-neutral English gloss that must stay English in
+                // every language; keep the baseline's verbatim rather than Claude's (which the
+                // guidance tells it to echo unchanged anyway).
+                ContextInfo = baseRow.ContextKind == TemplateContextKind.Hint
+                    ? baseRow.ContextInfo
+                    : tr.TranslatedContext,
+                ContextKind = baseRow.ContextKind,   // kind is the token's, not the language's
+                Note = tr.Note,
+                Representable = tr.Representable,
+                // ReviewedBy/ReviewedAtUtc left null — generated-but-unreviewed (WX-173 round-trip).
+            });
+            inserted.Add(tr.Token);
+            if (!tr.Representable)
+                blocked.Add(tr.Token);   // a newly-inserted not-representable token joins the blocked set
+        }
+
+        // Re-stamp READY/BLOCKED from the full blocked set. Set the culture only when the language
+        // has none yet (a fresh generation) — a top-up must not re-derive and silently flip an
+        // established language's curated locale tag (the never-clobber guarantee extends to
+        // CultureName, not just template rows). Inserts + stamp save together (one atomic unit).
+        if (string.IsNullOrWhiteSpace(lang.CultureName))
+            lang.CultureName = cultureName;
+        lang.GeneratedAtUtc = nowUtc;
+        lang.GenerationError = blocked.Count == 0
+            ? null
+            : FitGenerationError($"{blocked.Count} token(s) cannot be expressed in {lang.DisplayName} by simple substitution: "
+              + $"{string.Join(", ", blocked.OrderBy(t => t, StringComparer.Ordinal))}. This needs a renderer/code change; it will not retry.");
+        await ctx.SaveChangesAsync(ct);
+
+        return inserted;
     }
 
     // Language.GenerationError is nvarchar(1000); a large blocked-token set or a verbose
