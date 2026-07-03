@@ -55,6 +55,20 @@ public class NarrativeGlossaryTests
     }
 
     [Fact]
+    public void Build_AnchorsDaypartWord_ForEvening()
+    {
+        // WX-244: the named dayparts are anchored so the prose uses the approved evening word
+        // (es "Tarde-Noche") instead of drifting to "noche". Same concept→term mechanism as weather.
+        var rows = new List<LanguageTemplate>
+        {
+            Row(En, "PartEvening", "Evening"),
+            Row(Es, "PartEvening", "Tarde-Noche"),
+        };
+        var g = NarrativeGlossary.Build(new LanguageTemplateStore(() => rows, () => ["PartEvening"]), ["en", "es"]);
+        Assert.Contains("es: Evening → «Tarde-Noche»", g);
+    }
+
+    [Fact]
     public void Build_SkipsConcept_BlockedInALanguage()
     {
         var rows = Rows();

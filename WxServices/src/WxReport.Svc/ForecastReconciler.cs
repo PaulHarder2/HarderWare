@@ -1538,6 +1538,19 @@ public sealed class ForecastReconciler
             + "experience (strong storms, possible damaging winds or hail). "
             + "When precipitation is forecast near freezing temperatures, consider whether "
             + "snow, sleet, or a wintry mix is possible and mention it if so. "
+            // WX-244: time-of-day discipline for the free narrative — extends the deterministic
+            // WX-190 daypart rule into the prose (a night-word attached to a day names the WRONG day;
+            // the post-midnight block is that day's early morning, not the prior day's night).
+            + "Time-of-day discipline: name a period by its daypart, bound to its OWN calendar day. "
+            + "Never attach a night word to a day name — '<day> night' reads as the night FOLLOWING that "
+            + "day (the next day's early hours), so it labels the wrong day; e.g. Spanish 'la noche del "
+            + "lunes' is especially misleading. "
+            + "For the evening (roughly 18:00-24:00) use that daypart's approved word for the language "
+            + "(from the approved vocabulary provided), never a night word. "
+            + "Treat the hours after midnight (roughly 00:00-06:00) as the EARLY-MORNING hours of their "
+            + "OWN day — Spanish 'la madrugada del sábado' — a clock band, not a sunrise-relative moment "
+            + "(do not say 'pre-dawn'); keep them separate from the 06:00-12:00 morning, and never call "
+            + "them '<prior day> night'. "
             + changeAlertInstruction
             + narrativeLanguageInstruction
             // WX-238: the per-report approved-vocabulary glossary (uncached block; empty when no

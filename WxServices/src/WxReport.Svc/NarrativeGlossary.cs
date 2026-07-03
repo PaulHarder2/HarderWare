@@ -67,7 +67,7 @@ public static class NarrativeGlossary
 
         var sb = new StringBuilder();
         sb.Append("Approved vocabulary for this report — when the narrative describes one of these ");
-        sb.Append("meteorological concepts, use this approved wording for that language (inflected as the ");
+        sb.Append("meteorological or time-of-day concepts, use this approved wording for that language (inflected as the ");
         sb.Append("grammar requires and capitalized for its position; do not substitute a synonym):\n");
         sb.Append(string.Join("\n", langLines));
         return sb.ToString();
