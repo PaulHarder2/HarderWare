@@ -40,4 +40,17 @@ public class ReconcilerSystemPromptTests
         Assert.Contains("NOT interchangeable", guidance);
         Assert.Contains("se espera", guidance);
     }
+
+    [Fact]
+    public void SystemPrompt_LocksDaypartDayBoundaryRule_AgainstSilentDrop()
+    {
+        // WX-244: the free narrative used a night-word for the evening ("la noche del martes" =
+        // Wednesday's wee hours in our model). Lock the day-boundary + early-morning discipline so a
+        // future prompt edit can't silently drop it — it's a QA-only regression, like the probability
+        // tier above, so the suite has to hold it.
+        var prompt = ForecastReconciler.BuildReconcilerSystemPrompt(
+            ["en", "es"], ReportKind.Scheduled, allowSkip: false, "");
+        Assert.Contains("Never attach a night word to a day name", prompt);
+        Assert.Contains("la madrugada", prompt);   // the 00-06 = early-morning framing
+    }
 }
