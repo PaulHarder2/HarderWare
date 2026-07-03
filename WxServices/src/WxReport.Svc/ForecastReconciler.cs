@@ -181,9 +181,15 @@ public sealed class ForecastReconciler
         var systemPrompt = BuildReconcilerSystemPrompt(
             narrativeLanguages, reportKind, allowSkip, vocabularyGlossary);
 
+        // WX-246: the correct localized day name for each forecast date, so the free narrative binds
+        // dates to days deterministically (from CultureInfo) instead of mis-deriving them (the sq
+        // "Tuesday→Wednesday" class). Computed per report (dates change every send), so it rides the
+        // uncached user message, not the cached system prompt.
+        var dayNameReference = DayNameReference.Build(provisional, narrativeLanguages, _templates.CultureFor, tz);
+
         var userMessage = BuildUserMessage(
             snapshot, provisional, gfsModelRunUtc, tafIssuanceUtc, tafValidToUtc, prior, tz,
-            nowUtc, changedSinceLastSend);
+            nowUtc, changedSinceLastSend, dayNameReference);
 
         // WX-110: Claude intermittently returns a complete (untruncated) tool_use
         // that omits a required field or whose final_snapshot fails schema
@@ -1548,10 +1554,11 @@ public sealed class ForecastReconciler
     // (as canonical JSON), the structured observation/forecast text (via
     // SnapshotDescriber), the TAF issuance/validity timestamps, and the
     // prior snapshot's generated-at timestamp + body when present.
-    private static string BuildUserMessage(
+    internal static string BuildUserMessage(
         WeatherSnapshot snapshot, ForecastSnapshotBody provisional, DateTime? gfsModelRunUtc,
         DateTime? tafIssuanceUtc, DateTime? tafValidToUtc, ForecastSnapshot? prior,
-        TimeZoneInfo tz, DateTime nowUtc, IReadOnlyList<TriggerSource> changedSinceLastSend)
+        TimeZoneInfo tz, DateTime nowUtc, IReadOnlyList<TriggerSource> changedSinceLastSend,
+        string dayNameReference)
     {
         var sb = new StringBuilder();
         sb.AppendLine("Reconcile the following inputs for this locality and emit your three artifacts via the submit_reconciled_report tool.");
@@ -1577,6 +1584,13 @@ public sealed class ForecastReconciler
         if (temperatureGuidance.Length > 0)
         {
             sb.Append(temperatureGuidance);
+            sb.AppendLine();
+        }
+
+        // WX-246: the per-language date→day-name reference (empty when there are no forecast blocks).
+        if (dayNameReference.Length > 0)
+        {
+            sb.Append(dayNameReference);
             sb.AppendLine();
         }
 
