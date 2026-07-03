@@ -18,41 +18,62 @@ namespace WxReport.Tests;
 /// for the DB's lifetime). No Claude call is needed: the translated set is supplied directly,
 /// which is exactly why the DB mutation was extracted into its own seam.
 /// </summary>
-public class TopUpGenerationTests
+public sealed class TopUpGenerationTests : IDisposable
 {
     private static readonly DateTime T0 = new(2026, 7, 3, 12, 0, 0, DateTimeKind.Utc);
 
-    private static DbContextOptions<WeatherDataContext> NewDb(SqliteConnection conn)
+    // One in-memory DB per test (xUnit constructs a fresh instance per [Fact]); the connection is
+    // held open for the DB's lifetime and closed in Dispose. Centralizes the SQLite bootstrap so
+    // each test just uses _db.
+    private readonly SqliteConnection _conn;
+    private readonly DbContextOptions<WeatherDataContext> _db;
+
+    public TopUpGenerationTests()
     {
-        var options = new DbContextOptionsBuilder<WeatherDataContext>().UseSqlite(conn).Options;
-        using var ctx = new WeatherDataContext(options);
+        _conn = new SqliteConnection("DataSource=:memory:");
+        _conn.Open();
+        _db = new DbContextOptionsBuilder<WeatherDataContext>().UseSqlite(_conn).Options;
+        using var ctx = new WeatherDataContext(_db);
         var script = ctx.Database.GenerateCreateScript().Replace("nvarchar(max)", "TEXT");
         ctx.Database.ExecuteSqlRaw(script);
-        return options;
     }
 
+    public void Dispose() => _conn.Dispose();
+
     // An en baseline row for a token (the ContextKind/ContextInfo source ApplyTopUp reads).
-    private static LanguageTemplate BaseRow(string token) => new()
+    private static LanguageTemplate BaseRow(string token, TemplateContextKind kind = TemplateContextKind.Example) => new()
     {
         Token = token,
         Phrase = $"en-{token}",
         ContextInfo = $"context for {token}",
-        ContextKind = TemplateContextKind.Example,
+        ContextKind = kind,
         Representable = true,
     };
 
     private static IReadOnlyDictionary<string, LanguageTemplate> Baseline(params string[] tokens) =>
-        tokens.ToDictionary(t => t, BaseRow, StringComparer.Ordinal);
+        tokens.ToDictionary(t => t, t => BaseRow(t), StringComparer.Ordinal);
 
     private static TranslatedToken Tr(string token, string phrase, bool representable = true, string? note = null) =>
         new(token, representable ? phrase : "", $"ctx-{token}", representable, note);
 
+    private static LanguageTemplate Row(string token, string phrase, bool representable = true,
+        string? reviewedBy = null, DateTime? reviewedAt = null, string? note = null) => new()
+        {
+            Token = token,
+            Phrase = representable ? phrase : "",
+            ContextInfo = $"ctx-{token}",
+            ContextKind = TemplateContextKind.Example,
+            Representable = representable,
+            Note = note,
+            ReviewedBy = reviewedBy,
+            ReviewedAtUtc = reviewedAt,
+        };
+
     // Seeds an enabled language plus its existing template rows, returns its Id.
-    private static async Task<long> SeedLanguageAsync(
-        DbContextOptions<WeatherDataContext> db, string iso, DateTime? generatedAt, string? generationError,
+    private async Task<long> SeedLanguageAsync(string iso, DateTime? generatedAt, string? generationError,
         params LanguageTemplate[] rows)
     {
-        await using var ctx = new WeatherDataContext(db);
+        await using var ctx = new WeatherDataContext(_db);
         var lang = new Language
         {
             IsoCode = iso,
@@ -70,29 +91,13 @@ public class TopUpGenerationTests
         return lang.Id;
     }
 
-    private static LanguageTemplate Row(string token, string phrase, bool representable = true,
-        string? reviewedBy = null, DateTime? reviewedAt = null, string? note = null) => new()
-        {
-            Token = token,
-            Phrase = representable ? phrase : "",
-            ContextInfo = $"ctx-{token}",
-            ContextKind = TemplateContextKind.Example,
-            Representable = representable,
-            Note = note,
-            ReviewedBy = reviewedBy,
-            ReviewedAtUtc = reviewedAt,
-        };
-
     [Fact]
     public async Task TopUp_FillsOnly_DoesNotOverwriteAPresentToken()
     {
-        using var conn = new SqliteConnection("DataSource=:memory:");
-        conn.Open();
-        var db = NewDb(conn);
-        var langId = await SeedLanguageAsync(db, "fr", T0, null, Row("A", "old-A"));
+        var langId = await SeedLanguageAsync("fr", T0, null, Row("A", "old-A"));
 
         IReadOnlyList<string> inserted;
-        await using (var ctx = new WeatherDataContext(db))
+        await using (var ctx = new WeatherDataContext(_db))
         {
             var lang = await ctx.Languages.SingleAsync(l => l.Id == langId);
             // The translated set offers a NEW value for the present token A and a brand-new token B.
@@ -101,7 +106,7 @@ public class TopUpGenerationTests
         }
 
         Assert.Equal(new[] { "B" }, inserted);   // only the missing token was inserted
-        await using (var ctx = new WeatherDataContext(db))
+        await using (var ctx = new WeatherDataContext(_db))
         {
             var a = await ctx.LanguageTemplates.SingleAsync(t => t.LanguageId == langId && t.Token == "A");
             Assert.Equal("old-A", a.Phrase);      // present token untouched — never clobbered
@@ -114,14 +119,11 @@ public class TopUpGenerationTests
     [Fact]
     public async Task TopUp_ReviewedRow_SurvivesUntouched()
     {
-        using var conn = new SqliteConnection("DataSource=:memory:");
-        conn.Open();
-        var db = NewDb(conn);
         var reviewedAt = T0.AddDays(-1);
-        var langId = await SeedLanguageAsync(db, "sq", T0, null,
+        var langId = await SeedLanguageAsync("sq", T0, null,
             Row("VisHazy", "Turbullt", reviewedBy: "paul", reviewedAt: reviewedAt));
 
-        await using (var ctx = new WeatherDataContext(db))
+        await using (var ctx = new WeatherDataContext(_db))
         {
             var lang = await ctx.Languages.SingleAsync(l => l.Id == langId);
             // Top-up offers a re-translation of the reviewed token plus a new token.
@@ -130,7 +132,7 @@ public class TopUpGenerationTests
                 "sq-AL", Baseline("VisHazy", "DayMon"), T0.AddMinutes(5), default);
         }
 
-        await using (var ctx = new WeatherDataContext(db))
+        await using (var ctx = new WeatherDataContext(_db))
         {
             var reviewed = await ctx.LanguageTemplates.SingleAsync(t => t.LanguageId == langId && t.Token == "VisHazy");
             Assert.Equal("Turbullt", reviewed.Phrase);        // curated value preserved
@@ -144,13 +146,10 @@ public class TopUpGenerationTests
     [Fact]
     public async Task TopUp_NewBaselineToken_PropagatesToAlreadyReadyLanguage_StaysReady()
     {
-        using var conn = new SqliteConnection("DataSource=:memory:");
-        conn.Open();
-        var db = NewDb(conn);
         // A language that was READY on the old baseline {A}; the baseline has since grown to {A, B}.
-        var langId = await SeedLanguageAsync(db, "es", T0, null, Row("A", "a-es"));
+        var langId = await SeedLanguageAsync("es", T0, null, Row("A", "a-es"));
 
-        await using (var ctx = new WeatherDataContext(db))
+        await using (var ctx = new WeatherDataContext(_db))
         {
             var lang = await ctx.Languages.SingleAsync(l => l.Id == langId);
             // Pass a DIFFERENT culture tag than the established "es-US" — a top-up must not adopt it.
@@ -158,7 +157,7 @@ public class TopUpGenerationTests
                 ctx, lang, new[] { Tr("B", "b-es") }, "es-ES", Baseline("A", "B"), T0.AddMinutes(5), default);
         }
 
-        await using (var ctx = new WeatherDataContext(db))
+        await using (var ctx = new WeatherDataContext(_db))
         {
             Assert.Equal(2, await ctx.LanguageTemplates.CountAsync(t => t.LanguageId == langId)); // B propagated
             var lang = await ctx.Languages.SingleAsync(l => l.Id == langId);
@@ -172,11 +171,8 @@ public class TopUpGenerationTests
     [Fact]
     public async Task TopUp_FreshLanguage_SetsCultureWhenAbsent()
     {
-        using var conn = new SqliteConnection("DataSource=:memory:");
-        conn.Open();
-        var db = NewDb(conn);
         long langId;
-        await using (var ctx = new WeatherDataContext(db))
+        await using (var ctx = new WeatherDataContext(_db))
         {
             var lang = new Language { IsoCode = "fr", DisplayName = "French", IsEnabled = true, CultureName = null };
             ctx.Languages.Add(lang);
@@ -184,14 +180,14 @@ public class TopUpGenerationTests
             langId = lang.Id;
         }
 
-        await using (var ctx = new WeatherDataContext(db))
+        await using (var ctx = new WeatherDataContext(_db))
         {
             var lang = await ctx.Languages.SingleAsync(l => l.Id == langId);
             await ReportWorker.ApplyTopUpAsync(
                 ctx, lang, new[] { Tr("A", "a-fr"), Tr("B", "b-fr") }, "fr-FR", Baseline("A", "B"), T0.AddMinutes(5), default);
         }
 
-        await using (var ctx = new WeatherDataContext(db))
+        await using (var ctx = new WeatherDataContext(_db))
         {
             var lang = await ctx.Languages.SingleAsync(l => l.Id == langId);
             Assert.Equal("fr-FR", lang.CultureName);           // culture IS set on first generation (was null)
@@ -202,14 +198,11 @@ public class TopUpGenerationTests
     [Fact]
     public async Task TopUp_CleanTopUp_KeepsPreExistingBlockedState()
     {
-        using var conn = new SqliteConnection("DataSource=:memory:");
-        conn.Open();
-        var db = NewDb(conn);
         // A language BLOCKED on token A (a present, not-representable row), now missing new token B.
-        var langId = await SeedLanguageAsync(db, "de", T0, "A cannot be expressed",
+        var langId = await SeedLanguageAsync("de", T0, "A cannot be expressed",
             Row("A", "", representable: false, note: "needs code"));
 
-        await using (var ctx = new WeatherDataContext(db))
+        await using (var ctx = new WeatherDataContext(_db))
         {
             var lang = await ctx.Languages.SingleAsync(l => l.Id == langId);
             // A clean translation for B only — A is a present (blocked) row, not in the missing set.
@@ -217,7 +210,7 @@ public class TopUpGenerationTests
                 ctx, lang, new[] { Tr("B", "b-de") }, "de-DE", Baseline("A", "B"), T0.AddMinutes(5), default);
         }
 
-        await using (var ctx = new WeatherDataContext(db))
+        await using (var ctx = new WeatherDataContext(_db))
         {
             var b = await ctx.LanguageTemplates.SingleAsync(t => t.LanguageId == langId && t.Token == "B");
             Assert.Equal("b-de", b.Phrase);                    // the clean token was filled
@@ -225,6 +218,34 @@ public class TopUpGenerationTests
             Assert.NotNull(lang.GenerationError);              // re-stamped from the FULL set → still BLOCKED on A
             Assert.Contains("A", lang.GenerationError);
             Assert.Equal(LanguageGenerationState.Blocked, lang.GenerationState);
+        }
+    }
+
+    [Fact]
+    public async Task TopUp_HintContext_KeepsBaselineEnglishGloss()
+    {
+        var langId = await SeedLanguageAsync("de", T0, null);   // no rows yet
+        // A baseline whose token carries a language-neutral English Hint gloss (read, not translated).
+        var baseline = new Dictionary<string, LanguageTemplate>(StringComparer.Ordinal)
+        {
+            ["H"] = BaseRow("H", TemplateContextKind.Hint),
+        };
+
+        await using (var ctx = new WeatherDataContext(_db))
+        {
+            var lang = await ctx.Languages.SingleAsync(l => l.Id == langId);
+            // Claude returns a TRANSLATED context; the Hint branch must ignore it and keep the baseline gloss.
+            await ReportWorker.ApplyTopUpAsync(
+                ctx, lang, new[] { new TranslatedToken("H", "de-phrase", "translated-context-de", true, null) },
+                "de-DE", baseline, T0.AddMinutes(5), default);
+        }
+
+        await using (var ctx = new WeatherDataContext(_db))
+        {
+            var h = await ctx.LanguageTemplates.SingleAsync(t => t.LanguageId == langId && t.Token == "H");
+            Assert.Equal("context for H", h.ContextInfo);      // baseline English gloss kept, not the translated context
+            Assert.Equal(TemplateContextKind.Hint, h.ContextKind);
+            Assert.Equal("de-phrase", h.Phrase);
         }
     }
 }

@@ -779,11 +779,20 @@ public sealed class ReportWorker : BackgroundService
         DateTime nowUtc,
         CancellationToken ct)
     {
-        var present = (await ctx.LanguageTemplates
-                .Where(t => t.LanguageId == lang.Id)
-                .Select(t => t.Token)
-                .ToListAsync(ct))
-            .ToHashSet(StringComparer.Ordinal);
+        // Existing rows, up front and in ONE query: which tokens are present (fill-only skips
+        // these) and which are blocked. Reading representability now — rather than re-querying the
+        // DB after the insert — lets the blocked set be computed in memory, so the inserts and the
+        // Language stamp below persist in a SINGLE SaveChanges (a save failure can never leave rows
+        // inserted without the matching stamp).
+        var existing = await ctx.LanguageTemplates
+            .Where(t => t.LanguageId == lang.Id)
+            .Select(t => new { t.Token, t.Representable })
+            .ToListAsync(ct);
+        var present = existing.Select(r => r.Token).ToHashSet(StringComparer.Ordinal);
+        // The FULL blocked set (existing blocked + any not-representable token inserted below), NOT
+        // just this pass's subset: a clean top-up onto a language with a PRE-EXISTING blocked token
+        // must stay BLOCKED. Fill-only never removes a row, so existing blocked tokens all persist.
+        var blocked = existing.Where(r => !r.Representable).Select(r => r.Token).ToHashSet(StringComparer.Ordinal);
 
         var inserted = new List<string>();
         foreach (var tr in translations)
@@ -809,21 +818,14 @@ public sealed class ReportWorker : BackgroundService
                 // ReviewedBy/ReviewedAtUtc left null — generated-but-unreviewed (WX-173 round-trip).
             });
             inserted.Add(tr.Token);
+            if (!tr.Representable)
+                blocked.Add(tr.Token);   // a newly-inserted not-representable token joins the blocked set
         }
-        if (inserted.Count > 0)
-            await ctx.SaveChangesAsync(ct);
 
-        // Re-stamp from the FULL set (existing + inserted), not this pass's subset: a top-up that
-        // adds a clean token to a language with a PRE-EXISTING blocked token must not clear that
-        // BLOCKED state. READY ⇔ no blocked rows remain across the whole language.
-        var blocked = await ctx.LanguageTemplates
-            .Where(t => t.LanguageId == lang.Id && !t.Representable)
-            .Select(t => t.Token)
-            .ToListAsync(ct);
-
-        // Set the culture only when the language has none yet (a fresh generation). A top-up of a
-        // single new token must not re-derive and silently flip an established language's curated
-        // locale tag — the never-clobber guarantee extends to CultureName, not just template rows.
+        // Re-stamp READY/BLOCKED from the full blocked set. Set the culture only when the language
+        // has none yet (a fresh generation) — a top-up must not re-derive and silently flip an
+        // established language's curated locale tag (the never-clobber guarantee extends to
+        // CultureName, not just template rows). Inserts + stamp save together (one atomic unit).
         if (string.IsNullOrWhiteSpace(lang.CultureName))
             lang.CultureName = cultureName;
         lang.GeneratedAtUtc = nowUtc;
