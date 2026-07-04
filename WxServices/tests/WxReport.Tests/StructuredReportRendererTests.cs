@@ -472,6 +472,22 @@ public class StructuredReportRendererTests
     }
 
     [Fact]
+    public void QTimeToken_AtNoon_RendersBareNoonWord()  // WX-256 event context via the {q:time} → RenderInstant path
+    {
+        var report = new StructuredReportBody
+        {
+            Changes = [],
+            Narrative = new Dictionary<string, NarrativeSections>
+            {
+                ["en"] = new() { ChangeSummary = null, Closing = "Storms clear by {q:time:2026-06-08T12:00:00Z}." },  // 12:00Z = local noon
+            },
+        };
+        var en = StructuredReportRenderer.Render(report, Forecast(), Observation(), Imperial(), T("en"), C("en"), Utc, ReportKind.Scheduled, RenderNow);
+        Assert.Contains("clear by noon.", en);  // the {q:time} token renders the bare noon word through RenderInstant
+        Assert.DoesNotContain("12:00 PM", en);
+    }
+
+    [Fact]
     public void ChangeBand_RendersOnlyWhenNarrativeCarriesOne()
     {
         var scheduled = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), T("en"), C("en"), Utc, ReportKind.Scheduled, RenderNow);
