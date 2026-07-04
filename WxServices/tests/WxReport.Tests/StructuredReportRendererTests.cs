@@ -365,7 +365,9 @@ public class StructuredReportRendererTests
         // WX-184: it now sits ABOVE the grid — directly beneath the "Forecast for …"
         // heading rule — left-justified to match the Current Conditions station line.
         var en = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), T("en"), C("en"), Utc, ReportKind.Scheduled, RenderNow);
-        Assert.Contains("Times use a 24-hour clock: 00 = midnight, 12 = noon, 24 = midnight.", en);
+        // WX-257: the legend breaks after its colon — "…clock:" on line one, the key on line two.
+        Assert.Contains("Times use a 24-hour clock:<br/>00 = midnight, 12 = noon, 24 = midnight.", en);
+        Assert.DoesNotContain("&lt;br/&gt;", en);  // the break is raw markup, never escaped visible text
         Assert.DoesNotContain("12 AM", en);  // the banned contradictory anchors never appear
         Assert.DoesNotContain("12 PM", en);
         // WX-184: left-justified caption styling (matches the CC station line), not WX-195's centered form.
