@@ -275,8 +275,8 @@ public partial class VocabularyTab : UserControl
             var written = new List<(VocabEditRow Row, string Phrase, string RawNote, string PersistedNote, string English)>();
             foreach (var s in snapshot)
             {
-                var persistedNote = string.IsNullOrWhiteSpace(s.Note) ? "" : s.Note;
-                var baselineNote = string.IsNullOrWhiteSpace(s.Row.OriginalNote) ? "" : s.Row.OriginalNote;
+                var persistedNote = VocabEditRow.NormalizeNote(s.Note);
+                var baselineNote = VocabEditRow.NormalizeNote(s.Row.OriginalNote);
                 var wrote = false;
 
                 // The selected language's row: Phrase + Note — written (and re-stamped) only when one of them
@@ -417,9 +417,14 @@ public partial class VocabularyTab : UserControl
             set { if (_note != value) { _note = value; OnChanged(nameof(Note)); } }
         }
 
+        // Normalize a note the same way the save does (a whitespace-only note persists as "").
+        internal static string NormalizeNote(string s) => string.IsNullOrWhiteSpace(s) ? "" : s;
+
+        // Note is compared under that normalization so a whitespace-only edit isn't seen as a change that
+        // can never be saved (the save writes nothing for it, so it would otherwise stay dirty forever).
         public bool IsDirty =>
             !string.Equals(Phrase, OriginalPhrase, StringComparison.Ordinal) ||
-            !string.Equals(Note, OriginalNote, StringComparison.Ordinal) ||
+            !string.Equals(NormalizeNote(Note), NormalizeNote(OriginalNote), StringComparison.Ordinal) ||
             !string.Equals(English, OriginalEnglish, StringComparison.Ordinal);
 
         /// <summary>Set the clean baseline to the values actually persisted (called after a successful save).</summary>
@@ -473,7 +478,9 @@ public partial class VocabularyTab : UserControl
         // token's original {n} placeholders (every target phrase was validated against them).
         private static readonly Func<VocabEditRow, string, string?>[] EnglishValidators =
         {
-            (_, v) => string.IsNullOrWhiteSpace(v) ? "English cannot be empty." : null,
+            // A row with no en source row (EnglishId == 0) has a legitimately-empty, non-editable English —
+            // don't flag it invalid, which would disable Save for the whole grid. Mirrors PhraseValidators.
+            (row, v) => row.EnglishId != 0 && string.IsNullOrWhiteSpace(v) ? "English cannot be empty." : null,
             (row, v) => TemplateValidation.PlaceholdersMatch(row.OriginalEnglish, v)
                 ? null
                 : $"English edit must keep the original {{n}} placeholders ({row.OriginalEnglish}).",
