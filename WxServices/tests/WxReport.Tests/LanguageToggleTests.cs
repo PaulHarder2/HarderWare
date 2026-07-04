@@ -4,6 +4,8 @@ using MetarParser.Data.Entities;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 
+using WxReport.Svc;
+
 using Xunit;
 
 namespace WxReport.Tests;
@@ -20,6 +22,7 @@ public sealed class LanguageToggleTests : IDisposable
 {
     private static readonly DateTime Gen = new(2026, 7, 4, 12, 0, 0, DateTimeKind.Utc);
     private static readonly DateTime Reviewed = new(2026, 7, 4, 13, 0, 0, DateTimeKind.Utc);
+    private static readonly DateTime Gen2 = new(2026, 7, 4, 14, 0, 0, DateTimeKind.Utc);
 
     private readonly SqliteConnection _conn;
     private readonly DbContextOptions<WeatherDataContext> _db;
@@ -171,5 +174,54 @@ public sealed class LanguageToggleTests : IDisposable
         await using var ctx = new WeatherDataContext(_db);
         var result = await LanguageToggle.SetEnabledAsync(ctx, languageId: 999, enabled: false);
         Assert.Equal(LanguageToggleOutcome.NotFound, result.Outcome);
+    }
+
+    // WX-249 generator-path AC: a language disabled DURING a slow generation call (a stale tracked
+    // entity in the worker's context) must keep the freshly-generated rows AND stay disabled — the
+    // WX-222 mid-call discard is retired, and the top-up stamp never writes IsEnabled, so EF's
+    // column-scoped UPDATE leaves the concurrent disable intact. Locks the reasoning the removed
+    // race-guard used to embody so a future stamp that touches IsEnabled (or a concurrency token)
+    // would trip this test.
+    [Fact]
+    public async Task TopUp_ConcurrentlyDisabledMidCall_PersistsRowsButStaysDisabled()
+    {
+        long id;
+        await using (var ctx = new WeatherDataContext(_db))
+        {
+            // Enabled + PENDING (no GeneratedAtUtc) — the state the worker generates from.
+            var lang = new Language { IsoCode = "de", DisplayName = "German", IsEnabled = true, CultureName = "de-DE" };
+            ctx.Languages.Add(lang);
+            await ctx.SaveChangesAsync();
+            id = lang.Id;
+        }
+
+        // Context A: the worker loads the language tracked at cycle start (still enabled).
+        await using var ctxA = new WeatherDataContext(_db);
+        var staleLang = await ctxA.Languages.FirstAsync(l => l.Id == id);
+
+        // Context B: the operator disables it mid-call (during the slow Claude generation).
+        await using (var ctxB = new WeatherDataContext(_db))
+            await LanguageToggle.SetEnabledAsync(ctxB, id, enabled: false);
+
+        // Context A persists the generated rows against its now-stale (still-enabled-in-memory) entity.
+        var baseline = new Dictionary<string, LanguageTemplate>(StringComparer.Ordinal)
+        {
+            ["noon"] = new LanguageTemplate
+            {
+                Token = "noon",
+                Phrase = "en-noon",
+                ContextInfo = "ctx",
+                ContextKind = TemplateContextKind.Example,
+                Representable = true,
+            },
+        };
+        var translations = new List<TranslatedToken> { new("noon", "Mittag", "ctx-noon", true, null) };
+        await ReportWorker.ApplyTopUpAsync(ctxA, staleLang, translations, "de-DE", baseline, Gen2, default);
+
+        await using var check = new WeatherDataContext(_db);
+        var reloaded = await check.Languages.FindAsync(id);
+        Assert.False(reloaded!.IsEnabled);                 // the concurrent disable SURVIVED the stamp
+        Assert.Equal(Gen2, reloaded.GeneratedAtUtc);        // ...and the stamp still landed (dormant AND generated)
+        Assert.True(await check.LanguageTemplates.AnyAsync(t => t.LanguageId == id && t.Token == "noon"));
     }
 }
