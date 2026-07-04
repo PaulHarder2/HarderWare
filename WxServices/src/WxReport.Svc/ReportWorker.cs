@@ -259,7 +259,7 @@ public sealed class ReportWorker : BackgroundService
         var narrativeLanguages = members
             .Select(m => LanguageTemplateStore.CanonicalIso(ResolveLanguageCode(m, langById, cfg.DefaultLanguage)))
             .Distinct(StringComparer.Ordinal)
-            .Where(iso => _templates.MissingTokens(iso, Tok.All).Count == 0)
+            .Where(iso => _templates.MissingTokens(iso, Tok.Required).Count == 0)
             .ToList();
         if (narrativeLanguages.Count == 0)
         {
@@ -618,8 +618,9 @@ public sealed class ReportWorker : BackgroundService
             .ToDictionary(g => g.Key, g => g.Select(x => x.Token).ToHashSet(StringComparer.Ordinal));
 
         // Compute each language's missing (no-row) baseline tokens, then order so the ONE per-cycle
-        // generation slot goes to the most urgent: a formerly-READY language now missing a token is
-        // actively SUPPRESSING live reports (fail-closed), so it outranks a fresh PENDING enable (no
+        // generation slot goes to the most urgent: a formerly-READY language now missing a HARD token is
+        // actively SUPPRESSING live reports (fail-closed; a missing SOFT token only degrades, WX-256), so
+        // it outranks a fresh PENDING enable (no
         // recipients yet), which outranks a prior FAILED attempt. Free READY-stamps (nothing missing)
         // cost no Claude call and are handled regardless of the slot.
         var noTokens = new HashSet<string>(StringComparer.Ordinal);
@@ -1053,7 +1054,7 @@ public sealed class ReportWorker : BackgroundService
         var sendableLanguages = members
             .Select(m => LanguageTemplateStore.CanonicalIso(ResolveLanguageCode(m, langById, cfg.DefaultLanguage)))
             .Distinct(StringComparer.Ordinal)
-            .Where(iso => _templates.MissingTokens(iso, Tok.All).Count == 0)
+            .Where(iso => _templates.MissingTokens(iso, Tok.Required).Count == 0)
             .ToList();
         if (sendableLanguages.Count == 0)
         {
@@ -2249,7 +2250,8 @@ public sealed class ReportWorker : BackgroundService
     /// <summary>
     /// Resolves the recipient language's <see cref="TemplateSet"/> and <see cref="CultureInfo"/>,
     /// applying the WX-171 per-recipient fail-closed send gate: if the language is missing any
-    /// renderer-required token (<see cref="Tok.All"/>), logs an ERROR (which WxMonitor alerts on)
+    /// hard-required token (<see cref="Tok.Required"/> — a missing SOFT cosmetic token degrades in
+    /// the renderer instead, WX-256), logs an ERROR (which WxMonitor alerts on)
     /// and returns <see langword="false"/> so THIS recipient is skipped this cycle — every other
     /// recipient and language still sends. A complete language always returns <see langword="true"/>;
     /// completeness is verified here, before the renderer's <see cref="TemplateSet.Get"/> can throw.
@@ -2259,7 +2261,7 @@ public sealed class ReportWorker : BackgroundService
     {
         templates = _templates.ForLanguage(langCode);
         culture = _templates.CultureFor(langCode);
-        var missing = _templates.MissingTokens(langCode, Tok.All);
+        var missing = _templates.MissingTokens(langCode, Tok.Required);
         if (missing.Count == 0)
             return true;
 
@@ -2298,7 +2300,9 @@ public sealed class ReportWorker : BackgroundService
         // Use send-time when no observation is available; ObservationTimeUtc is
         // default(DateTime) in that case, which would render as 12:00 AM.
         var subjectTimeUtc = snap.ObservationAvailable ? snap.ObservationTimeUtc : DateTime.UtcNow;
-        var localTime = TimeZoneInfo.ConvertTimeFromUtc(subjectTimeUtc, tz).ToString("h:mm tt", culture);
+        var subjectLocal = TimeZoneInfo.ConvertTimeFromUtc(subjectTimeUtc, tz);
+        // WX-256: event context — a noon observation reads the bare noon word in the subject.
+        var localTime = StructuredReportRenderer.FormatEventClock(subjectLocal, subjectLocal.ToString("t", culture), templates);
 
         var label = templates.Get(ReportLabels.TokenFor(kind, LabelType.Title));
         var forName = string.IsNullOrWhiteSpace(recipientName)

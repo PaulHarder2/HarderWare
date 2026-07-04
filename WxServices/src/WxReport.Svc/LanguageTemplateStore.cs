@@ -182,8 +182,9 @@ public sealed class LanguageTemplateStore
     /// The subset of <paramref name="required"/> tokens that do NOT resolve for
     /// <paramref name="isoCode"/> — absent or blocked (not representable). Empty means the
     /// language is complete for that contract. This is the basis of the fail-closed posture
-    /// (WX-171): the startup check runs it over <see cref="Tok.All"/> for every supported
-    /// language (loud ERROR on any gap), the send path runs it per recipient language, and
+    /// (WX-171): the startup check runs it over <see cref="Tok.Required"/> for every supported
+    /// language (loud ERROR on any HARD-token gap; a SOFT token degrades in the renderer, WX-256),
+    /// the send path runs it per recipient language, and
     /// WX-172 runs it at enable time. Returns ordinal-sorted for deterministic logging.
     /// </summary>
     public IReadOnlyList<string> MissingTokens(string isoCode, IEnumerable<string> required)

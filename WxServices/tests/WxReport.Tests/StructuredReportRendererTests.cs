@@ -454,6 +454,24 @@ public class StructuredReportRendererTests
     }
 
     [Fact]
+    public void NoonObservation_ObsLine_RendersBareNoonWord()  // WX-256 event context, through Render
+    {
+        var noonSnap = new WeatherSnapshot
+        {
+            ObservationAvailable = true,
+            LocalityName = "Spring",
+            ObservationTimeUtc = new(2026, 6, 8, 12, 0, 0, DateTimeKind.Utc),  // 12:00 in the UTC locality = noon
+            StationIcao = "KDWH",
+            SkyLayers = [new SkyLayer { Coverage = SkyCoverage.Overcast, HeightFeet = 3000 }],
+            VisibilityStatuteMiles = 10,
+            TemperatureCelsius = 31.0,
+        };
+        var en = StructuredReportRenderer.Render(Body(), Forecast(), noonSnap, Imperial(), T("en"), C("en"), Utc, ReportKind.Scheduled, RenderNow);
+        Assert.Contains("Jun 8, noon", en);    // obs line reads the bare noon word
+        Assert.DoesNotContain("12:00 PM", en);
+    }
+
+    [Fact]
     public void ChangeBand_RendersOnlyWhenNarrativeCarriesOne()
     {
         var scheduled = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), T("en"), C("en"), Utc, ReportKind.Scheduled, RenderNow);
@@ -491,7 +509,7 @@ public class StructuredReportRendererTests
 
         Assert.Contains("Welcome to WxReport!", welcome);
         Assert.Contains("Spring", welcome);             // locality named
-        Assert.Contains("7 AM and 12 PM", welcome);     // localized + joined send times
+        Assert.Contains("7:00 AM and 12:00 noon", welcome);  // WX-256: precise schedule times + noon word
         // No weather content in a welcome-only email.
         Assert.DoesNotContain("Reported Conditions", welcome);
         Assert.DoesNotContain("Forecast for", welcome);

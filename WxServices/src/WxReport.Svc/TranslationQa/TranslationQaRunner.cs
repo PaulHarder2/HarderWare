@@ -63,11 +63,13 @@ public static class TranslationQaRunner
         // Render languages: English reference + the target (deduped if target is en).
         string[] renderLangs = targetIso == "en" ? ["en"] : ["en", targetIso];
 
-        // Fail early if a language isn't generated/complete in the DB — the renderer fails loud on a missing
-        // token, so there's no point making a Claude call we can't render.
+        // Fail early if a language is missing a HARD-required token (Tok.Required) — the renderer would
+        // fail closed and we couldn't render it, so there's no point making a Claude call. A missing SOFT
+        // token (WX-256: noon/midnight) is NOT blocking: the report renders with the culture 12h fallback,
+        // so QA audits the rest while top-up fills the soft words (they get audited on a later rerun).
         foreach (var lang in renderLangs)
         {
-            var missing = templates.MissingTokens(lang, Tok.All);
+            var missing = templates.MissingTokens(lang, Tok.Required);
             if (missing.Count > 0)
                 throw new InvalidOperationException(
                     $"language '{lang}' is missing {missing.Count} template token(s) in the DB " +

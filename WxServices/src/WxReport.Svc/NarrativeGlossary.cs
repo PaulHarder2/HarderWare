@@ -35,7 +35,8 @@ public static class NarrativeGlossary
 
         var ordered = tokens.OrderBy(t => t, StringComparer.Ordinal).ToList();
         // English is both the concept label for every language and its own anchor. Its completeness
-        // is guaranteed upstream by the startup Tok.All completeness check (a missing en phrase is a
+        // is guaranteed upstream by the startup Tok.Required completeness check + the build-time parity
+        // gate (a missing en phrase is a
         // loud startup ERROR, not a silent gap here), so using it as the per-concept label is safe.
         var en = templates.PhrasesFor("en");
 

@@ -11,10 +11,11 @@ namespace WxReport.Svc;
 /// WX-171 token contract: one constant per <c>LanguageTemplates</c> token the
 /// renderer can reference. The renderer uses ONLY these constants (never string
 /// literals), so referencing an undeclared token is a compile error. A CI parity
-/// test (<c>TokSeedParityTests</c>) asserts this set matches the en/es seed
-/// exactly (no gaps, no orphans), and a runtime completeness check verifies every
-/// constant resolves for each supported language. Generated from the seed; keep
-/// in lockstep with it.
+/// test (<c>TokSeedParityTests</c>) asserts this set matches the en seed exactly
+/// (no gaps, no orphans). The fail-closed completeness/send gates require
+/// <see cref="Required"/> (= <see cref="All"/> minus <see cref="Soft"/>): a missing
+/// SOFT token (WX-256, cosmetic) degrades in the renderer instead of suppressing the
+/// report. Generated from the seed; keep in lockstep with it.
 /// </summary>
 public static class Tok
 {
@@ -141,14 +142,35 @@ public static class Tok
     public const string ProbLikely = "likely";
     public const string ProbExpected = "expected";
 
+    // WX-256: soft (cosmetic) time-word tokens. See Soft / Required below — a language missing
+    // ONLY these still sends (the renderer degrades to the culture 12-hour form), unlike every
+    // other token. Otherwise normal: en-seeded, parity-checked, top-up-generated + QA-reviewed.
+    public const string Noon = "noon";
+    public const string Midnight = "midnight";
+
     private static readonly IReadOnlySet<string> _all =
         typeof(Tok).GetFields(BindingFlags.Public | BindingFlags.Static)
             .Where(f => f.IsLiteral && f.FieldType == typeof(string))
             .Select(f => (string)f.GetRawConstantValue()!)
             .ToHashSet(StringComparer.Ordinal);
 
-    /// <summary>Every declared token value — the renderer's full required-token contract, consumed by the completeness checks (startup, send gate, WX-172).</summary>
+    /// <summary>Every declared token value — the full token contract, consumed by the parity gate and top-up generation. The fail-closed suppression gates use <see cref="Required"/> instead, so a missing SOFT token degrades rather than suppresses (WX-256).</summary>
     public static IReadOnlySet<string> All => _all;
+
+    // WX-256: the soft-token allowlist — tokens whose absence must NOT suppress a report (a
+    // cosmetic time word must not fail-closed like a hazard token). Softness is an explicit
+    // opt-in: a new token is REQUIRED unless named here.
+    private static readonly IReadOnlySet<string> _soft =
+        new HashSet<string>(StringComparer.Ordinal) { Noon, Midnight };
+
+    /// <summary>Cosmetic tokens exempt from the fail-closed suppression gates (WX-256): a language missing one still sends (the renderer degrades to the culture 12-hour form). Still seeded / parity-checked / top-up-generated like any token.</summary>
+    public static IReadOnlySet<string> Soft => _soft;
+
+    private static readonly IReadOnlySet<string> _required =
+        _all.Where(t => !_soft.Contains(t)).ToHashSet(StringComparer.Ordinal);
+
+    /// <summary>The tokens whose absence SUPPRESSES a language's report (<see cref="All"/> minus <see cref="Soft"/>). The send/startup gates require these; soft tokens degrade gracefully instead of suppressing (WX-256).</summary>
+    public static IReadOnlySet<string> Required => _required;
 }
 
 /// <summary>

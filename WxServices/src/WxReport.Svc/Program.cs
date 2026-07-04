@@ -141,13 +141,14 @@ try
         Logger.Info($"Language templates loaded for: {string.Join(", ", loaded)}.");
 
         // Completeness self-check over ALL loaded languages, regardless of recipients (WX-171
-        // fail-closed posture, layer 2): any language missing a renderer-required token (Tok.All)
+        // fail-closed posture, layer 2): any language missing a HARD-required token (Tok.Required —
+        // a missing SOFT cosmetic token is expected while top-up fills it and does NOT alert, WX-256)
         // logs an ERROR so it is screamed about and fixed even when unused. This blocks NOTHING —
         // it is pure alerting; the send-time per-recipient gate is what actually withholds a report.
         var incomplete = 0;
         foreach (var iso in loaded)
         {
-            var missing = templates.MissingTokens(iso, Tok.All);
+            var missing = templates.MissingTokens(iso, Tok.Required);
             if (missing.Count == 0)
                 continue;
             incomplete++;
