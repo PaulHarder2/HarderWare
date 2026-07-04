@@ -353,32 +353,13 @@ All logs are in `{InstallRoot}\Logs\` with UTC timestamps.
 ## Jira labels
 
 Issues in the Jira `WX` project are tagged with labels across three orthogonal
-dimensions.  A typical issue carries one to three labels: usually one
-component + one work-character, occasionally a meta label.
+dimensions (component, work-character, source/meta). Standalone tickets must
+carry at least one component and one work-character label; cross-cutting work
+may add more.
 
-The authoritative label registry lives in Jira as **WX-37 "Label taxonomy
-reference"**.  That issue exists solely to keep every approved label in Jira's
-autocomplete pool (Jira Cloud has no admin page for labels — an unused label
-silently disappears from autocomplete).  Do not close WX-37 or strip its
-labels.
-
-### Component / area
-
-`wxparser`, `wxreport`, `wxmonitor`, `wxvis`, `wxmanager`, `wxviewer`,
-`database`, `claude-integration`, `config`, `infrastructure`
-
-### Work character
-
-`ui`, `reliability`, `observability`, `performance`, `security`, `refactor`,
-`tech-debt`, `docs`, `quick-win`
-
-### Source / meta
-
-`coderabbit`, `ai-collab`, `needs-design`, `incident`
-
-### Conventions
-
-- Lowercase, hyphen-separated (`wxmanager`, not `WxManager` or `wx_manager`).
-- Prefer reuse over invention.  Check the list above before adding a new one.
-- If a new label is genuinely needed, add it to WX-37 *and* to this section in
-  the same commit.
+The **single source of truth is [`LABELS.md`](LABELS.md)**: it lists every
+sanctioned label with its meaning, the epics-vs-labels rule, and the naming
+conventions. The Jira issue **WX-37** is only the mechanical autocomplete seed
+(Jira Cloud drops an unused label from autocomplete, so WX-37 keeps each one
+applied on ≥1 issue — do not close it or strip its labels). To sanction a new
+label, add it to `LABELS.md` first, then apply it once on WX-37.
