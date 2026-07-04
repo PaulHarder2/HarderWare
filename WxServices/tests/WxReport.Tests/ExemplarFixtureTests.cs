@@ -18,7 +18,9 @@ namespace WxReport.Tests;
 public class ExemplarFixtureTests
 {
     private static readonly LanguageTemplateStore Store = SeedTemplateStore.Build();
-    private static readonly string[] Languages = ["en", "es"];
+    // WX-251: en-only seed. Derive the languages from the store so this self-gates — it exercises
+    // whatever languages are actually loaded (en today; auto-covers a target language if ever seeded).
+    private static readonly string[] Languages = Store.LoadedLanguages.OrderBy(x => x, StringComparer.Ordinal).ToArray();
 
     private static Recipient Rec() => new()
     {

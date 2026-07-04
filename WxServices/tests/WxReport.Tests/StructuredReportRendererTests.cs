@@ -52,17 +52,6 @@ public class StructuredReportRendererTests
         PrecipUnit = "mm",
     };
 
-    private static Recipient Spanish() => new()
-    {
-        RecipientId = "t-es",
-        Name = "Prueba",
-        Email = "t@example.com",
-        TempUnit = "C",
-        PressureUnit = "kPa",
-        WindSpeedUnit = "kph",
-        PrecipUnit = "mm",
-    };
-
     private static WeatherSnapshot Observation() => new()
     {
         ObservationAvailable = true,
@@ -187,7 +176,6 @@ public class StructuredReportRendererTests
         Narrative = new Dictionary<string, NarrativeSections>
         {
             ["en"] = new() { ChangeSummary = changeSummary, Closing = ClosingTokens },
-            ["es"] = new() { ChangeSummary = changeSummary is null ? null : "{ch1}Tormentas en camino.", Closing = "Máximas cerca de {q:temp:33.5}, lluvia de {q:precip_mm:12}." },
         },
     };
 
@@ -254,16 +242,12 @@ public class StructuredReportRendererTests
             Narrative = new Dictionary<string, NarrativeSections>
             {
                 ["en"] = new() { ChangeSummary = null, Closing = "Quiet weather ahead." },
-                ["es"] = new() { ChangeSummary = null, Closing = "Tiempo tranquilo." },
             },
         };
 
         var en = StructuredReportRenderer.Render(report, Forecast(), Observation(), Imperial(), T("en"), C("en"), Utc, ReportKind.Unscheduled, RenderNow);
         Assert.Contains("Severe storms developing", en);  // Safety-tier convective → severe lead + appearing gerund
         Assert.Contains("Rain ending", en);               // clearing reads as ending, not a bare "Rain —"
-
-        var es = StructuredReportRenderer.Render(report, Forecast(), Observation(), Spanish(), T("es"), C("es"), Utc, ReportKind.Unscheduled, RenderNow);
-        Assert.Contains("terminando", es);                // es clearing gerund (invariant — no gender/number agreement)
     }
 
     [Fact]
@@ -470,17 +454,6 @@ public class StructuredReportRendererTests
     }
 
     [Fact]
-    public void Spanish_UsesEsNarrativeAndLabels()
-    {
-        var es = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Spanish(), T("es"), C("es"), Utc, ReportKind.Scheduled, RenderNow);
-        Assert.Contains("Condiciones reportadas", es);  // WX-184 relabel (was "Condiciones actuales")
-        Assert.Contains("En resumen:", es);
-        Assert.Contains("Pronóstico para Spring", es);
-        Assert.Contains("Máximas cerca de 34°C", es);  // es closing prose, metric temp
-        Assert.DoesNotContain("Reported Conditions", es);  // the es render never carries the English heading
-    }
-
-    [Fact]
     public void ChangeBand_RendersOnlyWhenNarrativeCarriesOne()
     {
         var scheduled = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), T("en"), C("en"), Utc, ReportKind.Scheduled, RenderNow);
@@ -523,15 +496,6 @@ public class StructuredReportRendererTests
         Assert.DoesNotContain("Reported Conditions", welcome);
         Assert.DoesNotContain("Forecast for", welcome);
         Assert.DoesNotContain("In summary:", welcome);
-    }
-
-    [Fact]
-    public void RenderWelcome_LocalizesToSpanish()
-    {
-        var welcome = StructuredReportRenderer.RenderWelcome(Spanish(), T("es"), C("es"), "Spring", Utc, new[] { 7 });
-        Assert.Contains("¡Bienvenido a WxReport!", welcome);
-        Assert.Contains("Spring", welcome);
-        Assert.DoesNotContain("Welcome to WxReport!", welcome);
     }
 
     [Fact]

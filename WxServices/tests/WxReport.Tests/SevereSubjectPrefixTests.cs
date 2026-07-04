@@ -8,17 +8,16 @@ namespace WxReport.Tests;
 
 // WX-156: the deterministic severe-weather subject prefix. These lock the
 // qualification rule (wind branch standalone; convective branch needs Likely+),
-// the 24-hour window, the earliest-qualifying-block noun choice, and localization.
+// the 24-hour window, and the earliest-qualifying-block noun choice.
 
 public class SevereSubjectPrefixTests
 {
     private static readonly DateTime Now = new(2026, 6, 10, 9, 0, 0, DateTimeKind.Utc);
 
     // WX-171: the severe noun now resolves from the DB-backed template store, not a hard-coded
-    // vocabulary. Build it once from the migration seed and resolve en/es TemplateSets.
+    // vocabulary. Build it once from the migration seed and resolve the en TemplateSet.
     private static readonly LanguageTemplateStore Store = SeedTemplateStore.Build();
     private static readonly TemplateSet En = Store.ForLanguage("en");
-    private static readonly TemplateSet Es = Store.ForLanguage("es");
 
     // A forecast block with the severe-relevant fields set; the rest are inert defaults.
     private static ForecastSnapshotBlock Block(
@@ -118,11 +117,4 @@ public class SevereSubjectPrefixTests
         => Assert.Null(SevereSubjectPrefix.Evaluate(
             Body(Block(Now.AddHours(-7), severe: true, maxWindKt: 55, PrecipExpectation.None)),
             Now, En));
-
-    [Fact]
-    public void Spanish_LocalizesTheNoun()
-    {
-        var body = Body(Block(Now.AddHours(4), severe: true, maxWindKt: 20, PrecipExpectation.Likely, PrecipPhenomenon.Thunderstorm));
-        Assert.Equal("Tormentas severas", SevereSubjectPrefix.Evaluate(body, Now, Es));
-    }
 }
