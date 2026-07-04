@@ -345,15 +345,18 @@ public static class StructuredReportRenderer
             // ambiguous 12-hour "6:00"; "t" honors each culture's clock convention.
             obsWhen = $"{obsLocal.ToString("ddd, MMM d", culture)}, {FormatEventClock(obsLocal, obsLocal.ToString("t", culture), t)}";
         }
-        var attribution = (station, obsWhen) switch
+        // WX-257: station on line one, observation date/time on line two. Each piece is HTML-escaped
+        // individually and the <br/> is raw markup — a <br/> inside an (escaped) vocab string would only
+        // render as visible text. The old middot join is dropped; the line break is the separator now.
+        string? attributionHtml = (station, obsWhen) switch
         {
-            (not null, not null) => $"{station} · {obsWhen}",
-            (not null, null) => station,
-            (null, not null) => obsWhen,
+            (not null, not null) => $"{HtmlText(station)}<br/>{HtmlText(obsWhen)}",
+            (not null, null) => HtmlText(station),
+            (null, not null) => HtmlText(obsWhen),
             _ => null,
         };
-        if (attribution is not null)
-            sb.Append($"<div style=\"font-size:13px;font-style:italic;color:#6b8fa8;font-weight:normal;margin-top:2px;\">{HtmlText(attribution)}</div>");
+        if (attributionHtml is not null)
+            sb.Append($"<div style=\"font-size:13px;font-style:italic;color:#6b8fa8;font-weight:normal;margin-top:2px;\">{attributionHtml}</div>");
 
         if (!snap.ObservationAvailable)
         {
@@ -440,7 +443,17 @@ public static class StructuredReportRenderer
         // and styled like the Current Conditions station line (13px italic #6b8fa8) — the
         // report's other sub-heading caption. (Supersedes WX-195's centered styling that
         // matched the meteogram caption; the two captions now live in different sections.)
-        sb.Append($"<div style=\"font-size:13px;color:#6b8fa8;font-style:italic;margin:2px 0 4px;\">{HtmlText(t.Get(Tok.GridTimeLegend))}</div>");
+        // WX-257: break after the legend's first colon — "…clock:" on line one, the "00 = … 24 = …" key
+        // on line two. Split before escaping (each half HTML-escaped, the <br/> raw); a phrasing with no
+        // colon degrades gracefully to a single line. NOTE: ASCII ':' is the colon-equivalent only for the
+        // Latin-script languages we support; a non-Latin culture (e.g. CJK full-width '：') would need its
+        // writing system's colon or a curated break — revisit under the per-culture locale work (WX-138).
+        var gridLegend = t.Get(Tok.GridTimeLegend);
+        var legendColon = gridLegend.IndexOf(':');
+        var gridLegendHtml = legendColon >= 0
+            ? $"{HtmlText(gridLegend[..(legendColon + 1)])}<br/>{HtmlText(gridLegend[(legendColon + 1)..].TrimStart())}"
+            : HtmlText(gridLegend);
+        sb.Append($"<div style=\"font-size:13px;color:#6b8fa8;font-style:italic;margin:2px 0 4px;\">{gridLegendHtml}</div>");
 
         sb.Append("<table style=\"width:100%;border-collapse:collapse;font-size:14px;margin-top:8px;\">");
         sb.Append("<tr style=\"background:#1a3a5c;color:#ffffff;\">");
