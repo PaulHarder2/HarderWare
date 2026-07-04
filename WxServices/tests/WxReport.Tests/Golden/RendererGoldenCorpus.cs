@@ -8,8 +8,9 @@ namespace WxReport.Tests.Golden;
 
 /// <summary>
 /// WX-171 no-regression corpus. A deterministic matrix of renderer inputs whose
-/// union exercises every renderer-reachable <c>LanguageTemplates</c> token, in
-/// both en and es. Each scenario renders a full report (or welcome / degraded);
+/// union exercises every renderer-reachable <c>LanguageTemplates</c> token, in en
+/// (WX-251: the seed is en-only; target languages are generated at runtime and are
+/// not part of this deterministic corpus). Each scenario renders a full report (or welcome / degraded);
 /// the golden harness (<see cref="RendererGoldenTests"/>) records the output of
 /// the CURRENT (pre-rewire) renderer, then — after the DB-template rewire —
 /// asserts the rewired renderer reproduces it byte-for-byte, bar documented
@@ -120,12 +121,6 @@ public static class RendererGoldenCorpus
     // Closing prose carrying one of every quantity-token kind + a time token.
     private const string ClosingEn =
         "Highs near {q:temp:33.5}, winds to {q:wind:22} gusting {q:gust:30}, pressure {q:pressure:1013.2}, rainfall {q:precip_mm:12}, clearing after {q:time:2026-06-08T21:00:00Z}.";
-    // The {q:time} token is placed mid-sentence, not sentence-final: es localized times end in a
-    // period ("9:00 p. m."), so ending the sentence right after one yields a double period
-    // ("p. m..") in the rendered prose (CodeRabbit). The real es-time-at-sentence-end punctuation
-    // is a separate localization concern; here the corpus just avoids baking the artifact in.
-    private const string ClosingEs =
-        "Máximas cerca de {q:temp:33.5}, despejando tras {q:time:2026-06-08T21:00:00Z}, con lluvia de {q:precip_mm:12}.";
 
     private static StructuredReportBody Body(bool withChange) => new()
     {
@@ -135,7 +130,6 @@ public static class RendererGoldenCorpus
         Narrative = new Dictionary<string, NarrativeSections>
         {
             ["en"] = new() { ChangeSummary = withChange ? "{ch1}A line of storms is moving in this evening." : null, Closing = ClosingEn },
-            ["es"] = new() { ChangeSummary = withChange ? "{ch1}Una línea de tormentas se acerca esta noche." : null, Closing = ClosingEs },
         },
     };
 
@@ -259,13 +253,12 @@ public static class RendererGoldenCorpus
         yield return new("welcome-plain", (r, l) => StructuredReportRenderer.WelcomePlainText(r, Templates(l), Culture(l), "Spring", ScheduleHours));
     }
 
-    /// <summary>The full corpus: every scenario in en (imperial) and es (metric), plus the rich scenario in en-metric for unit coverage.</summary>
+    /// <summary>The full corpus: every scenario in en (imperial), plus the rich scenario in en-metric for unit coverage.</summary>
     public static IReadOnlyList<GoldenCase> All()
     {
         var combos = new (string Suffix, Func<Recipient> R, string Lang)[]
         {
             ("en", Imperial, "en"),
-            ("es", Metric, "es"),
         };
 
         var list = new List<GoldenCase>();

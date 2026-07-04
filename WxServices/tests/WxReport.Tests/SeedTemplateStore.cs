@@ -8,11 +8,12 @@ using WxReport.Svc;
 namespace WxReport.Tests;
 
 /// <summary>
-/// Builds a <see cref="LanguageTemplateStore"/> from the migrations' en/es seed — the SAME rows
+/// Builds a <see cref="LanguageTemplateStore"/> from the migrations' en seed — the SAME rows
 /// production loads from the database — so tests render and gate against the real localized
 /// phrases without a database (WX-171). The phrases are parsed out of the migration source (as
 /// <c>TokSeedParityTests</c> relies on) rather than duplicated, so the test store and the shipped
-/// seed can never silently drift.
+/// seed can never silently drift. WX-251 made the seed en-only; target languages are generated
+/// at runtime (WX-250) and are not present here.
 ///
 /// <para>It scans EVERY migration, so the store mirrors the live DB state (seed + later inserts +
 /// relabels): any <c>InsertData</c> into <c>LanguageTemplates</c> (the WX-171 seed, the WX-223
@@ -25,18 +26,18 @@ namespace WxReport.Tests;
 /// </summary>
 public static class SeedTemplateStore
 {
-    // The WX-166 ISO-seed ids + cultures the migration sets for en/es (also fail-closed-guarded there).
+    // The WX-166 ISO-seed id + culture the migration sets for en (also fail-closed-guarded there).
+    // WX-251: en is the only seeded language; target languages are generated at runtime (WX-250).
     private static readonly Language En = new() { Id = 37, IsoCode = "en", DisplayName = "English", CultureName = "en-US" };
-    private static readonly Language Es = new() { Id = 39, IsoCode = "es", DisplayName = "Spanish", CultureName = "es-US" };
 
-    /// <summary>A store loaded with the migrations' en/es template rows (seed + later inserts + relabels).</summary>
+    /// <summary>A store loaded with the migrations' en template rows (seed + later inserts + relabels).</summary>
     public static LanguageTemplateStore Build()
     {
         var rows = SeedRows();
         return new LanguageTemplateStore(() => rows);
     }
 
-    /// <summary>The en + es <see cref="LanguageTemplate"/> rows: every migration's seed inserts with post-seed relabels applied.</summary>
+    /// <summary>The en <see cref="LanguageTemplate"/> rows: every migration's seed inserts with post-seed relabels applied.</summary>
     public static IReadOnlyList<LanguageTemplate> SeedRows()
     {
         var migrations = MigrationSources();
@@ -47,7 +48,6 @@ public static class SeedTemplateStore
             // Up() only — a Down() that reverts by re-inserting rows must not be read as live seed.
             var up = UpBody(src);
             rows.AddRange(RowsFor(En, up, relabels));
-            rows.AddRange(RowsFor(Es, up, relabels));
         }
         if (rows.Count == 0)
             throw new InvalidOperationException(

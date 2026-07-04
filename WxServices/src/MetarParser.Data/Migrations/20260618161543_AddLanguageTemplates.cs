@@ -65,17 +65,22 @@ namespace MetarParser.Data.Migrations
                 unique: true);
 
             // ── WX-171 dormant seed ──────────────────────────────────────────
-            // Seeds en (LanguageId 37) + es (39) from the WX-166 ISO registry.
-            // The renderer still reads the hard-coded ReportVocabulary at this
-            // point, so these rows are inert until WX-171's wire step. Ids are
-            // deterministic from WX-166's seed; guard fail-closed if that drifts.
+            // Seeds en (LanguageId 37) from the WX-166 ISO registry. The renderer
+            // still reads the hard-coded ReportVocabulary at this point, so these
+            // rows are inert until WX-171's wire step. Ids are deterministic from
+            // WX-166's seed; guard fail-closed if that drifts.
+            //
+            // WX-251 made the template seed en-only: the ~100 es (39) template rows were
+            // removed, and the es CultureName seed was dropped too — es is no longer special
+            // here in any way. es stays enabled (WX-166) and generates via top-up (WX-250),
+            // which sets its CultureName from the validated culture tag when it runs; the
+            // regional locale (es-US vs es-ES, etc.) becomes a per-recipient preference under
+            // WX-138. This migration now authors en (37) only and references no other id.
             migrationBuilder.Sql(
                 "IF NOT EXISTS (SELECT 1 FROM Languages WHERE Id = 37 AND IsoCode = 'en') " +
-                "OR NOT EXISTS (SELECT 1 FROM Languages WHERE Id = 39 AND IsoCode = 'es') " +
-                "THROW 50000, 'WX-171 seed: Languages Id 37/39 are not en/es as expected (WX-166 ISO-seed drift). Aborting before seeding templates.', 1;");
+                "THROW 50000, 'WX-171 seed: Languages Id 37 is not en as expected (WX-166 ISO-seed drift). Aborting before seeding templates.', 1;");
 
             migrationBuilder.UpdateData(table: "Languages", keyColumn: "Id", keyValue: 37L, column: "CultureName", value: "en-US");
-            migrationBuilder.UpdateData(table: "Languages", keyColumn: "Id", keyValue: 39L, column: "CultureName", value: "es-US");
 
             var cols = new[] { "LanguageId", "Token", "Phrase", "ContextInfo", "ContextKind", "Representable" };
 
@@ -183,109 +188,6 @@ namespace MetarParser.Data.Migrations
                 { 37L, "DirClearing", "ending", "Change-band direction gerund: a phenomenon ending/clearing.", "Hint", true },
                 { 37L, "WxThunderstorm", "Thunderstorm", "Observed present-weather thunderstorm; also the change-band noun for a non-severe thunderstorm.", "Hint", true },
                 { 37L, "ClosingFallback", "See the forecast above for the full outlook.", "Degrade closing line used when the model's own closing prose can't be made self-consistent.", "Hint", true },
-
-                // ── es (LanguageId 39) — hint contexts keep the English gloss; example contexts translated ──
-                { 39L, "CurrentConditionsHeading", "Condiciones actuales", "Section heading above the latest-observation block.", "Hint", true },
-                { 39L, "WhatsChangedLabel", "Qué ha cambiado:", "Inline label introducing the list of changes since last report.", "Hint", true },
-                { 39L, "InSummaryLabel", "En resumen:", "Inline label introducing the closing one-line summary.", "Hint", true },
-                { 39L, "NoObservationNote", "No hay una observación reciente de ninguna estación cercana, por lo que el informe a continuación se basa únicamente en datos del modelo de pronóstico.", "No hay una observación reciente de ninguna estación cercana, por lo que el informe a continuación se basa únicamente en datos del modelo de pronóstico.", "Example", true },
-                { 39L, "ScheduledReportLabel", "Reporte programado", "Header label for a routine scheduled report.", "Hint", true },
-                { 39L, "ScheduledReportSubject", "Reporte del tiempo", "Email-subject noun for a scheduled report.", "Hint", true },
-                { 39L, "UnscheduledUpdateLabel", "Actualización no programada", "Header label for an off-schedule update triggered by changing conditions.", "Hint", true },
-                { 39L, "UnscheduledUpdateSubject", "Actualización del tiempo", "Email-subject noun for an unscheduled update.", "Hint", true },
-                { 39L, "DiagnosticLabel", "Diagnóstico", "Header label for a post-deploy diagnostic/test report.", "Hint", true },
-                { 39L, "DiagnosticSubject", "Diagnóstico", "Email-subject noun for a diagnostic report.", "Hint", true },
-                { 39L, "SubjectForConnective", "para", "Preposition joining the report name to the recipient's name, as in 'Weather Report __ Maria'.", "Hint", true },
-                { 39L, "WelcomeSubject", "Bienvenido a WxReport", "Subject of the first-time welcome email ('WxReport' is a product name; keep as-is).", "Hint", true },
-                { 39L, "WelcomeGreeting", "¡Bienvenido a WxReport!", "¡Bienvenido a WxReport!", "Example", true },
-                { 39L, "AndConjunction", "y", "Conjunction joining the last two scheduled send times: '6 a.m. __ 6 p.m.'", "Hint", true },
-                { 39L, "RowSky", "Cielo", "Table row label for cloud cover.", "Hint", true },
-                { 39L, "RowVisibility", "Visibilidad", "Table row label for how far one can see.", "Hint", true },
-                { 39L, "RowWind", "Viento", "Table row label for wind direction and speed.", "Hint", true },
-                { 39L, "RowWeather", "Tiempo", "Table row label for present weather (rain/snow/fog).", "Hint", true },
-                { 39L, "RowTemperature", "Temperatura", "Table row label for the current temperature.", "Hint", true },
-                { 39L, "RowHumidity", "Humedad relativa", "Table row label for relative humidity (percent).", "Hint", true },
-                { 39L, "RowPressure", "Presión", "Table row label for barometric (atmospheric) pressure, not stress/force.", "Hint", true },
-                { 39L, "ColDate", "Fecha", "Column header for the date in the multi-day forecast.", "Hint", true },
-                { 39L, "ColTemperatures", "Temperaturas", "Column header for each day's high/low.", "Hint", true },
-                { 39L, "ColWind", "Viento", "Column header for each day's wind.", "Hint", true },
-                { 39L, "ColConditions", "Condiciones", "Column header for each day's summary.", "Hint", true },
-                { 39L, "HighLabel", "Máx", "Abbreviated label for the daily maximum temperature ('High: 34 deg').", "Hint", true },
-                { 39L, "LowLabel", "Mín", "Abbreviated label for the daily minimum temperature ('Low: 24 deg').", "Hint", true },
-                { 39L, "SkyClear", "Despejado", "Sky-cover term: a cloudless sky.", "Hint", true },
-                { 39L, "SkyPartlyCloudy", "Parcialmente nublado", "Sky-cover term: scattered clouds, more sky than cloud.", "Hint", true },
-                { 39L, "SkyMostlyCloudy", "Mayormente nublado", "Sky-cover term: more cloud than sky.", "Hint", true },
-                { 39L, "SkyOvercast", "Nublado", "Sky-cover term: a complete cloud deck.", "Hint", true },
-                { 39L, "SkyObscured", "Cielo cubierto", "Sky-cover term: sky hidden by fog/smoke.", "Hint", true },
-                { 39L, "VisGood", "Buena", "Visibility band: clear, six miles or more.", "Hint", true },
-                { 39L, "VisHazy", "Brumosa", "Visibility band: hazy, two to six miles.", "Hint", true },
-                { 39L, "VisReduced", "Reducida", "Visibility band: reduced, under two miles.", "Hint", true },
-                { 39L, "VisPoor", "Mala", "Visibility band: poor, under half a mile.", "Hint", true },
-                { 39L, "WindCalm", "Calma", "Wind term: essentially no wind.", "Hint", true },
-                { 39L, "WindVariable", "Variable", "Wind term: light wind, no steady direction.", "Hint", true },
-                { 39L, "WxFog", "Niebla", "Obscuration: fog (dense water droplets, visibility under ~1 km).", "Hint", true },
-                { 39L, "WxMist", "Neblina", "Obscuration: mist (thin humid haze; lighter than fog).", "Hint", true },
-                { 39L, "WxHaze", "Calima", "Obscuration: haze (humidity/particulate dimming, not dust-storm calima).", "Hint", true },
-                { 39L, "WxSmoke", "Humo", "Obscuration: smoke from fires.", "Hint", true },
-                { 39L, "PartMorning", "Mañana", "Day-part label: morning hours (sunrise to noon).", "Hint", true },
-                { 39L, "PartAfternoon", "Tarde", "Day-part label: afternoon (noon to ~5 pm).", "Hint", true },
-                { 39L, "PartEvening", "Noche", "Day-part label: evening (sunset to ~11 pm), not late-night noche/madrugada.", "Hint", true },
-                { 39L, "GridTimeLegend", "Las horas usan un reloj de 24 horas: 00 = medianoche, 12 = mediodía, 24 = medianoche.", "Legend beneath the forecast grid explaining its 24-hour clock columns (WX-190).", "Hint", true },
-                { 39L, "ForecastHeadingFormat", "Pronóstico para {0}", "Pronóstico para Spring, TX", "Example", true },
-                { 39L, "WelcomeFormat", "A partir de ahora recibirá un informe del tiempo diario para {0} a las {1} hora local, además de alertas adicionales cuando el tiempo cambie significativamente. Nos alegra tenerle con nosotros.", "A partir de ahora recibirá un informe diario para Spring, TX a las 6 a. m. hora local.", "Example", true },
-                { 39L, "HazardBannerFormat", "{0} en su pronóstico — {1}.", "Tormentas severas en su pronóstico — el sábado por la tarde.", "Example", true },
-                { 39L, "WindLine", "{0} a {1}", "Template for 'direction at speed' (e.g. NW at 15 mph); the 'at' marks a rate. Give the language's template; {0}=dir, {1}=speed.", "Hint", true },
-                { 39L, "WindGust", ", con ráfagas de {0}", "Appended gust clause (', gusting 30 mph'); keep {0}=gust speed.", "Hint", true },
-                { 39L, "StationSubtitle", "en {0}", "Subtitle 'at <station>'; the 'at' marks a location. Keep {0}=station.", "Hint", true },
-                { 39L, "rain", "lluvia", "Caía lluvia constante en el momento de la observación.", "Example", true },
-                { 39L, "rain_light", "lluvia ligera", "Caía lluvia ligera, a menos de 2,5 mm por hora.", "Example", true },
-                { 39L, "rain_heavy", "lluvia fuerte", "Caía lluvia fuerte a cántaros.", "Example", true },
-                { 39L, "rain_freezing", "lluvia helada", "Lluvia helada cubría las carreteras de hielo.", "Example", true },
-                { 39L, "rain_showers", "chubascos de lluvia", "Pasaban breves chubascos de lluvia.", "Example", true },
-                { 39L, "drizzle", "llovizna", "Una fina llovizna empañaba el parabrisas.", "Example", true },
-                { 39L, "drizzle_light", "llovizna ligera", "Llovizna ligera apenas humedecía el pavimento.", "Example", true },
-                { 39L, "drizzle_freezing", "llovizna helada", "Llovizna helada dejaba una fina capa de hielo en los autos.", "Example", true },
-                { 39L, "snow", "nieve", "Caía nieve y empezaba a cuajar.", "Example", true },
-                { 39L, "snow_light", "nieve ligera", "Nieve ligera espolvoreaba el césped.", "Example", true },
-                { 39L, "snow_heavy", "nieve fuerte", "Nieve fuerte se acumulaba rápidamente.", "Example", true },
-                { 39L, "snow_showers", "chubascos de nieve", "Chubascos de nieve pasajeros traían breves ventiscas.", "Example", true },
-                { 39L, "wintry_mix", "mezcla invernal", "Caía una mezcla invernal de aguanieve y gránulos de hielo.", "Example", true },
-                { 39L, "storms_possible", "tormentas posibles", "Tormentas dispersas son posibles por la tarde.", "Example", true },
-                { 39L, "storms_likely", "tormentas probables", "Tormentas son probables al final de la tarde.", "Example", true },
-                { 39L, "storms_expected", "tormentas previstas", "Tormentas están previstas para el sábado por la tarde.", "Example", true },
-                { 39L, "rain_possible", "lluvia posible", "Lluvia es posible por la mañana.", "Example", true },
-                { 39L, "rain_likely", "lluvia probable", "Lluvia es probable esta tarde.", "Example", true },
-                { 39L, "rain_expected", "lluvia prevista", "Lluvia está prevista para la madrugada.", "Example", true },
-                { 39L, "snow_possible", "nieve posible", "Nieve es posible en las colinas.", "Example", true },
-                { 39L, "snow_likely", "nieve probable", "Nieve es probable para la mañana.", "Example", true },
-                { 39L, "snow_expected", "nieve prevista", "Nieve está prevista para la madrugada.", "Example", true },
-                { 39L, "wmix_possible", "mezcla invernal posible", "Mezcla invernal es posible cerca del amanecer.", "Example", true },
-                { 39L, "wmix_likely", "mezcla invernal probable", "Mezcla invernal es probable durante la madrugada.", "Example", true },
-                { 39L, "wmix_expected", "mezcla invernal prevista", "Mezcla invernal está prevista antes del amanecer.", "Example", true },
-                { 39L, "fzra_possible", "lluvia helada posible", "Lluvia helada es posible al amanecer.", "Example", true },
-                { 39L, "fzra_likely", "lluvia helada probable", "Lluvia helada es probable durante la madrugada.", "Example", true },
-                { 39L, "fzra_expected", "lluvia helada prevista", "Lluvia helada está prevista antes del amanecer.", "Example", true },
-                { 39L, "sev_storms_possible", "Tormentas severas posibles", "Tormentas severas son posibles por la tarde.", "Example", true },
-                { 39L, "sev_storms_likely", "Tormentas severas probables", "Tormentas severas son probables al anochecer.", "Example", true },
-                { 39L, "sev_storms_expected", "Tormentas severas previstas", "Tormentas severas están previstas para el sábado.", "Example", true },
-                { 39L, "sev_wx_possible", "Tiempo severo posible", "Tiempo severo es posible, incluyendo vientos dañinos.", "Example", true },
-                { 39L, "sev_wx_likely", "Tiempo severo probable", "Tiempo severo es probable por la tarde.", "Example", true },
-                { 39L, "sev_wx_expected", "Tiempo severo previsto", "Tiempo severo está previsto más tarde hoy.", "Example", true },
-                { 39L, "sky_overcast_low", "nublado bajo", "Un nublado bajo cubría la bahía.", "Example", true },
-                { 39L, "sky_overcast_high", "nublado alto", "Un nublado alto atenuaba el sol.", "Example", true },
-                { 39L, "sky_mostlycloudy_low", "mayormente nublado bajo", "El cielo estaba mayormente nublado con una base baja.", "Example", true },
-                { 39L, "sky_mostlycloudy_high", "mayormente nublado alto", "El cielo estaba mayormente nublado con nubes altas y delgadas.", "Example", true },
-                { 39L, "clear_and_dry", "despejado y seco", "El día se mantiene despejado y seco.", "Example", true },
-                { 39L, "CondSevereStorms", "Tormentas severas", "Forecast lead noun for severe convective storms (hazard banner / change band).", "Hint", true },
-                { 39L, "CondSevereWeather", "Tiempo severo", "Forecast lead noun for severe non-convective weather, e.g. damaging wind with no precip.", "Hint", true },
-                { 39L, "ChangeTempNoun", "Cambio de temperatura", "Change-band noun for a temperature change.", "Hint", true },
-                { 39L, "ChangeWindNoun", "Cambio de viento", "Change-band noun for a wind change.", "Hint", true },
-                { 39L, "DirAppearing", "desarrollándose", "Change-band direction gerund: a phenomenon developing/appearing.", "Hint", true },
-                { 39L, "DirStrengthening", "intensificándose", "Change-band direction gerund: a phenomenon intensifying.", "Hint", true },
-                { 39L, "DirWeakening", "disminuyendo", "Change-band direction gerund: a phenomenon easing/weakening.", "Hint", true },
-                { 39L, "DirClearing", "terminando", "Change-band direction gerund: a phenomenon ending/clearing.", "Hint", true },
-                { 39L, "WxThunderstorm", "Tormenta", "Observed present-weather thunderstorm; also the change-band noun for a non-severe thunderstorm.", "Hint", true },
-                { 39L, "ClosingFallback", "Consulte el pronóstico anterior para ver el panorama completo.", "Degrade closing line used when the model's own closing prose can't be made self-consistent.", "Hint", true },
             });
         }
 
