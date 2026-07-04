@@ -42,6 +42,22 @@ public class ReconcilerSystemPromptTests
     }
 
     [Fact]
+    public void Guidance_LocksIdiomaticVocabularyLicense_AllowsRootTransformation()
+    {
+        // WX-258: the vocabulary-usage license was widened from "inflect for agreement + recase" to the
+        // full same-root idiomatic set (compounding / derivation) so the free narrative can write
+        // de "Freitagnachmittag" / eo "posttagmeze" from the approved daypart root — while still forbidding
+        // a synonym or the forced dictionary form. Lock the distinctive phrasing against a silent narrowing.
+        // Collapse the prompt's line-wrapping so a multi-word phrase matches wherever it wraps.
+        var guidance = System.Text.RegularExpressions.Regex.Replace(
+            ReconcilerPrompts.ReconciliationGuidanceText, @"\s+", " ");
+        Assert.Contains("compounded with an adjacent word", guidance);
+        Assert.Contains("derived into another part of speech", guidance);
+        Assert.Contains("do not force the dictionary/citation form", guidance);
+        Assert.Contains("synonym", guidance);   // synonym substitution stays forbidden
+    }
+
+    [Fact]
     public void SystemPrompt_LocksDaypartDayBoundaryRule_AgainstSilentDrop()
     {
         // WX-244: the free narrative used a night-word for the evening ("la noche del martes" =

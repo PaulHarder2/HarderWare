@@ -18,17 +18,46 @@
         </Border>
 
         <TextBlock DockPanel.Dock="Bottom" Foreground="#6b8fa8" FontSize="11" FontStyle="Italic" Margin="12,4"
-                   Text="Edit Phrase and Note. Token, English source, Context, and Representable are read-only (cross-language — change via migration). A Phrase that drops a {n} placeholder is blocked on save."/>
+                   Text="Edit English, Selected Language, and Note. Token, Context, and Representable are read-only (cross-language — change via migration). An edit that drops a {n} placeholder is blocked on save; an English edit writes the shared source, so it must keep its placeholders."/>
 
-        <!-- Editable: Phrase, Note. Read-only: everything else. -->
+        <!-- Editable: English, Selected Language (target phrase), Note. Read-only: Token, Context, Representable. -->
         <DataGrid x:Name="VocabGrid" AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False"
                   SelectionMode="Single" GridLinesVisibility="Horizontal" HeadersVisibility="Column"
                   RowHeaderWidth="0" BorderThickness="0" Margin="10,0,0,0"
                   BeginningEdit="VocabGrid_BeginningEdit">
+            <DataGrid.Resources>
+                <!-- WX-258: shared edit-mode tooltip style for the two validated columns (English +
+                     Selected Language) — surfaces the live validation error identically for both. -->
+                <Style x:Key="ValidatedCellEditStyle" TargetType="TextBox">
+                    <Setter Property="ToolTipService.InitialShowDelay" Value="200"/>
+                    <Setter Property="ToolTipService.ShowDuration" Value="20000"/>
+                    <Style.Triggers>
+                        <Trigger Property="Validation.HasError" Value="True">
+                            <Setter Property="ToolTip" Value="{Binding (Validation.Errors)[0].ErrorContent, RelativeSource={RelativeSource Self}}"/>
+                        </Trigger>
+                    </Style.Triggers>
+                </Style>
+            </DataGrid.Resources>
             <DataGrid.Columns>
                 <DataGridTextColumn Header="Token"           Binding="{Binding Token}"        IsReadOnly="True" Width="160"/>
-                <DataGridTextColumn Header="English (source)" Binding="{Binding English}"      IsReadOnly="True" Width="1.3*"/>
-                <DataGridTextColumn x:Name="PhraseColumn" Header="Phrase" Width="1.3*"
+                <DataGridTextColumn x:Name="EnglishColumn" Header="English" Width="1.3*"
+                                    EditingElementStyle="{StaticResource ValidatedCellEditStyle}"
+                                    Binding="{Binding English, UpdateSourceTrigger=PropertyChanged, ValidatesOnNotifyDataErrors=True}">
+                    <DataGridTextColumn.ElementStyle>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="ToolTipService.InitialShowDelay" Value="200"/>
+                            <Setter Property="ToolTipService.ShowDuration" Value="20000"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding HasEnglishError}" Value="True">
+                                    <Setter Property="Background" Value="#5a2020"/>
+                                    <Setter Property="ToolTip" Value="{Binding EnglishErrorText}"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
+                <DataGridTextColumn x:Name="PhraseColumn" Header="Selected Language" Width="1.3*"
+                                    EditingElementStyle="{StaticResource ValidatedCellEditStyle}"
                                     Binding="{Binding Phrase, UpdateSourceTrigger=PropertyChanged, ValidatesOnNotifyDataErrors=True}">
                     <DataGridTextColumn.ElementStyle>
                         <Style TargetType="TextBlock">
@@ -42,17 +71,6 @@
                             </Style.Triggers>
                         </Style>
                     </DataGridTextColumn.ElementStyle>
-                    <DataGridTextColumn.EditingElementStyle>
-                        <Style TargetType="TextBox">
-                            <Setter Property="ToolTipService.InitialShowDelay" Value="200"/>
-                            <Setter Property="ToolTipService.ShowDuration" Value="20000"/>
-                            <Style.Triggers>
-                                <Trigger Property="Validation.HasError" Value="True">
-                                    <Setter Property="ToolTip" Value="{Binding (Validation.Errors)[0].ErrorContent, RelativeSource={RelativeSource Self}}"/>
-                                </Trigger>
-                            </Style.Triggers>
-                        </Style>
-                    </DataGridTextColumn.EditingElementStyle>
                 </DataGridTextColumn>
                 <DataGridTextColumn Header="Note"            Binding="{Binding Note}"          Width="*"/>
                 <DataGridTextColumn Header="Context"         Binding="{Binding ContextInfo}"   IsReadOnly="True" Width="*"/>

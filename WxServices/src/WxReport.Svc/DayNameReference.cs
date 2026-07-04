@@ -15,9 +15,11 @@ namespace WxReport.Svc;
 /// Day names are <b>deterministic facts</b> sourced from <see cref="CultureInfo"/>, not curated/tone
 /// vocabulary that needs human review (unlike the weather terms in <see cref="NarrativeGlossary"/>).
 /// So they are computed here at reconcile time, never persisted as <c>LanguageTemplates</c> tokens.
-/// The value is the citation (lemma) form; the prompt instructs Claude to <b>inflect it for
-/// grammatical agreement</b> with its use in the sentence (WX-246 comment 12875), the same rule the
-/// deterministic renderer's day names already follow via <c>CultureInfo</c>. Because both the grid
+/// The value is the citation (lemma) form; the free-narrative prompt instructs Claude to <b>inflect it
+/// for grammatical agreement</b> with its use in the sentence — or compound it with an adjacent day-part
+/// where idiom requires (WX-258; e.g. German "Freitagnachmittag") — but never a different day (WX-246
+/// comment 12875). The deterministic renderer's day names follow the same inflection rule via
+/// <c>CultureInfo</c> (they do not compound — that is a free-prose idiom). Because both the grid
 /// (which renders <c>"ddd"/"dddd"</c> from <c>CultureInfo</c>) and this reference draw from the same
 /// source, grid and prose agree by construction.
 /// </para>
@@ -66,8 +68,10 @@ public static class DayNameReference
 
         var sb = new StringBuilder();
         sb.AppendLine("day_name_reference (the correct day name for each forecast date, per narrative "
-            + "language — use these EXACT day words in the narrative prose, inflected for grammatical "
-            + "agreement with their use in the sentence; never name a different day for a date):");
+            + "language — use these EXACT day words in the narrative prose, in whatever form idiom requires: "
+            + "inflected for grammatical agreement, or compounded with an adjacent day-part where the language "
+            + "does so (e.g. German \"Freitagnachmittag\" fuses Friday + afternoon); never name a DIFFERENT "
+            + "day for a date):");
         foreach (var iso in narrativeLanguages)
         {
             var culture = cultureFor(iso);

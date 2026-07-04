@@ -68,8 +68,10 @@ public static class NarrativeGlossary
 
         var sb = new StringBuilder();
         sb.Append("Approved vocabulary for this report — when the narrative describes one of these ");
-        sb.Append("meteorological or time-of-day concepts, use this approved wording for that language (inflected as the ");
-        sb.Append("grammar requires and capitalized for its position; do not substitute a synonym):\n");
+        sb.Append("meteorological or time-of-day concepts, use this approved wording's ROOT for that language, ");
+        sb.Append("rendered in whatever form idiom requires for its position and grammatical role — inflected for ");
+        sb.Append("agreement, compounded with an adjacent word, or derived into another part of speech (e.g. an ");
+        sb.Append("adverb), and capitalized to fit; do not substitute a synonym or force the dictionary form):\n");
         sb.Append(string.Join("\n", langLines));
         return sb.ToString();
     }
