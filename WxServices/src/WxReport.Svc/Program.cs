@@ -145,9 +145,28 @@ try
         // a missing SOFT cosmetic token is expected while top-up fills it and does NOT alert, WX-256)
         // logs an ERROR so it is screamed about and fixed even when unused. This blocks NOTHING —
         // it is pure alerting; the send-time per-recipient gate is what actually withholds a report.
+        // WX-249: scope the completeness check to ENABLED languages. Disabled languages now keep
+        // their curated templates (durable data — IsEnabled gates use, not existence) but are
+        // dormant, so a dormant-but-incomplete language must not raise a false INCOMPLETE alert; the
+        // per-recipient send gate already keys on IsEnabled. Key this set on the RAW IsoCode so it
+        // compares on the same basis as `loaded` (the store keys ByIso on the un-canonicalized
+        // IsoCode, and the whole system assumes IsoCode is already the canonical lower-case 2-letter
+        // code); canonicalizing only one side would silently drop a regional-coded enabled language
+        // out of this fail-closed check.
+        HashSet<string> enabledIsos;
+        using (var enabledCtx = new WeatherDataContext(dbOptions))
+            enabledIsos = enabledCtx.Languages.Where(l => l.IsEnabled)
+                .Select(l => l.IsoCode)
+                .AsEnumerable()
+                .ToHashSet(StringComparer.Ordinal);
+
+        var checkedCount = 0;
         var incomplete = 0;
         foreach (var iso in loaded)
         {
+            if (!enabledIsos.Contains(iso))
+                continue;   // WX-249: dormant disabled language — its rows are durable, not alerted.
+            checkedCount++;
             var missing = templates.MissingTokens(iso, Tok.Required);
             if (missing.Count == 0)
                 continue;
@@ -156,10 +175,10 @@ try
                 $"([{string.Join(", ", missing.Take(15))}{(missing.Count > 15 ? ", …" : "")}]). " +
                 "Recipients in this language will fail closed (no report) until repaired. (WX-171 startup completeness check.)");
         }
-        if (incomplete == 0 && loaded.Count > 0)
-            Logger.Info($"Language template completeness check passed for all {loaded.Count} loaded language(s).");
-        else if (loaded.Count == 0)
-            Logger.Error("No language templates loaded at startup — every recipient will fail closed. (WX-171; check the LanguageTemplates seed/migration.)");
+        if (incomplete == 0 && checkedCount > 0)
+            Logger.Info($"Language template completeness check passed for all {checkedCount} enabled language(s).");
+        else if (checkedCount == 0)
+            Logger.Error("No enabled language has templates loaded at startup — every recipient will fail closed. (WX-171; check that a language is enabled and its templates are seeded/generated.)");
     }
     catch (Exception ex)
     {

@@ -200,71 +200,37 @@ public partial class LanguagesTab : UserControl
         await SetEnabledAsync(lang, false);
     }
 
-    /// <summary>Persists the IsEnabled flip (re-fetched in a fresh context), requeueing a
-    /// not-ready language for generation on enable, and reloads both lists.</summary>
+    /// <summary>Persists the IsEnabled flip via the non-destructive <see cref="LanguageToggle"/>
+    /// seam (re-fetched in a fresh context), requeueing a not-ready language for generation on
+    /// enable and PRESERVING the curated templates on disable (WX-249), then reloads both lists.</summary>
     private async Task SetEnabledAsync(Language lang, bool enabled)
     {
-        bool willGenerate = false;
+        LanguageToggleResult result;
         try
         {
             await using var ctx = new WeatherDataContext(_dbOptions);
-            var row = await ctx.Languages.FindAsync(lang.Id);
-            if (row is null)
-            {
-                StatusText.Text = "That language no longer exists — reloading.";
-                await ReloadAsync();
-                return;
-            }
-            row.IsEnabled = enabled;
-            if (enabled)
-            {
-                // WX-172/WX-222: a re-enabled language is always needs-generation now — disable
-                // purges its templates and clears GeneratedAtUtc/GenerationError (and a never-
-                // generated one is already PENDING) — so it generates on the next cycle. The
-                // GenerationError reset is kept as defensive recovery for any hand-edited
-                // BLOCKED-while-disabled state.
-                if (row.GenerationError is not null)
-                {
-                    row.GeneratedAtUtc = null;
-                    row.GenerationError = null;
-                }
-                willGenerate = !row.IsReady;   // still not READY after the flip => generates next cycle
-            }
-            else
-            {
-                // WX-222: a language's templates exist iff it is enabled + generated. Purge on
-                // disable and revert to needs-generation, so a later re-enable regenerates a
-                // complete, CURRENT set (picking up any tokens or baseline changes added since)
-                // instead of silently reusing a now-incomplete one — and so a disabled language
-                // no longer loads and trips the startup completeness check (WX-171, Program.cs).
-                //
-                // Re-check the recipient guard inside THIS transaction: DisableBtn_Click checks it
-                // in a separate context, so a recipient assigned in the meantime (or a future
-                // caller that skips that guard) must not have its language purged out from under it.
-                var assigned = await ctx.Recipients.CountAsync(r => r.LanguageId == row.Id);
-                if (assigned > 0)
-                {
-                    StatusText.Text = $"Can't disable “{lang.DisplayName}”: {assigned} recipient(s) are still assigned it.";
-                    return;
-                }
-                var orphaned = await ctx.LanguageTemplates.Where(t => t.LanguageId == row.Id).ToListAsync();
-                if (orphaned.Count > 0)
-                    ctx.LanguageTemplates.RemoveRange(orphaned);
-                row.GeneratedAtUtc = null;
-                row.GenerationError = null;
-            }
-            await ctx.SaveChangesAsync();
+            result = await LanguageToggle.SetEnabledAsync(ctx, lang.Id, enabled);
         }
         catch (Exception ex)
         {
             StatusText.Text = $"Save failed: {ex.Message}";
             return;
         }
-        StatusText.Text = enabled
-            ? (willGenerate
-                ? $"Enabled “{lang.DisplayName}” — its report templates are queued for generation on an upcoming report cycle; it becomes assignable to recipients once ready."
-                : $"Enabled “{lang.DisplayName}” — ready; recipients can now be assigned it.")
-            : $"Disabled “{lang.DisplayName}” — its report templates were cleared; re-enabling will regenerate them.";
+
+        StatusText.Text = result.Outcome switch
+        {
+            LanguageToggleOutcome.NotFound =>
+                "That language no longer exists — reloading.",
+            LanguageToggleOutcome.BlockedByRecipients =>
+                $"Can't disable “{lang.DisplayName}”: {result.AssignedRecipients} recipient(s) are still assigned it.",
+            LanguageToggleOutcome.EnabledWillGenerate =>
+                $"Enabled “{lang.DisplayName}” — its report templates are queued for generation on an upcoming report cycle; it becomes assignable to recipients once ready.",
+            LanguageToggleOutcome.Enabled =>
+                $"Enabled “{lang.DisplayName}” — ready; recipients can now be assigned it.",
+            LanguageToggleOutcome.Disabled =>
+                $"Disabled “{lang.DisplayName}” — its curated report templates are preserved; re-enabling reuses them (only any newly-added terms are generated).",
+            _ => StatusText.Text,
+        };
         await ReloadAsync();
     }
 }
