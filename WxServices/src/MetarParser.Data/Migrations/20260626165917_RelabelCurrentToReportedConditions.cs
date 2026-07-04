@@ -15,32 +15,21 @@ namespace MetarParser.Data.Migrations
         // template, so no code moves with it.
         //
         // Keyed on IsoCode (the stable language identity) + Token, so it is robust to
-        // each row's surrogate id. Scope is the five ENABLED languages only; the `en`
-        // row doubles as the generation baseline (ReportWorker), so future-enabled
-        // languages translate "Reported Conditions" automatically. The disabled fr/pt
-        // orphans are intentionally left untouched — their lifecycle is WX-222.
-        //
-        // The de/da/eo phrasings are Claude-generated and flagged for a native /
-        // independent-model back-check (WX-214); en/es are high-confidence.
+        // each row's surrogate id. WX-251 made the seed en-only, so this relabels the
+        // `en` row only; the en row doubles as the generation baseline (ReportWorker),
+        // so every target language picks up "Reported Conditions" when top-up (WX-250)
+        // generates it. No-op on the already-migrated prod DB (en already relabeled).
 
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
             Relabel(migrationBuilder, "en", "Reported Conditions");
-            Relabel(migrationBuilder, "es", "Condiciones reportadas");
-            Relabel(migrationBuilder, "de", "Gemeldete Wetterlage");
-            Relabel(migrationBuilder, "da", "Rapporterede forhold");
-            Relabel(migrationBuilder, "eo", "Raportitaj Kondiĉoj");
         }
 
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
             Relabel(migrationBuilder, "en", "Current Conditions");
-            Relabel(migrationBuilder, "es", "Condiciones actuales");
-            Relabel(migrationBuilder, "de", "Aktuelle Wetterlage");
-            Relabel(migrationBuilder, "da", "Aktuelle forhold");
-            Relabel(migrationBuilder, "eo", "Aktualaj Kondiĉoj");
         }
 
         // One language's heading update, keyed on (IsoCode, Token). The phrase values

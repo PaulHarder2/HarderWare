@@ -12,15 +12,17 @@ namespace MetarParser.Data.Migrations
         {
             // WX-172: the generation-on-enable cycle treats an enabled language with
             // GeneratedAtUtc IS NULL as PENDING and (re)generates it. The WX-171 seed
-            // left en (the authored baseline) and es (Paul's reviewed seed) enabled and
-            // fully templated but UNstamped, so without this they would read PENDING and
-            // be needlessly re-translated. Stamp every enabled, not-yet-stamped language
-            // whose representable templates already cover the full baseline (en) token
-            // set — i.e. it is already complete — as READY. This is the SQL form of
-            // SupportedLanguages.HasCompleteTemplates, so it marks en/es today and any
-            // future already-complete seed, while leaving a genuinely incomplete language
-            // PENDING for the generator. A complete set is the readiness signal; the
-            // stamp is the apply time (a truthful "known-ready since").
+            // left en (the authored baseline) enabled and fully templated but UNstamped,
+            // so without this it would read PENDING and be needlessly re-translated.
+            // Stamp every enabled, not-yet-stamped language whose representable templates
+            // already cover the full baseline (en) token set — i.e. it is already complete
+            // — as READY. This is the SQL form of SupportedLanguages.HasCompleteTemplates.
+            //
+            // WX-251 note: the seed is now en-only, so on a fresh DB this set-based test
+            // stamps en only — es (still enabled, but no longer seeded) is incomplete here
+            // and correctly stays PENDING until top-up (WX-250) generates it. No literal
+            // es handling is needed; "stop stamping es" falls out of removing the es seed.
+            // A complete set is the readiness signal; the stamp is the apply time.
             migrationBuilder.Sql("""
                 UPDATE Languages
                 SET GeneratedAtUtc = SYSUTCDATETIME()
