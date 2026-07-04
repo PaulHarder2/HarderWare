@@ -709,18 +709,13 @@ public sealed class ReportWorker : BackgroundService
 
                 if (result is TranslateResult.Success s)
                 {
-                    // WX-222: the operator may have disabled (or deleted) this language during the
-                    // slow generation call. Persisting now would re-create templates on a disabled
-                    // language. Re-read the live flag (a scalar projection bypasses the identity
-                    // map) and discard the result if it's gone.
-                    var stillEnabled = await ctx.Languages.Where(l => l.Id == lang.Id)
-                        .Select(l => l.IsEnabled).FirstOrDefaultAsync(ct);
-                    if (!stillEnabled)
-                    {
-                        Logger.Info($"WX-172/WX-222: '{iso}' was disabled during generation — discarding the result, not persisting.");
-                        continue;
-                    }
-
+                    // WX-249: persist even if the operator disabled the language during the slow
+                    // Claude call (the WX-222 discard is retired). Curated templates are durable data
+                    // — IsEnabled gates use, not existence — so the freshly-generated rows are kept
+                    // for a later re-enable instead of throwing away billed work. The stamp below
+                    // never modifies IsEnabled, so EF's UPDATE omits it and the concurrent disable
+                    // (written in WxManager's own context) survives: the language ends up dormant AND
+                    // generated.
                     var inserted = await ApplyTopUpAsync(ctx, lang, s.Translations, s.CultureName, baselineByToken, DateTime.UtcNow, ct);
                     Logger.Info(lang.GenerationError == null
                         ? $"WX-250: '{iso}' topped up {inserted.Count} token(s) — READY."
