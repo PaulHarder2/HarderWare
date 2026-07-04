@@ -631,9 +631,13 @@ public sealed class ReportWorker : BackgroundService
                 var present = presentByLang.TryGetValue(l.Id, out var s) ? s : noTokens;
                 var missing = baselineByToken.Keys.Where(t => !present.Contains(t))
                     .OrderBy(t => t, StringComparer.Ordinal).ToList();
-                return (lang: l, iso, missing);
+                // WX-256: a formerly-READY language missing only SOFT tokens (noon/midnight) is still
+                // SENDING (the renderer degrades them) — only a HARD-token gap actively suppresses, so
+                // flag it to keep the top slot from being starved by cosmetic soft-token top-ups.
+                var missingHard = missing.Any(t => Tok.Required.Contains(t));
+                return (lang: l, iso, missing, missingHard);
             })
-            .OrderBy(w => GenerationSlotTier(w.lang, w.missing.Count))
+            .OrderBy(w => GenerationSlotTier(w.lang, w.missing.Count, w.missingHard))
             .ThenBy(w => w.iso, StringComparer.Ordinal)
             .ToList();
 
@@ -645,7 +649,7 @@ public sealed class ReportWorker : BackgroundService
         // count — they cost nothing — so a backlog of real generations drains one per cycle.
         bool spentGeneration = false;
 
-        foreach (var (lang, iso, missing) in work)
+        foreach (var (lang, iso, missing, _) in work)
         {
             try
             {
@@ -752,11 +756,14 @@ public sealed class ReportWorker : BackgroundService
     // formerly-READY language now missing a token is fail-closed SUPPRESSING live reports, so it
     // must out-prioritize a fresh PENDING enable (no recipients yet) and a prior FAILED attempt.
     // Nothing-missing languages need no Claude call and sort last.
-    private static int GenerationSlotTier(Language lang, int missingCount) => missingCount == 0
+    private static int GenerationSlotTier(Language lang, int missingCount, bool missingHard) => missingCount == 0
         ? 99                                      // no Claude call needed — free stamp / already stable
         : lang.GenerationState switch
         {
-            LanguageGenerationState.Ready => 0,   // was READY, now missing a token → suppressing live reports
+            // WX-256: a READY language now missing a HARD token is actively SUPPRESSING live reports (most
+            // urgent); missing ONLY soft tokens (noon/midnight) is still sending — the LEAST urgent work,
+            // below a fresh Pending enable and a prior Failed/Blocked retry.
+            LanguageGenerationState.Ready => missingHard ? 0 : 3,
             LanguageGenerationState.Pending => 1, // fresh enable, no recipients yet
             _ => 2,                               // Failed / Blocked — a prior partial or failed retry
         };
