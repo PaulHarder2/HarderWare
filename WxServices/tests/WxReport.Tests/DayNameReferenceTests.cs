@@ -56,6 +56,7 @@ public class DayNameReferenceTests
 
         Assert.Contains("day_name_reference", result);
         Assert.Contains("inflected for grammatical agreement", result);
+        Assert.Contains("compounded with an adjacent day-part", result);   // WX-258: idiomatic day+daypart fusion (de "Freitagnachmittag")
 
         // Invariant date anchors: three distinct local days, Mon/Tue/Wed.
         Assert.Contains("2026-07-06 (Mon)", result);

@@ -262,10 +262,15 @@ internal static class ReconcilerPrompts
             each language natively and idiomatically — never translate
             word-for-word — but keep the meteorological content identical across
             languages. When an "Approved vocabulary for this report" glossary is
-            provided below, use its approved wording for each listed concept — you
-            may inflect it for grammatical agreement (gender/number) and adjust its
-            capitalization to fit the word's position in the sentence, but do not
-            replace it with a synonym — and compose the sentence naturally around it.
+            provided below, use each listed concept's approved wording — specifically
+            its ROOT, rendered in whatever form the target language idiomatically
+            requires for its position and grammatical role: inflected for agreement
+            (gender/number), compounded with an adjacent word, or derived into another
+            part of speech (e.g. an adverb), and capitalized to fit. Do not substitute
+            a different word (a synonym), and do not force the dictionary/citation form
+            where idiom wants another (e.g. English "Friday afternoon" → German
+            "Freitagnachmittag" compounded, Esperanto "vendrede posttagmeze" with the
+            roots derived to adverbs) — then compose the sentence naturally around it.
             The probability words — possible, likely, and expected — name distinct
             forecast-confidence tiers and are NOT interchangeable: render the tier
             the source states with that tier's own approved word, never a higher- or
