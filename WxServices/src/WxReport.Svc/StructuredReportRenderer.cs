@@ -84,7 +84,7 @@ public static class StructuredReportRenderer
         string RenderProse(string prose) => HtmlText(ReportTokens.Substitute(
             prose,
             (kind, value) => RenderQuantity(kind, value, recipient),
-            instant => RenderInstant(instant, localityTz, culture),
+            instant => RenderInstant(instant, localityTz, culture, templates),
             (loC, hiC) => FormatTempRangeC(loC, hiC, recipient)));
 
         var sb = new StringBuilder();
@@ -270,11 +270,11 @@ public static class StructuredReportRenderer
             + string.Format(culture, templates.Get(Tok.WelcomeFormat), localityName, FormatScheduleTimes(scheduledHours, culture, templates));
     }
 
-    /// <summary>Localized "6 AM and 12 PM" list of the recipient's daily send hours, joined with the language's conjunction. Empty when no hours are configured.</summary>
+    /// <summary>Localized "6:00 AM and 12:00 noon" list of the recipient's daily send hours (WX-256 schedule form — precise HH:MM + AM/PM/noon/midnight), joined with the language's conjunction. Empty when no hours are configured.</summary>
     private static string FormatScheduleTimes(IReadOnlyList<int> hours, CultureInfo culture, TemplateSet t)
     {
         var times = hours
-            .Select(h => new DateTime(2000, 1, 1, h, 0, 0).ToString("h tt", culture))
+            .Select(h => FormatScheduleClock(new DateTime(2000, 1, 1, h, 0, 0), t, culture))
             .ToList();
         if (times.Count == 0)
             return "";
@@ -343,7 +343,7 @@ public static class StructuredReportRenderer
             // Culture-aware short time ("t"), not a hardcoded "h:mm tt": 24-hour locales
             // (de, da) define empty AM/PM designators, so "h:mm tt" would render an
             // ambiguous 12-hour "6:00"; "t" honors each culture's clock convention.
-            obsWhen = $"{obsLocal.ToString("ddd, MMM d", culture)}, {obsLocal.ToString("t", culture)}";
+            obsWhen = $"{obsLocal.ToString("ddd, MMM d", culture)}, {FormatEventClock(obsLocal, obsLocal.ToString("t", culture), t)}";
         }
         var attribution = (station, obsWhen) switch
         {
@@ -946,10 +946,42 @@ public static class StructuredReportRenderer
             ? $"{mm.ToString("0.#", Inv)} mm"
             : $"{(mm / 25.4).ToString("0.00", Inv)} in";
 
-    private static string RenderInstant(DateTime utc, TimeZoneInfo tz, CultureInfo culture)
+    private static string RenderInstant(DateTime utc, TimeZoneInfo tz, CultureInfo culture, TemplateSet t)
     {
         var local = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(utc, DateTimeKind.Utc), tz);
-        return local.ToString("h:mm tt", culture);
+        return FormatEventClock(local, local.ToString("t", culture), t);
+    }
+
+    // ── WX-256: noon/midnight soft-word clock formatting ───────────────────────────
+    // Two contexts. EVENT = an instant in the report body (obs line, {q:time} prose, subject):
+    // noon shows the bare noon word; everything else — including midnight — keeps the caller's
+    // culture rendering (a dated instant reads "12:00 AM" unambiguously, and a floating "midnight"
+    // word would drift across the day). All three event callers pass the culture short-time ("t"),
+    // so the fallback is uniformly culture-aware (a 24-hour locale gets "18:00", not an ambiguous
+    // "6:00"). SCHEDULE = a recurring generation time we state precisely (welcome): HH:MM +
+    // designator, where noon/midnight substitute the curated soft word.
+    // Detection is on the DateTime hour/minute — NEVER the formatted string: 24-hour locales (de,
+    // da) have empty AM/PM designators, so string-matching "PM" is unsafe. Soft-token fallback: if
+    // the language lacks the word, degrade to the culture form (the send gate keys on Tok.Required,
+    // so a missing soft word never suppresses the report).
+
+    private static bool IsNoon(DateTime local) => local.Hour == 12 && local.Minute == 0;
+    private static bool IsMidnight(DateTime local) => local.Hour == 0 && local.Minute == 0;
+
+    /// <summary>Event-context clock (WX-256): the bare noon word at local noon, else <paramref name="cultureRendering"/>.</summary>
+    internal static string FormatEventClock(DateTime local, string cultureRendering, TemplateSet t) =>
+        IsNoon(local) && t.Has(Tok.Noon) ? t.Get(Tok.Noon) : cultureRendering;
+
+    /// <summary>Schedule-context clock (WX-256): a precise "HH:MM designator", the designator being the noon/midnight soft word at those boundaries, else the culture's AM/PM (or bare 24-hour).</summary>
+    internal static string FormatScheduleClock(DateTime local, TemplateSet t, CultureInfo culture)
+    {
+        var ampm = local.ToString("tt", culture);   // "" for 24-hour cultures
+        var hhmm = string.IsNullOrEmpty(ampm) ? local.ToString("HH:mm", culture) : local.ToString("h:mm", culture);
+        if (IsNoon(local) && t.Has(Tok.Noon))
+            return $"{hhmm} {t.Get(Tok.Noon)}";
+        if (IsMidnight(local) && t.Has(Tok.Midnight))
+            return $"{hhmm} {t.Get(Tok.Midnight)}";
+        return string.IsNullOrEmpty(ampm) ? hhmm : $"{hhmm} {ampm}";
     }
 
     // ── small helpers ─────────────────────────────────────────────────────────
