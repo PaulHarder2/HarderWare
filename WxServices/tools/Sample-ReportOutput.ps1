@@ -78,7 +78,8 @@ $ErrorActionPreference = 'Stop'
 
 # Print UTF-8 so any excerpt renders. The UTF-8 file is authoritative regardless
 # of the console font.
-try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 }
+catch { Write-Verbose "Could not set console to UTF-8 ($($_.Exception.Message)); the UTF-8 output files are unaffected." }
 
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
@@ -100,6 +101,7 @@ if (-not (Test-Path $OutDir)) { New-Item -ItemType Directory -Path $OutDir | Out
 
 $cs = "Server=$Server;Database=$Database;Trusted_Connection=True;TrustServerCertificate=True;"
 $conn = New-Object System.Data.SqlClient.SqlConnection $cs
+$reader = $null
 $conn.Open()
 try {
   $cmd = $conn.CreateCommand()
@@ -176,8 +178,10 @@ ORDER BY lt.Token;
     Write-Host ("    file    : {0}" -f $file)
     Write-Host ""
   }
-  $reader.Close()
   if ($n -eq 0) { Write-Host "No matching records." }
   else { Write-Host ("Wrote {0} UTF-8 file(s). Open them in any UTF-8-aware editor to see the text as stored." -f $n) }
 }
-finally { $conn.Close() }
+finally {
+  if ($reader) { $reader.Dispose() }
+  $conn.Close()
+}
