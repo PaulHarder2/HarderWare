@@ -515,7 +515,25 @@ public static class StructuredReportRenderer
         int MaxWindKt,
         IReadOnlyList<(int Hour, ForecastSnapshotBlock Block)> Bands);
 
-    private enum DayPart { Overnight, Morning, Afternoon, Evening }
+    /// <summary>
+    /// The four civil dayparts as ordinal keys (WX-265). Boundaries are local clock hours; the
+    /// localized word for each lives in <c>LanguageTemplates</c>, keyed by the matching
+    /// <see cref="Tok"/> constant (<c>DayPart1..4</c>).
+    /// </summary>
+    private enum DayPart
+    {
+        /// <summary>00:00-06:00 — the pre-dawn block. Rendered clock-bound ("00-06"), never as a
+        /// word, in deterministic prose (WX-190: a US reader reads a pre-dawn word as the next
+        /// calendar day) until WX-264 wires <see cref="Tok.DayPart1"/> ("early hours") into the
+        /// narrative.</summary>
+        DayPart1,
+        /// <summary>06:00-12:00 — morning (<see cref="Tok.DayPart2"/>).</summary>
+        DayPart2,
+        /// <summary>12:00-18:00 — afternoon (<see cref="Tok.DayPart3"/>).</summary>
+        DayPart3,
+        /// <summary>18:00-24:00 — evening (<see cref="Tok.DayPart4"/>).</summary>
+        DayPart4,
+    }
 
     /// <summary>
     /// Buckets the snapshot's 6-hour blocks into per-local-calendar-day summaries:
@@ -802,10 +820,10 @@ public static class StructuredReportRenderer
 
     private static DayPart PartOf(int hour) => hour switch
     {
-        >= 6 and < 12 => DayPart.Morning,
-        >= 12 and < 18 => DayPart.Afternoon,
-        >= 18 => DayPart.Evening,
-        _ => DayPart.Overnight,
+        >= 6 and < 12 => DayPart.DayPart2,
+        >= 12 and < 18 => DayPart.DayPart3,
+        >= 18 => DayPart.DayPart4,
+        _ => DayPart.DayPart1,
     };
 
     /// <summary>
@@ -820,9 +838,12 @@ public static class StructuredReportRenderer
 
     private static string ProsePart(int localHour, TemplateSet t) => PartOf(localHour) switch
     {
-        DayPart.Morning => Lower(t.Get(Tok.PartMorning)),
-        DayPart.Afternoon => Lower(t.Get(Tok.PartAfternoon)),
-        DayPart.Evening => Lower(t.Get(Tok.PartEvening)),
+        DayPart.DayPart2 => Lower(t.Get(Tok.DayPart2)),
+        DayPart.DayPart3 => Lower(t.Get(Tok.DayPart3)),
+        DayPart.DayPart4 => Lower(t.Get(Tok.DayPart4)),
+        // DayPart1 (00-06) now has a token (Tok.DayPart1, "early hours") but stays clock-bound in
+        // deterministic prose (WX-190: a US reader reads a pre-dawn word as the next calendar day);
+        // WX-264 decides how the free-composed narrative consumes it.
         _ => ClockBand(localHour),
     };
 

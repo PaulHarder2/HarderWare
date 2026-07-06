@@ -61,10 +61,10 @@ public class NarrativeGlossaryTests
         // (es "Tarde-Noche") instead of drifting to "noche". Same concept→term mechanism as weather.
         var rows = new List<LanguageTemplate>
         {
-            Row(En, "PartEvening", "Evening"),
-            Row(Es, "PartEvening", "Tarde-Noche"),
+            Row(En, Tok.DayPart4, "Evening"),
+            Row(Es, Tok.DayPart4, "Tarde-Noche"),
         };
-        var g = NarrativeGlossary.Build(new LanguageTemplateStore(() => rows, () => ["PartEvening"]), ["en", "es"]);
+        var g = NarrativeGlossary.Build(new LanguageTemplateStore(() => rows, () => [Tok.DayPart4]), ["en", "es"]);
         Assert.Contains("es: Evening → «Tarde-Noche»", g);
     }
 

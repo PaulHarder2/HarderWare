@@ -41,4 +41,25 @@ public class TokSeedParityTests
             $"Tok<->seed drift. In Tok but not seeded: [{string.Join(", ", tok.Except(en).OrderBy(x => x))}]; " +
             $"seeded but not in Tok: [{string.Join(", ", en.Except(tok).OrderBy(x => x))}]");
     }
+
+    [Fact]
+    public void Daypart_tokens_renamed_to_ordinals_and_DayPart1_seeded()   // WX-265
+    {
+        // Exercises the rename migration's data effect as SeedTemplateStore models it: the three
+        // daypart words now carry the ordinal keys (phrases unchanged), the 00-06 token is seeded
+        // ("early hours"), and the old Part* keys are gone. If the RenameToken parser or the
+        // DayPart1 InsertData row regressed, this fails before the set-equality test does.
+        var en = SeedTemplateStore.SeedRows()
+            .Where(r => r.Language?.IsoCode == "en")
+            .ToDictionary(r => r.Token, r => r.Phrase, StringComparer.Ordinal);
+
+        Assert.Equal("Morning", en[Tok.DayPart2]);
+        Assert.Equal("Afternoon", en[Tok.DayPart3]);
+        Assert.Equal("Evening", en[Tok.DayPart4]);
+        Assert.Equal("early hours", en[Tok.DayPart1]);
+
+        Assert.DoesNotContain("PartMorning", en.Keys);
+        Assert.DoesNotContain("PartAfternoon", en.Keys);
+        Assert.DoesNotContain("PartEvening", en.Keys);
+    }
 }
