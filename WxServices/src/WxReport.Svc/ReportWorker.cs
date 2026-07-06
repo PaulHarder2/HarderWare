@@ -617,15 +617,31 @@ public sealed class ReportWorker : BackgroundService
             .GroupBy(t => t.LanguageId)
             .ToDictionary(g => g.Key, g => g.Select(x => x.Token).ToHashSet(StringComparer.Ordinal));
 
-        // Compute each language's missing (no-row) baseline tokens, then order so the ONE per-cycle
-        // generation slot goes to the most urgent: a formerly-READY language now missing a HARD token is
-        // actively SUPPRESSING live reports (fail-closed; a missing SOFT token only degrades, WX-256), so
-        // it outranks a fresh PENDING enable (no
-        // recipients yet), which outranks a prior FAILED attempt. Free READY-stamps (nothing missing)
-        // cost no Claude call and are handled regardless of the slot.
+        // WX-269: each enabled language's CURRENT-SUBSCRIBER count — one grouped query, keyed on
+        // explicit LanguageId. A null LanguageId means "use the service default language"; those
+        // recipients are NOT counted here. Under the shipped default (English = the baseline, always
+        // complete and never in this top-up work set) that is exactly correct — the uncounted fallback
+        // recipients belong to a language that is never ranked here. If the default were ever set to a
+        // NON-baseline language, that language would undercount its fallback recipients and could be
+        // de-prioritized; accepted for now (self-heals one-per-cycle) — a follow-up if a non-en default
+        // is adopted.
+        var subscribersByLang = (await ctx.Recipients
+                .Where(r => r.LanguageId != null && enabledIds.Contains(r.LanguageId.Value))
+                .GroupBy(r => r.LanguageId!.Value)
+                .Select(g => new { LangId = g.Key, Count = g.Count() })
+                .ToListAsync(ct))
+            .ToDictionary(x => x.LangId, x => x.Count);
+
+        // Compute each language's missing (no-row) baseline tokens, then order the ONE per-cycle
+        // generation slot. WX-269: languages with CURRENT SUBSCRIBERS come first (a 0-subscriber
+        // language suppresses nothing, so it is never urgent), most-subscribed first; WITHIN the
+        // subscribed group the existing urgency tier orders — a formerly-READY language now missing a
+        // HARD token is actively SUPPRESSING live reports (fail-closed; a missing SOFT token only
+        // degrades, WX-256) and outranks a fresh PENDING enable, which outranks a prior FAILED attempt.
+        // Free READY-stamps (nothing missing) cost no Claude call and are handled regardless of the slot.
         var noTokens = new HashSet<string>(StringComparer.Ordinal);
-        var work = enabled
-            .Select(l =>
+        var work = OrderGenerationCandidates(
+            enabled.Select(l =>
             {
                 var iso = LanguageTemplateStore.CanonicalIso(l.IsoCode);
                 var present = presentByLang.TryGetValue(l.Id, out var s) ? s : noTokens;
@@ -635,11 +651,10 @@ public sealed class ReportWorker : BackgroundService
                 // SENDING (the renderer degrades them) — only a HARD-token gap actively suppresses, so
                 // flag it to keep the top slot from being starved by cosmetic soft-token top-ups.
                 var missingHard = missing.Any(t => Tok.Required.Contains(t));
-                return (lang: l, iso, missing, missingHard);
-            })
-            .OrderBy(w => GenerationSlotTier(w.lang, w.missing.Count, w.missingHard))
-            .ThenBy(w => w.iso, StringComparer.Ordinal)
-            .ToList();
+                var subscribers = subscribersByLang.TryGetValue(l.Id, out var c) ? c : 0;
+                return (lang: l, iso, missing, missingHard, subscribers);
+            }),
+            w => w.lang.GenerationState, w => w.missing.Count, w => w.missingHard, w => w.subscribers, w => w.iso);
 
         var translator = new TemplateTranslator(
             new ClaudeClient(_claudeHttpClient, claudeCfg.ApiKey, claudeCfg.Model, _persona.Text));
@@ -649,7 +664,7 @@ public sealed class ReportWorker : BackgroundService
         // count — they cost nothing — so a backlog of real generations drains one per cycle.
         bool spentGeneration = false;
 
-        foreach (var (lang, iso, missing, _) in work)
+        foreach (var (lang, iso, missing, _, _) in work)
         {
             try
             {
@@ -747,19 +762,39 @@ public sealed class ReportWorker : BackgroundService
         }
     }
 
+    // WX-269: the per-cycle generation-slot ordering, extracted as a pure, testable seam. Ordered by:
+    // (1) subscribed languages before subscriber-less ones — a 0-subscriber language suppresses nothing,
+    // so it is never "urgent" and drops below ALL subscribed work; (2) the WX-250 urgency tier — so
+    // hard-suppression stays dominant AMONG subscribed languages; (3) most-subscribed first (replacing
+    // the old alphabetical tie-break); (4) iso for a stable final order. Generic over the caller's work
+    // item via accessors so the anonymous work tuple needs no named type.
+    internal static IReadOnlyList<T> OrderGenerationCandidates<T>(
+        IEnumerable<T> items,
+        Func<T, LanguageGenerationState> state,
+        Func<T, int> missingCount,
+        Func<T, bool> missingHard,
+        Func<T, int> subscribers,
+        Func<T, string> iso) =>
+        items
+            .OrderByDescending(w => subscribers(w) > 0)
+            .ThenBy(w => GenerationSlotTier(state(w), missingCount(w), missingHard(w)))
+            .ThenByDescending(w => subscribers(w))
+            .ThenBy(w => iso(w), StringComparer.Ordinal)
+            .ToList();
+
     // WX-250 slot priority (lower = more urgent for the single per-cycle generation call). A
-    // formerly-READY language now missing a token is fail-closed SUPPRESSING live reports, so it
-    // must out-prioritize a fresh PENDING enable (no recipients yet) and a prior FAILED attempt.
-    // Nothing-missing languages need no Claude call and sort last.
-    private static int GenerationSlotTier(Language lang, int missingCount, bool missingHard) => missingCount == 0
+    // formerly-READY language now missing a HARD token is fail-closed SUPPRESSING live reports, so it
+    // out-prioritizes a fresh PENDING enable and a prior FAILED attempt — WITHIN the subscribed group
+    // (WX-269 orders subscribed-before-unsubscribed above this). Nothing-missing languages sort last.
+    private static int GenerationSlotTier(LanguageGenerationState state, int missingCount, bool missingHard) => missingCount == 0
         ? 99                                      // no Claude call needed — free stamp / already stable
-        : lang.GenerationState switch
+        : state switch
         {
             // WX-256: a READY language now missing a HARD token is actively SUPPRESSING live reports (most
             // urgent); missing ONLY soft tokens (noon/midnight) is still sending — the LEAST urgent work,
             // below a fresh Pending enable and a prior Failed/Blocked retry.
             LanguageGenerationState.Ready => missingHard ? 0 : 3,
-            LanguageGenerationState.Pending => 1, // fresh enable, no recipients yet
+            LanguageGenerationState.Pending => 1, // fresh enable
             _ => 2,                               // Failed / Blocked — a prior partial or failed retry
         };
 
