@@ -53,10 +53,17 @@ gdrop=$(printf '%s\n' "$POST" | grep -E ' ERROR ' | grep -icE 'name unknown toke
 # (b) English baseline itself incomplete -> migration failed on the en rows.
 EN_INCOMPLETE="$(printf '%s\n' "$POST" | grep -E ' ERROR ' | grep -E "Language 'en' is INCOMPLETE" || true)"
 eninc=$(printf '%s\n' "$POST" | grep -E ' ERROR ' | grep -cE "Language 'en' is INCOMPLETE" || true)
-regression=$(( gdrop + eninc ))
 
-# Expected transient (informational): a TARGET missing DayPart1 until top-up fills it.
-TARGET_INCOMPLETE="$(printf '%s\n' "$POST" | grep -E ' ERROR ' | grep -E "Language '[a-z]+' is INCOMPLETE" | grep -vE "Language 'en' is INCOMPLETE" || true)"
+# Non-en INCOMPLETE lines, split by whether they name DayPart1 (the token THIS deploy adds; the
+# ERROR line lists the missing tokens). Naming DayPart1 -> the EXPECTED transient (top-up hasn't
+# filled that language yet). NOT naming DayPart1 -> a target missing some OTHER Required token
+# (e.g. a rename that failed to reach that language's DayPart2/3/4 rows) -> an UNEXPECTED
+# regression, folded into the FAIL count so it is never silently swallowed as "expected".
+TARGET_INCOMPLETE_ALL="$(printf '%s\n' "$POST" | grep -E ' ERROR ' | grep -E "Language '[a-z]+' is INCOMPLETE" | grep -vE "Language 'en' is INCOMPLETE" || true)"
+TARGET_INCOMPLETE="$(printf '%s\n' "$TARGET_INCOMPLETE_ALL" | grep -F 'DayPart1' || true)"
+UNEXPECTED_INCOMPLETE="$(printf '%s\n' "$TARGET_INCOMPLETE_ALL" | grep -vF 'DayPart1' | sed '/^[[:space:]]*$/d' || true)"
+unexpected=$(printf '%s\n' "$UNEXPECTED_INCOMPLETE" | grep -c . || true)
+regression=$(( gdrop + eninc + unexpected ))
 
 # The send/gate path ran this many times.
 exercised=$(printf '%s\n' "$POST" | grep -cF 'Report cycle complete.' || true)
@@ -69,14 +76,14 @@ precond=$(printf '%s\n' "$POST" | grep -cE "WX-250: '[a-z]+' topped up" || true)
 
 vl_header
 echo
-echo " RENAME BREAKAGE (must be none)"
+echo " RENAME BREAKAGE (must be none: glossary-drop, en INCOMPLETE, or a target missing a NON-DayPart1 token)"
 if [ "$regression" -gt 0 ]; then
-    printf '%s\n' "$GLOSSARY_DROP" "$EN_INCOMPLETE" | sed '/^[[:space:]]*$/d; s/^/   /'
+    printf '%s\n' "$GLOSSARY_DROP" "$EN_INCOMPLETE" "$UNEXPECTED_INCOMPLETE" | sed '/^[[:space:]]*$/d; s/^/   /'
 else
-    echo "   none -- no glossary-drop ERROR and en is complete (both tables renamed, en DayPart1 seeded)."
+    echo "   none -- no glossary-drop ERROR, en is complete, and no target is missing a non-DayPart1 token."
 fi
 echo
-echo " EXPECTED TRANSIENT (target missing DayPart1 until top-up fills it -- NOT a failure)"
+echo " EXPECTED TRANSIENT (target missing ONLY DayPart1 until top-up fills it -- NOT a failure)"
 if [ -n "$TARGET_INCOMPLETE" ]; then
     printf '%s\n' "$TARGET_INCOMPLETE" | sed 's/^/   /'
     echo "   ^ expected while DayPart1 is Required + unfilled; must cease once top-up completes (DB check in WX-265-267.md)."

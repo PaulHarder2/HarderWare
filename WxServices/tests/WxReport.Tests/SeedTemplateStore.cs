@@ -133,10 +133,10 @@ public static class SeedTemplateStore
     }
 
     // A relabel authored after a rename is keyed on the token's NEW name, but RowsFor matches the
-    // seeded (pre-rename) name — so for each rename, mirror any relabel keyed on the new name back
-    // onto the old name too. The seed row (old name) then picks up the relabeled phrase, and
-    // ApplyRenames carries it to the new key — faithful whether the relabel precedes or follows the
-    // rename. (Single-level renames; a rename chain would need a transitive walk of the old names.)
+    // seeded (pre-rename) name — so mirror each relabel back onto its seeded token name. The seed
+    // row (old name) then picks up the relabeled phrase, and ApplyRenames carries it to the new key
+    // — faithful whether the relabel precedes or follows the rename. Chain-transitive to match
+    // ApplyRenames: a relabel keyed on C where the chain is A→B→C is aliased onto the root A.
     private static IReadOnlyDictionary<(string Iso, string Token), string> AliasRelabelsThroughRenames(
         IReadOnlyDictionary<(string Iso, string Token), string> relabels,
         IReadOnlyList<(string Old, string New)> renames)
@@ -146,11 +146,34 @@ public static class SeedTemplateStore
         var map = new Dictionary<(string, string), string>();
         foreach (var kv in relabels)
             map[kv.Key] = kv.Value;
-        foreach (var (oldToken, newToken) in renames)
-            foreach (var kv in relabels)
-                if (string.Equals(kv.Key.Token, newToken, StringComparison.Ordinal))
-                    map.TryAdd((kv.Key.Iso, oldToken), kv.Value);
+        foreach (var kv in relabels)
+        {
+            var seeded = SeededToken(kv.Key.Token, renames);
+            if (!string.Equals(seeded, kv.Key.Token, StringComparison.Ordinal))
+                map.TryAdd((kv.Key.Iso, seeded), kv.Value);
+        }
         return map;
+    }
+
+    // Walk the rename chain backward (C←B←A) to the seeded (pre-rename) token name, so a relabel
+    // keyed on any post-rename name resolves to the name RowsFor matches. Transitive, matching
+    // ApplyRenames' in-order chain resolution; the counter bounds a pathological cycle.
+    private static string SeededToken(string token, IReadOnlyList<(string Old, string New)> renames)
+    {
+        var current = token;
+        for (int guard = renames.Count; guard >= 0; guard--)
+        {
+            var prior = current;
+            for (int i = renames.Count - 1; i >= 0; i--)
+                if (string.Equals(renames[i].New, current, StringComparison.Ordinal))
+                {
+                    current = renames[i].Old;
+                    break;
+                }
+            if (string.Equals(current, prior, StringComparison.Ordinal))
+                break;
+        }
+        return current;
     }
 
     // Apply the (old→new) token-key renames in migration order, mirroring what the rename migration
