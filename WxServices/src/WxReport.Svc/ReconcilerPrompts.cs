@@ -330,18 +330,28 @@ internal static class ReconcilerPrompts
             "morning", not "afternoon". When you write a day-part word
             ("morning", "afternoon", "evening") beside a {q:time} token, make the
             word agree with that token's local hour.
-          • The 00:00-06:00 pre-dawn block has NO safe day-part word: "overnight"
-            and "{weekday} night" both float to the WRONG calendar day for a US
-            reader, who hears "Saturday night" as the night that FOLLOWS Saturday,
-            not its first six hours. Never use them for this block. Bind it to its
-            day explicitly and without a night-word — e.g. "the early hours of
-            Saturday" or "Saturday, shortly after midnight" — beside the {q:time}
-            token, which renders the exact local time.
-          • Each block is exactly one local day-part (WX-155): its local start hour
-            names it — 06:00 morning, 12:00 afternoon, 18:00 evening, and 00:00 the
-            pre-dawn block (bound to its day per the rule above, never "overnight").
-            A change window covers whole blocks, so name its day-part from the
-            block(s) it spans; that name will agree with the {q:time} rule above.
+          • The 00:00-06:00 pre-dawn block now has an approved day-part word in the
+            glossary (English "early hours"; e.g. Spanish "madrugada", German "frühe
+            Morgenstunden") — use it in the form its position idiomatically requires.
+            NEVER label this block "overnight" or "{weekday} night": both float to
+            the WRONG calendar day for a US reader, who hears "Saturday night" as the
+            night that FOLLOWS Saturday, not its first six hours. Always bind this
+            block to its OWN day, beside the {q:time} token that renders the exact
+            local time.
+          • Each block is exactly one local day-part (WX-155): its local START hour
+            names it — 00:00 the pre-dawn "early hours", 06:00 morning, 12:00
+            afternoon, 18:00 evening. A time's day-part is fixed by its LOCAL hour
+            and its day by its LOCAL date (see day_name_reference); read BOTH off the
+            {q:time} token, never guess a day-part word independently of it.
+          • Label a time WINDOW by BOTH of its ends, each named by day AND day-part.
+            Within one day-part: "{day} {day-part}" (e.g. "Monday morning"). Within
+            one day but across day-parts: the day once, both day-parts (e.g. "Monday
+            morning through the afternoon"). CROSSING one or more local-day
+            boundaries: name the day AND day-part of BOTH ends (e.g. "Monday evening
+            into the early hours of Tuesday") — a window that crosses midnight
+            belongs to BOTH days. Never collapse such a window to its single tail day
+            ("the early hours of Tuesday" alone drops the Monday-evening start) nor
+            to bare days without day-parts ("Monday into Tuesday").
           • Hedged certainty: never state weather as flatly certain, in any
             language — no forecast is ever 100% sure. Render even a "certain"
             precip expectation or a set severeFlag as calibrated strong

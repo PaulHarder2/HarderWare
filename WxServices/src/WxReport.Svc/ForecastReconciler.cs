@@ -959,6 +959,54 @@ public sealed class ForecastReconciler
                     + $"token that renders to the {DayPartName(tokenPart)} (local hour {localHour}); "
                     + "the prose time-of-day word contradicts the token's local rendering.");
         }
+
+        // (3) WX-264: an English window that CROSSES a local-day boundary must name BOTH its
+        // bounding local days ("Monday evening into the early hours of Tuesday"), never the tail
+        // day alone (the paul_en repro "the early hours of Tuesday" dropped the Monday-evening
+        // start). Per sentence, the LOCAL dates its {q:time} tokens fall on; when they span two or
+        // more distinct dates, the earliest and latest are the window's termini and each must
+        // appear by its English day name. The day-part at a terminus is OPTIONAL (a whole-day
+        // terminus reads "…into Wednesday", "Tuesday through…"); only the DAY is required.
+        // English-only, like ValidateClosingClaims — other languages lean on the prompt rule (their
+        // day names are pushed via day_name_reference). Conservative: a relative-day word
+        // (today/tonight/tomorrow/yesterday) may name a terminus we cannot pin, so its presence
+        // skips the sentence rather than risk a false reject into suppression.
+        if (!string.Equals(lang, "en", StringComparison.Ordinal))
+            return;
+
+        var datesBySentence = new Dictionary<int, (int End, SortedSet<DateOnly> Dates)>();
+        foreach (Match m in QTimeToken.Matches(prose))
+        {
+            if (!DateTime.TryParse(m.Groups[1].Value, CultureInfo.InvariantCulture,
+                    DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var instantUtc))
+                continue;
+            var localDate = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(
+                DateTime.SpecifyKind(instantUtc, DateTimeKind.Utc), tz));
+            int ss = SentenceStart(masked, m.Index);
+            if (!datesBySentence.TryGetValue(ss, out var entry))
+                entry = (SentenceEnd(masked, m.Index + m.Length), new SortedSet<DateOnly>());
+            entry.Dates.Add(localDate);
+            datesBySentence[ss] = entry;
+        }
+
+        foreach (var (ss, (se, dates)) in datesBySentence)
+        {
+            if (dates.Count < 2)
+                continue;   // the sentence's instants share one local day — no boundary crossed
+            var sentence = masked.Substring(ss, se - ss);
+            if (HasRelativeDayWord(sentence))
+                continue;   // conservative — a relative-day word may name a terminus we can't verify
+            foreach (var date in new[] { dates.Min, dates.Max })
+            {
+                var dayName = EnCulture.DateTimeFormat.GetDayName(date.DayOfWeek);
+                if (!ContainsWholeWord(sentence, dayName))
+                    throw new NarrativeProseException(section,
+                        $"structured_report narrative 'en' {section} describes a window spanning "
+                        + $"{dates.Min:yyyy-MM-dd} to {dates.Max:yyyy-MM-dd} but never names {dayName}; "
+                        + "a window that crosses a local-day boundary must name BOTH bounding days "
+                        + "(e.g. \"Monday evening into the early hours of Tuesday\"), never the tail day alone.");
+            }
+        }
     }
 
     // Day-part buckets, mirroring StructuredReportRenderer.PartOf so the validator
@@ -990,6 +1038,7 @@ public sealed class ForecastReconciler
     private static readonly (string Word, int Part)[] DayPartWords =
     {
         ("overnight", 0),
+        ("early hours", 0),   // WX-264: DayPart1's approved English word for the 00-06 block
         ("morning", 1),
         ("afternoon", 2),
         ("evening", 3),
@@ -1033,7 +1082,7 @@ public sealed class ForecastReconciler
                         ? (after, tokenStart)
                         : (tokenEnd, idx);
                     int dist = gapEnd - gapStart;
-                    if (dist < bestDist && !HasLetter(prose, gapStart, gapEnd))
+                    if (dist < bestDist && GapBindsWord(prose, gapStart, gapEnd))
                     {
                         bestDist = dist;
                         best = (prose.Substring(idx, word.Length), part);
@@ -1050,6 +1099,71 @@ public sealed class ForecastReconciler
         for (int i = start; i < end; i++)
             if (char.IsLetter(s[i]))
                 return true;
+        return false;
+    }
+
+    // A day-part word governs the {q:time} token when the gap between them holds no other WORD —
+    // either nothing but whitespace/punctuation, OR a single POINT connective ("afternoon AROUND
+    // {q:time}") where the day-part word and the token name the SAME instant, so a day-part mismatch
+    // is a real contradiction. This is the WX-264 relaxation of the original no-letters-at-all rule,
+    // which let "afternoon around {q:time}" slip because "around" sat in the gap. Deliberately NOT
+    // range/span connectives ("into", "through", "until", "to", "from", …): those tie a NEAR-terminus
+    // day-part word to a FAR-terminus token of a DIFFERENT part ("Monday evening into {q:time:early
+    // Tuesday}" — the compressed both-ends phrasing the prompt encourages), which is correct — binding
+    // across them would FALSE-REJECT a valid span (WX-264 review). A gap of two or more words is a
+    // clause, not a connective, and never binds either (conservative).
+    private static readonly string[] SpanConnectors =
+    {
+        "around", "near", "at", "about",
+    };
+
+    private static bool GapBindsWord(string prose, int start, int end)
+    {
+        if (!HasLetter(prose, start, end))
+            return true;
+        string? only = null;
+        int i = start;
+        while (i < end)
+        {
+            if (!char.IsLetter(prose[i])) { i++; continue; }
+            int s = i;
+            while (i < end && char.IsLetter(prose[i]))
+                i++;
+            if (only is not null)
+                return false;   // a second word — a clause, not a lone connective
+            only = prose.Substring(s, i - s);
+        }
+        return only is not null && SpanConnectors.Contains(only, StringComparer.OrdinalIgnoreCase);
+    }
+
+    // WX-264: the English day names for the cross-boundary both-days check (4b). en-US and the
+    // invariant culture agree here; a fixed culture keeps the check independent of the host locale.
+    private static readonly CultureInfo EnCulture = CultureInfo.GetCultureInfo("en-US");
+
+    // Relative-day cues that may stand in for a specific calendar day the validator cannot pin (an
+    // explicit day name is absent) — their presence makes the cross-boundary both-days check skip the
+    // sentence (conservative). WX-264 review added next/following/later so a relatively-named tail
+    // terminus ("into the following morning", "the next evening") is not false-rejected.
+    private static readonly string[] RelativeDayWords =
+    { "today", "tonight", "tomorrow", "yesterday", "next", "following", "later" };
+
+    private static bool HasRelativeDayWord(string text) =>
+        RelativeDayWords.Any(w => ContainsWholeWord(text, w));
+
+    // Whole-word, case-insensitive containment — a day name inside a longer word must not match.
+    private static bool ContainsWholeWord(string text, string word)
+    {
+        int from = 0;
+        while (from <= text.Length - word.Length)
+        {
+            int idx = text.IndexOf(word, from, StringComparison.OrdinalIgnoreCase);
+            if (idx < 0)
+                return false;
+            int after = idx + word.Length;
+            if ((idx == 0 || !char.IsLetter(text[idx - 1])) && (after >= text.Length || !char.IsLetter(text[after])))
+                return true;
+            from = idx + 1;
+        }
         return false;
     }
 

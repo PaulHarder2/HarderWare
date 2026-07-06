@@ -758,6 +758,125 @@ public class ForecastReconcilerTests
         Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
     }
 
+    // ── WX-264: day-part connective + cross-boundary day labels ───────────────
+
+    // 4a: the day-part word binds to the {q:time} token across a single connective
+    // ("afternoon AROUND {q:time}") — the hole that shipped the paul_en bug. 11:00Z = 6:00 AM
+    // CDT (morning), so "afternoon" contradicts it.
+    private const string ProseTimeConnectiveMismatchReportJson = """
+        {
+          "schemaVersion": 5,
+          "narrative": {
+            "en": { "changeSummary": "Rain is now expected to develop Saturday afternoon around {q:time:2026-06-13T11:00:00Z}.", "closing": "A wet start to the weekend." }
+          }
+        }
+        """;
+
+    // 4b: a window crossing local midnight named with the TAIL day only — a Mon-evening token
+    // (2026-07-06T23:00Z) reaches into a Tue-morning token, but the prose never names Monday.
+    private const string ProseCrossMidnightDropsStartDayReportJson = """
+        {
+          "schemaVersion": 5,
+          "narrative": {
+            "en": { "changeSummary": "Storms are likely Tuesday morning, {q:time:2026-07-07T11:00:00Z}, after developing from {q:time:2026-07-06T23:00:00Z}.", "closing": "Stay weather-aware." }
+          }
+        }
+        """;
+
+    // 4b acceptance: a cross-boundary window naming BOTH days is fine even with a day-only
+    // terminus (the day-part is optional) — "Tuesday evening into the early hours of Wednesday".
+    private const string ProseCrossMidnightNamesBothDaysReportJson = """
+        {
+          "schemaVersion": 5,
+          "narrative": {
+            "en": { "changeSummary": "Storms are likely Tuesday evening, {q:time:2026-07-07T23:00:00Z}, into the early hours of Wednesday, {q:time:2026-07-08T05:00:00Z}.", "closing": "Stay weather-aware." }
+          }
+        }
+        """;
+
+    // A Mon-evening → Wed-early storm span backing the cross-boundary prose above.
+    private const string StormTueWedSnapshotJson = """
+        {"schemaVersion":5,"blocks":[
+          {"startUtc":"2026-07-06T23:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":22,"max":28},"windKt":{"min":6,"max":14},"precipExpectation":"likely","precipPhenomenon":"thunderstorm","severeFlag":false},
+          {"startUtc":"2026-07-07T11:00:00Z","skyState":"partly_cloudy","obscuration":"none","temperatureCelsius":{"min":23,"max":31},"windKt":{"min":5,"max":12},"precipExpectation":"likely","precipPhenomenon":"thunderstorm","severeFlag":false},
+          {"startUtc":"2026-07-07T23:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":22,"max":28},"windKt":{"min":6,"max":14},"precipExpectation":"likely","precipPhenomenon":"thunderstorm","severeFlag":false},
+          {"startUtc":"2026-07-08T05:00:00Z","skyState":"partly_cloudy","obscuration":"none","temperatureCelsius":{"min":20,"max":24},"windKt":{"min":4,"max":9},"precipExpectation":"likely","precipPhenomenon":"thunderstorm","severeFlag":false}]}
+        """;
+
+    [Fact]
+    public async Task ProseDaypartWord_BoundAcrossConnective_ContradictsToken_DropsChangeSummary()
+    {
+        // WX-264 4a: "afternoon around {q:time:11:00Z}" — 6:00 AM CDT is morning; the connective
+        // "around" must not let the contradiction slip (the pre-WX-264 no-letters rule did).
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: RainBlock613SnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: ProseTimeConnectiveMismatchReportJson);
+
+        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
+        Assert.Null(success.StructuredReport.Narrative["en"].ChangeSummary);
+    }
+
+    [Fact]
+    public async Task ProseCrossMidnight_NamesTailDayOnly_DropsChangeSummary()
+    {
+        // WX-264 4b: the span reaches from a Mon-evening token to a Tue-morning token, but the prose
+        // names only Tuesday — Monday is dropped, the original paul_en cross-midnight defect.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: StormTueWedSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: ProseCrossMidnightDropsStartDayReportJson);
+
+        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
+        Assert.Null(success.StructuredReport.Narrative["en"].ChangeSummary);
+    }
+
+    [Fact]
+    public async Task ProseCrossMidnight_NamesBothDays_DayOnlyTerminus_Succeeds()
+    {
+        // WX-264 4b acceptance: "Tuesday evening into the early hours of Wednesday" names both
+        // bounding days; the day-part is optional per terminus, so this must NOT be rejected.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: StormTueWedSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: ProseCrossMidnightNamesBothDaysReportJson);
+
+        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
+        Assert.NotNull(success.StructuredReport.Narrative["en"].ChangeSummary);
+    }
+
+    // 4a must NOT bind a day-part word across a RANGE connective to a far token of a different
+    // part — "evening into {q:time:00:00 Tue}" is a valid compressed span (the prompt's own
+    // both-ends phrasing), not a contradiction. (WX-264 review: range connectives were wrongly
+    // in SpanConnectors and would have false-rejected this.)
+    private const string ProseRangeConnectiveNotRejectedReportJson = """
+        {
+          "schemaVersion": 5,
+          "narrative": {
+            "en": { "changeSummary": "Storms are likely Monday evening into {q:time:2026-07-07T05:00:00Z}, easing thereafter.", "closing": "Stay weather-aware." }
+          }
+        }
+        """;
+
+    [Fact]
+    public async Task ProseDaypartWord_RangeConnective_NotBoundToFarToken_Succeeds()
+    {
+        // "evening into {q:time}" where the token is 00:00 Tue (part 0) — "into" is a range
+        // connective, so "evening" (the near terminus) must NOT bind to the far token's part; no
+        // contradiction, must send clean. A single token → the 4b both-days check does not fire.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: StormTueWedSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: ProseRangeConnectiveNotRejectedReportJson);
+
+        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
+        Assert.NotNull(success.StructuredReport.Narrative["en"].ChangeSummary);
+    }
+
     // ── WX-152 closing-claim validation ──────────────────────────────────────
     // Snapshots: first block is 2026-06-09T17:00:00Z = Tue 12:00 CDT (afternoon), so
     // refDate = Tue 6/9; "tonight" = Tue 18:00 → Wed 06:00 local (the 23Z + 05Z blocks).
