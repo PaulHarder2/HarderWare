@@ -795,7 +795,7 @@ public class ForecastReconcilerTests
         """;
 
     // A Mon-evening → Wed-early storm span backing the cross-boundary prose above.
-    private const string StormTueWedSnapshotJson = """
+    private const string StormMonWedSnapshotJson = """
         {"schemaVersion":5,"blocks":[
           {"startUtc":"2026-07-06T23:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":22,"max":28},"windKt":{"min":6,"max":14},"precipExpectation":"likely","precipPhenomenon":"thunderstorm","severeFlag":false},
           {"startUtc":"2026-07-07T11:00:00Z","skyState":"partly_cloudy","obscuration":"none","temperatureCelsius":{"min":23,"max":31},"windKt":{"min":5,"max":12},"precipExpectation":"likely","precipPhenomenon":"thunderstorm","severeFlag":false},
@@ -824,7 +824,7 @@ public class ForecastReconcilerTests
         // WX-264 4b: the span reaches from a Mon-evening token to a Tue-morning token, but the prose
         // names only Tuesday — Monday is dropped, the original paul_en cross-midnight defect.
         var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: StormTueWedSnapshotJson,
+            finalSnapshotJson: StormMonWedSnapshotJson,
             reasoningTrace: "trace",
             inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
             structuredReportJson: ProseCrossMidnightDropsStartDayReportJson);
@@ -839,7 +839,7 @@ public class ForecastReconcilerTests
         // WX-264 4b acceptance: "Tuesday evening into the early hours of Wednesday" names both
         // bounding days; the day-part is optional per terminus, so this must NOT be rejected.
         var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: StormTueWedSnapshotJson,
+            finalSnapshotJson: StormMonWedSnapshotJson,
             reasoningTrace: "trace",
             inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
             structuredReportJson: ProseCrossMidnightNamesBothDaysReportJson);
@@ -868,10 +868,37 @@ public class ForecastReconcilerTests
         // connective, so "evening" (the near terminus) must NOT bind to the far token's part; no
         // contradiction, must send clean. A single token → the 4b both-days check does not fire.
         var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: StormTueWedSnapshotJson,
+            finalSnapshotJson: StormMonWedSnapshotJson,
             reasoningTrace: "trace",
             inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
             structuredReportJson: ProseRangeConnectiveNotRejectedReportJson);
+
+        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
+        Assert.NotNull(success.StructuredReport.Narrative["en"].ChangeSummary);
+    }
+
+    // 4b conservative skip: a cross-midnight window named only by relative-day cues (tonight /
+    // tomorrow) with no explicit day name is NOT rejected — the validator can't pin the days, so it
+    // leans on the prompt rather than risk a false reject into suppression.
+    private const string ProseCrossMidnightRelativeDaysReportJson = """
+        {
+          "schemaVersion": 5,
+          "narrative": {
+            "en": { "changeSummary": "Storms are likely tonight, {q:time:2026-07-06T23:00:00Z}, into tomorrow morning, {q:time:2026-07-07T11:00:00Z}.", "closing": "Stay weather-aware." }
+          }
+        }
+        """;
+
+    [Fact]
+    public async Task ProseCrossMidnight_RelativeDayWordsOnly_Skipped_Succeeds()
+    {
+        // Two local dates but named only by "tonight"/"tomorrow" — the relative-day escape skips the
+        // both-days check (conservative), so the section sends clean rather than degrading.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: StormMonWedSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: ProseCrossMidnightRelativeDaysReportJson);
 
         var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
         Assert.NotNull(success.StructuredReport.Narrative["en"].ChangeSummary);

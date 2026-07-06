@@ -1112,7 +1112,7 @@ public sealed class ForecastReconciler
     // Tuesday}" — the compressed both-ends phrasing the prompt encourages), which is correct — binding
     // across them would FALSE-REJECT a valid span (WX-264 review). A gap of two or more words is a
     // clause, not a connective, and never binds either (conservative).
-    private static readonly string[] SpanConnectors =
+    private static readonly string[] PointConnectors =
     {
         "around", "near", "at", "about",
     };
@@ -1133,7 +1133,7 @@ public sealed class ForecastReconciler
                 return false;   // a second word — a clause, not a lone connective
             only = prose.Substring(s, i - s);
         }
-        return only is not null && SpanConnectors.Contains(only, StringComparer.OrdinalIgnoreCase);
+        return only is not null && PointConnectors.Contains(only, StringComparer.OrdinalIgnoreCase);
     }
 
     // WX-264: the English day names for the cross-boundary both-days check (4b). en-US and the
