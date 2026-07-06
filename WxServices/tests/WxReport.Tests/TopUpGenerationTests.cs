@@ -248,4 +248,64 @@ public sealed class TopUpGenerationTests : IDisposable
             Assert.Equal("de-phrase", h.Phrase);
         }
     }
+
+    // ── WX-269: subscriber-aware generation-slot ordering (pure, no DB) ────────
+
+    [Fact]
+    public void OrderGenerationCandidates_SubscribedFirst_ThenTier_ThenMostSubscribed()
+    {
+        var items = new[]
+        {
+            (iso: "da", state: LanguageGenerationState.Ready,   missing: 1, hard: true,  subs: 0),   // suppressing BUT no subscribers
+            (iso: "de", state: LanguageGenerationState.Ready,   missing: 1, hard: true,  subs: 3),    // suppressing, 3 subscribers
+            (iso: "es", state: LanguageGenerationState.Ready,   missing: 1, hard: true,  subs: 10),   // suppressing, 10 subscribers
+            (iso: "eo", state: LanguageGenerationState.Pending, missing: 5, hard: true,  subs: 2),    // fresh enable, 2 subscribers
+        };
+
+        var ordered = ReportWorker.OrderGenerationCandidates(
+            items, w => w.state, w => w.missing, w => w.hard, w => w.subs, w => w.iso);
+
+        // Subscribed languages first — `da` sorts LAST despite its tier-0 "suppressing" state, because
+        // with zero recipients it suppresses nothing. Among the subscribed, the urgency tier dominates
+        // (Ready-hard before Pending), then most-subscribed first (es > de).
+        Assert.Equal(new[] { "es", "de", "eo", "da" }, ordered.Select(w => w.iso).ToArray());
+    }
+
+    [Fact]
+    public void OrderGenerationCandidates_HardSuppression_OutranksHigherSubscribedSoftOnly()
+    {
+        var items = new[]
+        {
+            (iso: "de", state: LanguageGenerationState.Ready, missing: 1, hard: true,  subs: 2),    // hard-suppressing, 2 subscribers
+            (iso: "es", state: LanguageGenerationState.Ready, missing: 1, hard: false, subs: 50),   // soft-only, 50 subscribers
+        };
+
+        var ordered = ReportWorker.OrderGenerationCandidates(
+            items, w => w.state, w => w.missing, w => w.hard, w => w.subs, w => w.iso);
+
+        // Both subscribed, so the urgency tier still governs: the hard-suppressing language comes first
+        // even though the soft-only one has far more subscribers (subscriber count is the WITHIN-tier
+        // tie-break, not a tier override). Settles the "should a high-subscriber soft-only jump a
+        // hard-suppressing subscribed one?" question — no.
+        Assert.Equal(new[] { "de", "es" }, ordered.Select(w => w.iso).ToArray());
+    }
+
+    [Fact]
+    public void OrderGenerationCandidates_EqualTierAndSubscribers_FallsBackToIso()
+    {
+        // The common real case: a new baseline token leaves several languages missing it in the SAME
+        // cycle with equal subscriber counts — the iso tie-break must decide deterministically.
+        var items = new[]
+        {
+            (iso: "es", state: LanguageGenerationState.Ready, missing: 1, hard: true, subs: 4),
+            (iso: "de", state: LanguageGenerationState.Ready, missing: 1, hard: true, subs: 4),
+            (iso: "da", state: LanguageGenerationState.Ready, missing: 1, hard: true, subs: 4),
+        };
+
+        var ordered = ReportWorker.OrderGenerationCandidates(
+            items, w => w.state, w => w.missing, w => w.hard, w => w.subs, w => w.iso);
+
+        // Same subscribed tier + same subscriber count → alphabetical iso.
+        Assert.Equal(new[] { "da", "de", "es" }, ordered.Select(w => w.iso).ToArray());
+    }
 }
