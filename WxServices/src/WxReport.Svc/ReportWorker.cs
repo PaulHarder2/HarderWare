@@ -734,7 +734,7 @@ public sealed class ReportWorker : BackgroundService
                     var inserted = await ApplyTopUpAsync(ctx, lang, s.Translations, s.CultureName, baselineByToken, DateTime.UtcNow, ct);
                     Logger.Info(lang.GenerationError == null
                         ? $"WX-250: '{iso}' topped up {inserted.Count} token(s) — READY."
-                        : $"WX-250: '{iso}' topped up {inserted.Count} token(s) — BLOCKED ({lang.GenerationError}).");
+                        : $"WX-250: '{iso}' topped up {inserted.Count} token(s) — BLOCKED → DISABLED (WX-253): {lang.GenerationError}");
                 }
                 else if (result is TranslateResult.Failure f)
                 {
@@ -867,10 +867,30 @@ public sealed class ReportWorker : BackgroundService
         if (string.IsNullOrWhiteSpace(lang.CultureName))
             lang.CultureName = cultureName;
         lang.GeneratedAtUtc = nowUtc;
-        lang.GenerationError = blocked.Count == 0
-            ? null
-            : FitGenerationError($"{blocked.Count} token(s) cannot be expressed in {lang.DisplayName} by simple substitution: "
-              + $"{string.Join(", ", blocked.OrderBy(t => t, StringComparer.Ordinal))}. This needs a renderer/code change; it will not retry.");
+        if (blocked.Count == 0)
+        {
+            lang.GenerationError = null;
+        }
+        else
+        {
+            // WX-253: a blocked token leaves the language unable to send (the completeness gate fails
+            // closed), so leaving it ENABLED is an illegible dead state — reports silently stop. DISABLE
+            // it non-destructively instead (every row is kept, WX-249): the reason is legible, and the
+            // language drops out of the per-cycle auto-scan so a permanently code-blocked token never
+            // triggers a Claude retry or starves the single generation slot (footgun 2). Recovery is the
+            // deliberate re-enable, which deletes the blocked placeholder rows so the auto-scan re-attempts
+            // them as fair game (LanguageToggle.SetEnabledAsync). Only the block path writes IsEnabled, so
+            // a clean top-up still leaves it untouched (WX-249's concurrent-disable guarantee). This
+            // deliberately bypasses SetEnabledAsync's BlockedByRecipients guard: that guard protects a
+            // MANUAL disable of a working language, but a language already failing its recipients closed on
+            // a blocked token can't be kept enabled just because recipients are assigned — they stay
+            // assigned and resume automatically once a fix re-enables it to READY.
+            lang.GenerationError = FitGenerationError(
+                $"{blocked.Count} token(s) cannot be expressed in {lang.DisplayName} by simple substitution: "
+                + $"{string.Join(", ", blocked.OrderBy(t => t, StringComparer.Ordinal))}. "
+                + "The language has been disabled; re-enable after a renderer/code change makes the token expressible, to re-attempt.");
+            lang.IsEnabled = false;
+        }
         await ctx.SaveChangesAsync(ct);
 
         return inserted;
