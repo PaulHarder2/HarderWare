@@ -16,13 +16,16 @@ namespace WxReport.Tests;
 /// at runtime (WX-250) and are not present here.
 ///
 /// <para>It scans EVERY migration, so the store mirrors the live DB state (seed + later inserts +
-/// relabels): any <c>InsertData</c> into <c>LanguageTemplates</c> (the WX-171 seed, the WX-223
-/// meteogram tokens, …) is picked up by the same row regex, and any post-seed phrase relabel
-/// (WX-184, WX-224) is applied on top from that migration's <c>Up()</c>. A new InsertData
-/// vocabulary migration needs no change here; a relabel migration also needs none as long as it
-/// uses one of the Relabel() shapes <see cref="ParseRelabels"/> parses (the WX-184 3-arg form, or
-/// the WX-224 4-arg form that names the token). Only InsertData rows / Relabel() calls match the
-/// patterns, so scanning every file is safe.</para>
+/// relabels + token-key renames): any <c>InsertData</c> into <c>LanguageTemplates</c> (the WX-171
+/// seed, the WX-223 meteogram tokens, …) is picked up by the same row regex; any post-seed phrase
+/// relabel (WX-184, WX-224) is applied on top from that migration's <c>Up()</c>; and any post-seed
+/// token-key rename (WX-265, e.g. <c>PartMorning→DayPart2</c>) is applied on top too, so the parsed
+/// seed matches the renamed <c>Tok</c> contract without touching the historical seed migration. A
+/// new InsertData vocabulary migration needs no change here; a relabel migration needs none as long
+/// as it uses one of the Relabel() shapes <see cref="ParseRelabels"/> parses (the WX-184 3-arg form
+/// or the WX-224 4-arg form that names the token); a rename migration needs none as long as it uses
+/// the <c>RenameToken(mb, "old", "new")</c> shape <see cref="ParseRenames"/> parses. Only InsertData
+/// rows / Relabel() / RenameToken() calls match the patterns, so scanning every file is safe.</para>
 /// </summary>
 public static class SeedTemplateStore
 {
@@ -41,7 +44,12 @@ public static class SeedTemplateStore
     public static IReadOnlyList<LanguageTemplate> SeedRows()
     {
         var migrations = MigrationSources();
-        var relabels = ParseRelabels(migrations);
+        var renames = ParseRenames(migrations);
+        // Relabels are matched against the SEEDED (pre-rename) token name in RowsFor, but renames
+        // apply afterward — so a relabel authored AFTER a rename (keyed on the new DayPart* name)
+        // would miss the seed row. Mirror each such relabel back onto the old name so it still
+        // lands; ApplyRenames then carries the relabeled phrase to the new key.
+        var relabels = AliasRelabelsThroughRenames(ParseRelabels(migrations), renames);
         var rows = new List<LanguageTemplate>();
         foreach (var src in migrations)
         {
@@ -49,6 +57,9 @@ public static class SeedTemplateStore
             var up = UpBody(src);
             rows.AddRange(RowsFor(En, up, relabels));
         }
+        // Token-key renames (WX-265) apply after all rows are collected, since a rename migration
+        // renames rows seeded by an earlier migration; in migration order so any chain resolves.
+        ApplyRenames(rows, renames);
         if (rows.Count == 0)
             throw new InvalidOperationException(
                 "SeedTemplateStore parsed no LanguageTemplates seed rows — a seed migration was moved, " +
@@ -105,6 +116,74 @@ public static class SeedTemplateStore
                 map[(m.Groups[1].Value, "CurrentConditionsHeading")] = m.Groups[2].Value;
         }
         return map;
+    }
+
+    // Post-seed token-key renames (WX-265), read from the Up() of any rename migration so the test
+    // store mirrors the live DB (the renamed keys can't drift from what ships). Parses the migration-
+    // local helper shape RenameToken(mb, "OldToken", "NewToken"); tokens are letters/digits/underscore.
+    // Order is preserved across migrations so a chained rename (A→B then B→C) resolves correctly.
+    private static IReadOnlyList<(string Old, string New)> ParseRenames(IEnumerable<string> migrations)
+    {
+        var list = new List<(string, string)>();
+        var rx = new Regex("RenameToken\\(\\w+,\\s*\"([A-Za-z0-9_]+)\",\\s*\"([A-Za-z0-9_]+)\"\\s*\\)");
+        foreach (var src in migrations)
+            foreach (Match m in rx.Matches(UpBody(src)))
+                list.Add((m.Groups[1].Value, m.Groups[2].Value));
+        return list;
+    }
+
+    // A relabel authored after a rename is keyed on the token's NEW name, but RowsFor matches the
+    // seeded (pre-rename) name — so mirror each relabel back onto its seeded token name. The seed
+    // row (old name) then picks up the relabeled phrase, and ApplyRenames carries it to the new key
+    // — faithful whether the relabel precedes or follows the rename. Chain-transitive to match
+    // ApplyRenames: a relabel keyed on C where the chain is A→B→C is aliased onto the root A.
+    private static IReadOnlyDictionary<(string Iso, string Token), string> AliasRelabelsThroughRenames(
+        IReadOnlyDictionary<(string Iso, string Token), string> relabels,
+        IReadOnlyList<(string Old, string New)> renames)
+    {
+        if (renames.Count == 0 || relabels.Count == 0)
+            return relabels;
+        var map = new Dictionary<(string, string), string>();
+        foreach (var kv in relabels)
+            map[kv.Key] = kv.Value;
+        foreach (var kv in relabels)
+        {
+            var seeded = SeededToken(kv.Key.Token, renames);
+            if (!string.Equals(seeded, kv.Key.Token, StringComparison.Ordinal))
+                map.TryAdd((kv.Key.Iso, seeded), kv.Value);
+        }
+        return map;
+    }
+
+    // Walk the rename chain backward (C←B←A) to the seeded (pre-rename) token name, so a relabel
+    // keyed on any post-rename name resolves to the name RowsFor matches. Transitive, matching
+    // ApplyRenames' in-order chain resolution; the counter bounds a pathological cycle.
+    private static string SeededToken(string token, IReadOnlyList<(string Old, string New)> renames)
+    {
+        var current = token;
+        for (int guard = renames.Count; guard >= 0; guard--)
+        {
+            var prior = current;
+            for (int i = renames.Count - 1; i >= 0; i--)
+                if (string.Equals(renames[i].New, current, StringComparison.Ordinal))
+                {
+                    current = renames[i].Old;
+                    break;
+                }
+            if (string.Equals(current, prior, StringComparison.Ordinal))
+                break;
+        }
+        return current;
+    }
+
+    // Apply the (old→new) token-key renames in migration order, mirroring what the rename migration
+    // does to the live rows. A token with no matching row is a no-op (as in the DB).
+    private static void ApplyRenames(List<LanguageTemplate> rows, IReadOnlyList<(string Old, string New)> renames)
+    {
+        foreach (var (oldToken, newToken) in renames)
+            foreach (var row in rows)
+                if (string.Equals(row.Token, oldToken, StringComparison.Ordinal))
+                    row.Token = newToken;
     }
 
     // The Up() body only, so a Down() (revert) Relabel is never read as an override.

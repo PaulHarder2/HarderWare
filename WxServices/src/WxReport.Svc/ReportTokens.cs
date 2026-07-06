@@ -30,6 +30,14 @@ public static class Tok
     public const string CondSevereStorms = "CondSevereStorms";
     public const string CondSevereWeather = "CondSevereWeather";
     public const string CurrentConditionsHeading = "CurrentConditionsHeading";
+    // WX-265: the four civil dayparts as stable ordinal keys (was PartMorning/Afternoon/Evening;
+    // the 00-06 block had no token before). Local-hour block in the comment; the localized word
+    // lives in LanguageTemplates, keyed by these. DayPart1 ("early hours") is seeded but not yet
+    // consumed by the deterministic renderer (WX-190 keeps 00-06 clock-bound) until WX-264.
+    public const string DayPart1 = "DayPart1"; // 00:00-06:00
+    public const string DayPart2 = "DayPart2"; // 06:00-12:00
+    public const string DayPart3 = "DayPart3"; // 12:00-18:00
+    public const string DayPart4 = "DayPart4"; // 18:00-24:00
     public const string DiagnosticLabel = "DiagnosticLabel";
     public const string DiagnosticSubject = "DiagnosticSubject";
     public const string DirAppearing = "DirAppearing";
@@ -45,9 +53,6 @@ public static class Tok
     public const string MeteogramAlt = "MeteogramAlt";
     public const string MeteogramCaption = "MeteogramCaption";
     public const string NoObservationNote = "NoObservationNote";
-    public const string PartAfternoon = "PartAfternoon";
-    public const string PartEvening = "PartEvening";
-    public const string PartMorning = "PartMorning";
     public const string RowHumidity = "RowHumidity";
     public const string RowPressure = "RowPressure";
     public const string RowSky = "RowSky";
