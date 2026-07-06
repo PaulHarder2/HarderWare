@@ -193,15 +193,24 @@ public sealed class LanguageToggleTests : IDisposable
             ctx.LanguageTemplates.AddRange(
                 new LanguageTemplate
                 {
-                    LanguageId = id, Token = "X", Phrase = "",
-                    ContextInfo = "ctx", ContextKind = TemplateContextKind.Example,
-                    Representable = false, Note = "needs a code change",
+                    LanguageId = id,
+                    Token = "X",
+                    Phrase = "",
+                    ContextInfo = "ctx",
+                    ContextKind = TemplateContextKind.Example,
+                    Representable = false,
+                    Note = "needs a code change",
                 },
                 new LanguageTemplate
                 {
-                    LanguageId = id, Token = "Y", Phrase = "y-de",
-                    ContextInfo = "ctx", ContextKind = TemplateContextKind.Example,
-                    Representable = true, ReviewedBy = "paul", ReviewedAtUtc = Reviewed,
+                    LanguageId = id,
+                    Token = "Y",
+                    Phrase = "y-de",
+                    ContextInfo = "ctx",
+                    ContextKind = TemplateContextKind.Example,
+                    Representable = true,
+                    ReviewedBy = "paul",
+                    ReviewedAtUtc = Reviewed,
                 });
             await ctx.SaveChangesAsync();
         }
@@ -249,16 +258,24 @@ public sealed class LanguageToggleTests : IDisposable
                 // P: Claude's own blocked placeholder — not representable, never reviewed → purged.
                 new LanguageTemplate
                 {
-                    LanguageId = id, Token = "P", Phrase = "",
-                    ContextInfo = "ctx", ContextKind = TemplateContextKind.Example,
+                    LanguageId = id,
+                    Token = "P",
+                    Phrase = "",
+                    ContextInfo = "ctx",
+                    ContextKind = TemplateContextKind.Example,
                     Representable = false,
                 },
                 // R: a human-typed value on the same still-non-representable token → MUST survive.
                 new LanguageTemplate
                 {
-                    LanguageId = id, Token = "R", Phrase = "hand-typed de",
-                    ContextInfo = "ctx", ContextKind = TemplateContextKind.Example,
-                    Representable = false, ReviewedBy = "paul", ReviewedAtUtc = Reviewed,
+                    LanguageId = id,
+                    Token = "R",
+                    Phrase = "hand-typed de",
+                    ContextInfo = "ctx",
+                    ContextKind = TemplateContextKind.Example,
+                    Representable = false,
+                    ReviewedBy = "paul",
+                    ReviewedAtUtc = Reviewed,
                 });
             await ctx.SaveChangesAsync();
         }
