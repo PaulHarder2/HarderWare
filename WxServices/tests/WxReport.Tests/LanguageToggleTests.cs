@@ -169,6 +169,129 @@ public sealed class LanguageToggleTests : IDisposable
     }
 
     [Fact]
+    public async Task Enable_BlockedLanguage_DeletesBlockedRows_KeepsRepresentable()
+    {
+        // WX-253: a language disabled by block->disable carries a blocked PLACEHOLDER row (X,
+        // Representable=false) alongside a real value (Y — reviewed, or supplied by hand while
+        // disabled). Re-enabling must delete X so the token becomes no-row and the WX-250 auto-scan
+        // re-attempts it as fair game, while preserving Y untouched.
+        long id;
+        await using (var ctx = new WeatherDataContext(_db))
+        {
+            var lang = new Language
+            {
+                IsoCode = "de",
+                DisplayName = "DE",
+                IsEnabled = false,
+                CultureName = "de-DE",
+                GeneratedAtUtc = Gen,
+                GenerationError = "1 token(s) cannot be expressed in DE by simple substitution: X.",
+            };
+            ctx.Languages.Add(lang);
+            await ctx.SaveChangesAsync();
+            id = lang.Id;
+            ctx.LanguageTemplates.AddRange(
+                new LanguageTemplate
+                {
+                    LanguageId = id,
+                    Token = "X",
+                    Phrase = "",
+                    ContextInfo = "ctx",
+                    ContextKind = TemplateContextKind.Example,
+                    Representable = false,
+                    Note = "needs a code change",
+                },
+                new LanguageTemplate
+                {
+                    LanguageId = id,
+                    Token = "Y",
+                    Phrase = "y-de",
+                    ContextInfo = "ctx",
+                    ContextKind = TemplateContextKind.Example,
+                    Representable = true,
+                    ReviewedBy = "paul",
+                    ReviewedAtUtc = Reviewed,
+                });
+            await ctx.SaveChangesAsync();
+        }
+
+        LanguageToggleResult result;
+        await using (var ctx = new WeatherDataContext(_db))
+            result = await LanguageToggle.SetEnabledAsync(ctx, id, enabled: true);
+
+        Assert.Equal(LanguageToggleOutcome.EnabledWillGenerate, result.Outcome);
+        await using var check = new WeatherDataContext(_db);
+        var reloaded = await check.Languages.FindAsync(id);
+        Assert.True(reloaded!.IsEnabled);
+        Assert.Null(reloaded.GenerationError);   // requeued to PENDING
+        Assert.Null(reloaded.GeneratedAtUtc);
+        // The blocked placeholder is gone (no-row → auto-scan re-attempts it); the real row survives.
+        Assert.False(await check.LanguageTemplates.AnyAsync(t => t.LanguageId == id && t.Token == "X"));
+        var y = await check.LanguageTemplates.SingleAsync(t => t.LanguageId == id && t.Token == "Y");
+        Assert.Equal("y-de", y.Phrase);
+        Assert.Equal("paul", y.ReviewedBy);
+    }
+
+    [Fact]
+    public async Task Enable_BlockedLanguage_PreservesHumanReviewedBlockedRow()
+    {
+        // WX-253 regression guard: an operator can type a value into a blocked token via the Vocabulary
+        // tab — that STAMPS ReviewedBy but leaves Representable read-only/false (the token still can't be
+        // expressed by simple substitution). The re-enable's blocked-row purge must NOT destroy that
+        // human-reviewed row (WX-249 durability): only Claude's own never-reviewed empty placeholders go.
+        long id;
+        await using (var ctx = new WeatherDataContext(_db))
+        {
+            var lang = new Language
+            {
+                IsoCode = "de",
+                DisplayName = "DE",
+                IsEnabled = false,
+                CultureName = "de-DE",
+                GeneratedAtUtc = Gen,
+                GenerationError = "1 token(s) cannot be expressed in DE by simple substitution: R.",
+            };
+            ctx.Languages.Add(lang);
+            await ctx.SaveChangesAsync();
+            id = lang.Id;
+            ctx.LanguageTemplates.AddRange(
+                // P: Claude's own blocked placeholder — not representable, never reviewed → purged.
+                new LanguageTemplate
+                {
+                    LanguageId = id,
+                    Token = "P",
+                    Phrase = "",
+                    ContextInfo = "ctx",
+                    ContextKind = TemplateContextKind.Example,
+                    Representable = false,
+                },
+                // R: a human-typed value on the same still-non-representable token → MUST survive.
+                new LanguageTemplate
+                {
+                    LanguageId = id,
+                    Token = "R",
+                    Phrase = "hand-typed de",
+                    ContextInfo = "ctx",
+                    ContextKind = TemplateContextKind.Example,
+                    Representable = false,
+                    ReviewedBy = "paul",
+                    ReviewedAtUtc = Reviewed,
+                });
+            await ctx.SaveChangesAsync();
+        }
+
+        await using (var ctx = new WeatherDataContext(_db))
+            await LanguageToggle.SetEnabledAsync(ctx, id, enabled: true);
+
+        await using var check = new WeatherDataContext(_db);
+        Assert.False(await check.LanguageTemplates.AnyAsync(t => t.LanguageId == id && t.Token == "P")); // unreviewed placeholder purged
+        var r = await check.LanguageTemplates.SingleAsync(t => t.LanguageId == id && t.Token == "R");
+        Assert.Equal("hand-typed de", r.Phrase);        // human content preserved
+        Assert.Equal("paul", r.ReviewedBy);
+        Assert.False(r.Representable);                    // still non-representable — will re-block next cycle, not vanish
+    }
+
+    [Fact]
     public async Task SetEnabled_NotFound_WhenRowMissing()
     {
         await using var ctx = new WeatherDataContext(_db);

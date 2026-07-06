@@ -66,12 +66,24 @@ public static class LanguageToggle
         if (enabled)
         {
             row.IsEnabled = true;
-            // Defensive recovery: a language hand-edited into BLOCKED while disabled requeues to
-            // PENDING (both GeneratedAtUtc and GenerationError cleared) so the next cycle regenerates.
+            // WX-253: recovering a BLOCKED language (block->disable is the WX-253 disable path; this
+            // also covers a language hand-edited into BLOCKED while disabled). Requeue to PENDING (clear
+            // the stamp + reason) AND delete the generator's own blocked PLACEHOLDER rows — not-
+            // representable AND never human-reviewed (empty, Claude-authored) — so those tokens become
+            // no-row and the WX-250 auto-scan re-attempts them as fair game once a renderer/code change
+            // makes them expressible. A human-REVIEWED row is NEVER deleted (WX-249 durability), even if
+            // still marked non-representable: a value an operator typed into a blocked row via the
+            // Vocabulary tab keeps its ReviewedBy stamp, so it survives here (it re-blocks the language
+            // next cycle rather than being silently destroyed). If a token is still blocked after the
+            // re-attempt, block->disable re-fires, so this self-limits: no per-cycle retry, no slot starvation.
             if (row.GenerationError is not null)
             {
                 row.GeneratedAtUtc = null;
                 row.GenerationError = null;
+                var blockedRows = await ctx.LanguageTemplates
+                    .Where(t => t.LanguageId == row.Id && !t.Representable && t.ReviewedBy == null)
+                    .ToListAsync(ct);
+                ctx.LanguageTemplates.RemoveRange(blockedRows);
             }
             await ctx.SaveChangesAsync(ct);
             return new LanguageToggleResult(

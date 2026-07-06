@@ -86,7 +86,10 @@ public class Language
     /// and <see cref="GenerationError"/> (WX-172). Computed, never persisted. The encoding:
     /// PENDING = (enabled, GeneratedAtUtc null, no error); READY = (enabled, GeneratedAtUtc set,
     /// no error); BLOCKED = (enabled, GeneratedAtUtc set, error set); FAILED = (enabled,
-    /// GeneratedAtUtc null, error set).
+    /// GeneratedAtUtc null, error set). WX-253: the generation path no longer parks in BLOCKED —
+    /// a non-representable token auto-disables the language (error set alongside IsEnabled=false),
+    /// which DISABLED (checked first) reports; BLOCKED now denotes only a hand-edited enabled+error
+    /// state (which a re-enable recovers).
     /// </summary>
     [NotMapped]
     public LanguageGenerationState GenerationState =>

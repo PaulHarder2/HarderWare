@@ -215,9 +215,14 @@ public sealed class TopUpGenerationTests : IDisposable
             var b = await ctx.LanguageTemplates.SingleAsync(t => t.LanguageId == langId && t.Token == "B");
             Assert.Equal("b-de", b.Phrase);                    // the clean token was filled
             var lang = await ctx.Languages.SingleAsync(l => l.Id == langId);
-            Assert.NotNull(lang.GenerationError);              // re-stamped from the FULL set → still BLOCKED on A
+            Assert.NotNull(lang.GenerationError);              // re-stamped from the FULL set → still blocked on A
             Assert.Contains("A", lang.GenerationError);
-            Assert.Equal(LanguageGenerationState.Blocked, lang.GenerationState);
+            // WX-253: a surviving block disables the language (was Blocked) — the clean B fill is
+            // non-destructive, but A keeps the language out of the sendable set until re-attempted.
+            Assert.False(lang.IsEnabled);
+            Assert.Equal(LanguageGenerationState.Disabled, lang.GenerationState);
+            // Non-destructive: the pre-existing blocked row A is kept (top-up never deletes).
+            Assert.True(await ctx.LanguageTemplates.AnyAsync(t => t.LanguageId == langId && t.Token == "A"));
         }
     }
 
@@ -307,5 +312,80 @@ public sealed class TopUpGenerationTests : IDisposable
 
         // Same subscribed tier + same subscriber count → alphabetical iso.
         Assert.Equal(new[] { "da", "de", "es" }, ordered.Select(w => w.iso).ToArray());
+    }
+
+    // ── WX-253: block → disable (non-destructive) ─────────────────────────────
+
+    [Fact]
+    public async Task TopUp_BlockedToken_DisablesLanguageNonDestructively()
+    {
+        // A fresh enabled/PENDING language; the top-up yields one representable token (A) and one
+        // BLOCKED (B). WX-253: a block disables the language (legible dead-state → removed from the
+        // auto-scan) while KEEPING every row (non-destructive).
+        var langId = await SeedLanguageAsync("de", generatedAt: null, generationError: null);
+
+        await using (var ctx = new WeatherDataContext(_db))
+        {
+            var lang = await ctx.Languages.SingleAsync(l => l.Id == langId);
+            await ReportWorker.ApplyTopUpAsync(
+                ctx, lang,
+                new[] { Tr("A", "a-de"), Tr("B", "", representable: false, note: "needs a code change") },
+                "de-DE", Baseline("A", "B"), T0.AddMinutes(5), default);
+        }
+
+        await using (var ctx = new WeatherDataContext(_db))
+        {
+            var lang = await ctx.Languages.SingleAsync(l => l.Id == langId);
+            Assert.False(lang.IsEnabled);                                                  // WX-253: block → DISABLED
+            Assert.NotNull(lang.GenerationError);
+            Assert.Contains("B", lang.GenerationError!);                                    // the reason names the blocked token
+            Assert.Contains("disabled", lang.GenerationError!, StringComparison.OrdinalIgnoreCase);
+            // Non-destructive: BOTH rows kept — the clean A and the blocked placeholder B.
+            Assert.Equal("a-de", (await ctx.LanguageTemplates.SingleAsync(t => t.LanguageId == langId && t.Token == "A")).Phrase);
+            Assert.False((await ctx.LanguageTemplates.SingleAsync(t => t.LanguageId == langId && t.Token == "B")).Representable);
+        }
+    }
+
+    [Fact]
+    public async Task BlockedToken_ReEnableThenStillBlocked_ReDisables_SelfLimiting()
+    {
+        // WX-253 self-limiting round-trip (spans both seams): block→disable, operator re-enable
+        // (purges the unreviewed placeholder), then a top-up that STILL can't express the token must
+        // re-DISABLE — proving the recovery terminates rather than looping or resurrecting the language.
+        var langId = await SeedLanguageAsync("de", generatedAt: null, generationError: null);
+
+        // 1) First pass: token B is non-representable → disables the language.
+        await using (var ctx = new WeatherDataContext(_db))
+        {
+            var lang = await ctx.Languages.SingleAsync(l => l.Id == langId);
+            await ReportWorker.ApplyTopUpAsync(
+                ctx, lang, new[] { Tr("B", "", representable: false, note: "needs code") },
+                "de-DE", Baseline("B"), T0.AddMinutes(5), default);
+            Assert.False(lang.IsEnabled);
+        }
+
+        // 2) Operator re-enables — purges the unreviewed B placeholder, requeues PENDING (no-row).
+        await using (var ctx = new WeatherDataContext(_db))
+        {
+            var result = await LanguageToggle.SetEnabledAsync(ctx, langId, enabled: true);
+            Assert.Equal(LanguageToggleOutcome.EnabledWillGenerate, result.Outcome);
+        }
+        await using (var ctx = new WeatherDataContext(_db))
+        {
+            Assert.True((await ctx.Languages.SingleAsync(l => l.Id == langId)).IsEnabled);
+            Assert.False(await ctx.LanguageTemplates.AnyAsync(t => t.LanguageId == langId && t.Token == "B"));
+        }
+
+        // 3) Second pass: B is STILL non-representable → re-disables (the self-limiting terminus).
+        await using (var ctx = new WeatherDataContext(_db))
+        {
+            var lang = await ctx.Languages.SingleAsync(l => l.Id == langId);
+            await ReportWorker.ApplyTopUpAsync(
+                ctx, lang, new[] { Tr("B", "", representable: false, note: "needs code") },
+                "de-DE", Baseline("B"), T0.AddMinutes(10), default);
+            Assert.False(lang.IsEnabled);                       // re-disabled, not looping or left enabled
+            Assert.Equal(LanguageGenerationState.Disabled, lang.GenerationState);   // same terminus as the first pass
+            Assert.Contains("B", lang.GenerationError!);
+        }
     }
 }
