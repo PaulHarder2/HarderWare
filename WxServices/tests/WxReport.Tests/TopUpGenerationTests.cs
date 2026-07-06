@@ -384,6 +384,7 @@ public sealed class TopUpGenerationTests : IDisposable
                 ctx, lang, new[] { Tr("B", "", representable: false, note: "needs code") },
                 "de-DE", Baseline("B"), T0.AddMinutes(10), default);
             Assert.False(lang.IsEnabled);                       // re-disabled, not looping or left enabled
+            Assert.Equal(LanguageGenerationState.Disabled, lang.GenerationState);   // same terminus as the first pass
             Assert.Contains("B", lang.GenerationError!);
         }
     }
