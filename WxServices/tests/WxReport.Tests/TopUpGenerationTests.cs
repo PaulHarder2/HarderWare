@@ -345,4 +345,46 @@ public sealed class TopUpGenerationTests : IDisposable
             Assert.False((await ctx.LanguageTemplates.SingleAsync(t => t.LanguageId == langId && t.Token == "B")).Representable);
         }
     }
+
+    [Fact]
+    public async Task BlockedToken_ReEnableThenStillBlocked_ReDisables_SelfLimiting()
+    {
+        // WX-253 self-limiting round-trip (spans both seams): block→disable, operator re-enable
+        // (purges the unreviewed placeholder), then a top-up that STILL can't express the token must
+        // re-DISABLE — proving the recovery terminates rather than looping or resurrecting the language.
+        var langId = await SeedLanguageAsync("de", generatedAt: null, generationError: null);
+
+        // 1) First pass: token B is non-representable → disables the language.
+        await using (var ctx = new WeatherDataContext(_db))
+        {
+            var lang = await ctx.Languages.SingleAsync(l => l.Id == langId);
+            await ReportWorker.ApplyTopUpAsync(
+                ctx, lang, new[] { Tr("B", "", representable: false, note: "needs code") },
+                "de-DE", Baseline("B"), T0.AddMinutes(5), default);
+            Assert.False(lang.IsEnabled);
+        }
+
+        // 2) Operator re-enables — purges the unreviewed B placeholder, requeues PENDING (no-row).
+        await using (var ctx = new WeatherDataContext(_db))
+        {
+            var result = await LanguageToggle.SetEnabledAsync(ctx, langId, enabled: true);
+            Assert.Equal(LanguageToggleOutcome.EnabledWillGenerate, result.Outcome);
+        }
+        await using (var ctx = new WeatherDataContext(_db))
+        {
+            Assert.True((await ctx.Languages.SingleAsync(l => l.Id == langId)).IsEnabled);
+            Assert.False(await ctx.LanguageTemplates.AnyAsync(t => t.LanguageId == langId && t.Token == "B"));
+        }
+
+        // 3) Second pass: B is STILL non-representable → re-disables (the self-limiting terminus).
+        await using (var ctx = new WeatherDataContext(_db))
+        {
+            var lang = await ctx.Languages.SingleAsync(l => l.Id == langId);
+            await ReportWorker.ApplyTopUpAsync(
+                ctx, lang, new[] { Tr("B", "", representable: false, note: "needs code") },
+                "de-DE", Baseline("B"), T0.AddMinutes(10), default);
+            Assert.False(lang.IsEnabled);                       // re-disabled, not looping or left enabled
+            Assert.Contains("B", lang.GenerationError!);
+        }
+    }
 }
