@@ -1,6 +1,6 @@
 # WxServices development workflow
 
-Last updated 2026-06-01.
+Last updated 2026-07-07.
 
 This document is the authoritative workflow for landing a change in WxServices. It is a snapshot of the rules Paul and Claude have agreed on over time; when something here conflicts with an ad-hoc direction, this document wins unless the conflict is flagged and the document updated.
 
@@ -266,6 +266,24 @@ Like §7a — and **enforced there**, in the pre-push checklist — the function
 The verification compares production behavior *before* vs *after* the deploy, so the boundary must be the **latest deploy time of the component(s) the change touches** — read from `deploy-history.log` (each line is component / version / commit / OK; a single release deploys its components at staggered times). Too *early* a boundary straddles a mixed-version window — the old binary for part of it — and yields false signals; an unrelated service redeployed in the same batch does not count. A change spanning several services keys off the latest of *their* lines.
 
 A verify script resolves this **version-pinned**, via the shared `deploy-info.sh` helper: it embeds the release `VERSION` it tests and its `COMPONENTS` as constants (both knowable when the script is authored — the version bump ships with the change — so the script is review-complete), and the helper returns the most recent `deploy-history.log` entry matching that version among those components, as `timestamp<TAB>commit` (the boundary plus the deployed commit for an identity line). Pinning on the *version* rather than a captured commit means a later release at another version doesn't move the boundary — the test stays anchored to the deploy that shipped its change even across intervening redeploys — and a same-version redeploy moves to the freshest matching line. If the version isn't in the log yet, the verdict is `WAIT` (not deployed). Health is judged against the **equal-length pre-deploy window**: a verify script fails only on errors/degradations *new* relative to that baseline, so a steady background of unrelated errors (e.g. ongoing reconciler degradations) cancels out instead of failing every change's test. A *new* error above that baseline still **fails immediately** (only the `PASS` verdict is gated on a full active day); but because the cancellation needs a window wide enough to span the background's cadence, an early failure should be confirmed against the dumped error lines — a genuinely new error, not the thin-window's failure to cancel — before it is acted on.
+
+## Prove it with a functional test — OBE claims and behavior-preserving refactors
+
+**Added 2026-07-07 (Paul).**
+
+Two situations demand a *functional test* as the arbiter rather than reasoning, a code read, or a citation alone. In both, the running test is the evidence; a plausible argument is not.
+
+### "Already handled by another ticket" (OBE)
+
+When we suspect a ticket is **overtaken by events** — its bug already fixed under a different ticket — do not close it on the strength of a code read or a related-ticket citation. **Write a functional test that reproduces the ticket's own bug and run it.** Green proves the defect is gone and the OBE claim holds; red proves it survived. The test *could* reuse the other ticket's procedure — but we cannot assume the two are the same defect, and the very overlap that makes them look identical is what a shared, unexamined test plan would paper over. Author the test against *this* ticket's reproduction; borrow from the other only where it genuinely exercises the same path.
+
+### Behavior-preserving refactors — test before *and* after
+
+For a major refactor that is *not supposed to change behavior*, write the functional (characterization) test **before touching code**, run it to confirm it passes against the current behavior, then run the same test again after the refactor. Identical results both times is the proof the refactor preserved behavior; any diff between the runs is a regression the refactor introduced. Writing the test only *after* the refactor proves the new code is self-consistent but cannot catch what the change silently altered — the pre-change baseline is the whole point.
+
+### Sequence refactor and behavior change as separate sub-tasks
+
+It follows that when a behavior change *requires* a preparatory refactor, do the refactor **first**, under its own behavior-preserving test (above), and land it as a **separate sub-task** before the functional change. Splitting them keeps each diff single-purpose: the refactor's characterization test stays green across it (nothing moved), and the behavior change's test then isolates exactly the intended new behavior. Bundling both into one diff forfeits both proofs — a red test can no longer tell you whether the refactor broke something or the new behavior merely changed the output.
 
 ## Schema changes
 
