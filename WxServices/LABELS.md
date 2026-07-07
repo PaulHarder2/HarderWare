@@ -13,6 +13,8 @@ We use both, deliberately:
 
 Rule of thumb: a ticket gets an **Epic parent** when a body-of-work home exists. A standalone ticket with no natural epic must still carry **≥1 component + ≥1 work-character label**, so it's findable. A cross-cutting ticket gets an epic parent *and* the extra facet labels (that's the case labels handle that a single-parent epic can't).
 
+**Exemption — process / meta docs.** A ticket whose deliverable is a *process or meta doc* — WORKFLOW.md, LABELS.md, CONVENTIONS.md, and the like — has no fitting component: the component dimension names runtime sub-systems, and a process-doc edit touches none of them. Such a ticket is **exempt from the ≥1-component rule** when it carries **`ai-collab`** (which already marks it as work *about the workflow itself*); it still carries `docs` for work-character. This keeps the ceremony from outweighing the point. *Established 2026-07-07 (WX-272).*
+
 ## The three dimensions
 
 Labels are **orthogonal** across three dimensions. A typical issue carries one to three total: usually one component + one work-character, occasionally a meta label.
@@ -55,6 +57,7 @@ Labels are **orthogonal** across three dimensions. A typical issue carries one t
 | `ai-collab` | Meta work about the AI-collaboration workflow itself |
 | `needs-design` | Wants DESIGN.md / discussion before coding |
 | `incident` | Came from something broken in running services |
+| `standing-epic` | Marks a standing / perpetual Epic (never closed). Applied *only* to the standing epics — WX-39, WX-137, WX-153, WX-254, WX-255, WX-270, WX-271 — for dashboard filtering. |
 
 ## Rules
 
