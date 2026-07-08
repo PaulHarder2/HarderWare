@@ -27,6 +27,9 @@ public sealed class MonitorWorker : BackgroundService
 {
     private readonly IConfiguration _config;
     private readonly DbContextOptions<WeatherDataContext> _dbOptions;
+    private readonly Func<SmtpConfig, IEmailer> _emailerFactory;
+    private readonly IMonitorStateStore _stateStore;
+    private readonly Func<DateTime> _utcNow;
 
     private readonly Meter _meter = new("WxMonitor.Svc", "1.0.0");
     private readonly Counter<long> _monitorCycles;
@@ -35,10 +38,21 @@ public sealed class MonitorWorker : BackgroundService
     /// <summary>Initializes a new instance of <see cref="MonitorWorker"/> with the given dependencies.</summary>
     /// <param name="config">Application configuration used to load the <c>Monitor</c> config section each cycle.</param>
     /// <param name="dbOptions">EF Core options used to open a <see cref="WeatherDataContext"/> to read SMTP secrets from <c>GlobalSettings</c>.</param>
-    public MonitorWorker(IConfiguration config, DbContextOptions<WeatherDataContext> dbOptions)
+    /// <param name="emailerFactory">Builds an <see cref="IEmailer"/> from the per-cycle-resolved <see cref="SmtpConfig"/>. Injected so tests can capture alerts instead of sending mail.</param>
+    /// <param name="stateStore">Persists <see cref="MonitorState"/> between cycles. Injected so tests can use an in-memory store.</param>
+    /// <param name="utcNow">Supplies the current UTC time. Injected so tests can pin "now" for cooldown and staleness checks.</param>
+    public MonitorWorker(
+        IConfiguration config,
+        DbContextOptions<WeatherDataContext> dbOptions,
+        Func<SmtpConfig, IEmailer> emailerFactory,
+        IMonitorStateStore stateStore,
+        Func<DateTime> utcNow)
     {
         _config = config;
         _dbOptions = dbOptions;
+        _emailerFactory = emailerFactory;
+        _stateStore = stateStore;
+        _utcNow = utcNow;
         _monitorCycles = _meter.CreateCounter<long>("wxmonitor.cycles.total", description: "Number of completed monitor cycles.");
         _alertsSent = _meter.CreateCounter<long>("wxmonitor.alerts.total", description: "Number of alert emails sent.");
     }
@@ -94,7 +108,7 @@ public sealed class MonitorWorker : BackgroundService
     /// Updates and saves <see cref="MonitorState"/> to <c>wxmonitor-state.json</c> if any state changed.
     /// Writes log entries throughout.
     /// </sideeffects>
-    private async Task RunCycleAsync(CancellationToken ct)
+    internal async Task RunCycleAsync(CancellationToken ct)
     {
         var (cfg, smtp) = await LoadConfigsAsync(ct);
 
@@ -110,10 +124,10 @@ public sealed class MonitorWorker : BackgroundService
             return;
         }
 
-        var state = MonitorStateStore.Load();
-        var emailer = new SmtpSender(smtp, "WxMonitor");
+        var state = _stateStore.Load();
+        var emailer = _emailerFactory(smtp);
         var cooldown = TimeSpan.FromMinutes(cfg.AlertCooldownMinutes);
-        var now = DateTime.UtcNow;
+        var now = _utcNow();
         var dirty = false;
 
         foreach (var svc in cfg.WatchedServices)
@@ -151,7 +165,7 @@ public sealed class MonitorWorker : BackgroundService
                     {
                         Logger.Info($"{svc.Name}: {newEntries.Count} new {cfg.AlertOnSeverity}+ log entry/entries — sending alert.");
                         var subject = $"[WxMonitor] {svc.Name} — {newEntries.Count} new log error(s)";
-                        var body = BuildLogAlertBody(svc.Name, newEntries);
+                        var body = BuildLogAlertBody(svc.Name, newEntries, now);
 
                         if (await emailer.SendAsync(cfg.AlertEmail, subject, body))
                         {
@@ -187,7 +201,7 @@ public sealed class MonitorWorker : BackgroundService
                         var ageMin = (int)age.Value.TotalMinutes;
                         Logger.Warn($"{svc.Name}: heartbeat is {ageMin} minute(s) old (max {svc.HeartbeatMaxAgeMinutes}) — sending alert.");
                         var subject = $"[WxMonitor] {svc.Name} — service may be stopped";
-                        var body = BuildHeartbeatAlertBody(svc.Name, age.Value, svc.HeartbeatMaxAgeMinutes);
+                        var body = BuildHeartbeatAlertBody(svc.Name, age.Value, svc.HeartbeatMaxAgeMinutes, now);
 
                         if (await emailer.SendAsync(cfg.AlertEmail, subject, body))
                         {
@@ -226,7 +240,7 @@ public sealed class MonitorWorker : BackgroundService
                     Logger.Warn($"Most recent METAR observation is {ageMin} minute(s) old " +
                                 $"(threshold {cfg.MetarStalenessThresholdMinutes}) — sending alert.");
                     var subject = "[WxMonitor] METAR data is stale — no recent observations";
-                    var body = BuildMetarStalenessAlertBody(mostRecentObsUtc, cfg.MetarStalenessThresholdMinutes);
+                    var body = BuildMetarStalenessAlertBody(mostRecentObsUtc, cfg.MetarStalenessThresholdMinutes, now);
 
                     if (await emailer.SendAsync(cfg.AlertEmail, subject, body))
                     {
@@ -243,7 +257,7 @@ public sealed class MonitorWorker : BackgroundService
         }
 
         if (dirty)
-            MonitorStateStore.Save(state);
+            _stateStore.Save(state);
 
         _monitorCycles.Add(1);
         Logger.Info("Monitor cycle complete.");
@@ -257,8 +271,9 @@ public sealed class MonitorWorker : BackgroundService
     /// </summary>
     /// <param name="serviceName">Display name of the service, used in the introductory line.</param>
     /// <param name="entries">The new log entries to include, in chronological order.</param>
+    /// <param name="now">Current UTC time, used for the "Generated at" footer.</param>
     /// <returns>A formatted plain-text alert body ready to send as an email.</returns>
-    private static string BuildLogAlertBody(string serviceName, IReadOnlyList<LogEntry> entries)
+    private static string BuildLogAlertBody(string serviceName, IReadOnlyList<LogEntry> entries, DateTime now)
     {
         var sb = new System.Text.StringBuilder();
         sb.AppendLine($"WxMonitor detected {entries.Count} new log entry/entries at ERROR level or above in {serviceName}.");
@@ -270,7 +285,7 @@ public sealed class MonitorWorker : BackgroundService
             sb.AppendLine();
         }
         sb.AppendLine("─────────────────────────────────────────────");
-        sb.AppendLine($"Generated by WxMonitor at {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC");
+        sb.AppendLine($"Generated by WxMonitor at {now:yyyy-MM-dd HH:mm:ss} UTC");
         return sb.ToString();
     }
 
@@ -281,8 +296,9 @@ public sealed class MonitorWorker : BackgroundService
     /// <param name="serviceName">Display name of the service whose heartbeat is stale.</param>
     /// <param name="age">How long ago the last heartbeat was written.</param>
     /// <param name="maxAgeMinutes">The configured maximum allowed heartbeat age in minutes.</param>
+    /// <param name="now">Current UTC time, used for the "Generated at" footer.</param>
     /// <returns>A formatted plain-text alert body ready to send as an email.</returns>
-    private static string BuildHeartbeatAlertBody(string serviceName, TimeSpan age, int maxAgeMinutes)
+    private static string BuildHeartbeatAlertBody(string serviceName, TimeSpan age, int maxAgeMinutes, DateTime now)
     {
         var sb = new System.Text.StringBuilder();
         sb.AppendLine($"WxMonitor detected a stale heartbeat for {serviceName}.");
@@ -293,7 +309,7 @@ public sealed class MonitorWorker : BackgroundService
         sb.AppendLine("This may indicate the service has stopped, crashed, or is hung.");
         sb.AppendLine("Check the Windows Service Manager and the service log for details.");
         sb.AppendLine();
-        sb.AppendLine($"Generated by WxMonitor at {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC");
+        sb.AppendLine($"Generated by WxMonitor at {now:yyyy-MM-dd HH:mm:ss} UTC");
         return sb.ToString();
     }
 
@@ -303,15 +319,16 @@ public sealed class MonitorWorker : BackgroundService
     /// </summary>
     /// <param name="mostRecentUtc">Timestamp of the most recent observation, or null if the table is empty.</param>
     /// <param name="thresholdMinutes">The configured staleness threshold in minutes.</param>
+    /// <param name="now">Current UTC time, used for the age calculation and the "Generated at" footer.</param>
     /// <returns>A formatted plain-text alert body ready to send as an email.</returns>
-    private static string BuildMetarStalenessAlertBody(DateTime? mostRecentUtc, int thresholdMinutes)
+    private static string BuildMetarStalenessAlertBody(DateTime? mostRecentUtc, int thresholdMinutes, DateTime now)
     {
         var sb = new System.Text.StringBuilder();
         sb.AppendLine("WxMonitor detected stale METAR data in the database.");
         sb.AppendLine();
         if (mostRecentUtc.HasValue)
         {
-            var age = DateTime.UtcNow - mostRecentUtc.Value;
+            var age = now - mostRecentUtc.Value;
             sb.AppendLine($"  Most recent observation: {mostRecentUtc.Value:yyyy-MM-dd HH:mm} UTC  ({(int)age.TotalMinutes} minute(s) ago)");
         }
         else
@@ -323,7 +340,7 @@ public sealed class MonitorWorker : BackgroundService
         sb.AppendLine("This may indicate WxParser.Svc is not running, or the AWC METAR API is unreachable.");
         sb.AppendLine("Check the WxParser.Svc log and Windows Service Manager for details.");
         sb.AppendLine();
-        sb.AppendLine($"Generated by WxMonitor at {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC");
+        sb.AppendLine($"Generated by WxMonitor at {now:yyyy-MM-dd HH:mm:ss} UTC");
         return sb.ToString();
     }
 
