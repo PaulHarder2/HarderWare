@@ -83,6 +83,8 @@ public sealed class ReportErrorWatcher : IWatcher
 
         foreach (var send in newSends)
         {
+            ct.ThrowIfCancellationRequested();   // keep the service-stop path responsive across many sends
+
             if (send.SentAtUtc > maxSeen)
                 maxSeen = send.SentAtUtc.Value;
 

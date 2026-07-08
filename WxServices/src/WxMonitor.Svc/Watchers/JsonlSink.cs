@@ -31,7 +31,10 @@ public sealed class JsonlSink(string filePath, DateTime nowUtc) : ISink
         if (finding.Fields is not null)
         {
             foreach (var (key, value) in finding.Fields)
-                record[key] = value;
+            {
+                if (!record.TryAdd(key, value))   // never let a field clobber the reserved timestamp/watcher keys
+                    Logger.Warn($"Finding field '{key}' collides with a reserved JSONL key; skipping.");
+            }
         }
 
         try

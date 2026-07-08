@@ -30,8 +30,7 @@ public sealed class MonitorWorker : BackgroundService
     private readonly Func<DateTime> _utcNow;
 
     // The watcher family, run in order each cycle. Stateless — detection state lives in
-    // MonitorState via the WatcherContext. Future watchers (e.g. WX-273's report-error watcher)
-    // are added here.
+    // MonitorState via the WatcherContext. New watchers are added to this list.
     private readonly IReadOnlyList<IWatcher> _watchers =
     [
         new LogScanWatcher(),

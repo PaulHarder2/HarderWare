@@ -134,7 +134,7 @@ public sealed class ReportErrorWatcherTests : IDisposable
         var findings = await new ReportErrorWatcher().RunAsync(Ctx(db, state), CancellationToken.None);
 
         var f = Assert.Single(findings);
-        Assert.Equal("report-errors", f.WatcherId);
+        Assert.Equal(ReportErrorWatcher.WatcherId, f.WatcherId);
         Assert.Null(f.Cooldown);                        // JSONL findings are not rate-limited
         Assert.NotNull(f.Fields);
         Assert.Equal(id.ToString(), f.Fields!["reportId"]);
@@ -220,6 +220,28 @@ public sealed class ReportErrorWatcherTests : IDisposable
         var findings = await new ReportErrorWatcher().RunAsync(Ctx(db, state), CancellationToken.None);
 
         Assert.Single(findings);
+    }
+
+    // ── malformed patterns degrade gracefully ────────────────────────────────
+
+    [Fact]
+    public async Task InvalidAndDuplicatePatterns_SkippedGracefully_ValidStillMatches()
+    {
+        var db = NewDb();
+        using (var ctx = new WeatherDataContext(db))
+            SeedSend(ctx, "paulh", "the sky is BADSTRING");
+        // p1 valid; p2 has an invalid regex (unbalanced paren); p1 duplicated with a different regex.
+        WritePatterns(
+            Pattern("p1", "*", "BADSTRING"),
+            Pattern("p2", "*", "("),
+            Pattern("p1", "*", "OTHER"));
+
+        var state = new MonitorState { LastReportScanUtc = Now.AddSeconds(-1) };
+        var findings = await new ReportErrorWatcher().RunAsync(Ctx(db, state), CancellationToken.None);
+
+        // Invalid regex and the duplicate id are dropped at load; the one valid p1 still fires once.
+        var f = Assert.Single(findings);
+        Assert.Equal("p1", f.Fields!["patternId"]);
     }
 
     // ── §13 end-to-end: a full cycle writes a matching findings.jsonl line ─────
