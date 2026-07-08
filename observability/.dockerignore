@@ -1,0 +1,9 @@
+# Keep the build context minimal and never stream the secret (.env with
+# GRAFANA_ADMIN_PASSWORD) to the Docker daemon (WX-274).  Ignore everything,
+# then allow only the two config files the Dockerfiles actually COPY.  This
+# guarantees .env can never be baked into an image layer even if a COPY is
+# later broadened by mistake.  The Dockerfiles themselves are read as build
+# instructions regardless of this file, so they need no allow-entry.
+*
+!prometheus.yml
+!otel-collector-config.yml

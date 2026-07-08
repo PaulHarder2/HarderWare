@@ -1,5 +1,20 @@
 # Image versions are pinned (WX-17, 2026-04-15) for reproducibility.  Bump
 # deliberately when upgrading; check upstream release notes for breaking changes.
+# (prometheus & otel-collector now pin in their Dockerfile FROM line; grafana
+# still pins on its `image:` line below.)
+#
+# prometheus and otel-collector build a thin local image that COPYs its config
+# into the image instead of bind-mounting the config file from the host
+# (WX-274).  A single-file host bind mount fails on Windows reboot: Docker
+# Desktop auto-starts the containers before the Windows filesystem share is
+# ready inside its Linux VM, so the unresolved bind source gets a directory
+# placeholder mounted onto a config-FILE path -> exit 127.  Baking the config in
+# removes the host dependency at boot.  ==> After editing prometheus.yml or
+# otel-collector-config.yml, rebuild with:  docker compose up -d --build
+#
+# grafana keeps its directory bind mounts: directory mounts survive the reboot
+# race (a placeholder directory is type-compatible), and baking its dashboards
+# would force a rebuild on every dashboard edit.
 #
 # This stack requires observability/.env with GRAFANA_ADMIN_PASSWORD set
 # (WX-91, 2026-05-28).  The .env file is gitignored; source of truth for the
@@ -7,22 +22,23 @@
 # error rather than silently falling back to a weak default.
 services:
   prometheus:
-    image: prom/prometheus:v3.11.2
+    build:
+      context: .
+      dockerfile: prometheus.Dockerfile
     restart: unless-stopped
     ports:
       - "9090:9090"
     volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml
       - prometheus-data:/prometheus
 
   otel-collector:
-    image: otel/opentelemetry-collector:0.150.1
+    build:
+      context: .
+      dockerfile: otel-collector.Dockerfile
     restart: unless-stopped
     ports:
       - "4317:4317"
       - "4318:4318"
-    volumes:
-      - ./otel-collector-config.yml:/etc/otelcol/config.yaml
 
   grafana:
     image: grafana/grafana:11.4.0
