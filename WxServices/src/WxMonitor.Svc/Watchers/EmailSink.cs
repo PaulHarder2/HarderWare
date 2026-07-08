@@ -17,11 +17,11 @@ public sealed class EmailSink(IEmailer emailer, string alertEmail, TimeSpan cool
     {
         if (finding.Cooldown is { LastSentUtc: { } last } && (nowUtc - last) < cooldown)
         {
-            Logger.Debug($"{finding.WatcherId}: alert is on cooldown — suppressed.");
+            Logger.Debug($"Alert on cooldown, suppressed: {finding.Subject}");
             return;
         }
 
-        Logger.Info($"{finding.WatcherId}: sending alert — {finding.Subject}");
+        Logger.Info($"Sending alert: {finding.Subject}");
         if (await emailer.SendAsync(alertEmail, finding.Subject, finding.Body, ct: ct))
         {
             finding.Cooldown?.MarkSent(nowUtc);

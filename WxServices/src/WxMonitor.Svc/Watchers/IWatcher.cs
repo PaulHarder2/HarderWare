@@ -13,9 +13,6 @@ public interface IWatcher
     /// <summary>Stable identifier, e.g. <c>"log-scan"</c>. Used in log narration and metric tags.</summary>
     string Id { get; }
 
-    /// <summary>Human-readable name for operator-facing text.</summary>
-    string DisplayName { get; }
-
     /// <summary>Runs one detection pass and returns the findings to deliver this cycle.</summary>
     Task<IReadOnlyList<Finding>> RunAsync(WatcherContext ctx, CancellationToken ct);
 }

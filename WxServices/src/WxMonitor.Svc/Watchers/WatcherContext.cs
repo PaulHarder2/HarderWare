@@ -25,12 +25,17 @@ public sealed class WatcherContext
     /// <summary>The persisted monitor state (watermarks and last-delivered timestamps).</summary>
     public required MonitorState State { get; init; }
 
-    /// <summary>Minimum time between repeat deliveries of the same category.</summary>
-    public required TimeSpan Cooldown { get; init; }
-
     /// <summary>True once any watcher has mutated <see cref="State"/> this cycle.</summary>
     public bool StateDirty { get; private set; }
 
     /// <summary>Marks <see cref="State"/> as changed so the scheduler persists it at cycle end.</summary>
     public void MarkStateDirty() => StateDirty = true;
+
+    /// <summary>
+    /// Builds a <see cref="CooldownSlot"/> over a <see cref="MonitorState"/> field. The setter is
+    /// wrapped so writing the timestamp also marks state dirty — a watcher cannot record a delivery
+    /// without persisting it, removing the "forgot to call <see cref="MarkStateDirty"/>" footgun.
+    /// </summary>
+    public CooldownSlot NewCooldownSlot(Func<DateTime?> lastSent, Action<DateTime> setLastSent)
+        => new(lastSent, v => { setLastSent(v); MarkStateDirty(); });
 }

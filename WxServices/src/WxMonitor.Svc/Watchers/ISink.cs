@@ -1,9 +1,9 @@
 namespace WxMonitor.Svc.Watchers;
 
 /// <summary>
-/// Delivers a <see cref="Finding"/> somewhere — email today, a JSONL findings file in a future
-/// watcher. The scheduler routes each finding to its watcher's configured <b>set</b> of sinks, so
-/// a finding can go to zero, one, or several sinks (the and/or seam; wired one-per-watcher today).
+/// Delivers a <see cref="Finding"/> somewhere. Today the scheduler delivers every finding to a
+/// single <see cref="EmailSink"/>; the interface is the seam for routing a finding to a <b>set</b>
+/// of sinks (e.g. a JSONL findings file alongside email), which WX-273 wires in.
 /// </summary>
 public interface ISink
 {

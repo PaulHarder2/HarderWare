@@ -136,10 +136,10 @@ public sealed class MonitorWorker : BackgroundService
             UtcNow = now,
             DbOptions = _dbOptions,
             State = state,
-            Cooldown = TimeSpan.FromMinutes(cfg.AlertCooldownMinutes),
         };
 
-        var emailSink = new EmailSink(_emailerFactory(smtp), cfg.AlertEmail, ctx.Cooldown, now, () => _alertsSent.Add(1));
+        var cooldown = TimeSpan.FromMinutes(cfg.AlertCooldownMinutes);
+        var emailSink = new EmailSink(_emailerFactory(smtp), cfg.AlertEmail, cooldown, now, () => _alertsSent.Add(1));
 
         foreach (var watcher in _watchers)
         {
