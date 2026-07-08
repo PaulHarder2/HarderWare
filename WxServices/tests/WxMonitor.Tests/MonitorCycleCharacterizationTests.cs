@@ -241,4 +241,42 @@ public sealed class MonitorCycleCharacterizationTests : IDisposable
 
         Assert.Empty(emailer.Sent);
     }
+
+    // ── WX-276: METAR staleness must not be gated behind having watched services ──
+
+    private static Dictionary<string, string?> NoServicesMetarConfig() => new()
+    {
+        ["Monitor:AlertEmail"] = "alerts@example.com",
+        ["Monitor:AlertOnSeverity"] = "ERROR",
+        ["Monitor:AlertCooldownMinutes"] = "60",
+        ["Monitor:MetarStalenessThresholdMinutes"] = "120",
+        // No Monitor:WatchedServices — pre-WX-276 the cycle early-returns here and skips METAR.
+    };
+
+    [Fact]
+    public async Task Metar_Stale_ZeroWatchedServices_SendsAlert()
+    {
+        var db = NewDb();
+        SeedMostRecentMetar(db, Now.AddMinutes(-200)); // > 120 threshold → stale
+        var emailer = new FakeEmailer();
+        var state = new InMemoryStateStore(new MonitorState());
+
+        await NewWorker(Config(NoServicesMetarConfig()), db, emailer, state).RunCycleAsync(CancellationToken.None);
+
+        var msg = Assert.Single(emailer.Sent);
+        Assert.Equal("[WxMonitor] METAR data is stale — no recent observations", msg.Subject);
+    }
+
+    [Fact]
+    public async Task Metar_Fresh_ZeroWatchedServices_NoAlert()
+    {
+        var db = NewDb();
+        SeedMostRecentMetar(db, Now.AddMinutes(-10)); // < 120 threshold → fresh
+        var emailer = new FakeEmailer();
+        var state = new InMemoryStateStore(new MonitorState());
+
+        await NewWorker(Config(NoServicesMetarConfig()), db, emailer, state).RunCycleAsync(CancellationToken.None);
+
+        Assert.Empty(emailer.Sent);
+    }
 }

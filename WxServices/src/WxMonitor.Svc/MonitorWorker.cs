@@ -124,15 +124,9 @@ public sealed class MonitorWorker : BackgroundService
             return;
         }
 
-        // Preserved from the original cycle: with no watched services the whole cycle is skipped,
-        // which also gates the METAR-staleness check. That coupling is a latent bug — WX-276
-        // removes it. Kept here so this refactor stays behavior-preserving.
-        if (cfg.WatchedServices.Count == 0)
-        {
-            Logger.Debug("No watched services configured.");
-            return;
-        }
-
+        // WX-276: no early-return on an empty watched-services list. The per-service watchers
+        // (log-scan, heartbeat) no-op over it, and the METAR-staleness watcher — which does not
+        // depend on watched services — runs regardless, as it should.
         var state = _stateStore.Load();
         var now = _utcNow();
 
