@@ -1,0 +1,79 @@
+using System.Text;
+
+using WxServices.Logging;
+
+namespace WxMonitor.Svc.Watchers;
+
+/// <summary>
+/// Scans each watched service's log file for new entries at or above the configured severity
+/// threshold and raises one finding per service with new entries. Advances each service's
+/// last-seen-log watermark regardless of severity so future scans have a baseline.
+/// </summary>
+public sealed class LogScanWatcher : IWatcher
+{
+    /// <inheritdoc/>
+    public string Id => "log-scan";
+
+    /// <inheritdoc/>
+    public Task<IReadOnlyList<Finding>> RunAsync(WatcherContext ctx, CancellationToken ct)
+    {
+        var findings = new List<Finding>();
+
+        foreach (var svc in ctx.Config.WatchedServices)
+        {
+            if (string.IsNullOrWhiteSpace(svc.Name))
+            {
+                Logger.Warn("Watched service entry has no Name — skipping.");
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(svc.LogFile))
+                continue;
+
+            var svcState = ctx.State.GetOrCreate(svc.Name);
+
+            var newEntries = LogScanner.Scan(
+                svc.LogFile,
+                svcState.LastSeenLogTimestamp,
+                ctx.Config.AlertOnSeverity,
+                out var latestTs);
+
+            if (latestTs != svcState.LastSeenLogTimestamp)
+            {
+                svcState.LastSeenLogTimestamp = latestTs;
+                ctx.MarkStateDirty();
+            }
+
+            if (newEntries.Count > 0)
+            {
+                Logger.Info($"{svc.Name}: {newEntries.Count} new {ctx.Config.AlertOnSeverity}+ log entry/entries.");
+                findings.Add(new Finding(
+                    Id,
+                    $"[WxMonitor] {svc.Name} — {newEntries.Count} new log error(s)",
+                    BuildBody(svc.Name, newEntries, ctx.UtcNow),
+                    ctx.NewCooldownSlot(
+                        () => svcState.LastLogAlertSentUtc,
+                        v => svcState.LastLogAlertSentUtc = v)));
+            }
+        }
+
+        return Task.FromResult<IReadOnlyList<Finding>>(findings);
+    }
+
+    /// <summary>Builds the plain-text alert body listing the new high-severity log entries.</summary>
+    private static string BuildBody(string serviceName, IReadOnlyList<LogEntry> entries, DateTime now)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine($"WxMonitor detected {entries.Count} new log entry/entries at ERROR level or above in {serviceName}.");
+        sb.AppendLine();
+        sb.AppendLine(AlertBody.Separator);
+        foreach (var e in entries)
+        {
+            sb.AppendLine(e.Text);
+            sb.AppendLine();
+        }
+        sb.AppendLine(AlertBody.Separator);
+        AlertBody.AppendFooter(sb, now);
+        return sb.ToString();
+    }
+}

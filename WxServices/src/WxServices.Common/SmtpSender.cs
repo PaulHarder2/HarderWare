@@ -15,7 +15,7 @@ namespace WxServices.Common;
 /// row and loaded by each service at runtime.
 /// Supports inline image attachments referenced by <c>cid:</c> URIs in the HTML body.
 /// </summary>
-public sealed class SmtpSender
+public sealed class SmtpSender : IEmailer
 {
     private readonly SmtpConfig _cfg;
     private readonly string _fromName;

@@ -50,6 +50,9 @@ var host = Host.CreateDefaultBuilder(args)
         services.AddWxTelemetry(ctx.Configuration, m => m.AddMeter("WxMonitor.Svc"));
 
         services.AddSingleton(dbOptions);
+        services.AddSingleton<Func<SmtpConfig, IEmailer>>(_ => smtp => new SmtpSender(smtp, "WxMonitor"));
+        services.AddSingleton<IMonitorStateStore>(_ => new MonitorStateStore());
+        services.AddSingleton<Func<DateTime>>(_ => () => DateTime.UtcNow);
         services.AddHostedService<MonitorWorker>();
     })
     .Build();

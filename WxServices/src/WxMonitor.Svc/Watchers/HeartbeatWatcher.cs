@@ -1,0 +1,66 @@
+using System.Text;
+
+using WxServices.Logging;
+
+namespace WxMonitor.Svc.Watchers;
+
+/// <summary>
+/// Checks each watched service's heartbeat file and raises a finding when the heartbeat is older
+/// than the service's configured maximum age (the service may be stopped, crashed, or hung).
+/// </summary>
+public sealed class HeartbeatWatcher : IWatcher
+{
+    /// <inheritdoc/>
+    public string Id => "heartbeat";
+
+    /// <inheritdoc/>
+    public Task<IReadOnlyList<Finding>> RunAsync(WatcherContext ctx, CancellationToken ct)
+    {
+        var findings = new List<Finding>();
+
+        foreach (var svc in ctx.Config.WatchedServices)
+        {
+            if (string.IsNullOrWhiteSpace(svc.Name) || string.IsNullOrWhiteSpace(svc.HeartbeatFile))
+                continue;
+
+            var age = HeartbeatChecker.GetAge(svc.HeartbeatFile);
+
+            if (age is null)
+            {
+                Logger.Warn($"{svc.Name}: heartbeat file not found at '{svc.HeartbeatFile}'.");
+                continue;
+            }
+
+            if (age.Value.TotalMinutes > svc.HeartbeatMaxAgeMinutes)
+            {
+                var svcState = ctx.State.GetOrCreate(svc.Name);
+                Logger.Warn($"{svc.Name}: heartbeat is {(int)age.Value.TotalMinutes} minute(s) old (max {svc.HeartbeatMaxAgeMinutes}).");
+                findings.Add(new Finding(
+                    Id,
+                    $"[WxMonitor] {svc.Name} — service may be stopped",
+                    BuildBody(svc.Name, age.Value, svc.HeartbeatMaxAgeMinutes, ctx.UtcNow),
+                    ctx.NewCooldownSlot(
+                        () => svcState.LastHeartbeatAlertSentUtc,
+                        v => svcState.LastHeartbeatAlertSentUtc = v)));
+            }
+        }
+
+        return Task.FromResult<IReadOnlyList<Finding>>(findings);
+    }
+
+    /// <summary>Builds the plain-text alert body explaining that a heartbeat has gone stale.</summary>
+    private static string BuildBody(string serviceName, TimeSpan age, int maxAgeMinutes, DateTime now)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine($"WxMonitor detected a stale heartbeat for {serviceName}.");
+        sb.AppendLine();
+        sb.AppendLine($"  Last heartbeat:  {(int)age.TotalMinutes} minute(s) ago");
+        sb.AppendLine($"  Maximum allowed: {maxAgeMinutes} minute(s)");
+        sb.AppendLine();
+        sb.AppendLine("This may indicate the service has stopped, crashed, or is hung.");
+        sb.AppendLine("Check the Windows Service Manager and the service log for details.");
+        sb.AppendLine();
+        AlertBody.AppendFooter(sb, now);
+        return sb.ToString();
+    }
+}

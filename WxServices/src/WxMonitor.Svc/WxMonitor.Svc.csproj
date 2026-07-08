@@ -15,6 +15,9 @@
     <PackageReference Include="OpenTelemetry" Version="1.15.3" />
   </ItemGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="WxMonitor.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\MetarParser.Data\MetarParser.Data.csproj" />
     <ProjectReference Include="..\WxServices.Common\WxServices.Common.csproj" />
     <ProjectReference Include="..\WxServices.Logging\WxServices.Logging.csproj" />
