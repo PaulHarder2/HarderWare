@@ -12,6 +12,15 @@ public class MonitorState
     public DateTime? LastMetarStalenessAlertSentUtc { get; set; }
 
     /// <summary>
+    /// Highest <c>CommittedSend.SentAtUtc</c> the report-error watcher has scanned (WX-273). Keyed on
+    /// send-time rather than <c>Id</c> because <c>Id</c> is assigned at provisional insert while
+    /// <c>SentAtUtc</c> is set at send completion — so <c>SentAtUtc</c> is monotonic with the order sends
+    /// actually ship, and a lower-<c>Id</c> send that ships later is not skipped. Null until first
+    /// baselined; the watcher then only scans sends past this time (forward monitoring).
+    /// </summary>
+    public DateTime? LastReportScanUtc { get; set; }
+
+    /// <summary>
     /// Returns the <see cref="ServiceState"/> for the given service name,
     /// creating and registering a new empty entry if one does not yet exist.
     /// </summary>

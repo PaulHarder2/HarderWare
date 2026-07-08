@@ -15,6 +15,12 @@ public sealed class EmailSink(IEmailer emailer, string alertEmail, TimeSpan cool
     /// <inheritdoc/>
     public async Task EmitAsync(Finding finding, CancellationToken ct)
     {
+        if (string.IsNullOrWhiteSpace(alertEmail))
+        {
+            Logger.Debug($"No alert email configured — not sending: {finding.Subject}");
+            return;
+        }
+
         if (finding.Cooldown is { LastSentUtc: { } last } && (nowUtc - last) < cooldown)
         {
             Logger.Debug($"Alert on cooldown, suppressed: {finding.Subject}");

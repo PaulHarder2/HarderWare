@@ -2,6 +2,8 @@ using MetarParser.Data;
 
 using Microsoft.EntityFrameworkCore;
 
+using WxServices.Common;
+
 namespace WxMonitor.Svc.Watchers;
 
 /// <summary>
@@ -21,6 +23,9 @@ public sealed class WatcherContext
 
     /// <summary>EF options for opening a <see cref="WeatherDataContext"/> (used by DB-backed watchers).</summary>
     public required DbContextOptions<WeatherDataContext> DbOptions { get; init; }
+
+    /// <summary>InstallRoot-derived paths (logs dir, config locations) for watchers that read files.</summary>
+    public required WxPaths Paths { get; init; }
 
     /// <summary>The persisted monitor state (watermarks and last-delivered timestamps).</summary>
     public required MonitorState State { get; init; }

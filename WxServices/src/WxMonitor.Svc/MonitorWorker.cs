@@ -37,6 +37,7 @@ public sealed class MonitorWorker : BackgroundService
         new LogScanWatcher(),
         new HeartbeatWatcher(),
         new MetarStalenessWatcher(),
+        new ReportErrorWatcher(),
     ];
 
     private readonly Meter _meter = new("WxMonitor.Svc", "1.0.0");
@@ -118,37 +119,40 @@ public sealed class MonitorWorker : BackgroundService
     {
         var (cfg, smtp) = await LoadConfigsAsync(ct);
 
+        // Email alerts can't send without a destination, but the report-error watcher writes to a
+        // JSONL sink and needs no email — so warn and carry on rather than skipping the whole cycle.
         if (string.IsNullOrWhiteSpace(cfg.AlertEmail))
-        {
-            Logger.Warn("Monitor.AlertEmail is not set — skipping monitor cycle.");
-            return;
-        }
+            Logger.Warn("Monitor.AlertEmail is not set — email alerts are disabled; non-email watchers still run.");
 
         // WX-276: no early-return on an empty watched-services list. The per-service watchers
         // (log-scan, heartbeat) no-op over it, and the METAR-staleness watcher — which does not
         // depend on watched services — runs regardless, as it should.
         var state = _stateStore.Load();
         var now = _utcNow();
+        var paths = new WxPaths(_config["InstallRoot"]);
 
         var ctx = new WatcherContext
         {
             Config = cfg,
             UtcNow = now,
             DbOptions = _dbOptions,
+            Paths = paths,
             State = state,
         };
 
         var cooldown = TimeSpan.FromMinutes(cfg.AlertCooldownMinutes);
         var emailSink = new EmailSink(_emailerFactory(smtp), cfg.AlertEmail, cooldown, now, () => _alertsSent.Add(1));
+        var jsonlSink = new JsonlSink(Path.Combine(paths.LogsDir, "findings.jsonl"), now);
 
         foreach (var watcher in _watchers)
         {
             var findings = await watcher.RunAsync(ctx, ct);
-
-            // Today every finding is delivered by email. WX-273 introduces a per-watcher sink set
-            // (adding a JSONL sink for the report-error watcher); this is where routing widens.
+            var sinks = SinksFor(watcher.Id, emailSink, jsonlSink);
             foreach (var finding in findings)
-                await emailSink.EmitAsync(finding, ct);
+            {
+                foreach (var sink in sinks)
+                    await sink.EmitAsync(finding, ct);
+            }
         }
 
         if (ctx.StateDirty)
@@ -157,6 +161,14 @@ public sealed class MonitorWorker : BackgroundService
         _monitorCycles.Add(1);
         Logger.Info("Monitor cycle complete.");
     }
+
+    /// <summary>
+    /// Resolves the sink(s) a watcher's findings are delivered to. The operational watchers
+    /// (log-scan, heartbeat, METAR-staleness) alert a human by email; the report-error watcher
+    /// writes durable, review-oriented JSONL records with no email and no rate-limiting.
+    /// </summary>
+    private static IReadOnlyList<ISink> SinksFor(string watcherId, EmailSink email, JsonlSink jsonl)
+        => watcherId == ReportErrorWatcher.WatcherId ? [jsonl] : [email];
 
     // ── helpers ───────────────────────────────────────────────────────────────
 
