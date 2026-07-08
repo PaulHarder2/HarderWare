@@ -12,5 +12,5 @@
 # Editing prometheus.yml now requires: docker compose up -d --build
 #
 # Version pinned (WX-17); bump deliberately and re-check upstream release notes.
-FROM prom/prometheus:v3.11.2
+FROM prom/prometheus:v3.11.3
 COPY prometheus.yml /etc/prometheus/prometheus.yml

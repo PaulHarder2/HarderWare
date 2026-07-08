@@ -25,7 +25,6 @@ services:
     build:
       context: .
       dockerfile: prometheus.Dockerfile
-    image: harderware/prometheus:v3.11.2
     restart: unless-stopped
     ports:
       - "9090:9090"
@@ -36,7 +35,6 @@ services:
     build:
       context: .
       dockerfile: otel-collector.Dockerfile
-    image: harderware/otel-collector:0.150.1
     restart: unless-stopped
     ports:
       - "4317:4317"
