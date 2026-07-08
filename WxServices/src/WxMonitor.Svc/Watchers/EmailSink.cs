@@ -1,0 +1,31 @@
+using WxServices.Common;
+using WxServices.Logging;
+
+namespace WxMonitor.Svc.Watchers;
+
+/// <summary>
+/// Delivers findings by email, rate-limited per finding via its <see cref="CooldownSlot"/>.
+/// A finding whose category delivered within the cooldown window is skipped; the cooldown is
+/// marked only on a <b>successful</b> send, so a failed SMTP attempt is retried next cycle rather
+/// than burning the cooldown window. Constructed per cycle with the resolved emailer, destination,
+/// and stamped "now".
+/// </summary>
+public sealed class EmailSink(IEmailer emailer, string alertEmail, TimeSpan cooldown, DateTime nowUtc, Action onSent) : ISink
+{
+    /// <inheritdoc/>
+    public async Task EmitAsync(Finding finding, CancellationToken ct)
+    {
+        if (finding.Cooldown is { LastSentUtc: { } last } && (nowUtc - last) < cooldown)
+        {
+            Logger.Debug($"{finding.WatcherId}: alert is on cooldown — suppressed.");
+            return;
+        }
+
+        Logger.Info($"{finding.WatcherId}: sending alert — {finding.Subject}");
+        if (await emailer.SendAsync(alertEmail, finding.Subject, finding.Body, ct: ct))
+        {
+            finding.Cooldown?.MarkSent(nowUtc);
+            onSent();
+        }
+    }
+}
