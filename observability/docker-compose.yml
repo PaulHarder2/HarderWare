@@ -1,6 +1,7 @@
 # Image versions are pinned (WX-17, 2026-04-15) for reproducibility.  Bump
 # deliberately when upgrading; check upstream release notes for breaking changes.
-# (The pin now lives in each service's Dockerfile FROM line — see below.)
+# (prometheus & otel-collector now pin in their Dockerfile FROM line; grafana
+# still pins on its `image:` line below.)
 #
 # prometheus and otel-collector build a thin local image that COPYs its config
 # into the image instead of bind-mounting the config file from the host
