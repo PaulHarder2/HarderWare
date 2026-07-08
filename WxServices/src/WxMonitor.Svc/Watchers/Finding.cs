@@ -20,10 +20,12 @@ public sealed class CooldownSlot(Func<DateTime?> lastSent, Action<DateTime> mark
 /// and <see cref="Body"/> itself (it knows best how to phrase its own alert); each
 /// <see cref="ISink"/> takes what it needs. <see cref="Cooldown"/> carries the per-category
 /// rate-limit slot for sinks that rate-limit (e.g. email); it is <see langword="null"/> for
-/// findings that should always be delivered.
+/// findings that should always be delivered. <see cref="Fields"/> carries structured data for
+/// record sinks (e.g. <see cref="JsonlSink"/>); email delivery ignores it.
 /// </summary>
 public sealed record Finding(
     string WatcherId,
     string Subject,
     string Body,
-    CooldownSlot? Cooldown = null);
+    CooldownSlot? Cooldown = null,
+    IReadOnlyDictionary<string, string>? Fields = null);
