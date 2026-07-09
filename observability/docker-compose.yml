@@ -1,20 +1,30 @@
 # Image versions are pinned (WX-17, 2026-04-15) for reproducibility.  Bump
 # deliberately when upgrading; check upstream release notes for breaking changes.
-# (prometheus & otel-collector now pin in their Dockerfile FROM line; grafana
-# still pins on its `image:` line below.)
+# (all three now pin the upstream tag in their Dockerfile FROM line.)
 #
-# prometheus and otel-collector build a thin local image that COPYs its config
-# into the image instead of bind-mounting the config file from the host
-# (WX-274).  A single-file host bind mount fails on Windows reboot: Docker
+# All three services build a thin local image that COPYs its config into the
+# image instead of bind-mounting it from the host (prometheus + otel-collector:
+# WX-274; grafana: WX-278).  A host bind mount fails on Windows reboot: Docker
 # Desktop auto-starts the containers before the Windows filesystem share is
-# ready inside its Linux VM, so the unresolved bind source gets a directory
-# placeholder mounted onto a config-FILE path -> exit 127.  Baking the config in
-# removes the host dependency at boot.  ==> After editing prometheus.yml or
-# otel-collector-config.yml, rebuild with:  docker compose up -d --build
+# ready inside its Linux VM, so the unresolved bind source gets an empty
+# directory placeholder.  For a config-FILE mount (prometheus, otel-collector)
+# that is dir-onto-file -> exit 127 (fails loudly).  For a config-DIRECTORY
+# mount (grafana's provisioning + dashboards) the placeholder is type-compatible
+# so the container starts, but serves an EMPTY directory -> the dashboard
+# provisioner registers zero dashboards and bookmarked UIDs 404 ("Invalid
+# dashboard UID").  That silent-empty failure (proven on the 2026-07-09 reboot)
+# is arguably worse than exit 127, and it is persistent: grafana's 30s provider
+# re-scan keeps re-reading the stale empty mount and never self-heals.  Baking
+# every config into its image removes the host dependency at boot.  ==> After
+# editing any baked config (prometheus.yml, otel-collector-config.yml, or
+# grafana's provisioning/ or dashboards/), rebuild with:
+#   docker compose up -d --build            (all services)
+#   docker compose up -d --build grafana    (grafana only, e.g. a dashboard edit)
 #
-# grafana keeps its directory bind mounts: directory mounts survive the reboot
-# race (a placeholder directory is type-compatible), and baking its dashboards
-# would force a rebuild on every dashboard edit.
+# grafana bakes its dashboards to /etc/grafana/dashboards, NOT under
+# /var/lib/grafana, because the grafana-data named volume mounts there and would
+# shadow the baked content.  Named volumes live in the Docker VM and are immune
+# to the boot-time share race, so grafana-data (runtime DB/state) stays a mount.
 #
 # This stack requires observability/.env with GRAFANA_ADMIN_PASSWORD set
 # (WX-91, 2026-05-28).  The .env file is gitignored; source of truth for the
@@ -41,14 +51,14 @@ services:
       - "4318:4318"
 
   grafana:
-    image: grafana/grafana:11.4.0
+    build:
+      context: .
+      dockerfile: grafana.Dockerfile
     restart: unless-stopped
     ports:
       - "3000:3000"
     volumes:
       - grafana-data:/var/lib/grafana
-      - ./grafana/provisioning:/etc/grafana/provisioning
-      - ./grafana/dashboards:/var/lib/grafana/dashboards
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD must be set in observability/.env}
       - GF_USERS_ALLOW_SIGN_UP=false

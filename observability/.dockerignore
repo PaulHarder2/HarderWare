@@ -1,9 +1,18 @@
 # Keep the build context minimal and never stream the secret (.env with
-# GRAFANA_ADMIN_PASSWORD) to the Docker daemon (WX-274).  Ignore everything,
-# then allow only the two config files the Dockerfiles actually COPY.  This
+# GRAFANA_ADMIN_PASSWORD) to the Docker daemon (WX-274, WX-278).  Ignore
+# everything, then allow only what the Dockerfiles actually COPY.  This
 # guarantees .env can never be baked into an image layer even if a COPY is
 # later broadened by mistake.  The Dockerfiles themselves are read as build
 # instructions regardless of this file, so they need no allow-entry.
+#
+# .env lives at the context ROOT (observability/.env), not under grafana/, and
+# stays excluded by `*`.  We allow-list ONLY the two grafana/ subtrees that
+# grafana.Dockerfile actually COPYs -- provisioning + dashboards -- so the
+# "allow only what is COPYed" principle above holds for grafana too, and a
+# future stray file elsewhere under grafana/ is not streamed to the daemon
+# (WX-278).
 *
 !prometheus.yml
 !otel-collector-config.yml
+!grafana/provisioning
+!grafana/dashboards
