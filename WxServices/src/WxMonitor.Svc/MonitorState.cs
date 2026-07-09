@@ -20,6 +20,17 @@ public class MonitorState
     /// </summary>
     public DateTime? LastReportScanUtc { get; set; }
 
+    /// <summary>UTC time the most recent grafana too-few-dashboards alert was sent (WX-279 cooldown).</summary>
+    public DateTime? LastGrafanaDashboardAlertSentUtc { get; set; }
+
+    /// <summary>
+    /// Consecutive sub-floor grafana dashboard-count readings (WX-279 debounce). Reset to 0 on a healthy
+    /// reading; a probe failure leaves it unchanged (inconclusive). Alerting begins once it reaches
+    /// <see cref="Watchers.GrafanaDashboardWatcher.AlertThreshold"/>, which suppresses false positives
+    /// during grafana's boot/provisioning window.
+    /// </summary>
+    public int GrafanaSubFloorStreak { get; set; }
+
     /// <summary>
     /// Returns the <see cref="ServiceState"/> for the given service name,
     /// creating and registering a new empty entry if one does not yet exist.
