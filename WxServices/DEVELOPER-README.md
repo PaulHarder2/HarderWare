@@ -352,14 +352,7 @@ All logs are in `{InstallRoot}\Logs\` with UTC timestamps.
 
 ## Jira labels
 
-Issues in the Jira `WX` project are tagged with labels across three orthogonal
-dimensions (component, work-character, source/meta). Standalone tickets must
-carry at least one component and one work-character label; cross-cutting work
-may add more.
-
-The **single source of truth is [`LABELS.md`](LABELS.md)**: it lists every
-sanctioned label with its meaning, the epics-vs-labels rule, and the naming
-conventions. The Jira issue **WX-37** is only the mechanical autocomplete seed
-(Jira Cloud drops an unused label from autocomplete, so WX-37 keeps each one
-applied on ≥1 issue — do not close it or strip its labels). To sanction a new
-label, add it to `LABELS.md` first, then apply it once on WX-37.
+Issues in the Jira `WX` project carry an internal label taxonomy (component /
+work-character / source dimensions) used for the maintainer's board hygiene. It
+is Jira-workflow metadata, not part of the codebase or the build — so the
+taxonomy is maintained outside this repo and isn't reproduced here.
