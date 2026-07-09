@@ -15,7 +15,8 @@ namespace WxMonitor.Svc;
 /// <summary>
 /// Background service that periodically runs the WxMonitor watcher family — one scheduling loop
 /// that builds a per-cycle <see cref="WatcherContext"/>, runs each <see cref="IWatcher"/>
-/// (log-scan, heartbeat, METAR-staleness), and routes the findings each produces to their sink(s).
+/// (log-scan, heartbeat, METAR-staleness, report-error, grafana-dashboards), and routes the findings
+/// each produces to their sink(s).
 /// Today every finding is delivered by email via <see cref="EmailSink"/>, which rate-limits repeats
 /// per category via <see cref="MonitorConfig.AlertCooldownMinutes"/>. The watchers detect and
 /// advance their own watermarks; this class owns only scheduling, config/secret loading, routing,
@@ -37,6 +38,7 @@ public sealed class MonitorWorker : BackgroundService
         new HeartbeatWatcher(),
         new MetarStalenessWatcher(),
         new ReportErrorWatcher(),
+        new GrafanaDashboardWatcher(),
     ];
 
     private readonly Meter _meter = new("WxMonitor.Svc", "1.0.0");
@@ -163,8 +165,9 @@ public sealed class MonitorWorker : BackgroundService
 
     /// <summary>
     /// Resolves the sink(s) a watcher's findings are delivered to. The operational watchers
-    /// (log-scan, heartbeat, METAR-staleness) alert a human by email; the report-error watcher
-    /// writes durable, review-oriented JSONL records with no email and no rate-limiting.
+    /// (log-scan, heartbeat, METAR-staleness, grafana-dashboards) alert a human by email; the
+    /// report-error watcher writes durable, review-oriented JSONL records with no email and no
+    /// rate-limiting.
     /// </summary>
     private static IReadOnlyList<ISink> SinksFor(string watcherId, EmailSink email, JsonlSink jsonl)
         => watcherId == ReportErrorWatcher.WatcherId ? [jsonl] : [email];

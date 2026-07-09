@@ -32,6 +32,25 @@ public class MonitorConfig
     /// </summary>
     public int MetarStalenessThresholdMinutes { get; set; } = 120;
 
+    /// <summary>
+    /// Base URL of the local grafana to probe for its served-dashboard count, e.g.
+    /// <c>http://localhost:3000</c>.  Blank (the default) disables the grafana dashboard-count check.
+    /// </summary>
+    public string GrafanaUrl { get; set; } = "";
+
+    /// <summary>
+    /// Grafana Viewer service-account token used to authenticate the dashboard-count probe (bearer auth).
+    /// A secret — set it only in the host-only <c>appsettings.local.json</c> under InstallRoot, never in
+    /// the committed <c>appsettings.shared.json</c>.
+    /// </summary>
+    public string GrafanaServiceAccountToken { get; set; } = "";
+
+    /// <summary>
+    /// Minimum number of dashboards grafana is expected to serve.  A reading below this floor — after
+    /// the watcher's consecutive-reading debounce — raises an alert.  Default 4; set to 0 to disable.
+    /// </summary>
+    public int GrafanaDashboardFloor { get; set; } = 4;
+
     public List<WatchedServiceConfig> WatchedServices { get; set; } = [];
 }
 
