@@ -3,6 +3,13 @@ apiVersion: 1
 providers:
   - name: WxServices
     type: file
+    # Static baked files now (WX-278): a change needs `docker compose up -d
+    # --build grafana`, which restarts the container and reloads everything, so
+    # this poll can't observe live on-disk edits. Kept as a harmless explicit
+    # interval (removing it falls back to a more frequent default poll).
     updateIntervalSeconds: 30
     options:
-      path: /var/lib/grafana/dashboards
+      # Baked into the image at /etc/grafana/dashboards (WX-278), outside the
+      # grafana-data named volume mounted at /var/lib/grafana (which would
+      # otherwise shadow the baked dashboards). See grafana.Dockerfile.
+      path: /etc/grafana/dashboards
