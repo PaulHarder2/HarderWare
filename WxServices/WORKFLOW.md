@@ -1,65 +1,14 @@
 # WxServices development workflow
 
-Last updated 2026-07-09.
+Last updated 2026-07-10.
 
 This document is the authoritative workflow for landing a change in WxServices. It is a snapshot of the rules Paul and Claude have agreed on over time; when something here conflicts with an ad-hoc direction, this document wins unless the conflict is flagged and the document updated.
 
 The flow intentionally trades speed for audit: every change maps to a Jira ticket, every release maps to an immutable commit hash, and every substantive code change has been seen by two reviewers — Claude's `/code-review` first (§7d, as of 2026-05-29), then CodeRabbit as the independent second pass (§9).
 
-The **common core** immediately below states the principles every Claude project shares; it is **synced from the template** `~/.claude/templates/claude-project/WORKFLOW.md` — to change a shared principle, edit the template and re-sync, don't patch it here (see `~/.claude/shared/CONVENTIONS.md` → *Route before you write*). Everything beneath the **"— WxServices mechanics below —"** seam is this project's own heavyweight machinery (§1–§13 and the sections that follow), which *implements and extends* the core — that detail is where WxServices earns its keep.
+This file holds **only WxServices' own process mechanics** — the heavyweight machinery (§1–§13 and the sections that follow) that governs how *this* project branches, builds, tests, reviews, versions, and transitions a change from ticket to done. A code reviewer needs exactly this detail, and it is versioned with the code it governs; that detail is where WxServices earns its keep.
 
-<!-- BEGIN COMMON CORE — source of truth: ~/.claude/templates/claude-project/WORKFLOW.md · sync from template, don't edit in a project copy -->
-
-## The common core — principles every project shares
-
-1. **A ticket for every change.** No orphan changes: every change maps to a Jira ticket before it lands.
-   Batch related work into one ticket (one ticket ↔ many commits is fine); don't split a single logical
-   unit of work across tickets.
-
-2. **Off-scope tweaks may ride along — but leave a paper trail.** A small out-of-scope fix (a typo, a
-   log-message cleanup, a drive-by bug fix) may share the commit/PR rather than getting its own ticket.
-   When it goes beyond trivial — an actual bug unrelated to the ticket's scope — **comment on the active
-   ticket** naming the find + the fix + that it was folded in. Split it out if it would confuse a bisect or
-   complicate a revert. Inline cleanup is encouraged; it just must not let the ticket's history lie about
-   what shipped.
-
-3. **Labels are orthogonal facets from the project's sanctioned set.** The sanctioned labels live in the
-   shared `~/.claude/shared/LABELS.md` (a Global section + a per-project section). Before coining a new
-   label, check the other projects' sections and **reuse the meaning** rather than coining a near-synonym —
-   cross-project consistency beats a marginally better name. *(How strictly labels are required is
-   weight-specific — see project mechanics.)*
-
-4. **Read the ticket first; the groomed spec is the contract — but not infallible.** Build to the ticket,
-   not to `DESIGN.md` + assumptions. When the spec looks wrong or conflicts with a later decision, **raise
-   it** — never silently follow *and* never silently deviate.
-
-5. **Clear the change with Paul before it lands.** Walk him through what changed, why, and any surprises;
-   run the tests/verification; show the diff; **wait for his go** before commit/push. This is the
-   human-in-the-loop gate against autopilot — Paul reads what ships in his name, and stays fluent in his own
-   system. *(The depth of the walkthrough scales with the change; the heavyweight form is a PR walkthrough,
-   the light form a plain diff — see project mechanics.)*
-
-6. **Self-review before it lands.** Run Claude's local `/code-review` on the working-tree diff and resolve
-   every valid finding **before** any further (heavier) review. Decline bad suggestions with a written
-   rationale; don't apply every suggestion reflexively.
-
-7. **Verification is tracked, per ticket.** Every verifiable ticket carries two Jira fields: **Test Proc** =
-   the path to `docs/test-procedures/<KEY>.md`, or the literal **`N/A`** (never blank — blank reads as
-   *forgotten*); **Test Result** = `PASS yyyy-mm-dd @ <version>` or `FAIL …`. Set Test Proc *before* the
-   change lands. Bundled tickets share one procedure doc named with every key.
-
-8. **Done means verified, not merged; Closed is Paul's.** Claude drives a ticket to **Done** once it is
-   complete, verified, and landed; **Paul alone** transitions Done → Closed (his deliberate human-review
-   checkpoint). Log the groomed→Done work-time as a Jira worklog at Done — calibration data against the
-   Original estimate.
-
-9. **Version every change that alters the deployed/run artifact.** Semantic versioning (patch = fix,
-   minor = feature, major = large/breaking) with a `VERSIONS.md` row. Litmus: if the shipped
-   binaries/assets would be **byte-for-byte identical** — pure-docs, tests-only, external tooling/config
-   (dashboards, CI yaml) — **skip the bump.** "Shippable" means it changes what the user actually runs,
-   which is broader than "code changed" at both edges.
-
-<!-- END COMMON CORE -->
+The **general working principles** that govern how we operate across *every* project — our ticketing, grooming, review, verification, and release discipline (the operating agreement between the maintainer and the AI collaborator) — are deliberately **not** restated here. They live in a shared standing policy outside this repository (`~/.claude/shared/WORKFLOW-CORE.md`, read at the start of every working session); that policy is internal working context, **not part of this repository and not subject to code review**. A contributor needs the mechanics below; the shared principles are context, not a repo artifact. (The discriminator that draws this line — a rule is in-repo iff a code review must be able to see it — and the retired embed-and-re-sync model it replaced are recorded in `~/.claude/shared/CONVENTIONS.md` → *Route before you write*; see WX-282.)
 
 — WxServices mechanics below —
 
