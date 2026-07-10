@@ -38,7 +38,9 @@ out of the repo and shell history. From the `WxServices` directory, with
 `ANTHROPIC_API_KEY` already exported in the shell:
 
 ```bash
-cat > /mnt/c/Code/Temp/kdwh-record.runsettings <<XML
+RS=/mnt/c/Code/Temp/kdwh-record.runsettings
+trap 'rm -f "$RS"' EXIT INT TERM          # delete the key file on ANY exit — even a failed/interrupted run
+cat > "$RS" <<XML
 <?xml version="1.0" encoding="utf-8"?>
 <RunSettings><RunConfiguration><EnvironmentVariables>
   <WX_RECORD_KDWH>1</WX_RECORD_KDWH>
@@ -46,11 +48,12 @@ cat > /mnt/c/Code/Temp/kdwh-record.runsettings <<XML
 </EnvironmentVariables></RunConfiguration></RunSettings>
 XML
 dotnet test WxServices.CI.slnf --filter FullyQualifiedName~KdwhScenarioReplayRecorder --settings 'C:\Code\Temp\kdwh-record.runsettings'
-rm -f /mnt/c/Code/Temp/kdwh-record.runsettings
+rm -f "$RS"; trap - EXIT INT TERM
 ```
 
-(The unquoted `<<XML` heredoc expands `${ANTHROPIC_API_KEY}` into the file; the
-single-quoted `'C:\Code\Temp\…'` keeps the backslashes for `dotnet.exe`.)
+(The `trap` guarantees the key-bearing settings file is removed even if `dotnet test`
+fails or you Ctrl-C it. The unquoted `<<XML` heredoc expands `${ANTHROPIC_API_KEY}` into
+the file; the single-quoted `'C:\Code\Temp\…'` keeps the backslashes for `dotnet.exe`.)
 
 **A real recording takes ~40 s+ (two live Claude calls) and leaves the three fixtures
 modified in `git status`.** A fast (< 10 s), zero-diff run means the env never reached
