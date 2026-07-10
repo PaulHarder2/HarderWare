@@ -920,7 +920,7 @@ public sealed class ForecastReconciler
         + @"|surface[ -]low|upper[ -]level[ -]low|cutoff[ -]low|closed[ -]low|convergence[ -]zone"
         + @"|upper[ -]level[ -]trough|jet[ -]stream|jet[ -]streak|upslope[ -]flow|downslope[ -]flow"
         + @"|onshore[ -]flow|offshore[ -]flow|dryline|sea[ -]breeze|cyclone|anticyclone|shortwave)\b"
-        + @"|(?<!\bin\s)\bfront(?:al)?\b",
+        + @"|(?<!\bin\s+)\bfront(?:al)?\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     // Spanish (es): unambiguously-meteorological phrases only, so a general word that
     // merely also carries a met sense is never flagged. "un frente"/"el frente"

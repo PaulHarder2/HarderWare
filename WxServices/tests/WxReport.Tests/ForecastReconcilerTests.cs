@@ -827,6 +827,30 @@ public class ForecastReconcilerTests
     }
 
     [Fact]
+    public async Task SynopticMechanism_InFrontOf_WhitespaceRun_IsLegal_Succeeds()
+    {
+        // The "in front of" guard tolerates a whitespace RUN between "in" and "front"
+        // (CodeRabbit, PR #182): the lookbehind is (?<!\bin\s+), so a double space still
+        // reads as the positional idiom, not a flagged mechanism.
+        const string report = """
+            {
+              "schemaVersion": 5,
+              "narrative": {
+                "en": { "changeSummary": "Breezy conditions build this evening, with the drier air sitting just in  front of the coast.", "closing": "A quieter stretch settles in for the rest of the week." }
+              }
+            }
+            """;
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: RainBlockSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: report);
+
+        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
+        Assert.Equal("Breezy conditions build this evening, with the drier air sitting just in  front of the coast.", success.StructuredReport.Narrative["en"].ChangeSummary);
+    }
+
+    [Fact]
     public async Task SynopticMechanism_SpanishFrenteFrio_DropsChangeSummary()
     {
         // The es arm catches "un frente frío" (article + noun, and the weather-adjective form).
