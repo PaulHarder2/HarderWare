@@ -10,10 +10,10 @@ namespace WxReport.Tests.Scenarios;
 
 // Opt-in recorder: captures the live Anthropic responses for the KDWH replay
 // fixtures. A no-op in CI; runs only when WX_RECORD_KDWH=1 and ANTHROPIC_API_KEY
-// are set. On a dev box (from the repo's WxServices directory):
-//
-//   WX_RECORD_KDWH=1 ANTHROPIC_API_KEY=sk-ant-... \
-//     dotnet test WxServices.CI.slnf --filter FullyQualifiedName~KdwhScenarioReplayRecorder
+// are set — but inject them via a RunSettings file, NOT inline/exported env vars: under
+// .NET SDK 9 the `dotnet test` host does not inherit the shell environment, so the inline
+// form silently no-ops (a fast, green, zero-diff run that records nothing). See the
+// "Re-recording" section of Fixtures/README.md for the exact command (WX-285).
 //
 // It overwrites two committed fixtures with genuine Claude output:
 //   Fixtures/kdwh-853-skip.recorded.json        (expected: skip_send)

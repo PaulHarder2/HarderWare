@@ -1,1 +1,12 @@
-Changed since last sent report is "observation only" — no new TAF or GFS run. The current observation (light rain, overcast, 8 kt winds) is entirely consistent with what the prior_snapshot already committed: overcast skies, rain likely, winds 7–12 kt for the current blocks. The provisional_snapshot (which is the same GFS run as before) matches the prior_snapshot for the remaining blocks. The TAF issuance (11:38Z) is newer than the GFS run (06Z) but is not flagged as new since last sent, so per the anti-reversal rule and the "observation only" flag, no model-driven changes are warranted. The 30% probability of thunderstorms in the TAF's 19–23Z window does not rise to a safety-critical level (CAPE is only 13 J/kg — low — no severe flag, no new model run), and that probabilistic group was already within the validity window of the TAF that existed at the time of the prior send. The observation confirms previously promised rain; it introduces nothing new. No material categorical change from prior_snapshot — skip send.
+Changed_since_last_sent_report is "observation only" — no new TAF or GFS run since the last sent report.
+
+Reconciliation:
+1. TAF issuance (2026-04-21T11:38Z) is newer than GFS run (2026-04-21T06:00Z), so TAF takes precedence within its validity window. The TAF shows overcast skies, showers/light rain, winds ~11-12 kt — consistent with the provisional snapshot's overcast + likely rain + 6-12 kt wind blocks. No material divergence.
+
+2. Current observation (2026-04-21T13:53Z): light rain, overcast, 8 kt wind — this confirms the prior committed forecast of likely rain / overcast for the 11-17Z block. No new weather is arriving that was not already promised.
+
+3. Comparison with prior_snapshot: The prior snapshot already committed "likely rain / overcast" for both the 11-17Z and 17-23Z blocks. The observation merely confirms the rain that was already promised. The provisional snapshot for the remaining two blocks is materially identical to prior_snapshot's corresponding blocks (same sky, same precip category, same wind band).
+
+The TAF's Prob30 for thunderstorms (19-23Z) is only a 30% probability group — not a TAF main-line forecast — and since changed_since_last_sent_report is "observation only," the anti-reversal rule prevents re-escalating or re-opening any forecast tier the model has not freshly changed. The prior snapshot did not carry thunderstorms, and no new GFS run supports introducing them now.
+
+Net result: the reconciled snapshot is materially identical to prior_snapshot for all remaining blocks. The observation confirms what was already committed. No category changes, no new hazards, no wind-band crossings. This is not news worth an unscheduled email.
