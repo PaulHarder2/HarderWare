@@ -726,6 +726,150 @@ public class ForecastReconcilerTests
         Assert.Equal("See the forecast above for the full outlook.", success.StructuredReport.Narrative["en"].Closing);
     }
 
+    // WX-139: a two-language structured report body — used by the synoptic-mechanism
+    // tests to exercise the en and es validator arms in one report.
+    private static string EnEsReport(string? enChange, string enClosing, string? esChange, string esClosing) =>
+        "{\"schemaVersion\":5,\"changes\":[],\"narrative\":{"
+        + "\"en\":{\"changeSummary\":" + JsonSerializer.Serialize(enChange) + ",\"closing\":" + JsonSerializer.Serialize(enClosing) + "},"
+        + "\"es\":{\"changeSummary\":" + JsonSerializer.Serialize(esChange) + ",\"closing\":" + JsonSerializer.Serialize(esClosing) + "}}}";
+
+    [Fact]
+    public async Task SynopticMechanism_FrontInClosing_DropsClosingOnly()
+    {
+        // WX-139 headline repro (send 1643): "...a chance of showers ... as a front pushes
+        // through." The gusts/showers are grounded in the TAF but the front is invented — the
+        // model cannot evidence a cause from single-point data. WX-189: closing dropped, rest sends.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: RainBlockSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: ClosingOnlyReport("Expect gusty winds and a few showers this evening as a front pushes through."));
+
+        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
+        Assert.Equal("See the forecast above for the full outlook.", success.StructuredReport.Narrative["en"].Closing);
+    }
+
+    [Fact]
+    public async Task SynopticMechanism_FrontalBoundaryInChangeSummary_DropsChangeSummaryOnly()
+    {
+        // The change-band form of the same defect (send 1637: "...as a frontal boundary pushes
+        // through"). The changeSummary is dropped to the deterministic band and the closing sends.
+        const string report = """
+            {
+              "schemaVersion": 5,
+              "narrative": {
+                "en": { "changeSummary": "Winds turn gusty with showers arriving this evening as a frontal boundary pushes through.", "closing": "Conditions settle down as the week goes on." }
+              }
+            }
+            """;
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: RainBlockSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: report);
+
+        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
+        Assert.Null(success.StructuredReport.Narrative["en"].ChangeSummary);
+        Assert.Equal("Conditions settle down as the week goes on.", success.StructuredReport.Narrative["en"].Closing);
+    }
+
+    [Fact]
+    public async Task SynopticMechanism_MultiWordPressureSystem_DropsClosingOnly()
+    {
+        // A multi-word term ("low pressure") must be caught while its ambiguous bare stem
+        // ("low", a temperature) is left alone — the list is spelled out for exactly this.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: RainBlockSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: ClosingOnlyReport("A broad area of low pressure keeps the unsettled pattern going into the weekend."));
+
+        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
+        Assert.Equal("See the forecast above for the full outlook.", success.StructuredReport.Narrative["en"].Closing);
+    }
+
+    [Fact]
+    public async Task SynopticMechanism_HyphenatedCompound_DropsClosingOnly()
+    {
+        // A hyphenated compound ("upper-level low") is caught as well as the spaced form —
+        // the inter-word separator is [ -], so adjectival hyphenation doesn't slip the backstop.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: RainBlockSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: ClosingOnlyReport("An upper-level low keeps the unsettled pattern going into the weekend."));
+
+        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
+        Assert.Equal("See the forecast above for the full outlook.", success.StructuredReport.Narrative["en"].Closing);
+    }
+
+    [Fact]
+    public async Task SynopticMechanism_EnglishInFrontOf_IsLegal_Succeeds()
+    {
+        // The positional idiom "in front of" is NOT a synoptic mechanism — the "front"/"frontal"
+        // arm is lookbehind-guarded so a legal report is never falsely suppressed.
+        const string report = """
+            {
+              "schemaVersion": 5,
+              "narrative": {
+                "en": { "changeSummary": "Breezy conditions build this evening, with the drier air sitting just in front of the coast.", "closing": "A quieter stretch settles in for the rest of the week." }
+              }
+            }
+            """;
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: RainBlockSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: report);
+
+        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
+        Assert.Equal("Breezy conditions build this evening, with the drier air sitting just in front of the coast.", success.StructuredReport.Narrative["en"].ChangeSummary);
+    }
+
+    [Fact]
+    public async Task SynopticMechanism_SpanishFrenteFrio_DropsChangeSummary()
+    {
+        // The es arm catches "un frente frío" (article + noun, and the weather-adjective form).
+        // The changeSummary is dropped across every language (WX-189 uniform section degrade).
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: RainBlockSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: EnEsReport(
+                enChange: "Winds turn gusty with a few showers this evening.",
+                enClosing: "Conditions settle down as the week goes on.",
+                esChange: "Los vientos se vuelven racheados con algunas lluvias esta tarde mientras avanza un frente frío.",
+                esClosing: "Las condiciones se calman durante la semana."));
+
+        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(
+            _ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(responseJson, Encoding.UTF8, "application/json") },
+            narrativeLanguages: new[] { "en", "es" }));
+        Assert.Null(success.StructuredReport.Narrative["es"].ChangeSummary);
+        Assert.Null(success.StructuredReport.Narrative["en"].ChangeSummary);
+    }
+
+    [Fact]
+    public async Task SynopticMechanism_SpanishFrenteA_IsLegal_Succeeds()
+    {
+        // Ticket-required guard: the positional "frente a" (= off/facing, "frente a la costa"),
+        // which never takes an article, must stay legal — only "frente" + a weather adjective or
+        // article is a mechanism. A legal es report survives intact.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: RainBlockSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: EnEsReport(
+                enChange: "Winds pick up this evening with a few showers around.",
+                enClosing: "A calmer stretch follows for the rest of the week.",
+                esChange: "Los vientos aumentan esta tarde, con el aire más seco justo frente a la costa.",
+                esClosing: "Sigue un periodo más tranquilo durante la semana."));
+
+        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(
+            _ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(responseJson, Encoding.UTF8, "application/json") },
+            narrativeLanguages: new[] { "en", "es" }));
+        Assert.Equal("Los vientos aumentan esta tarde, con el aire más seco justo frente a la costa.", success.StructuredReport.Narrative["es"].ChangeSummary);
+    }
+
     [Fact]
     public async Task ProseTimeWord_ContradictsTokenLocalRendering_DropsChangeSummaryOnly()
     {

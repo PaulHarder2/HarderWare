@@ -900,6 +900,37 @@ public sealed class ForecastReconciler
     // {q:time:<ISO-8601 UTC>} — the only sanctioned way to express an instant in
     // prose. Captures the inner timestamp so we can render it to a local hour.
     private static readonly Regex QTimeToken = new(@"\{q:time:([^}]+)\}", RegexOptions.Compiled);
+    // WX-139: synoptic-MECHANISM vocabulary must never reach recipient prose. The
+    // model's inputs are single-point data (no pressure field, no upstream stations,
+    // snapshot blocks carry no wind direction), so it cannot evidence a causal "why";
+    // a confidently invented mechanism ("as a front pushes through") is the credibility
+    // defect this bans. The prompt rule (ReconcilerPrompts) is the primary defense —
+    // it enumerates the same terms so the model avoids them — and this validator is the
+    // deterministic backstop, failing closed through the WX-189 retry. Lists are
+    // unambiguous-ONLY: bare "system/wave/trough/ridge/boundary/cap" stay prompt-only
+    // (too many innocent uses to hard-reject), and only en/es (the enabled languages)
+    // are scanned. English: multi-word phrases spelled out (so an ambiguous stem like
+    // "convergence" only matches as "convergence zone"), plus the two headline offenders
+    // "front"/"frontal" — guarded so the positional idiom "in front of" stays legal.
+    // Inter-word separators are [ -] (space OR hyphen), so a hyphenated compound
+    // ("low-pressure system", "upper-level low") is caught as well as the spaced form.
+    private static readonly Regex SynopticEnglishMechanism = new(
+        @"\b(?:cold[ -]front|warm[ -]front|stationary[ -]front|occluded[ -]front|backdoor[ -]front"
+        + @"|frontal[ -]boundary|gust[ -]front|outflow[ -]boundary|low[ -]pressure|high[ -]pressure"
+        + @"|surface[ -]low|upper[ -]level[ -]low|cutoff[ -]low|closed[ -]low|convergence[ -]zone"
+        + @"|upper[ -]level[ -]trough|jet[ -]stream|jet[ -]streak|upslope[ -]flow|downslope[ -]flow"
+        + @"|onshore[ -]flow|offshore[ -]flow|dryline|sea[ -]breeze|cyclone|anticyclone|shortwave)\b"
+        + @"|(?<!\bin\s)\bfront(?:al)?\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    // Spanish (es): unambiguously-meteorological phrases only, so a general word that
+    // merely also carries a met sense is never flagged. "un frente"/"el frente"
+    // (article + noun) catch the bare met "front", while the positional idiom "frente a"
+    // (= off/facing, "frente a la costa"), which takes no article, stays legal.
+    private static readonly Regex SynopticSpanishMechanism = new(
+        @"\b(?:frente frío|frente cálido|frente estacionario|frente ocluido"
+        + @"|un frente|el frente|baja presión|alta presión|vaguada|borrasca"
+        + @"|anticiclón|brisa marina|línea seca)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private static void CheckProse(string lang, NarrativeSection section, string? prose, TimeZoneInfo tz)
     {
@@ -932,6 +963,25 @@ public sealed class ForecastReconciler
                 $"structured_report narrative '{lang}' uses the internal/aviation term "
                 + $"'{jargon.Value}' in recipient prose; never name a data source "
                 + "(TAF/METAR/GFS/CAPE/ICAO) — use plain wording such as 'the latest indications'.");
+
+        // WX-139: synoptic-mechanism attribution. The model cannot evidence a causal
+        // "why" from single-point data, so an invented mechanism ("as a front pushes
+        // through") must never reach the reader. en/es only (the enabled languages);
+        // any other language leans on the prompt rule (its equivalents aren't enumerated
+        // here), matching the WX-264 English-only pattern below.
+        var synoptic = lang switch
+        {
+            "en" => SynopticEnglishMechanism,
+            "es" => SynopticSpanishMechanism,
+            _ => null,
+        };
+        var mechanism = synoptic?.Match(masked);
+        if (mechanism is { Success: true })
+            throw new NarrativeProseException(section,
+                $"structured_report narrative '{lang}' attributes a synoptic mechanism "
+                + $"('{mechanism.Value.Trim()}') as a cause; state the observed effect only, "
+                + "never a 'why' — no fronts, pressure systems, troughs/ridges, or other "
+                + "named weather mechanisms (the data cannot support a cause).");
 
         // (2) Prose time-of-day word must agree with its {q:time} token's LOCAL
         // rendering (defect 2, send 1927: "...develop Saturday afternoon,
