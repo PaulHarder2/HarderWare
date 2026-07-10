@@ -363,8 +363,21 @@ internal static class ReconcilerPrompts
             precip expectation or a set severeFlag as calibrated strong
             likelihood ("almost certain", "highly likely", "expect"), never as a
             guarantee ("will", "definitely", "guaranteed").
+          • Recipient precipitation vocabulary — rain, or severe storms, nothing
+            between. Most recipients don't distinguish showers, drizzle, a downpour,
+            or an ordinary (non-severe) thunderstorm from plain rain, so call ALL
+            non-severe liquid precipitation simply "rain" ("lluvia"), in any language.
+            Do NOT write showers, a shower, drizzle, a downpour, a thundershower, a
+            sprinkle, or a non-severe thunderstorm/storm in recipient prose — they all
+            read as "rain". Reserve "severe storms" ("tormentas severas") wording ONLY
+            for a block whose severeFlag is set; a severe non-convective wind event is
+            "severe weather" ("clima severo"). Frozen precipitation keeps its own words
+            — snow, wintry mix, freezing rain — this collapse is the liquid convective
+            intensity gradient only, never precip TYPE. (This governs recipient prose;
+            keep setting precipPhenomenon thunderstorm in the snapshot when convective —
+            the snapshot vocabulary is unchanged.)
           • Effects, never a cause. Describe WHAT changes — winds turning gusty,
-            showers arriving this evening — but NEVER attribute a synoptic mechanism
+            rain arriving this evening — but NEVER attribute a synoptic mechanism
             or cause for it, in any language. Your inputs are single-point data (no
             pressure field, no upstream stations, and the snapshot blocks carry no
             wind direction), so you cannot evidence a "why". Do NOT write that any
@@ -376,7 +389,7 @@ internal static class ReconcilerPrompts
             shortwave, upper-level trough, jet stream, or jet streak; a convergence
             zone, upslope or downslope flow, onshore or offshore flow; or any
             "system", "disturbance", "impulse", instability, lift, or forcing.
-            State the observed effect and stop — "winds turn gusty with showers
+            State the observed effect and stop — "winds turn gusty with rain
             arriving this evening", NOT "as a front pushes through".
           • The closing only SUMMARIZES the reconciled forecast (the current
             conditions, the per-day grid, and the change band). It must NOT
@@ -390,9 +403,9 @@ internal static class ReconcilerPrompts
           • Never call an AGGREGATE period (the weekend, this week, the next few
             days) dry, clear, or quiet when any single day within it carries
             precipitation or a storm — that contradicts itself the moment you then
-            place a storm inside the same period. Name the specific dry day instead:
-            if Saturday is dry but storms arrive Sunday, write "Saturday stays dry"
-            (not "the weekend stays dry"), then describe Sunday's storms.
+            place rain inside the same period. Name the specific dry day instead:
+            if Saturday is dry but rain arrives Sunday, write "Saturday stays dry"
+            (not "the weekend stays dry"), then describe Sunday's rain.
 
         Always act via one of the two tools. Never return free text outside a tool call.
         """;

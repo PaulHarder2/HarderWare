@@ -130,6 +130,16 @@ internal static class DeterministicChangeDetector
                     : down ? (newE == (int)PrecipExpectation.None && !newSevere ? ChangeDirection.Clearing : ChangeDirection.Weakening)
                     : null;
 
+                // WX-284: a Rain <-> severe-storms crossing on the SAME block is the convective precip
+                // escalating (or de-escalating) across the severe line — the rain did not go away, it
+                // upgraded to "severe storms" (or the reverse). That crossing is narrated once, on the
+                // Thunderstorm(severe) axis; emitting a paired Rain "clearing"/"appearing" here would tell
+                // the recipient their rain ended when it in fact became a severe storm. Suppress it. (A
+                // rain->snow TYPE change still splits — that is a genuine replacement, not this
+                // intensity crossing.)
+                if (p == PrecipPhenomenon.Rain && (IsSevereStorm(block) || IsSevereStorm(pri)))
+                    dir = null;
+
                 // Severe carried by THIS precip block is folded into the phenomenon's
                 // own change (a severe thunderstorm is a Thunderstorm strengthening),
                 // so the standalone Severe phenomenon is reserved for severe with no
@@ -353,11 +363,23 @@ internal static class DeterministicChangeDetector
     // the caller from the hazard signal, never here.
     private static ChangeTier HorizonTier(int tier) => tier is >= 0 and <= 1 ? ChangeTier.Plans : ChangeTier.Ambient;
 
+    // WX-284: classify on the RECIPIENT phenomenon, so a non-severe thunderstorm diffs on the
+    // Rain axis (it reads as "rain") rather than its own — a Rain <-> non-severe-Thunderstorm swap
+    // is a non-change and must not surface as "rain clearing + thunderstorm appearing". A SEVERE
+    // thunderstorm keeps its own axis so the rain -> severe-storms escalation still surfaces. The
+    // oracle's mirror helpers (MaxExpect/SevereForPhenomenon/BlockExpect/BlockSevere) fold the same
+    // way, keeping the WX-189/151 tautology green.
     private static int ExpectOf(ForecastSnapshotBlock b, PrecipPhenomenon p) =>
-        b.PrecipPhenomenon == p ? (int)b.PrecipExpectation : (int)PrecipExpectation.None;
+        RecipientPrecip.Of(b) == p ? (int)b.PrecipExpectation : (int)PrecipExpectation.None;
 
     private static bool SevereOf(ForecastSnapshotBlock b, PrecipPhenomenon p) =>
-        b.PrecipPhenomenon == p && b.SevereFlag;
+        RecipientPrecip.Of(b) == p && b.SevereFlag;
+
+    // WX-284: a severe (convective) thunderstorm — the recipient's "severe storms", the rung above
+    // ordinary "rain" on the liquid-convective ladder. Used to suppress the phantom Rain change on a
+    // block crossing the severe line (the crossing is narrated on the Thunderstorm axis).
+    private static bool IsSevereStorm(ForecastSnapshotBlock b) =>
+        b.PrecipPhenomenon == PrecipPhenomenon.Thunderstorm && b.SevereFlag;
 
     private static ChangePhenomenon PrecipToChange(PrecipPhenomenon p) => p switch
     {

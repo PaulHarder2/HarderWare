@@ -129,7 +129,7 @@ public static class RendererGoldenCorpus
             : [],
         Narrative = new Dictionary<string, NarrativeSections>
         {
-            ["en"] = new() { ChangeSummary = withChange ? "{ch1}A line of storms is moving in this evening." : null, Closing = ClosingEn },
+            ["en"] = new() { ChangeSummary = withChange ? "{ch1}Rain is moving in this evening." : null, Closing = ClosingEn },
         },
     };
 

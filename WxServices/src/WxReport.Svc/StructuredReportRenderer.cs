@@ -867,12 +867,14 @@ public static class StructuredReportRenderer
     /// noun and the agreeing outlook hedge baked into one token ("rain likely",
     /// "lluvia probable"). Rain is the default family for any unhandled phenomenon, matching
     /// the former composition. Every arm is a <see cref="Tok"/> constant (compile-checked).
+    ///
+    /// WX-284: a non-severe thunderstorm collapses to the "rain" family here — the
+    /// recipient-facing binary is ordinary "rain" vs. a severe block's "severe storms"
+    /// (<see cref="SevereBandToken"/>). Storm wording is reserved for <c>SevereFlag</c>, so
+    /// Thunderstorm has no arm and falls through to the Rain default.
     /// </summary>
     private static string BandPrecipToken(PrecipPhenomenon phen, PrecipExpectation exp) => (phen, exp) switch
     {
-        (PrecipPhenomenon.Thunderstorm, PrecipExpectation.Possible) => Tok.StormsPossible,
-        (PrecipPhenomenon.Thunderstorm, PrecipExpectation.Likely) => Tok.StormsLikely,
-        (PrecipPhenomenon.Thunderstorm, _) => Tok.StormsExpected,
         (PrecipPhenomenon.Snow, PrecipExpectation.Possible) => Tok.SnowPossible,
         (PrecipPhenomenon.Snow, PrecipExpectation.Likely) => Tok.SnowLikely,
         (PrecipPhenomenon.Snow, _) => Tok.SnowExpected,

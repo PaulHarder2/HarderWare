@@ -97,13 +97,48 @@ public class DeterministicChangeDetectorTests
     [Fact]
     public void FlatExpectation_SevereRise_IsStrengthening()
     {
-        // Likely thunderstorm both sides, but severeFlag false→true: strengthening.
+        // Likely snow both sides, but severeFlag false→true: strengthening. Snow does NOT fold to
+        // rain (WX-284 collapses only the convective gradient), so it keeps its own axis — this
+        // preserves the WX-148 worked example that the oracle's per-phenomenon severe-strength axis
+        // relies on. (The thunderstorm form of this case now collapses — see
+        // NonSevereThunderstorm_UpgradesToSevere_SevereStormsAppear_RainEnds.)
         var c = Assert.Single(Detect(
-            Body(Blk(precip: PrecipExpectation.Likely, phenom: PrecipPhenomenon.Thunderstorm)),
-            Body(Blk(precip: PrecipExpectation.Likely, phenom: PrecipPhenomenon.Thunderstorm, severe: true))));
-        Assert.Equal(ChangePhenomenon.Thunderstorm, c.Phenomenon);
+            Body(Blk(precip: PrecipExpectation.Likely, phenom: PrecipPhenomenon.Snow)),
+            Body(Blk(precip: PrecipExpectation.Likely, phenom: PrecipPhenomenon.Snow, severe: true))));
+        Assert.Equal(ChangePhenomenon.Snow, c.Phenomenon);
         Assert.Equal(ChangeDirection.Strengthening, c.Direction);
         Assert.Equal(ChangeTier.Safety, c.Tier);
+    }
+
+    [Fact]
+    public void NonSevereThunderstorm_UpgradesToSevere_IsSevereStormsOnly_NoRainClearing()
+    {
+        // WX-284 (Paul): a non-severe thunderstorm reads as ordinary "rain"; upgrading it to SEVERE
+        // is NOT "rain clearing" — the rain did not go away, it escalated to "severe storms". The
+        // convective precip crossing the severe line is narrated ONCE, on the Thunderstorm(severe)
+        // axis; the phantom Rain change is suppressed. (Contrast rain→snow, a genuine TYPE change,
+        // which still splits into rain-clearing + snow-appearing.)
+        var changes = Detect(
+            Body(Blk(precip: PrecipExpectation.Likely, phenom: PrecipPhenomenon.Thunderstorm)),
+            Body(Blk(precip: PrecipExpectation.Likely, phenom: PrecipPhenomenon.Thunderstorm, severe: true)));
+        var storms = Assert.Single(changes);
+        Assert.Equal(ChangePhenomenon.Thunderstorm, storms.Phenomenon);
+        Assert.Equal(ChangeTier.Safety, storms.Tier);
+        Assert.DoesNotContain(changes, c => c.Phenomenon == ChangePhenomenon.Rain);
+    }
+
+    [Fact]
+    public void SevereStorms_DeEscalateToRain_IsSevereStormsClearing_NoRainAppearing()
+    {
+        // WX-284 symmetry: severe storms easing back to ordinary rain is "severe storms" clearing on
+        // the Thunderstorm axis, NOT "rain appearing" — the recipient is not told rain arrived when
+        // their severe storm merely de-escalated. The phantom Rain change is suppressed both ways.
+        var changes = Detect(
+            Body(Blk(precip: PrecipExpectation.Likely, phenom: PrecipPhenomenon.Thunderstorm, severe: true)),
+            Body(Blk(precip: PrecipExpectation.Likely, phenom: PrecipPhenomenon.Thunderstorm)));
+        var storms = Assert.Single(changes);
+        Assert.Equal(ChangePhenomenon.Thunderstorm, storms.Phenomenon);
+        Assert.DoesNotContain(changes, c => c.Phenomenon == ChangePhenomenon.Rain);
     }
 
     // ── severe de-dup ─────────────────────────────────────────────────────────

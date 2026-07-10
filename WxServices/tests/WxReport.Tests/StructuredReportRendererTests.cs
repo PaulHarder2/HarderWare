@@ -281,10 +281,12 @@ public class StructuredReportRendererTests
     public void Conditions_TilesDayIntoClockBands_NotCollapsedToPeak()
     {
         var en = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), T("en"), C("en"), Utc, ReportKind.Scheduled, RenderNow);
-        // WX-148 Class 2 / WX-190: Day 1 tiles into its two present bands — a thunderstorm
-        // at 12Z (12-18) then rain at 18Z (18-24) — each its own clock-band line, rather
-        // than collapsing to the single highest-expectation one.
-        Assert.Contains("12-18 — Storms likely", en);
+        // WX-148 Class 2 / WX-190: Day 1 tiles into its two present bands — a (non-severe)
+        // thunderstorm at 12Z (12-18) then rain at 18Z (18-24) — each its own clock-band line,
+        // rather than collapsing to the single highest-expectation one. WX-284: the non-severe
+        // thunderstorm reads as "rain" to the recipient (storm wording is reserved for a severe
+        // block — see Conditions_SevereBand_IsEmphasizedAndClockBound).
+        Assert.Contains("12-18 — Rain likely", en);
         Assert.Contains("18-24 — Rain expected", en);
         // Day 2: 00Z PartlyCloudy (no precip) → sky phrase; 06Z Clear → "Clear and dry".
         Assert.Contains("00-06 — Partly cloudy", en);
