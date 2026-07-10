@@ -22,23 +22,40 @@ Re-run the recorder after any material change to the reconciliation prompt
 (`ReconcilerPrompts`) or to the `Kdwh20260421Fixture` inputs, then commit the
 overwritten `*.recorded.json` and `kdwh-853-skip.trace.txt`.
 
-PowerShell (from the `WxServices` directory):
+**Inject the two variables via a RunSettings file — NOT inline env vars.** On this
+machine `dotnet` is the Windows `dotnet.exe` (invoked from WSL), and under .NET SDK 9
+the `dotnet test` **test host does not inherit the shell environment** — so an inline
+`WX_RECORD_KDWH=1 … dotnet test` *or* an `export`ed variable is silently ignored: the
+recorder's `WX_RECORD_KDWH` gate returns early and you get a fast, green, **zero-diff**
+run that records nothing (the "silently stale fixtures" trap, inverted). VSTest reads
+env vars from a `.runsettings` `<EnvironmentVariables>` block and sets them in the host,
+so that is the reliable channel.
 
-```powershell
-$env:WX_RECORD_KDWH = "1"
-$env:ANTHROPIC_API_KEY = "sk-ant-..."
-dotnet test WxServices.CI.slnf --filter FullyQualifiedName~KdwhScenarioReplayRecorder
-Remove-Item Env:WX_RECORD_KDWH, Env:ANTHROPIC_API_KEY
-```
-
-WSL bash equivalent:
+Put the settings file at a **Windows-accessible** path — a WSL `/tmp/…` argument is
+mangled to `C:\tmp\…` by the interop layer and `dotnet.exe` can't find it — pass an
+explicit Windows path to `--settings`, and `rm` it after: it holds the key, so keep it
+out of the repo and shell history. From the `WxServices` directory, with
+`ANTHROPIC_API_KEY` already exported in the shell:
 
 ```bash
-WX_RECORD_KDWH=1 ANTHROPIC_API_KEY=sk-ant-... \
-  dotnet test WxServices.CI.slnf --filter FullyQualifiedName~KdwhScenarioReplayRecorder
+cat > /mnt/c/Code/Temp/kdwh-record.runsettings <<XML
+<?xml version="1.0" encoding="utf-8"?>
+<RunSettings><RunConfiguration><EnvironmentVariables>
+  <WX_RECORD_KDWH>1</WX_RECORD_KDWH>
+  <ANTHROPIC_API_KEY>${ANTHROPIC_API_KEY}</ANTHROPIC_API_KEY>
+</EnvironmentVariables></RunConfiguration></RunSettings>
+XML
+dotnet test WxServices.CI.slnf --filter FullyQualifiedName~KdwhScenarioReplayRecorder --settings 'C:\Code\Temp\kdwh-record.runsettings'
+rm -f /mnt/c/Code/Temp/kdwh-record.runsettings
 ```
 
-The recorder is opt-in: a no-op unless `WX_RECORD_KDWH=1`. If it is set but
-`ANTHROPIC_API_KEY` is missing, the recorder fails loudly rather than silently
-committing stale fixtures. If real Claude stops skipping the negative case, that
-is a genuine finding about the tier prompt — investigate before trusting it.
+(The unquoted `<<XML` heredoc expands `${ANTHROPIC_API_KEY}` into the file; the
+single-quoted `'C:\Code\Temp\…'` keeps the backslashes for `dotnet.exe`.)
+
+**A real recording takes ~40 s+ (two live Claude calls) and leaves the three fixtures
+modified in `git status`.** A fast (< 10 s), zero-diff run means the env never reached
+the host — re-check the RunSettings path. The recorder is opt-in: a no-op unless
+`WX_RECORD_KDWH=1` reaches the host. If it is set but `ANTHROPIC_API_KEY` is missing, the
+recorder fails loudly rather than silently committing stale fixtures. If real Claude
+stops skipping the negative case, that is a genuine finding about the tier prompt —
+investigate before trusting it.
