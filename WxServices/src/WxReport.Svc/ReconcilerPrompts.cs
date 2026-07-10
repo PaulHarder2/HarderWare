@@ -253,6 +253,12 @@ internal static class ReconcilerPrompts
                 sees is built from those same blocks, so the band must agree with
                 them. Express every instant as a {q:time:...} token (the renderer
                 shows it in local time), never an internal clock window.
+              - When you cite a specific figure for a day (a wind speed, a
+                temperature), use the value that day's forecast-grid row shows — its
+                headline/peak for that quantity — not a narrower sub-period reading
+                that would read to the recipient as contradicting the grid (do not
+                write "reaching 8 mph through midday" when the day's grid row
+                headlines 13 mph; cite 13).
           • narrative — one entry per language code requested below, each with
             exactly two prose sections: changeSummary (the change-band prose; null
             only on a scheduled or diagnostic report with no near-term severe
@@ -379,7 +385,14 @@ internal static class ReconcilerPrompts
             a dry evening, do not write "a chance of a storm tonight"; if a storm
             sits only in an afternoon block, do not move it to "tonight". Speak
             only of weather the blocks support, at the time they place it. Saying
-            a period stays dry or quiet is always fine.
+            a specific day or day-part stays dry or quiet — when the blocks for it
+            are dry — is always fine (but see the aggregate-period rule next).
+          • Never call an AGGREGATE period (the weekend, this week, the next few
+            days) dry, clear, or quiet when any single day within it carries
+            precipitation or a storm — that contradicts itself the moment you then
+            place a storm inside the same period. Name the specific dry day instead:
+            if Saturday is dry but storms arrive Sunday, write "Saturday stays dry"
+            (not "the weekend stays dry"), then describe Sunday's storms.
 
         Always act via one of the two tools. Never return free text outside a tool call.
         """;

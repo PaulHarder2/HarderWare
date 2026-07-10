@@ -1085,6 +1085,106 @@ public class ForecastReconcilerTests
         ]}
         """;
 
+    // WX-177 Defect A fixtures. Sat 2026-06-13 + Sun 2026-06-14 (both local in Cdt = -5).
+    private const string WeekendSatDrySunWetSnapshotJson = """
+        {"schemaVersion":5,"blocks":[
+          {"startUtc":"2026-06-13T18:00:00Z","skyState":"clear","obscuration":"none","temperatureCelsius":{"min":24,"max":32},"windKt":{"min":5,"max":10},"precipExpectation":"none","precipPhenomenon":null,"severeFlag":false},
+          {"startUtc":"2026-06-14T18:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":23,"max":29},"windKt":{"min":6,"max":12},"precipExpectation":"likely","precipPhenomenon":"thunderstorm","severeFlag":false}
+        ]}
+        """;
+    private const string WeekendAllDrySnapshotJson = """
+        {"schemaVersion":5,"blocks":[
+          {"startUtc":"2026-06-13T18:00:00Z","skyState":"clear","obscuration":"none","temperatureCelsius":{"min":24,"max":32},"windKt":{"min":5,"max":10},"precipExpectation":"none","precipPhenomenon":null,"severeFlag":false},
+          {"startUtc":"2026-06-14T18:00:00Z","skyState":"partly_cloudy","obscuration":"none","temperatureCelsius":{"min":23,"max":30},"windKt":{"min":6,"max":11},"precipExpectation":"none","precipPhenomenon":null,"severeFlag":false}
+        ]}
+        """;
+
+    [Fact]
+    public async Task AggregateDryClaim_WeekendDryOverStormySunday_DropsClosingOnly()
+    {
+        // WX-177 Defect A repro: "The weekend stays dry" while Sunday carries storms. The
+        // aggregate word "weekend" resolves to {Sat, Sun}; a wet weekend day contradicts the
+        // dry claim → closing dropped, rest sends (WX-189).
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: WeekendSatDrySunWetSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: ClosingOnlyReport("The weekend stays dry, with just a few clouds around."));
+
+        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
+        Assert.Equal("See the forecast above for the full outlook.", success.StructuredReport.Narrative["en"].Closing);
+    }
+
+    [Fact]
+    public async Task AggregateDryClaim_WeekendDryAllDry_Succeeds()
+    {
+        // Not a false reject: "the weekend stays dry" over a genuinely dry Sat AND Sun is a
+        // true claim and must survive intact.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: WeekendAllDrySnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: ClosingOnlyReport("The weekend stays dry, with just a few clouds around."));
+
+        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
+        Assert.Equal("The weekend stays dry, with just a few clouds around.", success.StructuredReport.Narrative["en"].Closing);
+    }
+
+    [Fact]
+    public async Task AggregateDryClaim_NegatedDryClaim_NotFlagged_Succeeds()
+    {
+        // The negation guard: "the weekend won't stay dry" ASSERTS wet, so a wet Sunday agrees
+        // with it — flagging it would be a false reject. Must survive intact.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: WeekendSatDrySunWetSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: ClosingOnlyReport("The weekend won't stay dry the whole way through."));
+
+        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
+        Assert.Equal("The weekend won't stay dry the whole way through.", success.StructuredReport.Narrative["en"].Closing);
+    }
+
+    [Fact]
+    public async Task AggregateDryClaim_UnrelatedNegationAfterDryClaim_StillDrops()
+    {
+        // CodeRabbit PR #183: an unrelated negation elsewhere in the sentence ("an unlikely storm")
+        // must NOT bypass the check — the negation is scoped to the dry expression, so "the weekend
+        // stays dry" over a wet Sunday is still caught even though "unlikely" appears later.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: WeekendSatDrySunWetSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: ClosingOnlyReport("The weekend stays dry, although an unlikely storm could develop Sunday."));
+
+        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
+        Assert.Equal("See the forecast above for the full outlook.", success.StructuredReport.Narrative["en"].Closing);
+    }
+
+    [Fact]
+    public async Task AggregateDryClaim_InChangeSummary_DropsChangeSummary()
+    {
+        // The check runs on the change band too (CheckProseClaims covers both sections): a
+        // weekend-dry claim in the changeSummary over a wet Sunday drops the changeSummary, closing sends.
+        const string report = """
+            {
+              "schemaVersion": 5,
+              "narrative": {
+                "en": { "changeSummary": "The weekend stays dry overall.", "closing": "Conditions settle down as the week goes on." }
+              }
+            }
+            """;
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: WeekendSatDrySunWetSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: report);
+
+        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
+        Assert.Null(success.StructuredReport.Narrative["en"].ChangeSummary);
+        Assert.Equal("Conditions settle down as the week goes on.", success.StructuredReport.Narrative["en"].Closing);
+    }
+
     // Tue afternoon dry, but a Tue-evening (tonight) thunderstorm — backs a "tonight" claim.
     private const string ClosingStormEveningSnapshotJson = """
         {"schemaVersion":5,"blocks":[
