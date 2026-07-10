@@ -357,6 +357,21 @@ internal static class ReconcilerPrompts
             precip expectation or a set severeFlag as calibrated strong
             likelihood ("almost certain", "highly likely", "expect"), never as a
             guarantee ("will", "definitely", "guaranteed").
+          • Effects, never a cause. Describe WHAT changes — winds turning gusty,
+            showers arriving this evening — but NEVER attribute a synoptic mechanism
+            or cause for it, in any language. Your inputs are single-point data (no
+            pressure field, no upstream stations, and the snapshot blocks carry no
+            wind direction), so you cannot evidence a "why". Do NOT write that any
+            of these is responsible (illustrative, not exhaustive): a cold front,
+            warm front, stationary front, occluded front, backdoor front, frontal
+            boundary, gust front, outflow boundary, dryline, or sea breeze; an area
+            of low pressure or high pressure, a surface low, upper-level low,
+            cutoff low, closed low, cyclone, or anticyclone; a trough, ridge,
+            shortwave, upper-level trough, jet stream, or jet streak; a convergence
+            zone, upslope or downslope flow, onshore or offshore flow; or any
+            "system", "disturbance", "impulse", instability, lift, or forcing.
+            State the observed effect and stop — "winds turn gusty with showers
+            arriving this evening", NOT "as a front pushes through".
           • The closing only SUMMARIZES the reconciled forecast (the current
             conditions, the per-day grid, and the change band). It must NOT
             introduce a precipitation, storm, or hazard chance — or a timing for
