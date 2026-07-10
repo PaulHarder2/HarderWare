@@ -1320,6 +1320,7 @@ public sealed class ForecastReconciler
         {
             int end = SentenceEnd(masked, from);
             CheckClosingSentence(lang, section, prose, masked, from, end, refDate, finalSnapshot, tz);
+            CheckAggregateDryClaim(lang, section, prose, masked, from, end, refDate, finalSnapshot, tz);
             from = end + 1;
         }
     }
@@ -1372,6 +1373,81 @@ public sealed class ForecastReconciler
                 + "day-grid, and changes and must not introduce a forecast the snapshot does not carry.");
         }
     }
+
+    // WX-177 Defect A: a closing that calls an AGGREGATE period dry while a day WITHIN it
+    // carries precip is self-contradictory the moment it then places a storm inside the same
+    // period (repro: "The weekend stays dry." then "thunderstorms are likely Sunday afternoon").
+    // CheckClosingSentence can't catch this — "weekend" is not a precip word and the claim is a
+    // NEGATED (dry) one, both of which it skips. This is the inverse guard: a DRY claim about the
+    // one aggregate period we can resolve deterministically — the weekend — contradicted by precip
+    // on a weekend day in the snapshot. Only "weekend" is resolved (Sat + Sun are unambiguous);
+    // broader aggregates ("this week", "the next few days") lean on the prompt rule, as does the
+    // whole check for non-English (the lexicon is English) — same conservative stance as
+    // CheckClosingSentence (a missed catch beats a false reject of a real send). Fail-closed via
+    // NarrativeProseException → retry-with-feedback → WX-189 section degrade.
+    private static void CheckAggregateDryClaim(
+        string lang, NarrativeSection section, string prose, string masked, int start, int end, DateOnly refDate, ForecastSnapshotBody finalSnapshot, TimeZoneInfo tz)
+    {
+        if (!string.Equals(lang, "en", StringComparison.Ordinal))
+            return;
+        if (!HasWord(masked, start, end, "weekend"))
+            return;
+        if (!ContainsAnyWord(masked, start, end, AggregateDryWords))
+            return;
+        // Skip a NEGATED dry claim ("the weekend won't stay dry") — that asserts wet, so a wet
+        // weekend day agrees with it; flagging it would be a false reject.
+        if (ContainsAnyWord(masked, start, end, AggregateNegationCues)
+            || masked.IndexOf("n't", start, end - start, StringComparison.OrdinalIgnoreCase) >= 0)
+            return;
+
+        // Scope to the NEAREST weekend (Sat + Sun) from refDate, not every Sat/Sun in the horizon
+        // — a horizon spanning two weekends could otherwise let a far weekend's precip false-reject
+        // a claim about the near one. On a Sunday, "the weekend" is that Saturday (just past) + today.
+        DateOnly sat, sun;
+        if (refDate.DayOfWeek == DayOfWeek.Sunday)
+        {
+            sun = refDate;
+            sat = refDate.AddDays(-1);
+        }
+        else
+        {
+            sat = refDate.AddDays(((int)DayOfWeek.Saturday - (int)refDate.DayOfWeek + 7) % 7);
+            sun = sat.AddDays(1);
+        }
+
+        // Reject only when a block on that weekend is present AND carries precip (a weekend
+        // entirely outside the horizon can't be verified → skip, never reject blind).
+        bool sawWeekendDay = false, wetWeekendDay = false;
+        foreach (var b in finalSnapshot.Blocks)
+        {
+            var localDate = DateOnly.FromDateTime(
+                TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(b.StartUtc, DateTimeKind.Utc), tz));
+            if (localDate != sat && localDate != sun)
+                continue;
+            sawWeekendDay = true;
+            if (b.PrecipExpectation != PrecipExpectation.None)
+                wetWeekendDay = true;
+        }
+        if (sawWeekendDay && wetWeekendDay)
+        {
+            var offending = string.Join(" ", prose.Substring(start, end - start)
+                .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+            throw new NarrativeProseException(section,
+                $"structured_report narrative '{lang}' calls the weekend dry while a weekend day carries precipitation in the "
+                + $"final_snapshot, in this {section} sentence: \"{offending}\". An aggregate period is not dry when a day within "
+                + "it is wet — name the specific dry day (e.g. \"Saturday stays dry\") and describe the wet weekend day separately.");
+        }
+    }
+
+    // WX-177 Defect A: unambiguous dry-state assertions about an aggregate period. Kept tight
+    // (a false reject suppresses the closing) — "clear"/"quiet" are excluded as too ambiguous
+    // ("clears" is a cessation; a "quiet weekend" can tolerate light rain); the prompt rule
+    // carries the broader cases.
+    private static readonly string[] AggregateDryWords = { "dry", "rain-free", "storm-free", "precipitation-free" };
+
+    // Cues that NEGATE a dry claim ("won't stay dry", "unlikely to stay dry") — presence means
+    // the sentence asserts wet, so a wet weekend day agrees with it; skip rather than false-reject.
+    private static readonly string[] AggregateNegationCues = { "not", "unlikely", "won't", "wont" };
 
     // Precipitation/storm phenomenon words the closing could assert. (A precip word
     // in an idiom — "weather the storm", "calm before the storm" — is a rare residual:
