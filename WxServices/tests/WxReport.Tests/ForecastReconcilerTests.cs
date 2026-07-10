@@ -1145,6 +1145,46 @@ public class ForecastReconcilerTests
         Assert.Equal("The weekend won't stay dry the whole way through.", success.StructuredReport.Narrative["en"].Closing);
     }
 
+    [Fact]
+    public async Task AggregateDryClaim_UnrelatedNegationAfterDryClaim_StillDrops()
+    {
+        // CodeRabbit PR #183: an unrelated negation elsewhere in the sentence ("an unlikely storm")
+        // must NOT bypass the check — the negation is scoped to the dry expression, so "the weekend
+        // stays dry" over a wet Sunday is still caught even though "unlikely" appears later.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: WeekendSatDrySunWetSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: ClosingOnlyReport("The weekend stays dry, although an unlikely storm could develop Sunday."));
+
+        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
+        Assert.Equal("See the forecast above for the full outlook.", success.StructuredReport.Narrative["en"].Closing);
+    }
+
+    [Fact]
+    public async Task AggregateDryClaim_InChangeSummary_DropsChangeSummary()
+    {
+        // The check runs on the change band too (CheckProseClaims covers both sections): a
+        // weekend-dry claim in the changeSummary over a wet Sunday drops the changeSummary, closing sends.
+        const string report = """
+            {
+              "schemaVersion": 5,
+              "narrative": {
+                "en": { "changeSummary": "The weekend stays dry overall.", "closing": "Conditions settle down as the week goes on." }
+              }
+            }
+            """;
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: WeekendSatDrySunWetSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: report);
+
+        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
+        Assert.Null(success.StructuredReport.Narrative["en"].ChangeSummary);
+        Assert.Equal("Conditions settle down as the week goes on.", success.StructuredReport.Narrative["en"].Closing);
+    }
+
     // Tue afternoon dry, but a Tue-evening (tonight) thunderstorm — backs a "tonight" claim.
     private const string ClosingStormEveningSnapshotJson = """
         {"schemaVersion":5,"blocks":[

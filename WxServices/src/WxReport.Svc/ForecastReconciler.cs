@@ -1392,12 +1392,28 @@ public sealed class ForecastReconciler
             return;
         if (!HasWord(masked, start, end, "weekend"))
             return;
-        if (!ContainsAnyWord(masked, start, end, AggregateDryWords))
-            return;
-        // Skip a NEGATED dry claim ("the weekend won't stay dry") — that asserts wet, so a wet
-        // weekend day agrees with it; flagging it would be a false reject.
-        if (ContainsAnyWord(masked, start, end, AggregateNegationCues)
-            || masked.IndexOf("n't", start, end - start, StringComparison.OrdinalIgnoreCase) >= 0)
+        // Require an UN-NEGATED dry assertion: a dry word with no negation cue in its immediate
+        // neighborhood. Scoping the negation to the dry EXPRESSION (a small window each side), not
+        // the whole sentence, means an unrelated negation elsewhere ("...stays dry, although an
+        // unlikely storm Sunday") no longer disqualifies a real claim (CodeRabbit), while "won't
+        // stay dry" / "unlikely to remain dry" (negation touching the dry word) are still skipped.
+        bool hasUnnegatedDry = false;
+        foreach (var dry in AggregateDryWords)
+        {
+            for (int idx = IndexOfWord(masked, start, end, dry); idx >= 0 && !hasUnnegatedDry;
+                 idx = IndexOfWord(masked, idx + dry.Length, end, dry))
+            {
+                int lo = Math.Max(start, idx - 24);
+                int hi = Math.Min(end, idx + dry.Length + 16);
+                bool negated = ContainsAnyWord(masked, lo, hi, AggregateNegationCues)
+                    || masked.IndexOf("n't", lo, hi - lo, StringComparison.OrdinalIgnoreCase) >= 0;
+                if (!negated)
+                    hasUnnegatedDry = true;
+            }
+            if (hasUnnegatedDry)
+                break;
+        }
+        if (!hasUnnegatedDry)
             return;
 
         // Scope to the NEAREST weekend (Sat + Sun) from refDate, not every Sat/Sun in the horizon

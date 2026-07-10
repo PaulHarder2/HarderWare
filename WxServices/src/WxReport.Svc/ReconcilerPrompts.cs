@@ -385,7 +385,8 @@ internal static class ReconcilerPrompts
             a dry evening, do not write "a chance of a storm tonight"; if a storm
             sits only in an afternoon block, do not move it to "tonight". Speak
             only of weather the blocks support, at the time they place it. Saying
-            a period stays dry or quiet is always fine.
+            a specific day or day-part stays dry or quiet — when the blocks for it
+            are dry — is always fine (but see the aggregate-period rule next).
           • Never call an AGGREGATE period (the weekend, this week, the next few
             days) dry, clear, or quiet when any single day within it carries
             precipitation or a storm — that contradicts itself the moment you then
