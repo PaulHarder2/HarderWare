@@ -955,6 +955,32 @@ public class ForecastReconcilerTests
     }
 
     [Fact]
+    public async Task SpanishDayPart_MadrugadaContradictsToken_IsCaught_Degrades()
+    {
+        // WX-168: the es day-part {q:time} agreement check (WX-149) fires on the one unambiguous es
+        // day-part word — "madrugada" (pre-dawn, part 0) next to a {q:time} that renders to the
+        // afternoon/evening contradicts the token's local hour. es-only: en's lexicon has no "madrugada",
+        // so this proves the es day-part wiring, not just en's.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: WetTodaySnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: EnEsReport(
+                enChange: "Rain around today.",
+                enClosing: "Keep an umbrella handy.",
+                esChange: "Lluvia en la madrugada, {q:time:2026-06-09T18:00:00Z}.",
+                esClosing: "Manténgase al tanto."));
+
+        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(
+            _ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(responseJson, Encoding.UTF8, "application/json") },
+            narrativeLanguages: new[] { "en", "es" }));
+        // The madrugada(pre-dawn)/afternoon-token contradiction degrades the es changeSummary; the
+        // offending word is gone (en unaffected).
+        Assert.DoesNotContain("madrugada", success.StructuredReport.Narrative["es"].ChangeSummary ?? "");
+        Assert.Equal("Keep an umbrella handy.", success.StructuredReport.Narrative["en"].Closing);
+    }
+
+    [Fact]
     public async Task SpanishClosing_PrecipAtAWetTime_IsLegal_Succeeds()
     {
         // WX-168: "Lluvia hoy" over a snapshot that IS wet today is a true claim — it must pass.
