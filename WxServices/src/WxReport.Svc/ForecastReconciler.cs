@@ -1682,12 +1682,18 @@ public sealed class ForecastReconciler
     // WX-284: match on the RECIPIENT phenomenon (RecipientPrecip.Of) so a non-severe thunderstorm
     // counts on the Rain axis — the exact fold DeterministicChangeDetector.ExpectOf/SevereOf use, so
     // this oracle accepts precisely what the detector emits (the WX-189/151 tautology stays green).
+    // WX-284 step 2: the tier folds through RecipientPrecip.Expectation(block) too — the same fold
+    // ExpectOf/BlockExpect apply (Possible == Likely; a severe block pinned to the top) — so a possible
+    // <-> likely move, and a tier bump on a block that stays severe, both read flat here as well.
     private static PrecipExpectation MaxExpect(ForecastSnapshotBody body, PrecipPhenomenon p, ChangeWindow w)
     {
         var max = PrecipExpectation.None;
         foreach (var b in body.Blocks)
-            if (RecipientPrecip.Of(b) == p && BlockOverlapsWindow(b.StartUtc, w) && (int)b.PrecipExpectation > (int)max)
-                max = b.PrecipExpectation;
+            if (RecipientPrecip.Of(b) == p && BlockOverlapsWindow(b.StartUtc, w))
+            {
+                var e = RecipientPrecip.Expectation(b);
+                if ((int)e > (int)max) max = e;
+            }
         return max;
     }
 
@@ -1724,9 +1730,12 @@ public sealed class ForecastReconciler
     // detector emits (tautological) while still rejecting a change no block carries (the WX-151 intent).
     // The expectation/severe axis matches the detector's ExpectOf/SevereOf: a block backs phenomenon
     // p only when its RECIPIENT phenomenon (RecipientPrecip.Of, WX-284) is p — a non-severe
-    // thunderstorm backs Rain, not Thunderstorm.
+    // thunderstorm backs Rain, not Thunderstorm. WX-284 step 2: the tier folds through
+    // RecipientPrecip.Expectation(block) (Possible == Likely; a severe block pinned to the top),
+    // matching ExpectOf, so neither a possible <-> likely move nor a tier bump on a block that stays
+    // severe backs a Strengthening/Weakening the detector never emits.
     private static int BlockExpect(ForecastSnapshotBlock? b, PrecipPhenomenon p) =>
-        b is not null && RecipientPrecip.Of(b) == p ? (int)b.PrecipExpectation : (int)PrecipExpectation.None;
+        b is not null && RecipientPrecip.Of(b) == p ? (int)RecipientPrecip.Expectation(b) : (int)PrecipExpectation.None;
 
     private static bool BlockSevere(ForecastSnapshotBlock? b, PrecipPhenomenon p) =>
         b is not null && RecipientPrecip.Of(b) == p && b.SevereFlag;

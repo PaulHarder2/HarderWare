@@ -286,7 +286,7 @@ public class StructuredReportRendererTests
         // rather than collapsing to the single highest-expectation one. WX-284: the non-severe
         // thunderstorm reads as "rain" to the recipient (storm wording is reserved for a severe
         // block — see Conditions_SevereBand_IsEmphasizedAndClockBound).
-        Assert.Contains("12-18 — Rain likely", en);
+        Assert.Contains("12-18 — Rain possible", en);
         Assert.Contains("18-24 — Rain expected", en);
         // Day 2: 00Z PartlyCloudy (no precip) → sky phrase; 06Z Clear → "Clear and dry".
         Assert.Contains("00-06 — Partly cloudy", en);
@@ -300,7 +300,7 @@ public class StructuredReportRendererTests
         // WX-190: a severe band is bold and labeled by its clock range; the grid row's
         // date binds the hazard to its calendar day, so no floating "overnight" is used.
         var en = StructuredReportRenderer.Render(Body(), SevereForecast(), Observation(), Imperial(), T("en"), C("en"), Utc, ReportKind.Scheduled, RenderNow);
-        Assert.Contains("<strong>12-18 — Severe storms likely</strong>", en);
+        Assert.Contains("<strong>12-18 — Severe storms possible</strong>", en);  // WX-284 step 2: severe is always "possible"
         Assert.Contains("18-24 — Rain expected", en);
     }
 
@@ -311,7 +311,7 @@ public class StructuredReportRendererTests
         // benign sky phrase — its band leads with the generic "Severe weather" hazard.
         var en = StructuredReportRenderer.Render(Body(), SevereNoPrecipForecast(), Observation(), Imperial(), T("en"), C("en"), Utc, ReportKind.Scheduled, RenderNow);
         // Generic "Severe weather" — not storm-specific — because the severe block carries no precip (a wind event).
-        Assert.Contains("<strong>12-18 — Severe weather likely</strong>", en);
+        Assert.Contains("<strong>12-18 — Severe weather possible</strong>", en);  // WX-284 step 2: severe is always "possible"
     }
 
     [Fact]
@@ -320,7 +320,7 @@ public class StructuredReportRendererTests
         // WX-190: rain in both the 06Z (06-12) and 12Z (12-18) bands shares one phrase,
         // so the two adjacent bands merge into a single "06-18" line.
         var en = StructuredReportRenderer.Render(Body(), SpanningForecast(), Observation(), Imperial(), T("en"), C("en"), Utc, ReportKind.Scheduled, RenderNow);
-        Assert.Contains("06-18 — Rain likely", en);
+        Assert.Contains("06-18 — Rain possible", en);
     }
 
     [Fact]
@@ -329,8 +329,8 @@ public class StructuredReportRendererTests
         // WX-190 (review): two same-phrase bands separated by a missing interior block must render
         // as separate clock-band lines, never merged into a span that fabricates coverage of the gap.
         var en = StructuredReportRenderer.Render(Body(), GappedForecast(), Observation(), Imperial(), T("en"), C("en"), Utc, ReportKind.Scheduled, RenderNow);
-        Assert.Contains("00-06 — Rain likely", en);
-        Assert.Contains("12-18 — Rain likely", en);
+        Assert.Contains("00-06 — Rain possible", en);
+        Assert.Contains("12-18 — Rain possible", en);
         Assert.DoesNotContain("00-18", en);   // the 06-12 gap must not be bridged
     }
 
@@ -345,7 +345,7 @@ public class StructuredReportRendererTests
         Assert.Contains("12-24 — Clear and dry", en);   // leads with the current band; 12-18 + 18-24 merge
         Assert.DoesNotContain("00-06", en);             // elapsed morning bands dropped
         Assert.DoesNotContain("06-12", en);
-        Assert.DoesNotContain("Rain likely", en);       // the elapsed rain bands are gone from the cell
+        Assert.DoesNotContain("Rain possible", en);       // the elapsed rain bands are gone from the cell
         Assert.Contains("91°F", en);                    // High from the 12Z block (33°C) — whole-day
         Assert.Contains("59°F", en);                    // Low from the ELAPSED 06Z block (15°C) — proves Hi/Lo span all blocks
     }
@@ -386,7 +386,7 @@ public class StructuredReportRendererTests
         // WX-190: the 00-06 pre-dawn block is labeled by its clock range in the grid,
         // never the floating "Overnight"/"overnight" daypart word.
         var en = StructuredReportRenderer.Render(Body(), SevereOvernightForecast(), Observation(), Imperial(), T("en"), C("en"), Utc, ReportKind.Scheduled, RenderNow);
-        Assert.Contains("<strong>00-06 — Severe storms likely</strong>", en);
+        Assert.Contains("<strong>00-06 — Severe storms possible</strong>", en);  // WX-284 step 2: severe is always "possible"
         Assert.DoesNotContain("Overnight", en);
         Assert.DoesNotContain("overnight", en);
     }
@@ -414,7 +414,7 @@ public class StructuredReportRendererTests
         var en = StructuredReportRenderer.RenderDegraded(SevereForecast(), Observation(), Imperial(), T("en"), C("en"), Utc, nowUtc);
         // Full deterministic banner (SevereForecast is convective → "Severe storms"); weekday
         // computed so the assertion can't drift, and "in your forecast" is banner-specific
-        // (the grid cell says "Severe storms likely …", never "in your forecast").
+        // (the grid cell says "Severe storms possible …", never "in your forecast").
         var expectedDay = nowUtc.ToString("dddd", System.Globalization.CultureInfo.GetCultureInfo("en-US"));
         Assert.Contains($"Severe storms in your forecast — {expectedDay} afternoon.", en);
         Assert.Contains("Reported Conditions", en);             // conditions table present (WX-184 relabel)

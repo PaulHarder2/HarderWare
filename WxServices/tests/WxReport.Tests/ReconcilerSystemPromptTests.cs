@@ -34,11 +34,17 @@ public class ReconcilerSystemPromptTests
     {
         // WX-238 (reopened): the probability-tier rule was added after a QA-only regression — the
         // narrative rendered English "likely" as the un-anchored "se espera" (the *expected*
-        // register) — slipped past the suite. Lock the distinctive phrasing so a future prompt edit
-        // can't silently drop the tier-substitution constraint (CodeRabbit).
-        var guidance = ReconcilerPrompts.ReconciliationGuidanceText;
-        Assert.Contains("NOT interchangeable", guidance);
-        Assert.Contains("se espera", guidance);
+        // register) — slipped past the suite. WX-284 step 2 (Niki) then collapsed the possible/likely
+        // pair into one "likely" register while keeping "expected" for certain; lock the collapse
+        // premise AND the surviving "se espera" verb-construction ban so a future prompt edit can't
+        // silently drop either constraint. Whitespace-collapse so a multi-word phrase matches wherever
+        // it line-wraps.
+        var guidance = System.Text.RegularExpressions.Regex.Replace(
+            ReconcilerPrompts.ReconciliationGuidanceText, @"\s+", " ");
+        Assert.Contains("read as the same register", guidance);   // possible == likely (the collapse)
+        Assert.Contains("move as no change", guidance);           // ... so it is not an upgrade to narrate
+        Assert.Contains("se espera", guidance);                   // the verb-construction ban survives
+        Assert.Contains("we never promise it", guidance);         // severe is ALWAYS "possible", never likely/expected (Paul)
     }
 
     [Fact]

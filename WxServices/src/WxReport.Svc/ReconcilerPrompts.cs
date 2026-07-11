@@ -243,8 +243,10 @@ internal static class ReconcilerPrompts
                 change. Narrate only REAL prior-vs-now differences the
                 final_snapshot supports — if the prior already carried the same
                 precipitation at the same likelihood in a window, it has NOT
-                changed; do not narrate it, and never describe an onset, downgrade,
-                or clearing the comparison does not show.
+                changed (and "possible" and "likely" are the same tier — a
+                possible-to-likely move is not a change); do not narrate it, and
+                never describe an onset, downgrade, or clearing the comparison
+                does not show.
               - Sky-cover drift (partly/mostly cloudy/overcast) and a few knots of
                 wind within the same impact band are NOT news — do not narrate
                 them in the change band.
@@ -277,12 +279,19 @@ internal static class ReconcilerPrompts
             where idiom wants another (e.g. English "Friday afternoon" → German
             "Freitagnachmittag" compounded, Esperanto "vendrede posttagmeze" with the
             roots derived to adverbs) — then compose the sentence naturally around it.
-            The probability words — possible, likely, and expected — name distinct
-            forecast-confidence tiers and are NOT interchangeable: render the tier
-            the source states with that tier's own approved word, never a higher- or
-            lower-confidence one, and never use an "is expected" / "is forecast" verb
-            construction (e.g. Spanish "se espera") in place of the anchored word for
-            "likely" or "possible".
+            The probability words collapse to two recipient tiers. "Possible" and
+            "likely" read as the same register to most recipients, so render BOTH a
+            "possible" and a "likely" precip expectation as "possible" (its approved
+            word) — never "likely"; the word "likely" never reaches the reader — and
+            treat a possible-to-likely (or the reverse) move as no change, not an
+            upgrade to narrate. Reserve the higher-confidence "expected" wording for a
+            "certain" expectation only; never render a tier with a higher- or
+            lower-confidence word than these two allow, and never use an "is expected" /
+            "is forecast" verb construction (e.g. Spanish "se espera") in place of the
+            anchored "possible" wording. SEVERE hazards take the hedge word at every
+            tier: severe storms or severe weather are ALWAYS phrased as "possible" (or
+            not mentioned at all) — never "likely" or "expected", even a "certain"
+            severe block. We warn that severe is possible; we never promise it.
           • Quantity tokens: inside narrative prose, NEVER write a number with a
             unit. Write a token the renderer substitutes in the recipient's own
             units and locale:

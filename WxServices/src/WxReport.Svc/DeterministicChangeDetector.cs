@@ -369,8 +369,13 @@ internal static class DeterministicChangeDetector
     // thunderstorm keeps its own axis so the rain -> severe-storms escalation still surfaces. The
     // oracle's mirror helpers (MaxExpect/SevereForPhenomenon/BlockExpect/BlockSevere) fold the same
     // way, keeping the WX-189/151 tautology green.
+    // WX-284 step 2: the expectation folds through RecipientPrecip.Expectation(block) — non-severe
+    // Possible == Likely, and a SEVERE block is pinned to the top (Certain) because its wording is the
+    // constant "possible". So a possible <-> likely move, AND a tier bump on a block that stays severe,
+    // both yield newE == priorE (no phantom Strengthening/Weakening send). Only dry <-> wet, likely <->
+    // "expected", and the SevereFlag flip (severe onset/clearing, via SevereOf) still move.
     private static int ExpectOf(ForecastSnapshotBlock b, PrecipPhenomenon p) =>
-        RecipientPrecip.Of(b) == p ? (int)b.PrecipExpectation : (int)PrecipExpectation.None;
+        RecipientPrecip.Of(b) == p ? (int)RecipientPrecip.Expectation(b) : (int)PrecipExpectation.None;
 
     private static bool SevereOf(ForecastSnapshotBlock b, PrecipPhenomenon p) =>
         RecipientPrecip.Of(b) == p && b.SevereFlag;
