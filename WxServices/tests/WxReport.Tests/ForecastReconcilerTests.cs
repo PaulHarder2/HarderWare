@@ -894,6 +894,86 @@ public class ForecastReconcilerTests
         Assert.Equal("Los vientos aumentan esta tarde, con el aire más seco justo frente a la costa.", success.StructuredReport.Narrative["es"].ChangeSummary);
     }
 
+    // ── WX-168 Spanish deterministic timing/claim validator parity ────────────
+
+    // One DRY block on the reference local day (06-09): "hoy" resolves to it, and it carries no precip.
+    private const string DryTodaySnapshotJson = """
+        {"schemaVersion":5,"blocks":[{"startUtc":"2026-06-09T18:00:00Z","skyState":"clear","obscuration":"none","temperatureCelsius":{"min":20,"max":28},"windKt":{"min":5,"max":12},"precipExpectation":"none","precipPhenomenon":null,"severeFlag":false}]}
+        """;
+
+    // One WET block on the reference local day (06-09): "hoy" resolves to it, and it carries rain.
+    private const string WetTodaySnapshotJson = """
+        {"schemaVersion":5,"blocks":[{"startUtc":"2026-06-09T18:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":20,"max":28},"windKt":{"min":5,"max":12},"precipExpectation":"likely","precipPhenomenon":"rain","severeFlag":false}]}
+        """;
+
+    [Fact]
+    public async Task SpanishClosing_PrecipAtADryTime_IsCaught_Degrades()
+    {
+        // WX-168: the es lexicon plugin gives the closing precip-at-a-dry-time check (WX-152) real
+        // deterministic coverage — "Lluvia hoy" (rain today) over a snapshot that is dry today is caught,
+        // fails closed through the WX-189 retry, and (the fixed fixture can't fix it) the report degrades
+        // with the es-attributed reason. Before this ticket the en-only validator matched no es word and
+        // never fired.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: DryTodaySnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: EnEsReport(
+                enChange: "A quiet day on tap.",
+                enClosing: "Calm conditions hold through the day.",
+                esChange: "Un día tranquilo por delante.",
+                esClosing: "Lluvia hoy."));
+
+        var result = await RunReconciler(
+            _ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(responseJson, Encoding.UTF8, "application/json") },
+            narrativeLanguages: new[] { "en", "es" });
+        var degraded = Assert.IsType<ReconcileResult.Degraded>(result);
+        Assert.Contains("narrative 'es'", degraded.Reason);   // the es closing check fired, not en's
+        Assert.Contains("dry", degraded.Reason);
+    }
+
+    [Fact]
+    public async Task SpanishClosing_AmbiguousManana_IsSkipped_Succeeds()
+    {
+        // WX-168 residual policy: es "mañana" = morning OR tomorrow — ambiguous, so it is NOT a
+        // deterministic time trigger (TomorrowWords is empty). "Lluvia mañana" over a dry snapshot must
+        // therefore be SKIPPED, never false-rejected — the es closing survives intact.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: DryTodaySnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: EnEsReport(
+                enChange: "A quiet day on tap.",
+                enClosing: "Calm conditions hold through the day.",
+                esChange: "Un día tranquilo por delante.",
+                esClosing: "Lluvia mañana."));
+
+        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(
+            _ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(responseJson, Encoding.UTF8, "application/json") },
+            narrativeLanguages: new[] { "en", "es" }));
+        Assert.Equal("Lluvia mañana.", success.StructuredReport.Narrative["es"].Closing);   // ambiguous time → skipped, not rejected
+    }
+
+    [Fact]
+    public async Task SpanishClosing_PrecipAtAWetTime_IsLegal_Succeeds()
+    {
+        // WX-168: "Lluvia hoy" over a snapshot that IS wet today is a true claim — it must pass.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: WetTodaySnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: EnEsReport(
+                enChange: "Rain around today.",
+                enClosing: "Keep an umbrella handy.",
+                esChange: "Lluvia por la zona hoy.",
+                esClosing: "Lluvia hoy."));
+
+        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(
+            _ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(responseJson, Encoding.UTF8, "application/json") },
+            narrativeLanguages: new[] { "en", "es" }));
+        Assert.Equal("Lluvia hoy.", success.StructuredReport.Narrative["es"].Closing);   // true claim over a wet block → passes
+    }
+
     // ── WX-284 recipient precipitation vocabulary collapse ────────────────────
 
     // A severe (convective) block — the one case where storm wording is legitimate.

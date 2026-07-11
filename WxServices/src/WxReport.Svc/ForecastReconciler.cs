@@ -1081,6 +1081,10 @@ public sealed class ForecastReconciler
                 + "\"[precip] possible\" (\"expected\" only for a certain non-severe block; a severe block "
                 + "is always \"possible\"). \"likely\" is retired for recipient-facing precipitation.");
 
+        // WX-168: the per-language lexicon plugin for the timing/day-name checks below (null for a
+        // language with no plugin → those checks no-op for it, the safe residual).
+        var lex = LanguageLexicons.For(lang);
+
         // (2) Prose time-of-day word must agree with its {q:time} token's LOCAL
         // rendering (defect 2, send 1927: "...develop Saturday afternoon,
         // {q:time:...T12:00:00Z}" — that token renders to 7:00 AM, i.e. morning).
@@ -1100,7 +1104,7 @@ public sealed class ForecastReconciler
                 DateTime.SpecifyKind(instantUtc, DateTimeKind.Utc), tz).Hour;
             int tokenPart = DayPartOfHour(localHour);
 
-            var (word, wordPart) = NearestDayPartWord(masked, m.Index, m.Index + m.Length);
+            var (word, wordPart) = NearestDayPartWord(masked, m.Index, m.Index + m.Length, lex);
             if (word is not null && wordPart != tokenPart)
                 throw new NarrativeProseException(section,
                     $"structured_report narrative '{lang}' says \"{word}\" next to a {{q:time}} "
@@ -1142,7 +1146,7 @@ public sealed class ForecastReconciler
             if (dates.Count < 2)
                 continue;   // the sentence's instants share one local day — no boundary crossed
             var sentence = masked.Substring(ss, se - ss);
-            if (HasRelativeDayWord(sentence))
+            if (HasRelativeDayWord(sentence, lex!))   // reached only for lang == "en", so the en plugin is present
                 continue;   // conservative — a relative-day word may name a terminus we can't verify
             foreach (var date in new[] { dates.Min, dates.Max })
             {
@@ -1176,23 +1180,6 @@ public sealed class ForecastReconciler
         _ => "overnight",
     };
 
-    // UNAMBIGUOUS day-part words only. Words whose local bucket is genuinely
-    // ambiguous are deliberately omitted so the check cannot false-reject: English
-    // "tonight"/"night" (evening OR overnight), and the Spanish "mañana" (morning
-    // OR tomorrow), "tarde" (afternoon OR evening), "noche" (evening OR night).
-    // English covers the common case and the 6/13 Spring repro; Spanish
-    // contributes only the unambiguous pre-dawn "madrugada". The residual leans on
-    // the prompt rule (WX-149 documented residual). Whole-word, case-insensitive.
-    private static readonly (string Word, int Part)[] DayPartWords =
-    {
-        ("overnight", 0),
-        ("early hours", 0),   // WX-264: DayPart1's approved English word for the 00-06 block
-        ("morning", 1),
-        ("afternoon", 2),
-        ("evening", 3),
-        ("madrugada", 0),
-    };
-
     // The unambiguous day-part word that DIRECTLY governs the token: searched only
     // within the token's sentence, and only a word whose gap to the token holds no
     // other word (no letters — just whitespace and punctuation) qualifies. That
@@ -1203,14 +1190,16 @@ public sealed class ForecastReconciler
     // Returns (null, -1) when no such word is directly associated. The trade is
     // recall on the far side of a connector ("{q:time} in the afternoon") — that
     // residual leans on the prompt rule, consistent with the conservative design.
-    private static (string? Word, int Part) NearestDayPartWord(string prose, int tokenStart, int tokenEnd)
+    private static (string? Word, int Part) NearestDayPartWord(string prose, int tokenStart, int tokenEnd, ILanguageLexicon? lex)
     {
+        if (lex is null)
+            return (null, -1);   // no plugin for this language → no deterministic day-part check (safe residual)
         int sentStart = SentenceStart(prose, tokenStart);
         int sentEnd = SentenceEnd(prose, tokenEnd);
 
         (string? Word, int Part) best = (null, -1);
         int bestDist = int.MaxValue;
-        foreach (var (word, part) in DayPartWords)
+        foreach (var (word, part) in lex.DayPartWords)
         {
             int from = sentStart;
             while (from < sentEnd)
@@ -1288,15 +1277,8 @@ public sealed class ForecastReconciler
     // invariant culture agree here; a fixed culture keeps the check independent of the host locale.
     private static readonly CultureInfo EnCulture = CultureInfo.GetCultureInfo("en-US");
 
-    // Relative-day cues that may stand in for a specific calendar day the validator cannot pin (an
-    // explicit day name is absent) — their presence makes the cross-boundary both-days check skip the
-    // sentence (conservative). WX-264 review added next/following/later so a relatively-named tail
-    // terminus ("into the following morning", "the next evening") is not false-rejected.
-    private static readonly string[] RelativeDayWords =
-    { "today", "tonight", "tomorrow", "yesterday", "next", "following", "later" };
-
-    private static bool HasRelativeDayWord(string text) =>
-        RelativeDayWords.Any(w => ContainsWholeWord(text, w));
+    private static bool HasRelativeDayWord(string text, ILanguageLexicon lex) =>
+        lex.RelativeDayWords.Any(w => ContainsWholeWord(text, w));
 
     // Whole-word, case-insensitive containment — a day name inside a longer word must not match.
     private static bool ContainsWholeWord(string text, string word)
@@ -1337,16 +1319,10 @@ public sealed class ForecastReconciler
     // day-level parsing, so we conservatively skip it (never reject prose we can't
     // prove wrong — the WX-149 policy). An unqualified "this evening" / "by evening"
     // still refers to the change and is checked.
-    private static readonly string[] DayQualifiers =
-    {
-        "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
-        "today", "tonight", "tomorrow", "yesterday",
-    };
-
     // True when the word ending at the letters before wordStart is a DayQualifier.
     // Bounded by sentStart so the scan never crosses into a previous sentence — a
     // "Friday." ending the prior sentence must not qualify a word in this one.
-    private static bool QualifiedByOtherDay(string prose, int sentStart, int wordStart)
+    private static bool QualifiedByOtherDay(string prose, int sentStart, int wordStart, ILanguageLexicon lex)
     {
         int i = wordStart - 1;
         while (i >= sentStart && !char.IsLetter(prose[i]))
@@ -1357,7 +1333,7 @@ public sealed class ForecastReconciler
         while (i >= sentStart && char.IsLetter(prose[i]))
             i--;
         var prev = prose.Substring(i + 1, end - (i + 1));
-        return DayQualifiers.Contains(prev, StringComparer.OrdinalIgnoreCase);
+        return lex.DayQualifiers.Contains(prev, StringComparer.OrdinalIgnoreCase);
     }
 
     // WX-152: the closing ("In summary:") is the one narrative section the other
@@ -1436,6 +1412,7 @@ public sealed class ForecastReconciler
         // severe block" gate (a window past the horizon carries no block, so it can't be verified and is
         // skipped — the conservative stance never false-rejects a real send).
         var overHedge = lang == "en" ? SevereOverHedgeEnglish : null;
+        var lex = LanguageLexicons.For(lang);   // WX-168: time resolution for the window scope (null → unresolvable → fallback)
         int from = 0;
         while (from < masked.Length)
         {
@@ -1460,7 +1437,7 @@ public sealed class ForecastReconciler
                         + "ALWAYS \"possible\" (or not mentioned), never \"expected\"/\"certain\" — we warn that severe is "
                         + "possible, we never promise it (WX-284).");
                 }
-                var window = ResolveClosingTime(masked, from, end, refDate);
+                var window = ResolveClosingTime(masked, from, end, refDate, lex);
                 bool legitimate;
                 if (window is null)
                     legitimate = anySevere;  // unresolvable time — allow iff any severe block exists at all
@@ -1501,34 +1478,39 @@ public sealed class ForecastReconciler
     {
         if (string.IsNullOrEmpty(prose))
             return;
+        // WX-168: no plugin for this language → the deterministic closing/aggregate checks no-op for it
+        // (its prose leans on the language-agnostic prompt rules + the QA-judge path — the safe residual).
+        var lex = LanguageLexicons.For(lang);
+        if (lex is null)
+            return;
         // Mask {...} tokens (a {q:time} instant is the WX-149 check's job, not this one's).
         var masked = BraceToken.Replace(prose, m => new string(' ', m.Length));
         int from = 0;
         while (from < masked.Length)
         {
             int end = SentenceEnd(masked, from);
-            CheckClosingSentence(lang, section, prose, masked, from, end, refDate, finalSnapshot, tz);
-            CheckAggregateDryClaim(lang, section, prose, masked, from, end, refDate, finalSnapshot, tz);
+            CheckClosingSentence(lang, section, prose, masked, from, end, refDate, finalSnapshot, tz, lex);
+            CheckAggregateDryClaim(lang, section, prose, masked, from, end, refDate, finalSnapshot, tz, lex);
             from = end + 1;
         }
     }
 
     private static void CheckClosingSentence(
-        string lang, NarrativeSection section, string prose, string masked, int start, int end, DateOnly refDate, ForecastSnapshotBody finalSnapshot, TimeZoneInfo tz)
+        string lang, NarrativeSection section, string prose, string masked, int start, int end, DateOnly refDate, ForecastSnapshotBody finalSnapshot, TimeZoneInfo tz, ILanguageLexicon lex)
     {
         // Must assert a precipitation/storm phenomenon...
-        if (!ContainsAnyWord(masked, start, end, ClosingPrecipWords))
+        if (!ContainsAnyWord(masked, start, end, lex.ClosingPrecipWords))
             return;
         // ...not in a negated / "stays dry" context, nor a CESSATION one where the
         // time word is a deadline by which precip ENDS rather than where it occurs
         // ("rain tapers off by evening", "showers ending tonight"). Both are
         // conservative skips — a few missed catches beats a false reject of a real send.
-        if (ContainsAnyWord(masked, start, end, ClosingNegationCues)
-            || ContainsAnyWord(masked, start, end, ClosingCessationCues)
+        if (ContainsAnyWord(masked, start, end, lex.ClosingNegationCues)
+            || ContainsAnyWord(masked, start, end, lex.ClosingCessationCues)
             || masked.IndexOf("n't", start, end - start, StringComparison.OrdinalIgnoreCase) >= 0)
             return;
         // ...at exactly one resolvable local time reference.
-        var window = ResolveClosingTime(masked, start, end, refDate);
+        var window = ResolveClosingTime(masked, start, end, refDate, lex);
         if (window is null)
             return;
 
@@ -1574,10 +1556,10 @@ public sealed class ForecastReconciler
     // CheckClosingSentence (a missed catch beats a false reject of a real send). Fail-closed via
     // NarrativeProseException → retry-with-feedback → WX-189 section degrade.
     private static void CheckAggregateDryClaim(
-        string lang, NarrativeSection section, string prose, string masked, int start, int end, DateOnly refDate, ForecastSnapshotBody finalSnapshot, TimeZoneInfo tz)
+        string lang, NarrativeSection section, string prose, string masked, int start, int end, DateOnly refDate, ForecastSnapshotBody finalSnapshot, TimeZoneInfo tz, ILanguageLexicon lex)
     {
         if (!string.Equals(lang, "en", StringComparison.Ordinal))
-            return;
+            return;   // WX-177's "weekend" resolution is en-specific; es "fin de semana" is a WX-168 follow-up
         if (!HasWord(masked, start, end, "weekend"))
             return;
         // Require an UN-NEGATED dry assertion: a dry word with no negation cue in its immediate
@@ -1586,14 +1568,14 @@ public sealed class ForecastReconciler
         // unlikely storm Sunday") no longer disqualifies a real claim (CodeRabbit), while "won't
         // stay dry" / "unlikely to remain dry" (negation touching the dry word) are still skipped.
         bool hasUnnegatedDry = false;
-        foreach (var dry in AggregateDryWords)
+        foreach (var dry in lex.AggregateDryWords)
         {
             for (int idx = IndexOfWord(masked, start, end, dry); idx >= 0 && !hasUnnegatedDry;
                  idx = IndexOfWord(masked, idx + dry.Length, end, dry))
             {
                 int lo = Math.Max(start, idx - 24);
                 int hi = Math.Min(end, idx + dry.Length + 16);
-                bool negated = ContainsAnyWord(masked, lo, hi, AggregateNegationCues)
+                bool negated = ContainsAnyWord(masked, lo, hi, lex.AggregateNegationCues)
                     || masked.IndexOf("n't", lo, hi - lo, StringComparison.OrdinalIgnoreCase) >= 0;
                 if (!negated)
                     hasUnnegatedDry = true;
@@ -1647,41 +1629,6 @@ public sealed class ForecastReconciler
     // (a false reject suppresses the closing) — "clear"/"quiet" are excluded as too ambiguous
     // ("clears" is a cessation; a "quiet weekend" can tolerate light rain); the prompt rule
     // carries the broader cases.
-    private static readonly string[] AggregateDryWords = { "dry", "rain-free", "storm-free", "precipitation-free" };
-
-    // Cues that NEGATE a dry claim ("won't stay dry", "unlikely to stay dry") — presence means
-    // the sentence asserts wet, so a wet weekend day agrees with it; skip rather than false-reject.
-    private static readonly string[] AggregateNegationCues = { "not", "unlikely", "won't", "wont" };
-
-    // Precipitation/storm phenomenon words the closing could assert. (A precip word
-    // in an idiom — "weather the storm", "calm before the storm" — is a rare residual:
-    // it can't be told from a literal claim deterministically, and the literal-forecast
-    // prompt makes it unlikely.)
-    private static readonly string[] ClosingPrecipWords =
-    {
-        "rain", "rains", "raining", "rainy", "shower", "showers", "thundershower", "thundershowers",
-        "storm", "storms", "stormy", "thunderstorm", "thunderstorms", "thunder", "snow", "snows",
-        "snowing", "snowy", "snowfall", "snowstorm", "snowstorms", "flurries", "flurry", "wintry",
-        "sleet", "drizzle", "hail", "downpour", "downpours",
-    };
-
-    // Sentence-level negation / "dry" cues — their presence makes the sentence too
-    // likely a "stays dry" / "no rain" statement to safely treat as an assertion.
-    private static readonly string[] ClosingNegationCues =
-    {
-        "no", "not", "without", "dry", "nothing", "none", "absent", "lacking",
-    };
-
-    // Cessation cues — the sentence describes precip ENDING ("tapers off this evening",
-    // "showers ending by tonight", "rain clears this afternoon"), so the named time is
-    // a deadline, not where the precip lives; skip rather than read it as a wet-time
-    // claim against a (correctly) dry block.
-    private static readonly string[] ClosingCessationCues =
-    {
-        "ending", "ends", "ended", "taper", "tapers", "tapering", "tapered", "clearing", "clears",
-        "cleared", "diminishing", "diminishes", "subsiding", "subsides", "departing", "exiting", "fading",
-    };
-
     // Resolves the sentence's local time reference to a (localDate, localHour) block
     // predicate, or null when there is none, more than one (ambiguous), or it is pinned
     // to a specific weekday/other day (residual — lean on the prompt). refDate is "today".
@@ -1689,8 +1636,10 @@ public sealed class ForecastReconciler
     // block by its LOCAL START hour — deliberately, so the closing is checked against the
     // very day-part the reader's grid places the block in (a block whose start hour lands
     // in "afternoon" is the grid's afternoon even if it spills an hour into "evening").
-    private static Func<DateOnly, int, bool>? ResolveClosingTime(string masked, int start, int end, DateOnly refDate)
+    private static Func<DateOnly, int, bool>? ResolveClosingTime(string masked, int start, int end, DateOnly refDate, ILanguageLexicon? lex)
     {
+        if (lex is null)
+            return null;   // no plugin for this language → no time resolution → the closing check skips (safe residual)
         var next = refDate.AddDays(1);
         Func<DateOnly, int, bool>? found = null;
         int matches = 0;
@@ -1700,34 +1649,50 @@ public sealed class ForecastReconciler
             matches++;
         }
 
-        if (HasWord(masked, start, end, "tonight"))
-            Take((d, h) => (d == refDate && h >= 18) || (d == next && h < 6));
-        if (HasWord(masked, start, end, "today"))
-            Take((d, _) => d == refDate);
-        if (HasWord(masked, start, end, "tomorrow"))
-            Take((d, _) => d == next);
-        TakeDayPart(masked, start, end, "morning", refDate, 6, 12, Take);
-        TakeDayPart(masked, start, end, "afternoon", refDate, 12, 18, Take);
-        TakeDayPart(masked, start, end, "evening", refDate, 18, 24, Take);
+        foreach (var w in lex.TonightWords)
+            if (HasWord(masked, start, end, w))
+                Take((d, h) => (d == refDate && h >= 18) || (d == next && h < 6));
+        foreach (var w in lex.TodayWords)
+            if (HasWord(masked, start, end, w))
+                Take((d, _) => d == refDate);
+        foreach (var w in lex.TomorrowWords)
+            if (HasWord(masked, start, end, w))
+                Take((d, _) => d == next);
+        // Day-part words → their universal local-hour bucket. The words are per-language; the hours are
+        // not. Only parts 1–3 resolve; pre-dawn (part 0) has no closing-time bucket, matching the
+        // pre-WX-168 morning/afternoon/evening-only behaviour.
+        foreach (var (word, part) in lex.DayPartWords)
+            if (PartHourRange(part) is (int lo, int hi))
+                TakeDayPart(masked, start, end, word, refDate, lo, hi, Take, lex);
 
         return matches == 1 ? found : null;
     }
+
+    // Universal local-hour bucket for a resolvable day part (matches StructuredReportRenderer.PartOf).
+    // Pre-dawn (part 0) returns null — it has no closing-time bucket, matching the pre-WX-168 behaviour.
+    private static (int Lo, int Hi)? PartHourRange(int part) => part switch
+    {
+        1 => (6, 12),
+        2 => (12, 18),
+        3 => (18, 24),
+        _ => null,
+    };
 
     // A bare day-part word maps to TODAY's bucket — unless it is pinned to a weekday or
     // another relative day ("Saturday afternoon", "tomorrow morning"), which we can't
     // localize confidently, so we skip it (residual).
     private static void TakeDayPart(
-        string masked, int start, int end, string word, DateOnly refDate, int loHour, int hiHour, Action<Func<DateOnly, int, bool>> take)
+        string masked, int start, int end, string word, DateOnly refDate, int loHour, int hiHour, Action<Func<DateOnly, int, bool>> take, ILanguageLexicon lex)
     {
         int idx = IndexOfWord(masked, start, end, word);
-        if (idx < 0 || QualifiedByOtherDay(masked, start, idx))
+        if (idx < 0 || QualifiedByOtherDay(masked, start, idx, lex))
             return;
         take((d, h) => d == refDate && h >= loHour && h < hiHour);
     }
 
     private static bool HasWord(string s, int start, int end, string word) => IndexOfWord(s, start, end, word) >= 0;
 
-    private static bool ContainsAnyWord(string s, int start, int end, string[] words)
+    private static bool ContainsAnyWord(string s, int start, int end, IReadOnlyList<string> words)
     {
         foreach (var w in words)
             if (IndexOfWord(s, start, end, w) >= 0)
