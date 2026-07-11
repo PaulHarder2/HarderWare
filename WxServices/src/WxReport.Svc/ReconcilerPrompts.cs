@@ -236,17 +236,21 @@ internal static class ReconcilerPrompts
             structural change the data does not support — get the final_snapshot
             right and the change set follows. Your job for the band is the
             changeSummary PROSE (below).
-              - In changeSummary, describe in one or two plain sentences what
-                genuinely differs from prior_snapshot: precipitation appearing
-                where the prior was dry, a band strengthening or weakening, a
-                hazard appearing or clearing, a meaningful temperature or wind
-                change. Narrate only REAL prior-vs-now differences the
-                final_snapshot supports — if the prior already carried the same
-                precipitation at the same likelihood in a window, it has NOT
-                changed (and "possible" and "likely" are the same tier — a
-                possible-to-likely move is not a change); do not narrate it, and
-                never describe an onset, downgrade, or clearing the comparison
-                does not show.
+              - changeSummary answers the reader's question "Why this update?" —
+                name, in one or two plain sentences, the SINGLE change that
+                warranted this send: the one triggering difference from
+                prior_snapshot (precipitation appearing where the prior was dry, a
+                hazard appearing, a band strengthening, a meaningful temperature or
+                wind change). Lead with that trigger; do NOT enumerate every
+                difference — a list of minor changes buries the reason you
+                interrupted the reader. If several things changed, name the most
+                significant one (the one that justifies the send) and let the
+                forecast grid below carry the rest. Narrate only REAL prior-vs-now
+                differences the final_snapshot supports — if the prior already
+                carried the same precipitation at the same likelihood in a window,
+                it has NOT changed (and "possible" and "likely" are the same tier —
+                a possible-to-likely move is not a change); never describe an
+                onset, downgrade, or clearing the comparison does not show.
               - Sky-cover drift (partly/mostly cloudy/overcast) and a few knots of
                 wind within the same impact band are NOT news — do not narrate
                 them in the change band.

@@ -419,7 +419,7 @@ public class StructuredReportRendererTests
         Assert.Contains($"Severe storms in your forecast — {expectedDay} afternoon.", en);
         Assert.Contains("Reported Conditions", en);             // conditions table present (WX-184 relabel)
         Assert.Contains("Forecast for Spring", en);             // forecast grid present
-        Assert.DoesNotContain("What's changed:", en);           // no change band
+        Assert.DoesNotContain("Why this update:", en);         // no change band
         Assert.DoesNotContain("In summary:", en);               // no closing/summary
     }
 
@@ -495,13 +495,13 @@ public class StructuredReportRendererTests
     public void ChangeBand_RendersOnlyWhenNarrativeCarriesOne()
     {
         var scheduled = StructuredReportRenderer.Render(Body(), Forecast(), Observation(), Imperial(), T("en"), C("en"), Utc, ReportKind.Scheduled, RenderNow);
-        Assert.DoesNotContain("What's changed:", scheduled);
+        Assert.DoesNotContain("Why this update:", scheduled);
         Assert.DoesNotContain("Unscheduled Update", scheduled);
         Assert.Contains("Scheduled Report", scheduled);   // the type label is always shown (WX-154)
 
         var unscheduled = StructuredReportRenderer.Render(
             Body("{ch1}Thunderstorms now expected this afternoon."), Forecast(), Observation(), Imperial(), T("en"), C("en"), Utc, ReportKind.Unscheduled, RenderNow);
-        Assert.Contains("What's changed:", unscheduled);
+        Assert.Contains("Why this update:", unscheduled);
         Assert.Contains("Thunderstorms now expected this afternoon.", unscheduled);
         Assert.Contains("Unscheduled Update", unscheduled);
     }
@@ -576,17 +576,17 @@ public class StructuredReportRendererTests
     [Fact]
     public void WithoutChangeBand_SuppressesBand_KeepsClosing()
     {
-        // A change summary normally renders the "What's changed:" band...
+        // A change summary normally renders the "Why this update:" band...
         var withBand = StructuredReportRenderer.Render(
             Body("{ch1}Storms moving in."), Forecast(), Observation(), Imperial(), T("en"), C("en"), Utc, ReportKind.Scheduled, RenderNow);
-        Assert.Contains("What's changed:", withBand);
+        Assert.Contains("Why this update:", withBand);
 
         // ...WX-182's band-free copy (a cached scheduled re-send narrates no change) drops
         // the band but keeps the closing prose.
         var bandFree = ReportWorker.WithoutChangeBand(Body("{ch1}Storms moving in."));
         var rendered = StructuredReportRenderer.Render(
             bandFree, Forecast(), Observation(), Imperial(), T("en"), C("en"), Utc, ReportKind.Scheduled, RenderNow);
-        Assert.DoesNotContain("What's changed:", rendered);
+        Assert.DoesNotContain("Why this update:", rendered);
         Assert.Contains("92°F", rendered);  // closing prose still rendered (Highs near 33.5°C → 92°F)
     }
 
