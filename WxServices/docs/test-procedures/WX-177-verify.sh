@@ -59,7 +59,7 @@ wknd_exhausted=$(printf '%s\n' "$POST" | grep 'calls the weekend dry' | cnt 'cou
 # SCOPED to narrative 'en': WX-168 (v1.49.0) gives the SAME closing check es coverage, so es prose
 # now emits the identical inner string with an 'es' tag -- counting those here would inflate this
 # en trend. The es family is measured separately by WX-168-verify.sh. (Change rides the WX-168 PR.)
-read precip_before precip_after precip_new < <(vl_health_delta "narrative 'en' asserts precipitation/storm activity at a local time")
+read -r precip_before precip_after precip_new < <(vl_health_delta "narrative 'en' asserts precipitation/storm activity at a local time")
 
 # Exercised = reports actually flowed post-deploy (the new binary is live and producing reports).
 sent=$(      printf '%s\n' "$POST" | grep 'report sent' | cnt 'DeliverWeatherReportAsync')

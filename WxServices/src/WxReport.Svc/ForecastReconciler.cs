@@ -1125,6 +1125,8 @@ public sealed class ForecastReconciler
         // skips the sentence rather than risk a false reject into suppression.
         if (!string.Equals(lang, "en", StringComparison.Ordinal))
             return;
+        if (lex is null)
+            return;   // en always has a plugin; guard explicitly rather than lean on that invariant (CodeRabbit)
 
         var datesBySentence = new Dictionary<int, (int End, SortedSet<DateOnly> Dates)>();
         foreach (Match m in QTimeToken.Matches(prose))
@@ -1146,7 +1148,7 @@ public sealed class ForecastReconciler
             if (dates.Count < 2)
                 continue;   // the sentence's instants share one local day — no boundary crossed
             var sentence = masked.Substring(ss, se - ss);
-            if (HasRelativeDayWord(sentence, lex!))   // reached only for lang == "en", so the en plugin is present
+            if (HasRelativeDayWord(sentence, lex))   // lex is non-null here (en-guarded + null-checked above)
                 continue;   // conservative — a relative-day word may name a terminus we can't verify
             foreach (var date in new[] { dates.Min, dates.Max })
             {
