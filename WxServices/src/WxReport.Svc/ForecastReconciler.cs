@@ -983,6 +983,17 @@ public sealed class ForecastReconciler
         @"\b(?:lluvia|nieve|aguanieve|tormentas?|granizo)\b[^.!?;:,]{0,20}\bprobables?\b"
         + @"|\bprobables?\b[^.!?;:,]{0,20}\b(?:lluvia|nieve|aguanieve|tormentas?|granizo)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    // WX-284 (CR follow-up): severe content is never rendered stronger than "possible" — the likelihood
+    // ban above catches "storms ... likely"; this catches the HIGH-CONFIDENCE register ("expected" /
+    // "certain") that is legitimate for a non-severe certain block but forbidden for severe. Guarded with
+    // a negative lookahead against the verb construction "expected/certain TO <verb>" ("storms expected to
+    // weaken / move out"), where the word describes the trend, not the severe likelihood. "will" /
+    // "definitely" / "guaranteed" are separately banned as guarantees by the prompt's hedged-certainty
+    // rule. en only; es "esperada"/"se espera" verbal forms are prompt-governed (like the es probable case).
+    private static readonly Regex SevereOverHedgeEnglish = new(
+        @"\b(?:storms?|thunderstorms?)\b[^.!?;:,]{0,20}\b(?:expected|certain)\b(?!\s+to\b)"
+        + @"|\b(?:expected|certain)\b(?!\s+to\b)[^.!?;:,]{0,20}\b(?:storms?|thunderstorms?)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private static void CheckProse(string lang, NarrativeSection section, string? prose, TimeZoneInfo tz)
     {
@@ -1424,15 +1435,31 @@ public sealed class ForecastReconciler
         // carry a severe block IN that window; an unresolvable time falls back to the snapshot-wide "any
         // severe block" gate (a window past the horizon carries no block, so it can't be verified and is
         // skipped — the conservative stance never false-rejects a real send).
+        var overHedge = lang == "en" ? SevereOverHedgeEnglish : null;
         int from = 0;
         while (from < masked.Length)
         {
             int end = SentenceEnd(masked, from);
             // Match on the sentence substring so the frozen-compound lookbehind ("snow storm") still
             // sees its qualifier even when the compound sits at the sentence start.
-            var hit = storm.Match(masked.Substring(from, end - from));
+            var sentence = masked.Substring(from, end - from);
+            var hit = storm.Match(sentence);
             if (hit.Success)
             {
+                // Severe content is never rendered stronger than "possible" (WX-284): a storm sentence
+                // carrying a high-confidence hedge ("expected"/"certain") is wrong regardless of severe
+                // backing — reject it before the window check.
+                var over = overHedge?.Match(sentence);
+                if (over is { Success: true })
+                {
+                    var offendingOver = string.Join(" ", prose.Substring(from, end - from)
+                        .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+                    throw new NarrativeProseException(section,
+                        $"structured_report narrative '{lang}' renders severe weather stronger than \"possible\" "
+                        + $"('{over.Value.Trim()}'), in this {section} sentence: \"{offendingOver}\". Severe storms are "
+                        + "ALWAYS \"possible\" (or not mentioned), never \"expected\"/\"certain\" — we warn that severe is "
+                        + "possible, we never promise it (WX-284).");
+                }
                 var window = ResolveClosingTime(masked, from, end, refDate);
                 bool legitimate;
                 if (window is null)

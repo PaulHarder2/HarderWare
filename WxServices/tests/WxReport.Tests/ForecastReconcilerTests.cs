@@ -1027,6 +1027,36 @@ public class ForecastReconcilerTests
     }
 
     [Fact]
+    public async Task SevereStormVocabulary_SevereRenderedAsExpected_DropsClosingOnly()
+    {
+        // WX-284 (CR follow-up): severe is ALWAYS "possible", never "expected"/"certain". Even with a
+        // severe block in the referenced window, "severe storms are expected" over-hedges — rejected.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: SevereTodayRainTomorrowSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: ClosingOnlyReport("Severe storms are expected today."));
+
+        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
+        Assert.Equal("See the forecast above for the full outlook.", success.StructuredReport.Narrative["en"].Closing);
+    }
+
+    [Fact]
+    public async Task SevereStormVocabulary_ExpectedToVerb_IsLegal_Succeeds()
+    {
+        // The over-hedge ban must NOT catch the trend construction "expected TO <verb>" — "severe storms
+        // expected to weaken" describes the trend, not the severe likelihood, and stays legal.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: SevereTodayRainTomorrowSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: ClosingOnlyReport("Severe storms are expected to weaken today."));
+
+        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
+        Assert.Equal("Severe storms are expected to weaken today.", success.StructuredReport.Narrative["en"].Closing);
+    }
+
+    [Fact]
     public async Task NonSeverePrecipRegister_SnowShowers_IsLegal_Succeeds()
     {
         // WX-284 frozen guard: the liquid "showers" ban must NOT catch "snow showers" — frozen precip
