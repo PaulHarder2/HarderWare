@@ -372,10 +372,13 @@ internal static class ReconcilerPrompts
             ("the early hours of Tuesday" alone drops the Monday-evening start) nor
             to bare days without day-parts ("Monday into Tuesday").
           • Hedged certainty: never state weather as flatly certain, in any
-            language — no forecast is ever 100% sure. Render even a "certain"
-            precip expectation or a set severeFlag as calibrated strong
-            likelihood ("almost certain", "highly likely", "expect"), never as a
-            guarantee ("will", "definitely", "guaranteed").
+            language — no forecast is ever 100% sure. Render a "certain"
+            NON-SEVERE precip expectation as calibrated confidence ("almost
+            certain", "expect"/"expected"), never as a guarantee ("will",
+            "definitely", "guaranteed") — and never as "highly likely" ("likely"
+            is retired, see the probability-words rule). A severe block is the
+            exception in the other direction: it is never rendered stronger than
+            "possible", whatever its tier (see the recipient-vocabulary rule).
           • Recipient precipitation vocabulary — rain, or severe storms, nothing
             between. Most recipients don't distinguish showers, drizzle, a downpour,
             or an ordinary (non-severe) thunderstorm from plain rain, so call ALL

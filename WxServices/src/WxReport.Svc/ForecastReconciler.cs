@@ -967,6 +967,22 @@ public sealed class ForecastReconciler
     private static readonly Regex StormVocabularySpanish = new(
         @"\b(?:tormentas?|tormentoso|truenos?|turbonadas?)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    // WX-284 step 2 (CR #4a): "likely" is the RETIRED recipient precip-likelihood word — the hedge
+    // collapsed to "possible" ("expected" only for a certain NON-severe block; a severe block is always
+    // "possible"). The renderer can only emit "possible"/"expected" (deterministic tokens), so the one
+    // path by which "likely" reaches a recipient is Claude's free prose — this is the fail-closed
+    // backstop to the prompt rule. Scoped to a precip noun within the SAME clause (a bare "likely" is
+    // legitimate for temperature/wind — "highs likely near 90"), so the proximity window stops at clause
+    // punctuation. en/es; es "probable" is the retired word (the verbal "es probable que llueva"
+    // construction leans on the prompt, matching the conservative es-validator stance).
+    private static readonly Regex PrecipLikelihoodEnglish = new(
+        @"\b(?:rain|snow|sleet|storms?|thunderstorms?|showers?|drizzle|downpours?|precipitation|hail)\b[^.!?;:,]{0,20}\blikely\b"
+        + @"|\blikely\b[^.!?;:,]{0,20}\b(?:rain|snow|sleet|storms?|thunderstorms?|showers?|drizzle|downpours?|precipitation|hail)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex PrecipLikelihoodSpanish = new(
+        @"\b(?:lluvia|nieve|aguanieve|tormentas?|granizo)\b[^.!?;:,]{0,20}\bprobables?\b"
+        + @"|\bprobables?\b[^.!?;:,]{0,20}\b(?:lluvia|nieve|aguanieve|tormentas?|granizo)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private static void CheckProse(string lang, NarrativeSection section, string? prose, TimeZoneInfo tz)
     {
@@ -1035,6 +1051,24 @@ public sealed class ForecastReconciler
                 + $"'{precipRegister.Value.Trim()}' in recipient prose; most recipients don't "
                 + "distinguish it from ordinary rain, so say plain \"rain\" (WX-284) — reserve "
                 + "elevated \"severe storms\" wording for a severe block.");
+
+        // WX-284 step 2 (CR #4a): the retired likelihood word "likely" must never reach a recipient —
+        // the hedge collapsed to "possible" ("expected" only for a certain non-severe block; a severe
+        // block is always "possible"). Fail-closed backstop to the prompt rule, precip-scoped so a
+        // non-precip "likely" (temperature/wind) is untouched.
+        var likelihood = lang switch
+        {
+            "en" => PrecipLikelihoodEnglish,
+            "es" => PrecipLikelihoodSpanish,
+            _ => (Regex?)null,
+        };
+        var likely = likelihood?.Match(masked);
+        if (likely is { Success: true })
+            throw new NarrativeProseException(section,
+                $"structured_report narrative '{lang}' renders a precipitation likelihood as "
+                + $"'{likely.Value.Trim()}'; the recipient hedge collapsed to \"possible\" (WX-284) — say "
+                + "\"[precip] possible\" (\"expected\" only for a certain non-severe block; a severe block "
+                + "is always \"possible\"). \"likely\" is retired for recipient-facing precipitation.");
 
         // (2) Prose time-of-day word must agree with its {q:time} token's LOCAL
         // rendering (defect 2, send 1927: "...develop Saturday afternoon,
@@ -1356,8 +1390,8 @@ public sealed class ForecastReconciler
             CheckProseClaims(lang, NarrativeSection.ChangeSummary, sections.ChangeSummary, refDate, finalSnapshot, tz);
             CheckProseClaims(lang, NarrativeSection.Closing, sections.Closing, refDate, finalSnapshot, tz);
             // WX-284: storm wording is reserved for a severe block (rain vs. severe-storms binary).
-            CheckSevereStormVocabulary(lang, NarrativeSection.ChangeSummary, sections.ChangeSummary, finalSnapshot);
-            CheckSevereStormVocabulary(lang, NarrativeSection.Closing, sections.Closing, finalSnapshot);
+            CheckSevereStormVocabulary(lang, NarrativeSection.ChangeSummary, sections.ChangeSummary, refDate, finalSnapshot, tz);
+            CheckSevereStormVocabulary(lang, NarrativeSection.Closing, sections.Closing, refDate, finalSnapshot, tz);
         }
     }
 
@@ -1370,26 +1404,66 @@ public sealed class ForecastReconciler
     // (the WX-149 "never reject what you can't prove wrong" policy). en/es only; other languages
     // lean on the prompt rule. Fail-closed via NarrativeProseException → WX-189 retry/section degrade.
     private static void CheckSevereStormVocabulary(
-        string lang, NarrativeSection section, string? prose, ForecastSnapshotBody finalSnapshot)
+        string lang, NarrativeSection section, string? prose, DateOnly refDate, ForecastSnapshotBody finalSnapshot, TimeZoneInfo tz)
     {
         if (string.IsNullOrEmpty(prose))
             return;
-        if (finalSnapshot.Blocks.Any(b => b.SevereFlag))
-            return;  // a severe block is present — storm wording is legitimate; don't second-guess it.
         var storm = lang switch
         {
             "en" => StormVocabularyEnglish,
             "es" => StormVocabularySpanish,
             _ => (Regex?)null,
         };
+        if (storm is null)
+            return;
+        bool anySevere = finalSnapshot.Blocks.Any(b => b.SevereFlag);
         var masked = BraceToken.Replace(prose, m => new string(' ', m.Length));
-        var hit = storm?.Match(masked);
-        if (hit is { Success: true })
-            throw new NarrativeProseException(section,
-                $"structured_report narrative '{lang}' uses storm wording ('{hit.Value.Trim()}') but the "
-                + "final_snapshot carries no severe block; a non-severe thunderstorm reads as ordinary "
-                + "\"rain\" to the recipient (WX-284). Say \"rain\", and reserve \"severe storms\" for a "
-                + "severe block.");
+        // WX-284 (CR #3): storm wording is legitimate only for the WINDOW the prose names, not merely
+        // somewhere in the snapshot — otherwise "severe storms tonight" would pass over a calm tonight
+        // when an unrelated block tomorrow is severe. Scope sentence-by-sentence: a resolvable time must
+        // carry a severe block IN that window; an unresolvable time falls back to the snapshot-wide "any
+        // severe block" gate (a window past the horizon carries no block, so it can't be verified and is
+        // skipped — the conservative stance never false-rejects a real send).
+        int from = 0;
+        while (from < masked.Length)
+        {
+            int end = SentenceEnd(masked, from);
+            // Match on the sentence substring so the frozen-compound lookbehind ("snow storm") still
+            // sees its qualifier even when the compound sits at the sentence start.
+            var hit = storm.Match(masked.Substring(from, end - from));
+            if (hit.Success)
+            {
+                var window = ResolveClosingTime(masked, from, end, refDate);
+                bool legitimate;
+                if (window is null)
+                    legitimate = anySevere;  // unresolvable time — allow iff any severe block exists at all
+                else
+                {
+                    bool anyInWindow = false, anySevereInWindow = false;
+                    foreach (var b in finalSnapshot.Blocks)
+                    {
+                        var local = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(b.StartUtc, DateTimeKind.Utc), tz);
+                        if (window(DateOnly.FromDateTime(local), local.Hour))
+                        {
+                            anyInWindow = true;
+                            if (b.SevereFlag) anySevereInWindow = true;
+                        }
+                    }
+                    legitimate = !anyInWindow || anySevereInWindow;
+                }
+                if (!legitimate)
+                {
+                    var offending = string.Join(" ", prose.Substring(from, end - from)
+                        .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+                    throw new NarrativeProseException(section,
+                        $"structured_report narrative '{lang}' uses storm wording ('{hit.Value.Trim()}') for a time the "
+                        + $"final_snapshot carries no severe block, in this {section} sentence: \"{offending}\". A "
+                        + "non-severe thunderstorm reads as ordinary \"rain\" to the recipient (WX-284); say \"rain\", "
+                        + "and reserve \"severe storms\" for a window that carries a severe block.");
+                }
+            }
+            from = end + 1;
+        }
     }
 
     // Scans one prose section sentence-by-sentence for a precip/storm assertion at a
