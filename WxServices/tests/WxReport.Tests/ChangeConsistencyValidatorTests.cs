@@ -118,4 +118,33 @@ public class ChangeConsistencyValidatorTests
         Assert.ThrowsAny<JsonException>(() =>
             ForecastReconciler.ValidateChangeSnapshotConsistency(report, rain, dry, Utc));
     }
+
+    [Fact]
+    public void PhantomStrengthening_PossibleToLikely_Rejected()
+    {
+        // WX-284 step 2 (Niki): "possible" and "likely" fold to one recipient tier, so a "rain
+        // strengthening" over a possible->likely block is a change that did not occur. The oracle's
+        // MaxExpect/BlockExpect fold through RecipientPrecip.Expectation in lockstep with the
+        // detector's ExpectOf, so it rejects exactly the phantom the detector never emits — this pins
+        // that fold (revert it and the mirror falls out of step, silently re-admitting the phantom).
+        var report = Report(ChangeTier.Plans, ChangePhenomenon.Rain, ChangeDirection.Strengthening, 0, 6);
+        var prior = Body(Blk(0, PrecipExpectation.Possible, PrecipPhenomenon.Rain));
+        var final = Body(Blk(0, PrecipExpectation.Likely, PrecipPhenomenon.Rain));
+        Assert.ThrowsAny<JsonException>(() =>
+            ForecastReconciler.ValidateChangeSnapshotConsistency(report, final, prior, Utc));
+    }
+
+    [Fact]
+    public void PhantomStrengthening_SevereTierBump_Rejected()
+    {
+        // WX-284 step 2 (Paul): a severe block is pinned to the top of the ladder (its wording is the
+        // constant "severe storms possible"), so a "storms strengthening" over a severe likely->certain
+        // block is a change that did not occur. The oracle pins in lockstep with the detector's ExpectOf,
+        // rejecting the phantom the detector never emits (a severe ONSET still backs a real change).
+        var report = Report(ChangeTier.Safety, ChangePhenomenon.Thunderstorm, ChangeDirection.Strengthening, 0, 6);
+        var prior = Body(Blk(0, PrecipExpectation.Likely, PrecipPhenomenon.Thunderstorm, severe: true));
+        var final = Body(Blk(0, PrecipExpectation.Certain, PrecipPhenomenon.Thunderstorm, severe: true));
+        Assert.ThrowsAny<JsonException>(() =>
+            ForecastReconciler.ValidateChangeSnapshotConsistency(report, final, prior, Utc));
+    }
 }

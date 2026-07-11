@@ -931,6 +931,69 @@ public sealed class ForecastReconciler
         + @"|un frente|el frente|baja presión|alta presión|vaguada|borrasca"
         + @"|anticiclón|brisa marina|línea seca)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    // WX-284: the non-severe LIQUID precipitation REGISTER. Most recipients don't distinguish
+    // "showers", "drizzle", a "downpour", or a "thundershower" from ordinary rain, so the report
+    // confines non-severe liquid precip to plain "rain" — these convective-intensity / coverage words
+    // must never reach recipient prose (they collapse to "rain"). Storm/thunderstorm wording is
+    // handled separately by CheckSevereStormVocabulary, which gates it on a severe block (the snapshot
+    // the context-free CheckProse lacks). The prompt rule (ReconcilerPrompts) is the primary defense;
+    // this is the deterministic backstop, failing closed through the WX-189 retry. Unambiguous
+    // precip-register words ONLY, en/es (the enabled languages) — every other language leans on the
+    // prompt rule, matching the SynopticMechanism policy above.
+    //
+    // FROZEN GUARD: WX-284 collapses only the LIQUID convective gradient — snow/wintry precip keeps
+    // its own words. "showers" has a frozen compound ("snow showers", "wintry showers") that must
+    // stay legal, so it is excluded when a frozen qualifier precedes it (a negative lookbehind). The
+    // other words are liquid-only and need no guard. (Spanish frozen compounds put the qualifier
+    // AFTER the noun — "chubascos de nieve" — which a lookbehind can't catch; those lean on the
+    // prompt, matching the conservative es-validator stance.)
+    private static readonly Regex NonSeverePrecipRegisterEnglish = new(
+        @"\b(?<!\b(?:snow|wintry|sleet|ice)[ -])(?:showers?|thundershowers?|drizzl(?:e|es|ing)|downpours?|cloudbursts?|sprinkles?)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex NonSeverePrecipRegisterSpanish = new(
+        @"\b(?:chubascos?|lloviznas?|lloviznando|aguaceros?)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    // WX-284: storm / thunderstorm vocabulary — reserved for a SEVERE block (rain vs. severe-storms
+    // binary). Gated on snapshot severe state by CheckSevereStormVocabulary (not context-free like
+    // the register above), so these are only rejected when no severe block exists. en/es.
+    //
+    // FROZEN GUARD (as above): "winter storm", "snow storm", "ice storm", "snow squall" are legitimate
+    // frozen-precip terms that do NOT set the convective severeFlag, so a frozen qualifier before
+    // storm/squall is excluded via lookbehind. "thunderstorm" (bare) has no frozen compound and stays
+    // gated. (Spanish "tormenta de nieve" puts the qualifier after — leans on the prompt.)
+    private static readonly Regex StormVocabularyEnglish = new(
+        @"\b(?<!\b(?:winter|snow|ice|wintry)[ -])(?:thunder(?:storms?|y)?|storms?|stormy|squalls?)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex StormVocabularySpanish = new(
+        @"\b(?:tormentas?|tormentoso|truenos?|turbonadas?)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    // WX-284 step 2 (CR #4a): "likely" is the RETIRED recipient precip-likelihood word — the hedge
+    // collapsed to "possible" ("expected" only for a certain NON-severe block; a severe block is always
+    // "possible"). The renderer can only emit "possible"/"expected" (deterministic tokens), so the one
+    // path by which "likely" reaches a recipient is Claude's free prose — this is the fail-closed
+    // backstop to the prompt rule. Scoped to a precip noun within the SAME clause (a bare "likely" is
+    // legitimate for temperature/wind — "highs likely near 90"), so the proximity window stops at clause
+    // punctuation. en/es; es "probable" is the retired word (the verbal "es probable que llueva"
+    // construction leans on the prompt, matching the conservative es-validator stance).
+    private static readonly Regex PrecipLikelihoodEnglish = new(
+        @"\b(?:rain|snow|sleet|storms?|thunderstorms?|showers?|drizzle|downpours?|precipitation|hail)\b[^.!?;:,]{0,20}\blikely\b"
+        + @"|\blikely\b[^.!?;:,]{0,20}\b(?:rain|snow|sleet|storms?|thunderstorms?|showers?|drizzle|downpours?|precipitation|hail)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex PrecipLikelihoodSpanish = new(
+        @"\b(?:lluvia|nieve|aguanieve|tormentas?|granizo)\b[^.!?;:,]{0,20}\bprobables?\b"
+        + @"|\bprobables?\b[^.!?;:,]{0,20}\b(?:lluvia|nieve|aguanieve|tormentas?|granizo)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    // WX-284 (CR follow-up): severe content is never rendered stronger than "possible" — the likelihood
+    // ban above catches "storms ... likely"; this catches the HIGH-CONFIDENCE register ("expected" /
+    // "certain") that is legitimate for a non-severe certain block but forbidden for severe. Guarded with
+    // a negative lookahead against the verb construction "expected/certain TO <verb>" ("storms expected to
+    // weaken / move out"), where the word describes the trend, not the severe likelihood. "will" /
+    // "definitely" / "guaranteed" are separately banned as guarantees by the prompt's hedged-certainty
+    // rule. en only; es "esperada"/"se espera" verbal forms are prompt-governed (like the es probable case).
+    private static readonly Regex SevereOverHedgeEnglish = new(
+        @"\b(?:storms?|thunderstorms?)\b[^.!?;:,]{0,20}\b(?:expected|certain)\b(?!\s+to\b)"
+        + @"|\b(?:expected|certain)\b(?!\s+to\b)[^.!?;:,]{0,20}\b(?:storms?|thunderstorms?)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private static void CheckProse(string lang, NarrativeSection section, string? prose, TimeZoneInfo tz)
     {
@@ -982,6 +1045,41 @@ public sealed class ForecastReconciler
                 + $"('{mechanism.Value.Trim()}') as a cause; state the observed effect only, "
                 + "never a 'why' — no fronts, pressure systems, troughs/ridges, or other "
                 + "named weather mechanisms (the data cannot support a cause).");
+
+        // WX-284: non-severe precipitation register. "showers"/"drizzle"/"downpour"/"thundershower"
+        // all read as ordinary rain to the recipient, so say plain "rain". en/es only; other
+        // languages lean on the prompt rule (their equivalents aren't enumerated here).
+        var register = lang switch
+        {
+            "en" => NonSeverePrecipRegisterEnglish,
+            "es" => NonSeverePrecipRegisterSpanish,
+            _ => (Regex?)null,
+        };
+        var precipRegister = register?.Match(masked);
+        if (precipRegister is { Success: true })
+            throw new NarrativeProseException(section,
+                $"structured_report narrative '{lang}' uses the precipitation register "
+                + $"'{precipRegister.Value.Trim()}' in recipient prose; most recipients don't "
+                + "distinguish it from ordinary rain, so say plain \"rain\" (WX-284) — reserve "
+                + "elevated \"severe storms\" wording for a severe block.");
+
+        // WX-284 step 2 (CR #4a): the retired likelihood word "likely" must never reach a recipient —
+        // the hedge collapsed to "possible" ("expected" only for a certain non-severe block; a severe
+        // block is always "possible"). Fail-closed backstop to the prompt rule, precip-scoped so a
+        // non-precip "likely" (temperature/wind) is untouched.
+        var likelihood = lang switch
+        {
+            "en" => PrecipLikelihoodEnglish,
+            "es" => PrecipLikelihoodSpanish,
+            _ => (Regex?)null,
+        };
+        var likely = likelihood?.Match(masked);
+        if (likely is { Success: true })
+            throw new NarrativeProseException(section,
+                $"structured_report narrative '{lang}' renders a precipitation likelihood as "
+                + $"'{likely.Value.Trim()}'; the recipient hedge collapsed to \"possible\" (WX-284) — say "
+                + "\"[precip] possible\" (\"expected\" only for a certain non-severe block; a severe block "
+                + "is always \"possible\"). \"likely\" is retired for recipient-facing precipitation.");
 
         // (2) Prose time-of-day word must agree with its {q:time} token's LOCAL
         // rendering (defect 2, send 1927: "...develop Saturday afternoon,
@@ -1302,6 +1400,96 @@ public sealed class ForecastReconciler
             // same precip-vs-dry guard (the residual prose-phantom surface Option C left).
             CheckProseClaims(lang, NarrativeSection.ChangeSummary, sections.ChangeSummary, refDate, finalSnapshot, tz);
             CheckProseClaims(lang, NarrativeSection.Closing, sections.Closing, refDate, finalSnapshot, tz);
+            // WX-284: storm wording is reserved for a severe block (rain vs. severe-storms binary).
+            CheckSevereStormVocabulary(lang, NarrativeSection.ChangeSummary, sections.ChangeSummary, refDate, finalSnapshot, tz);
+            CheckSevereStormVocabulary(lang, NarrativeSection.Closing, sections.Closing, refDate, finalSnapshot, tz);
+        }
+    }
+
+    // WX-284: storm / thunderstorm wording is reserved for a SEVERE block — a non-severe
+    // thunderstorm reads as ordinary "rain" to the recipient (the rain vs. severe-storms binary).
+    // So when the final_snapshot carries NO severe block, storm-family words in prose are provably
+    // wrong (there are no severe storms to describe) and must be "rain". When a severe block IS
+    // present the wording is legitimate and we do not try to prove WHICH window the prose describes
+    // — mapping a prose span to a block is exactly the sub-block precision the other checks avoid
+    // (the WX-149 "never reject what you can't prove wrong" policy). en/es only; other languages
+    // lean on the prompt rule. Fail-closed via NarrativeProseException → WX-189 retry/section degrade.
+    private static void CheckSevereStormVocabulary(
+        string lang, NarrativeSection section, string? prose, DateOnly refDate, ForecastSnapshotBody finalSnapshot, TimeZoneInfo tz)
+    {
+        if (string.IsNullOrEmpty(prose))
+            return;
+        var storm = lang switch
+        {
+            "en" => StormVocabularyEnglish,
+            "es" => StormVocabularySpanish,
+            _ => (Regex?)null,
+        };
+        if (storm is null)
+            return;
+        bool anySevere = finalSnapshot.Blocks.Any(b => b.SevereFlag);
+        var masked = BraceToken.Replace(prose, m => new string(' ', m.Length));
+        // WX-284 (CR #3): storm wording is legitimate only for the WINDOW the prose names, not merely
+        // somewhere in the snapshot — otherwise "severe storms tonight" would pass over a calm tonight
+        // when an unrelated block tomorrow is severe. Scope sentence-by-sentence: a resolvable time must
+        // carry a severe block IN that window; an unresolvable time falls back to the snapshot-wide "any
+        // severe block" gate (a window past the horizon carries no block, so it can't be verified and is
+        // skipped — the conservative stance never false-rejects a real send).
+        var overHedge = lang == "en" ? SevereOverHedgeEnglish : null;
+        int from = 0;
+        while (from < masked.Length)
+        {
+            int end = SentenceEnd(masked, from);
+            // Match on the sentence substring so the frozen-compound lookbehind ("snow storm") still
+            // sees its qualifier even when the compound sits at the sentence start.
+            var sentence = masked.Substring(from, end - from);
+            var hit = storm.Match(sentence);
+            if (hit.Success)
+            {
+                // Severe content is never rendered stronger than "possible" (WX-284): a storm sentence
+                // carrying a high-confidence hedge ("expected"/"certain") is wrong regardless of severe
+                // backing — reject it before the window check.
+                var over = overHedge?.Match(sentence);
+                if (over is { Success: true })
+                {
+                    var offendingOver = string.Join(" ", prose.Substring(from, end - from)
+                        .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+                    throw new NarrativeProseException(section,
+                        $"structured_report narrative '{lang}' renders severe weather stronger than \"possible\" "
+                        + $"('{over.Value.Trim()}'), in this {section} sentence: \"{offendingOver}\". Severe storms are "
+                        + "ALWAYS \"possible\" (or not mentioned), never \"expected\"/\"certain\" — we warn that severe is "
+                        + "possible, we never promise it (WX-284).");
+                }
+                var window = ResolveClosingTime(masked, from, end, refDate);
+                bool legitimate;
+                if (window is null)
+                    legitimate = anySevere;  // unresolvable time — allow iff any severe block exists at all
+                else
+                {
+                    bool anyInWindow = false, anySevereInWindow = false;
+                    foreach (var b in finalSnapshot.Blocks)
+                    {
+                        var local = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(b.StartUtc, DateTimeKind.Utc), tz);
+                        if (window(DateOnly.FromDateTime(local), local.Hour))
+                        {
+                            anyInWindow = true;
+                            if (b.SevereFlag) anySevereInWindow = true;
+                        }
+                    }
+                    legitimate = !anyInWindow || anySevereInWindow;
+                }
+                if (!legitimate)
+                {
+                    var offending = string.Join(" ", prose.Substring(from, end - from)
+                        .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+                    throw new NarrativeProseException(section,
+                        $"structured_report narrative '{lang}' uses storm wording ('{hit.Value.Trim()}') for a time the "
+                        + $"final_snapshot carries no severe block, in this {section} sentence: \"{offending}\". A "
+                        + "non-severe thunderstorm reads as ordinary \"rain\" to the recipient (WX-284); say \"rain\", "
+                        + "and reserve \"severe storms\" for a window that carries a severe block.");
+                }
+            }
+            from = end + 1;
         }
     }
 
@@ -1592,12 +1780,21 @@ public sealed class ForecastReconciler
     // phenomenon is p — None when no such block (a block carrying a phenomenon
     // always has a non-None expectation by the snapshot invariant). Used to compare
     // the prior and new snapshots' in-window intensity for a phenomenon.
+    // WX-284: match on the RECIPIENT phenomenon (RecipientPrecip.Of) so a non-severe thunderstorm
+    // counts on the Rain axis — the exact fold DeterministicChangeDetector.ExpectOf/SevereOf use, so
+    // this oracle accepts precisely what the detector emits (the WX-189/151 tautology stays green).
+    // WX-284 step 2: the tier folds through RecipientPrecip.Expectation(block) too — the same fold
+    // ExpectOf/BlockExpect apply (Possible == Likely; a severe block pinned to the top) — so a possible
+    // <-> likely move, and a tier bump on a block that stays severe, both read flat here as well.
     private static PrecipExpectation MaxExpect(ForecastSnapshotBody body, PrecipPhenomenon p, ChangeWindow w)
     {
         var max = PrecipExpectation.None;
         foreach (var b in body.Blocks)
-            if (b.PrecipPhenomenon == p && BlockOverlapsWindow(b.StartUtc, w) && (int)b.PrecipExpectation > (int)max)
-                max = b.PrecipExpectation;
+            if (RecipientPrecip.Of(b) == p && BlockOverlapsWindow(b.StartUtc, w))
+            {
+                var e = RecipientPrecip.Expectation(b);
+                if ((int)e > (int)max) max = e;
+            }
         return max;
     }
 
@@ -1607,9 +1804,10 @@ public sealed class ForecastReconciler
 
     // WX-151: severe within the window on a block carrying phenomenon p — the
     // per-phenomenon severe axis, so an unrelated severe block does not vouch for a
-    // different phenomenon's change.
+    // different phenomenon's change. WX-284: on the recipient phenomenon (a severe thunderstorm
+    // keeps its own axis; a non-severe one folds to Rain and carries no severe).
     private static bool SevereForPhenomenon(ForecastSnapshotBody body, PrecipPhenomenon p, ChangeWindow w) =>
-        body.Blocks.Any(b => b.PrecipPhenomenon == p && b.SevereFlag && BlockOverlapsWindow(b.StartUtc, w));
+        body.Blocks.Any(b => RecipientPrecip.Of(b) == p && b.SevereFlag && BlockOverlapsWindow(b.StartUtc, w));
 
     // WX-151: true when the prior has a block at EVERY 6-hour step of the window.
     // Weakening/clearing is only verifiable against a prior that fully covers the
@@ -1632,12 +1830,16 @@ public sealed class ForecastReconciler
     // is flat. These mirror that per-block axis so the consistency net accepts exactly what the
     // detector emits (tautological) while still rejecting a change no block carries (the WX-151 intent).
     // The expectation/severe axis matches the detector's ExpectOf/SevereOf: a block backs phenomenon
-    // p only when it actually carries p.
+    // p only when its RECIPIENT phenomenon (RecipientPrecip.Of, WX-284) is p — a non-severe
+    // thunderstorm backs Rain, not Thunderstorm. WX-284 step 2: the tier folds through
+    // RecipientPrecip.Expectation(block) (Possible == Likely; a severe block pinned to the top),
+    // matching ExpectOf, so neither a possible <-> likely move nor a tier bump on a block that stays
+    // severe backs a Strengthening/Weakening the detector never emits.
     private static int BlockExpect(ForecastSnapshotBlock? b, PrecipPhenomenon p) =>
-        b is not null && b.PrecipPhenomenon == p ? (int)b.PrecipExpectation : (int)PrecipExpectation.None;
+        b is not null && RecipientPrecip.Of(b) == p ? (int)RecipientPrecip.Expectation(b) : (int)PrecipExpectation.None;
 
     private static bool BlockSevere(ForecastSnapshotBlock? b, PrecipPhenomenon p) =>
-        b is not null && b.PrecipPhenomenon == p && b.SevereFlag;
+        b is not null && RecipientPrecip.Of(b) == p && b.SevereFlag;
 
     private static ForecastSnapshotBlock? PriorBlockAt(ForecastSnapshotBody? prior, DateTime startUtc) =>
         prior?.Blocks.FirstOrDefault(b => b.StartUtc == startUtc);

@@ -804,10 +804,10 @@ public static class StructuredReportRenderer
     {
         if (block.SevereFlag)
         {
-            // A severe block may carry no precip (a damaging-wind event); the non-convective
-            // token covers that, and a missing expectation falls back to "likely". The severe
-            // tokens are seeded already-capitalized, so use them verbatim.
-            return (t.Get(SevereBandToken(block.PrecipPhenomenon, block.PrecipExpectation)), true);
+            // A severe block may carry no precip (a damaging-wind event); the non-convective token
+            // covers that. WX-284 step 2 (Paul): a severe hazard is always phrased "possible", so the
+            // expectation tier is not consulted here. The severe tokens are seeded already-capitalized.
+            return (t.Get(SevereBandToken(block.PrecipPhenomenon)), true);
         }
 
         if (block.PrecipExpectation != PrecipExpectation.None && block.PrecipPhenomenon is PrecipPhenomenon p)
@@ -858,50 +858,44 @@ public static class StructuredReportRenderer
     private static string ClockBandSpan(int firstStart, int lastStart) =>
         $"{firstStart:00}-{lastStart + 6:00}";
 
-    /// <summary>The outlook suffix ("possible" / "likely" / "expected") for a precip expectation; <c>Certain</c> reads "expected" (never "certain").</summary>
-    private static PrecipExpectation NormalizeOutlook(PrecipExpectation e) =>
-        e == PrecipExpectation.None ? PrecipExpectation.Likely : e;
-
     /// <summary>
     /// The atomic forecast-band token for a non-severe (phenomenon, outlook) pair — the
     /// noun and the agreeing outlook hedge baked into one token ("rain likely",
     /// "lluvia probable"). Rain is the default family for any unhandled phenomenon, matching
     /// the former composition. Every arm is a <see cref="Tok"/> constant (compile-checked).
+    ///
+    /// WX-284: a non-severe thunderstorm collapses to the "rain" family here — the
+    /// recipient-facing binary is ordinary "rain" vs. a severe block's "severe storms"
+    /// (<see cref="SevereBandToken"/>). Storm wording is reserved for <c>SevereFlag</c>, so
+    /// Thunderstorm has no arm and falls through to the Rain default.
+    ///
+    /// WX-284 step 2: the outlook folds through <see cref="RecipientPrecip.Expectation"/>, so a
+    /// <c>Likely</c> tier reads "possible" like a <c>Possible</c> one ("possible" is the surviving
+    /// non-severe hedge word; "likely" never reaches the reader) — the <c>*Likely</c> tokens are left
+    /// dormant (removing their seed rows would be a migration + SchemaVersion bump).
     /// </summary>
-    private static string BandPrecipToken(PrecipPhenomenon phen, PrecipExpectation exp) => (phen, exp) switch
+    private static string BandPrecipToken(PrecipPhenomenon phen, PrecipExpectation exp) => (phen, RecipientPrecip.Expectation(exp)) switch
     {
-        (PrecipPhenomenon.Thunderstorm, PrecipExpectation.Possible) => Tok.StormsPossible,
-        (PrecipPhenomenon.Thunderstorm, PrecipExpectation.Likely) => Tok.StormsLikely,
-        (PrecipPhenomenon.Thunderstorm, _) => Tok.StormsExpected,
         (PrecipPhenomenon.Snow, PrecipExpectation.Possible) => Tok.SnowPossible,
-        (PrecipPhenomenon.Snow, PrecipExpectation.Likely) => Tok.SnowLikely,
         (PrecipPhenomenon.Snow, _) => Tok.SnowExpected,
         (PrecipPhenomenon.Mixed, PrecipExpectation.Possible) => Tok.WmixPossible,
-        (PrecipPhenomenon.Mixed, PrecipExpectation.Likely) => Tok.WmixLikely,
         (PrecipPhenomenon.Mixed, _) => Tok.WmixExpected,
         (PrecipPhenomenon.FreezingPrecip, PrecipExpectation.Possible) => Tok.FzraPossible,
-        (PrecipPhenomenon.FreezingPrecip, PrecipExpectation.Likely) => Tok.FzraLikely,
         (PrecipPhenomenon.FreezingPrecip, _) => Tok.FzraExpected,
         (_, PrecipExpectation.Possible) => Tok.RainPossible,
-        (_, PrecipExpectation.Likely) => Tok.RainLikely,
         (_, _) => Tok.RainExpected,
     };
 
     /// <summary>
-    /// The atomic severe-band token for a (phenomenon, outlook) pair: convective
-    /// (thunderstorm) → <c>sev_storms_*</c>, otherwise → <c>sev_wx_*</c> (covers a no-precip
-    /// damaging-wind event). A <c>None</c> expectation defaults to "likely". Each arm is a
-    /// <see cref="Tok"/> constant (compile-checked).
+    /// The atomic severe-band token: convective (thunderstorm) → "severe storms possible", otherwise
+    /// → "severe weather possible" (covers a no-precip damaging-wind event). WX-284 step 2 (Paul): a
+    /// severe hazard is ALWAYS phrased "possible" — we never tell a recipient severe storms are
+    /// "likely" or "expected"; the only recipient states are "possible" or not mentioned at all. So the
+    /// expectation tier never varies the severe wording, and the <c>*Likely</c>/<c>*Expected</c> severe
+    /// tokens are dormant. Each arm is a <see cref="Tok"/> constant (compile-checked).
     /// </summary>
-    private static string SevereBandToken(PrecipPhenomenon? phen, PrecipExpectation exp) => (phen == PrecipPhenomenon.Thunderstorm, NormalizeOutlook(exp)) switch
-    {
-        (true, PrecipExpectation.Possible) => Tok.SevStormsPossible,
-        (true, PrecipExpectation.Likely) => Tok.SevStormsLikely,
-        (true, _) => Tok.SevStormsExpected,
-        (false, PrecipExpectation.Possible) => Tok.SevWxPossible,
-        (false, PrecipExpectation.Likely) => Tok.SevWxLikely,
-        (false, _) => Tok.SevWxExpected,
-    };
+    private static string SevereBandToken(PrecipPhenomenon? phen) =>
+        phen == PrecipPhenomenon.Thunderstorm ? Tok.SevStormsPossible : Tok.SevWxPossible;
 
     private static string SkyWordToken(SkyState s) => s switch
     {

@@ -72,11 +72,27 @@ public class DeterministicChangeDetectorTests
     }
 
     [Fact]
-    public void Rain_Strengthening_OnExpectationStep()
+    public void Rain_PossibleToLikely_IsNotAChange()
     {
-        var c = Assert.Single(Detect(
+        // WX-284 step 2 (Niki): "possible" and "likely" read as the same tier to the recipient, so a
+        // possible<->likely move is NOT news — it must not surface a Strengthening/Weakening that
+        // would warrant an unscheduled update. Both directions fold flat.
+        Assert.Empty(Detect(
             Body(Blk(precip: PrecipExpectation.Possible, phenom: PrecipPhenomenon.Rain)),
             Body(Blk(precip: PrecipExpectation.Likely, phenom: PrecipPhenomenon.Rain))));
+        Assert.Empty(Detect(
+            Body(Blk(precip: PrecipExpectation.Likely, phenom: PrecipPhenomenon.Rain)),
+            Body(Blk(precip: PrecipExpectation.Possible, phenom: PrecipPhenomenon.Rain))));
+    }
+
+    [Fact]
+    public void Rain_Strengthening_OnExpectationStep()
+    {
+        // A genuine step above the merged possible/likely tier — likely -> "expected" (Certain) —
+        // is still a real strengthening (the "expected" register survives the WX-284 collapse).
+        var c = Assert.Single(Detect(
+            Body(Blk(precip: PrecipExpectation.Likely, phenom: PrecipPhenomenon.Rain)),
+            Body(Blk(precip: PrecipExpectation.Certain, phenom: PrecipPhenomenon.Rain))));
         Assert.Equal(ChangeDirection.Strengthening, c.Direction);
     }
 
@@ -97,13 +113,62 @@ public class DeterministicChangeDetectorTests
     [Fact]
     public void FlatExpectation_SevereRise_IsStrengthening()
     {
-        // Likely thunderstorm both sides, but severeFlag false→true: strengthening.
+        // Likely snow both sides, but severeFlag false→true: strengthening. Snow does NOT fold to
+        // rain (WX-284 collapses only the convective gradient), so it keeps its own axis — this
+        // preserves the WX-148 worked example that the oracle's per-phenomenon severe-strength axis
+        // relies on. (The thunderstorm form of this case now collapses — see
+        // NonSevereThunderstorm_UpgradesToSevere_SevereStormsAppear_RainEnds.)
         var c = Assert.Single(Detect(
-            Body(Blk(precip: PrecipExpectation.Likely, phenom: PrecipPhenomenon.Thunderstorm)),
-            Body(Blk(precip: PrecipExpectation.Likely, phenom: PrecipPhenomenon.Thunderstorm, severe: true))));
-        Assert.Equal(ChangePhenomenon.Thunderstorm, c.Phenomenon);
+            Body(Blk(precip: PrecipExpectation.Likely, phenom: PrecipPhenomenon.Snow)),
+            Body(Blk(precip: PrecipExpectation.Likely, phenom: PrecipPhenomenon.Snow, severe: true))));
+        Assert.Equal(ChangePhenomenon.Snow, c.Phenomenon);
         Assert.Equal(ChangeDirection.Strengthening, c.Direction);
         Assert.Equal(ChangeTier.Safety, c.Tier);
+    }
+
+    [Fact]
+    public void Severe_TierBump_WhileSevere_IsNotAChange()
+    {
+        // WX-284 step 2 (Paul): a severe hazard's recipient wording is the constant "severe storms
+        // possible" — never "likely"/"expected" — so an internal expectation bump (likely -> certain) on
+        // a block that STAYS severe is not a change the reader sees. RecipientPrecip.Expectation pins a
+        // severe block to the top of the ladder, so only the SevereFlag flip (onset/clearing) drives a
+        // severe change; the tier bump reads flat. (Contrast FlatExpectation_SevereRise: a severe ONSET
+        // — false -> true — is still a strengthening.)
+        Assert.Empty(Detect(
+            Body(Blk(precip: PrecipExpectation.Likely, phenom: PrecipPhenomenon.Thunderstorm, severe: true)),
+            Body(Blk(precip: PrecipExpectation.Certain, phenom: PrecipPhenomenon.Thunderstorm, severe: true))));
+    }
+
+    [Fact]
+    public void NonSevereThunderstorm_UpgradesToSevere_IsSevereStormsOnly_NoRainClearing()
+    {
+        // WX-284 (Paul): a non-severe thunderstorm reads as ordinary "rain"; upgrading it to SEVERE
+        // is NOT "rain clearing" — the rain did not go away, it escalated to "severe storms". The
+        // convective precip crossing the severe line is narrated ONCE, on the Thunderstorm(severe)
+        // axis; the phantom Rain change is suppressed. (Contrast rain→snow, a genuine TYPE change,
+        // which still splits into rain-clearing + snow-appearing.)
+        var changes = Detect(
+            Body(Blk(precip: PrecipExpectation.Likely, phenom: PrecipPhenomenon.Thunderstorm)),
+            Body(Blk(precip: PrecipExpectation.Likely, phenom: PrecipPhenomenon.Thunderstorm, severe: true)));
+        var storms = Assert.Single(changes);
+        Assert.Equal(ChangePhenomenon.Thunderstorm, storms.Phenomenon);
+        Assert.Equal(ChangeTier.Safety, storms.Tier);
+        Assert.DoesNotContain(changes, c => c.Phenomenon == ChangePhenomenon.Rain);
+    }
+
+    [Fact]
+    public void SevereStorms_DeEscalateToRain_IsSevereStormsClearing_NoRainAppearing()
+    {
+        // WX-284 symmetry: severe storms easing back to ordinary rain is "severe storms" clearing on
+        // the Thunderstorm axis, NOT "rain appearing" — the recipient is not told rain arrived when
+        // their severe storm merely de-escalated. The phantom Rain change is suppressed both ways.
+        var changes = Detect(
+            Body(Blk(precip: PrecipExpectation.Likely, phenom: PrecipPhenomenon.Thunderstorm, severe: true)),
+            Body(Blk(precip: PrecipExpectation.Likely, phenom: PrecipPhenomenon.Thunderstorm)));
+        var storms = Assert.Single(changes);
+        Assert.Equal(ChangePhenomenon.Thunderstorm, storms.Phenomenon);
+        Assert.DoesNotContain(changes, c => c.Phenomenon == ChangePhenomenon.Rain);
     }
 
     // ── severe de-dup ─────────────────────────────────────────────────────────
@@ -305,12 +370,15 @@ public class DeterministicChangeDetectorTests
     [Fact]
     public void Strengthening_FromInteriorBlockRise_IsEmittedAndPassesConsistency_WX204()
     {
-        // WX-204 regression: block0 expectation Likely->Certain and block6 severe False->True are
-        // both real per-block rises, so the detector groups them into one Thunderstorm Strengthening
-        // window (00-12). But the window AGGREGATE is flat — max expectation Certain->Certain (block6
-        // was already Certain) and severe True->True (block0 was already severe) — so the old
-        // window-max consistency check false-rejected the change as a phantom, the prod degrade. The
-        // per-block check must both see the change AND accept it (the keystone invariant restored).
+        // WX-204 regression: the per-block consistency check must SEE a real interior change AND accept
+        // it, where the old window-max aggregate false-rejected it as a phantom (the prod degrade).
+        // WX-284 step 2 reshapes this scenario: block0 stays severe on BOTH sides, so its Likely->Certain
+        // tier bump is now pinned flat — a severe block's wording is the constant "severe storms possible",
+        // never likely/expected, so an internal tier bump is not a reader-visible change (see
+        // Severe_TierBump_WhileSevere_IsNotAChange). The only real change left is block6 going non-severe
+        // -> severe: a severe-storms ONSET in the 06-12 window. The detector must emit that onset AND the
+        // per-block oracle must accept it (the aggregate severe/expectation on the Thunderstorm axis is
+        // backed per-block, not masked).
         var prior = Body(
             Blk(0, precip: PrecipExpectation.Likely, phenom: PrecipPhenomenon.Thunderstorm, severe: true),
             Blk(6, precip: PrecipExpectation.Certain, phenom: PrecipPhenomenon.Thunderstorm, severe: false));
@@ -319,9 +387,11 @@ public class DeterministicChangeDetectorTests
             Blk(6, precip: PrecipExpectation.Certain, phenom: PrecipPhenomenon.Thunderstorm, severe: true));
 
         var changes = Detect(prior, final);
-        Assert.Contains(changes, c => c.Phenomenon == ChangePhenomenon.Thunderstorm && c.Direction == ChangeDirection.Strengthening);
+        // block0 is flat (severe both sides, tier pinned); block6 is a severe-storms onset.
+        Assert.Contains(changes, c => c.Phenomenon == ChangePhenomenon.Thunderstorm && c.Direction == ChangeDirection.Appearing);
+        Assert.DoesNotContain(changes, c => c.Phenomenon == ChangePhenomenon.Thunderstorm && c.Direction == ChangeDirection.Strengthening);
 
-        // Must not throw — pre-WX-204 this scenario raised ChangeConsistencyException.
+        // Must not throw — the per-block oracle backs the severe onset (pre-WX-204 this raised ChangeConsistencyException).
         var report = new StructuredReportBody { Changes = changes };
         ForecastReconciler.ValidateChangeSnapshotConsistency(report, final, prior, Utc);
     }

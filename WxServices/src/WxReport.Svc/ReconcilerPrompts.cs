@@ -236,15 +236,21 @@ internal static class ReconcilerPrompts
             structural change the data does not support — get the final_snapshot
             right and the change set follows. Your job for the band is the
             changeSummary PROSE (below).
-              - In changeSummary, describe in one or two plain sentences what
-                genuinely differs from prior_snapshot: precipitation appearing
-                where the prior was dry, a band strengthening or weakening, a
-                hazard appearing or clearing, a meaningful temperature or wind
-                change. Narrate only REAL prior-vs-now differences the
-                final_snapshot supports — if the prior already carried the same
-                precipitation at the same likelihood in a window, it has NOT
-                changed; do not narrate it, and never describe an onset, downgrade,
-                or clearing the comparison does not show.
+              - changeSummary answers the reader's question "Why this update?" —
+                name, in one or two plain sentences, the SINGLE change that
+                warranted this send: the one triggering difference from
+                prior_snapshot (precipitation appearing where the prior was dry, a
+                hazard appearing, a band strengthening, a meaningful temperature or
+                wind change). Lead with that trigger; do NOT enumerate every
+                difference — a list of minor changes buries the reason you
+                interrupted the reader. If several things changed, name the most
+                significant one (the one that justifies the send) and let the
+                forecast grid below carry the rest. Narrate only REAL prior-vs-now
+                differences the final_snapshot supports — if the prior already
+                carried the same precipitation at the same likelihood in a window,
+                it has NOT changed (and "possible" and "likely" are the same tier —
+                a possible-to-likely move is not a change); never describe an
+                onset, downgrade, or clearing the comparison does not show.
               - Sky-cover drift (partly/mostly cloudy/overcast) and a few knots of
                 wind within the same impact band are NOT news — do not narrate
                 them in the change band.
@@ -277,12 +283,19 @@ internal static class ReconcilerPrompts
             where idiom wants another (e.g. English "Friday afternoon" → German
             "Freitagnachmittag" compounded, Esperanto "vendrede posttagmeze" with the
             roots derived to adverbs) — then compose the sentence naturally around it.
-            The probability words — possible, likely, and expected — name distinct
-            forecast-confidence tiers and are NOT interchangeable: render the tier
-            the source states with that tier's own approved word, never a higher- or
-            lower-confidence one, and never use an "is expected" / "is forecast" verb
-            construction (e.g. Spanish "se espera") in place of the anchored word for
-            "likely" or "possible".
+            The probability words collapse to two recipient tiers. "Possible" and
+            "likely" read as the same register to most recipients, so render BOTH a
+            "possible" and a "likely" precip expectation as "possible" (its approved
+            word) — never "likely"; the word "likely" never reaches the reader — and
+            treat a possible-to-likely (or the reverse) move as no change, not an
+            upgrade to narrate. Reserve the higher-confidence "expected" wording for a
+            "certain" expectation only; never render a tier with a higher- or
+            lower-confidence word than these two allow, and never use an "is expected" /
+            "is forecast" verb construction (e.g. Spanish "se espera") in place of the
+            anchored "possible" wording. SEVERE hazards take the hedge word at every
+            tier: severe storms or severe weather are ALWAYS phrased as "possible" (or
+            not mentioned at all) — never "likely" or "expected", even a "certain"
+            severe block. We warn that severe is possible; we never promise it.
           • Quantity tokens: inside narrative prose, NEVER write a number with a
             unit. Write a token the renderer substitutes in the recipient's own
             units and locale:
@@ -359,12 +372,28 @@ internal static class ReconcilerPrompts
             ("the early hours of Tuesday" alone drops the Monday-evening start) nor
             to bare days without day-parts ("Monday into Tuesday").
           • Hedged certainty: never state weather as flatly certain, in any
-            language — no forecast is ever 100% sure. Render even a "certain"
-            precip expectation or a set severeFlag as calibrated strong
-            likelihood ("almost certain", "highly likely", "expect"), never as a
-            guarantee ("will", "definitely", "guaranteed").
+            language — no forecast is ever 100% sure. Render a "certain"
+            NON-SEVERE precip expectation as calibrated confidence ("almost
+            certain", "expect"/"expected"), never as a guarantee ("will",
+            "definitely", "guaranteed") — and never as "highly likely" ("likely"
+            is retired, see the probability-words rule). A severe block is the
+            exception in the other direction: it is never rendered stronger than
+            "possible", whatever its tier (see the recipient-vocabulary rule).
+          • Recipient precipitation vocabulary — rain, or severe storms, nothing
+            between. Most recipients don't distinguish showers, drizzle, a downpour,
+            or an ordinary (non-severe) thunderstorm from plain rain, so call ALL
+            non-severe liquid precipitation simply "rain" ("lluvia"), in any language.
+            Do NOT write showers, a shower, drizzle, a downpour, a thundershower, a
+            sprinkle, or a non-severe thunderstorm/storm in recipient prose — they all
+            read as "rain". Reserve "severe storms" ("tormentas severas") wording ONLY
+            for a block whose severeFlag is set; a severe non-convective wind event is
+            "severe weather" ("clima severo"). Frozen precipitation keeps its own words
+            — snow, wintry mix, freezing rain — this collapse is the liquid convective
+            intensity gradient only, never precip TYPE. (This governs recipient prose;
+            keep setting precipPhenomenon thunderstorm in the snapshot when convective —
+            the snapshot vocabulary is unchanged.)
           • Effects, never a cause. Describe WHAT changes — winds turning gusty,
-            showers arriving this evening — but NEVER attribute a synoptic mechanism
+            rain arriving this evening — but NEVER attribute a synoptic mechanism
             or cause for it, in any language. Your inputs are single-point data (no
             pressure field, no upstream stations, and the snapshot blocks carry no
             wind direction), so you cannot evidence a "why". Do NOT write that any
@@ -376,7 +405,7 @@ internal static class ReconcilerPrompts
             shortwave, upper-level trough, jet stream, or jet streak; a convergence
             zone, upslope or downslope flow, onshore or offshore flow; or any
             "system", "disturbance", "impulse", instability, lift, or forcing.
-            State the observed effect and stop — "winds turn gusty with showers
+            State the observed effect and stop — "winds turn gusty with rain
             arriving this evening", NOT "as a front pushes through".
           • The closing only SUMMARIZES the reconciled forecast (the current
             conditions, the per-day grid, and the change band). It must NOT
@@ -390,9 +419,9 @@ internal static class ReconcilerPrompts
           • Never call an AGGREGATE period (the weekend, this week, the next few
             days) dry, clear, or quiet when any single day within it carries
             precipitation or a storm — that contradicts itself the moment you then
-            place a storm inside the same period. Name the specific dry day instead:
-            if Saturday is dry but storms arrive Sunday, write "Saturday stays dry"
-            (not "the weekend stays dry"), then describe Sunday's storms.
+            place rain inside the same period. Name the specific dry day instead:
+            if Saturday is dry but rain arrives Sunday, write "Saturday stays dry"
+            (not "the weekend stays dry"), then describe Sunday's rain.
 
         Always act via one of the two tools. Never return free text outside a tool call.
         """;
