@@ -3,7 +3,7 @@
   "timezone": "utc",
   "uid": "wxreport-v1",
   "schemaVersion": 39,
-  "version": 2,
+  "version": 3,
   "refresh": "1m",
   "time": { "from": "now-6h", "to": "now" },
   "timepicker": {},
@@ -77,12 +77,12 @@
     {
       "id": 3,
       "type": "stat",
-      "title": "Send Failures (Last Hour)",
-      "description": "Failed email sends in the last 60 minutes. Should be 0.",
+      "title": "Send Failures",
+      "description": "Failed email sends over the dashboard time range (the time picker; defaults to 6h). Should be 0.",
       "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 },
       "targets": [
         {
-          "expr": "increase(wxreport_send_failures_total[1h])",
+          "expr": "increase(wxreport_send_failures_total[$__range])",
           "instant": true,
           "refId": "A"
         }
