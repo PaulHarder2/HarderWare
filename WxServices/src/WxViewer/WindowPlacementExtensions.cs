@@ -93,6 +93,30 @@ public static class WindowPlacementExtensions
         };
     }
 
+    /// <summary>
+    /// Returns the work area (device-independent pixels) of the monitor currently containing
+    /// <paramref name="window"/>. Use this to clamp a frameless maximized window to the *right*
+    /// monitor: <see cref="SystemParameters.WorkArea"/> reports only the primary monitor, so a
+    /// maximize on a secondary display would otherwise be pushed to the primary's bounds (WX-291).
+    /// Falls back to <see cref="SystemParameters.WorkArea"/> if the window has no HWND yet or the
+    /// Win32 lookup fails.
+    /// </summary>
+    public static Rect CurrentMonitorWorkArea(this Window window)
+    {
+        var hwnd = new WindowInteropHelper(window).Handle;
+        var source = hwnd != IntPtr.Zero ? HwndSource.FromHwnd(hwnd) : null;
+        if (source?.CompositionTarget is not null)
+        {
+            var toDevice = source.CompositionTarget.TransformToDevice;
+            var sx = toDevice.M11 > 0 ? toDevice.M11 : 1.0;
+            var sy = toDevice.M22 > 0 ? toDevice.M22 : 1.0;
+            var monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+            if (TryGetWorkAreaDip(monitor, sx, sy, out var l, out var t, out var w, out var h))
+                return new Rect(l, t, w, h);
+        }
+        return SystemParameters.WorkArea;
+    }
+
     private static bool TryGetWorkAreaDip(
         IntPtr monitor, double sx, double sy,
         out double left, out double top, out double width, out double height)
@@ -144,6 +168,9 @@ public static class WindowPlacementExtensions
 
     [DllImport("user32.dll")]
     private static extern IntPtr MonitorFromPoint(POINT pt, int dwFlags);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr MonitorFromWindow(IntPtr hwnd, int dwFlags);
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]

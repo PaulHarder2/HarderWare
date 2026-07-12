@@ -53,13 +53,16 @@ public partial class MainWindow : Window
     /// <summary>
     /// Constrains the maximized window to the working area so it doesn't
     /// overlap the taskbar.  Required because WindowStyle="None" bypasses
-    /// the shell's default taskbar-avoidance logic.
+    /// the shell's default taskbar-avoidance logic.  Uses the work area of the
+    /// monitor the window is actually on (WX-291) — <see cref="SystemParameters.WorkArea"/>
+    /// is primary-monitor-only, so maximizing on a secondary display (e.g. the 4K TV,
+    /// now reachable because WX-291 restores placement there) would clamp to the wrong bounds.
     /// </summary>
     private void OnStateChanged(object? sender, EventArgs e)
     {
         if (WindowState == WindowState.Maximized)
         {
-            var wa = SystemParameters.WorkArea;
+            var wa = this.CurrentMonitorWorkArea();
             MaxHeight = wa.Height;
             MaxWidth = wa.Width;
             Left = wa.Left;
