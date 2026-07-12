@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Interop;
 
 using WxServices.Common;
+using WxServices.Logging;
 
 namespace WxServices.Wpf;
 
@@ -32,10 +33,19 @@ public static class WindowPlacementExtensions
     {
         var saved = WindowPlacement.Load(appName);
 
+        // Track the last non-minimized state so that closing from a minimized window still
+        // records whether it was maximized (window.WindowState is Minimized on that path).
+        var lastNonMinimized = WindowState.Normal;
+
         // Apply at SourceInitialized — the window has an HWND (so we know its DPI and can resolve
         // its monitor) but has not yet been rendered, so there is no visible reposition flicker.
         window.SourceInitialized += (_, _) => ApplyPlacement(window, saved);
-        window.Closing += (_, _) => Capture(window).Save(appName);
+        window.StateChanged += (_, _) =>
+        {
+            if (window.WindowState != WindowState.Minimized)
+                lastNonMinimized = window.WindowState;
+        };
+        window.Closing += (_, _) => Capture(window, lastNonMinimized).Save(appName);
     }
 
     private static void ApplyPlacement(Window window, WindowPlacement? saved)
@@ -43,7 +53,12 @@ public static class WindowPlacementExtensions
         var hwnd = new WindowInteropHelper(window).Handle;
         var source = HwndSource.FromHwnd(hwnd);
         if (source?.CompositionTarget is null)
-            return; // no device context yet — leave the XAML defaults in place
+        {
+            // Should not happen at SourceInitialized (the HWND exists); if it does we can't
+            // resolve DPI/monitor, so leave the XAML defaults rather than mis-place the window.
+            Logger.Warn("WindowPlacement: no composition target at SourceInitialized; leaving default placement.");
+            return;
+        }
 
         // Single device scale (these apps are System-DPI aware, so one scale governs the desktop).
         var toDevice = source.CompositionTarget.TransformToDevice;
@@ -58,7 +73,10 @@ public static class WindowPlacementExtensions
 
         if (!TryGetWorkAreaDip(monitor, sx, sy, out var waLeft, out var waTop, out var waWidth, out var waHeight))
         {
-            // Win32 lookup failed — fall back to WPF's primary work area, already in DIPs.
+            // Win32 lookup failed — fall back to WPF's primary work area, already in DIPs. The
+            // window still opens correctly on the primary; log so a multi-monitor mis-placement
+            // is diagnosable rather than silent.
+            Logger.Warn("WindowPlacement: monitor work-area lookup failed; falling back to primary work area.");
             var wa = SystemParameters.WorkArea;
             (waLeft, waTop, waWidth, waHeight) = (wa.Left, wa.Top, wa.Width, wa.Height);
         }
@@ -74,11 +92,14 @@ public static class WindowPlacementExtensions
         window.WindowState = (saved?.Maximized ?? false) ? WindowState.Maximized : WindowState.Normal;
     }
 
-    private static WindowPlacement Capture(Window window)
+    private static WindowPlacement Capture(Window window, WindowState lastNonMinimized)
     {
-        // RestoreBounds carries the normal-state rectangle even while maximized/minimized, so a
-        // maximized window still records the size it should restore to. Live Left/Top/Width/Height
-        // are correct only when the window is in the Normal state.
+        // If the window is minimized at close, its live WindowState/Left/Top are not meaningful;
+        // use the last non-minimized state so a maximized-then-minimized window still reopens
+        // maximized. RestoreBounds carries the normal-state rectangle even while maximized or
+        // minimized, so it is the right geometry source in every non-Normal case.
+        var effectiveState = window.WindowState == WindowState.Minimized ? lastNonMinimized : window.WindowState;
+
         var bounds = window.WindowState == WindowState.Normal
             ? new Rect(window.Left, window.Top, window.Width, window.Height)
             : window.RestoreBounds;
@@ -89,7 +110,7 @@ public static class WindowPlacementExtensions
             Top = bounds.Top,
             Width = bounds.Width,
             Height = bounds.Height,
-            Maximized = window.WindowState == WindowState.Maximized,
+            Maximized = effectiveState == WindowState.Maximized,
         };
     }
 
