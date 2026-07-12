@@ -4,6 +4,7 @@ using System.Windows.Input;
 using System.Windows.Interop;
 
 using WxServices.Common;
+using WxServices.Wpf;
 
 namespace WxManager;
 
@@ -19,6 +20,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        this.RestoreAndPersistPlacement("wxmanager"); // WX-291: restore last position/size, default 1920x1080
         VersionRun.Text = $"  {WxPaths.ProductVersion}";
         SetupTab.AllChecksPassed += OnAllChecksPassed;
         ConfigureTab.ConfigurationSaved += OnConfigurationSaved;

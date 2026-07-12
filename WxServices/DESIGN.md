@@ -686,7 +686,7 @@ Output PNGs are saved to the directory configured in `config.json` (default `C:\
 
 **Purpose:** Provide a local WPF desktop application for browsing and animating the PNG maps and meteograms produced by WxVis.Svc.
 
-**Layout:** A frameless maximised window (no OS title bar) with a custom header bar containing the HarderWare/WxViewer logo and standard window controls (minimise, restore, close). Below the header, a `TabControl` hosts two tabs:
+**Layout:** A frameless window (no OS title bar) with a custom header bar containing the HarderWare/WxViewer logo and standard window controls (minimise, restore, close). Since WX-291 the window **restores its last-saved position, size, and maximised state** on launch and persists them on close (shared with WxManager via `WindowPlacement`/`WindowPlacementExtensions` — the placement JSON lives at `%LOCALAPPDATA%\HarderWare\wxviewer.window.json`); on first run — no saved state — it opens **windowed, centered on the primary monitor at up to 1920×1080 capped to that monitor's work area** (replacing the previous forced-maximised startup). Every restored or default placement is fitted to a currently-connected monitor's work area, so the window can never open off-screen or larger than its monitor. Below the header, a `TabControl` hosts two tabs:
 
 **Maps tab** — split into two independent panes by a draggable `GridSplitter`:
 
