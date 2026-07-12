@@ -50,33 +50,39 @@ public static class WindowPlacementExtensions
 
     private static void ApplyPlacement(Window window, WindowPlacement? saved)
     {
+        double waLeft, waTop, waWidth, waHeight;
+
         var hwnd = new WindowInteropHelper(window).Handle;
         var source = HwndSource.FromHwnd(hwnd);
-        if (source?.CompositionTarget is null)
+        if (source?.CompositionTarget is not null)
         {
-            // Should not happen at SourceInitialized (the HWND exists); if it does we can't
-            // resolve DPI/monitor, so leave the XAML defaults rather than mis-place the window.
-            Logger.Warn("WindowPlacement: no composition target at SourceInitialized; leaving default placement.");
-            return;
+            // Single device scale (these apps are System-DPI aware, so one scale governs the desktop).
+            var toDevice = source.CompositionTarget.TransformToDevice;
+            var sx = toDevice.M11 > 0 ? toDevice.M11 : 1.0;
+            var sy = toDevice.M22 > 0 ? toDevice.M22 : 1.0;
+
+            // Pick the monitor nearest the saved rectangle (so a rect that now lies off every monitor
+            // still resolves to the closest connected one), or the primary monitor on first run.
+            var monitor = saved is not null
+                ? MonitorFromRect(ToPhysical(saved, sx, sy), MONITOR_DEFAULTTONEAREST)
+                : MonitorFromPoint(default, MONITOR_DEFAULTTOPRIMARY);
+
+            if (!TryGetWorkAreaDip(monitor, sx, sy, out waLeft, out waTop, out waWidth, out waHeight))
+            {
+                // Win32 lookup failed — fall back to WPF's primary work area, already in DIPs. The
+                // window still opens correctly on the primary; log so a multi-monitor mis-placement
+                // is diagnosable rather than silent.
+                Logger.Warn("WindowPlacement: monitor work-area lookup failed; falling back to primary work area.");
+                var wa = SystemParameters.WorkArea;
+                (waLeft, waTop, waWidth, waHeight) = (wa.Left, wa.Top, wa.Width, wa.Height);
+            }
         }
-
-        // Single device scale (these apps are System-DPI aware, so one scale governs the desktop).
-        var toDevice = source.CompositionTarget.TransformToDevice;
-        var sx = toDevice.M11 > 0 ? toDevice.M11 : 1.0;
-        var sy = toDevice.M22 > 0 ? toDevice.M22 : 1.0;
-
-        // Pick the monitor nearest the saved rectangle (so a rect that now lies off every monitor
-        // still resolves to the closest connected one), or the primary monitor on first run.
-        var monitor = saved is not null
-            ? MonitorFromRect(ToPhysical(saved, sx, sy), MONITOR_DEFAULTTONEAREST)
-            : MonitorFromPoint(default, MONITOR_DEFAULTTOPRIMARY);
-
-        if (!TryGetWorkAreaDip(monitor, sx, sy, out var waLeft, out var waTop, out var waWidth, out var waHeight))
+        else
         {
-            // Win32 lookup failed — fall back to WPF's primary work area, already in DIPs. The
-            // window still opens correctly on the primary; log so a multi-monitor mis-placement
-            // is diagnosable rather than silent.
-            Logger.Warn("WindowPlacement: monitor work-area lookup failed; falling back to primary work area.");
+            // Should not happen at SourceInitialized (the HWND exists), so we can't resolve the
+            // window's own monitor/DPI here. Still fit and apply against WPF's primary work area
+            // (DIPs) rather than bailing to the raw XAML size/position — a safe, visible fallback.
+            Logger.Warn("WindowPlacement: no composition target at SourceInitialized; using primary work area.");
             var wa = SystemParameters.WorkArea;
             (waLeft, waTop, waWidth, waHeight) = (wa.Left, wa.Top, wa.Width, wa.Height);
         }
