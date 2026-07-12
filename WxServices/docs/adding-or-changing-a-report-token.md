@@ -1,8 +1,9 @@
-# Adding a new report vocabulary token
+# Adding or changing a report vocabulary token
 
-This runbook covers what happens — and the decisions you must make — when you add a new token to
+This runbook covers what happens — and the decisions you must make — when you **add** a new token to
 the report vocabulary (the `LanguageTemplates` phrase set, keyed by the `ReportTokens.Tok`
-contract). It is the token-side companion to [`enable-a-new-language.md`](enable-a-new-language.md)
+contract), **or change an existing token's phrase** (a *relabel* — §6, which has the opposite failure
+mode and is easy to get wrong). It is the token-side companion to [`enable-a-new-language.md`](enable-a-new-language.md)
 (which covers standing up a *whole* new language) and to the rendering/localization architecture in
 [`DESIGN.md`](../DESIGN.md) (`StructuredReportRenderer`, the WX-171 token contract, the WX-256
 soft-token model, the WX-172/WX-250 generation-and-top-up pass).
@@ -14,6 +15,11 @@ The worked example throughout is **WX-265**, which renamed the three daypart tok
 > enabled language is *missing* it until the WX-250 top-up generates it **one language per cycle** —
 > and whether that gap **suppresses** those languages' reports or **degrades silently** is your
 > Required-vs-Soft decision.
+>
+> **Changing an existing token is the opposite problem.** Top-up won't touch it — the target rows
+> already *exist*, carrying the **old** phrase — so nothing suppresses, nothing regenerates, and
+> every non-English language silently keeps shipping the stale translation until you fix each row by
+> hand (**§6**).
 
 ---
 
@@ -137,7 +143,84 @@ complete.
 
 ---
 
-## 6. Checklist
+## 6. Changing an existing token's phrase (a relabel)
+
+Everything above is about *adding* a token. **Relabeling** an already-seeded token — changing its
+English phrase without changing its key — is a different operation with the **opposite failure
+mode**, and it is easy to get wrong because the top-up machinery (§4) does **not** help you.
+
+The worked example is **WX-284**, which relabeled `WhatsChangedLabel` from "What's changed:" to "Why
+this update:" — reframing a change-*list* header into a single-*reason* label.
+
+### Why top-up won't save you
+
+Top-up (§4) fills tokens a language is **missing**. After a relabel, every enabled language **still
+has** the token — carrying its **old** translation. The completeness gate keys on *absence*
+(`MissingTokens` / `Tok.Required`, `ReportWorker.cs`), and nothing is absent, so none of the §3–§5
+dynamics fire:
+
+- **No suppression window** — the rows exist, so every language keeps sending.
+- **No top-up fill, no WX-250 log lines** — nothing is "missing," so nothing regenerates.
+- **Every non-English language silently ships the stale phrase**, indefinitely, until a human changes
+  it.
+
+This is the inverse of adding a Required token, which fails **loud** (suppression + an ERROR
+WxMonitor alerts on). A relabel fails **silent**: valid-looking, correctly-rendered text that is
+simply **out of date** — and, if the *meaning* changed (as in WX-284: a list header → a single
+reason), now semantically **wrong** against the new intent, not merely old wording.
+
+> **Why there is no target-language migration.** Target rows are **not seeded** — they live only in
+> the DB (en-only seeding, WX-251; DB is truth). The migration relabels the one **en** row; the
+> target rows are curated data. A DB rebuilt from migrations would *generate* the targets fresh from
+> the **new** en baseline via top-up, so they'd be correct — the stale-row problem exists **only in
+> an already-populated production DB**, which is exactly the DB you must hand-fix.
+
+### The procedure
+
+1. **Relabel the `en` row via migration.** Use the `Relabel(mb, "en", "<Token>", "<new phrase>")`
+   helper (see WX-284's `WX284RelabelChangeBand`), keyed on `(IsoCode, Token)` so it's robust to the
+   row's surrogate id. `SeedTemplateStore.ParseRelabels` already parses this shape, so the parity
+   gate and goldens track the new en value automatically — **no historical-seed edit and no
+   `SchemaVersion` bump** (data-only). Update any golden/snapshot that asserts the phrase.
+
+2. **Fix every enabled target language's row — this is the step nothing does for you.** The rows
+   already exist, so (unlike a *brand-new* token, §3 point 3) you **can** edit them in place:
+   - **WxManager → Vocabulary tab** — select each language, find the token, correct the phrase, Save.
+     The sanctioned operator path.
+   - Or a **direct `LanguageTemplates` UPDATE** for phrases you can author with confidence.
+   - **Only ship a foreign phrase you can validate.** Ones you can't (low-resource languages, or
+     anything you're unsure of) go through QA — don't hand-ship them. A wrong phrase in front of a
+     live recipient is worse than a short delay (the same gate as the WX-168 per-language lexicons).
+
+3. **Rerun QA for each changed language.** Press **Rerun QA** (WxManager, WX-235) or run the
+   `TranslationQa` tooling so the judge re-audits the new phrase **against the new meaning** — a
+   relabel that changed intent invalidates the prior audit, not just the prior wording.
+
+4. **Verify the whole set.** Confirm every enabled language now carries the intended phrase and none
+   was missed — the fastest check is a direct query:
+
+   ```sql
+   SELECT l.IsoCode, lt.Phrase
+   FROM LanguageTemplates lt JOIN Languages l ON l.Id = lt.LanguageId
+   WHERE lt.Token = '<Token>' AND l.IsEnabled = 1 ORDER BY l.IsoCode;
+   ```
+
+   (Beware the sqlcmd codepage fold when eyeballing non-ASCII phrases — it silently folds accented
+   characters to ASCII; dump as UTF-8 / `varbinary` hex if a phrase looks mangled.)
+
+### Relabel checklist
+
+- [ ] `en` relabel migration using a `Relabel()` shape `ParseRelabels` recognizes; goldens/snapshots
+      updated; **no `SchemaVersion` bump** (data-only).
+- [ ] **Every enabled target language** row corrected (Vocabulary tab or DB `UPDATE`) — top-up will
+      **not** do this for you.
+- [ ] Foreign phrases either author-validated or routed through QA (don't hand-ship the unsure ones).
+- [ ] **Rerun QA** per changed language, judged against the token's **new meaning**.
+- [ ] Final `SELECT … WHERE Token = …` confirms all enabled languages carry the intended phrase.
+
+---
+
+## 7. Checklist (adding a token)
 
 - [ ] Add the `Tok` constant (and doc-comment it if the name isn't self-evident).
 - [ ] Decide **Required vs Soft** (§2); if Soft, add it to `Tok.Soft`.
@@ -160,6 +243,9 @@ complete.
   for shipping a new token with no suppression window.
 - **WX-265** — worked example (daypart rename + `DayPart1`); the `RenameToken` migration helper and
   the `SeedTemplateStore` rename-parser.
+- **WX-284** — worked example for **§6** (relabeling `WhatsChangedLabel` "What's changed:" → "Why this
+  update:"); the `Relabel()` migration helper and the `SeedTemplateStore.ParseRelabels` parser. The
+  en-only relabel stranded the curated es/de/da/eo/sq rows — the case that motivated §6.
 - **WX-264** — will consume `DayPart1` in the narrative; may revisit its Required-vs-Soft status.
 - **DESIGN.md** — `StructuredReportRenderer` localization, the WX-171 parity gate, the WX-256
   soft-token send-gate model, and the WX-172/WX-250 generation-and-top-up pass.
