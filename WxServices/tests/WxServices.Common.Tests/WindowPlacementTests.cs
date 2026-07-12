@@ -137,6 +137,20 @@ public sealed class WindowPlacementTests
         Assert.False(def.Maximized);
     }
 
+    [Fact]
+    public void CenteredDefault_OnExactly1080pMonitor_FitsWorkAreaMinusTaskbar()
+    {
+        // On a 1920x1080 monitor the work area is the full width but the height less the
+        // taskbar (e.g. a 48px bottom taskbar → 1032). The default must fill the width and
+        // shrink to the taskbar-excluded height — not overflow to a hard 1080.
+        var def = WindowPlacement.CenteredDefault(0, 0, 1920, 1032);
+
+        Assert.Equal(1920, def.Width);
+        Assert.Equal(1032, def.Height);
+        Assert.Equal(0, def.Left);
+        Assert.Equal(0, def.Top);
+    }
+
     // ── Load/Save round-trip and corrupt-file handling ───────────────────────
 
     [Fact]
