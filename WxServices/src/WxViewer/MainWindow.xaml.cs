@@ -9,6 +9,7 @@ using System.Windows.Threading;
 
 using WxServices.Common;
 using WxServices.Logging;
+using WxServices.Wpf;
 
 namespace WxViewer;
 
@@ -30,6 +31,7 @@ public partial class MainWindow : Window
     public MainWindow(MainViewModel viewModel)
     {
         InitializeComponent();
+        this.RestoreAndPersistPlacement("wxviewer"); // WX-291: restore last position/size, default 1920x1080
         VersionRun.Text = $"  {WxPaths.ProductVersion}";
         _vm = viewModel;
         DataContext = _vm;

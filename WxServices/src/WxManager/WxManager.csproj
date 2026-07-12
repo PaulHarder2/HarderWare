@@ -17,6 +17,13 @@
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4022.49" />
   </ItemGroup>
   <ItemGroup>
+    <!-- WX-291: shared window-placement glue, authored in WxViewer and compiled into both apps
+         (same link pattern as HarderWare.ico below). Pure placement math lives in WxServices.Common. -->
+    <Compile Include="..\WxViewer\WindowPlacementExtensions.cs">
+      <Link>WindowPlacementExtensions.cs</Link>
+    </Compile>
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\MetarParser.Data\MetarParser.Data.csproj" />
     <ProjectReference Include="..\WxServices.Common\WxServices.Common.csproj" />
     <ProjectReference Include="..\WxServices.Logging\WxServices.Logging.csproj" />

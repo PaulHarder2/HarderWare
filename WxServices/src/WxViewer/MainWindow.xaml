@@ -3,8 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="WxViewer" Height="750" Width="1400"
         Background="#1a1a1a"
-        WindowStyle="None"
-        WindowState="Maximized">
+        WindowStyle="None">
 
     <WindowChrome.WindowChrome>
         <WindowChrome CaptionHeight="0"
