@@ -2423,7 +2423,7 @@ public sealed class ReportWorker : BackgroundService
     {
         var report = new ReportConfig();
         _config.GetSection("Report").Bind(report);
-        report.HeartbeatFile ??= new WxPaths(_config["InstallRoot"]).HeartbeatFile("wxreport");
+        report.HeartbeatFile ??= new WxPaths(_config["InstallRoot"]).HeartbeatFile(WxServiceToken.WxReport);
 
         var dbRecipients = await ctx.Recipients.OrderBy(r => r.Id).ToListAsync(ct);
         if (dbRecipients.Count > 0)

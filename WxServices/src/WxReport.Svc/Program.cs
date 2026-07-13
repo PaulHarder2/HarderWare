@@ -23,7 +23,7 @@ using WxServices.Logging;
 var installRoot = WxPaths.ReadInstallRoot();
 var paths = new WxPaths(installRoot);
 
-Logger.Initialise(paths.LogFile("wxreport-svc"));
+Logger.Initialise(paths.ServiceLogFile(WxServiceToken.WxReport));
 Logger.Info($"WxReport.Svc {WxPaths.ProductVersion} (commit {WxPaths.GitCommit}) starting.");
 
 var host = Host.CreateDefaultBuilder(args)

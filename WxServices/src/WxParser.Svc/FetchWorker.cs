@@ -247,7 +247,7 @@ public sealed class FetchWorker : BackgroundService
 
             Logger.Info("Fetch cycle complete.");
             WriteHeartbeat(_config["Fetch:HeartbeatFile"]
-                ?? new WxPaths(_config["InstallRoot"]).HeartbeatFile("wxparser"));
+                ?? new WxPaths(_config["InstallRoot"]).HeartbeatFile(WxServiceToken.WxParser));
             _fetchCycles.Add(1);
             _fetchDuration.Record(sw.Elapsed.TotalSeconds);
         }

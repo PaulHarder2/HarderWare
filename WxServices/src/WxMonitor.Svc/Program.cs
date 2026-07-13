@@ -23,7 +23,7 @@ using WxServices.Logging;
 var installRoot = WxPaths.ReadInstallRoot();
 var paths = new WxPaths(installRoot);
 
-Logger.Initialise(paths.LogFile("wxmonitor-svc"));
+Logger.Initialise(paths.ServiceLogFile(WxServiceToken.WxMonitor));
 Logger.Info($"WxMonitor.Svc {WxPaths.ProductVersion} (commit {WxPaths.GitCommit}) starting.");
 
 var host = Host.CreateDefaultBuilder(args)

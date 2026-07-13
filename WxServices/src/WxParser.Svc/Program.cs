@@ -22,7 +22,7 @@ using WxServices.Logging;
 var installRoot = WxPaths.ReadInstallRoot();
 var paths = new WxPaths(installRoot);
 
-Logger.Initialise(paths.LogFile("wxparser-svc"));
+Logger.Initialise(paths.ServiceLogFile(WxServiceToken.WxParser));
 Logger.Info($"WxParser.Svc {WxPaths.ProductVersion} (commit {WxPaths.GitCommit}) starting.");
 
 var host = Host.CreateDefaultBuilder(args)
