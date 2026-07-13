@@ -42,16 +42,19 @@ public class ReconcilerPromptsTests
     {
         // WX-293: the recurring Closing degrade came from the model rendering "storms" for a non-severe
         // window (the snapshot's non-severe precipPhenomenon=thunderstorm leaking into prose as stylistic
-        // variety on "rain"). Lock the absolute, phase-aware storm-word gate — storm words require
-        // severeFlag, a non-severe window takes the plain PHASE word (rain for liquid, snow for frozen),
-        // and this holds even when precipPhenomenon is thunderstorm — so a future prompt edit can't
-        // silently weaken it back into the general vocabulary paragraph. Whitespace-collapse so a phrase
-        // matches wherever it line-wraps.
+        // variety on "rain"). Lock the absolute storm-word gate — liquid storm words require severeFlag,
+        // the gate keys on severeFlag (not the snapshot's precipPhenomenon), and a non-severe window is
+        // plain "rain" even when its precipPhenomenon is thunderstorm — so a future prompt edit can't
+        // silently weaken it back into the general vocabulary paragraph. The gate is scoped to LIQUID
+        // storm words: frozen precip keeps its own words (that clause is locked too, so the gate can't
+        // drift into forbidding a legitimate "winter storm" the deterministic validator allows).
+        // Whitespace-collapse so a phrase matches wherever it line-wraps.
         var guidance = System.Text.RegularExpressions.Regex.Replace(
             ReconcilerPrompts.ReconciliationGuidanceText, @"\s+", " ");
-        Assert.Contains("ABSOLUTE, PHASE-AWARE GATE", guidance);
-        Assert.Contains("The gate keys on severeFlag, NOT on precipitation phase", guidance);
-        Assert.Contains("a non-severe thunderstorm is \"rain\" to", guidance);
+        Assert.Contains("ABSOLUTE GATE", guidance);
+        Assert.Contains("keys on severeFlag, NOT on the snapshot's precipPhenomenon", guidance);
+        Assert.Contains("EVEN WHEN its precipPhenomenon is thunderstorm", guidance);
+        Assert.Contains("Frozen precipitation is unaffected", guidance);   // gate stays liquid-scoped
     }
 
     [Fact]

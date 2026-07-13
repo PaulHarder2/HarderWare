@@ -64,6 +64,22 @@ public class ReconcilerSystemPromptTests
     }
 
     [Fact]
+    public void SystemPrompt_CapeGuidance_GatesStormWordingOnSevereFlag_NotCapeMagnitude()
+    {
+        // WX-293: the CAPE guidance used to license non-severe storm wording ("low CAPE warrants at most
+        // a mention of an isolated storm"), contradicting the WX-284/WX-293 storm-word gate — and it
+        // misfires in winter, where convective snow (thundersnow) runs at LOW CAPE, so the "low CAPE →
+        // isolated storm" branch would push storm wording onto a frozen, non-severe window. It now feeds
+        // severeFlag only; recipient storm wording is gated on severeFlag. Lock that so a future edit
+        // can't reintroduce CAPE-magnitude storm licensing.
+        var prompt = ForecastReconciler.BuildReconcilerSystemPrompt(
+            ["en", "es"], ReportKind.Scheduled, allowSkip: false, "");
+        Assert.DoesNotContain("isolated storm", prompt);           // the retired non-severe storm license
+        Assert.Contains("judge a window's thunderstorm severity", prompt);   // CAPE → severeFlag, not prose
+        Assert.Contains("severeFlag", prompt);
+    }
+
+    [Fact]
     public void SystemPrompt_LocksDaypartDayBoundaryRule_AgainstSilentDrop()
     {
         // WX-244: the free narrative used a night-word for the evening ("la noche del martes" =

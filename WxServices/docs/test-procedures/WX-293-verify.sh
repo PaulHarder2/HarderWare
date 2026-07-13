@@ -58,7 +58,7 @@ scheduled=$( printf '%s\n' "$POST" | cnt 'generating scheduled report')
 
 vl_header
 echo
-echo    " WX-293 -- Closing storm-wording for a non-severe window (the PASS/FAIL signal)"
+echo    " WX-293 -- storm-wording for a non-severe window (the PASS/FAIL signal; section named per line)"
 printf  '   %-52s %s\n' 'Reports flowed since deploy (sent + scheduled):' "$(( sent + scheduled ))   $([ $(( sent + scheduled )) -gt 0 ] && echo '[fix is live, producing reports]' || echo '[none yet -- WAIT]')"
 printf  '   %-52s %s\n' 'Self-correcting storm-wording retries (healthy):' "$storm_retry   $([ "$storm_retry" -eq 0 ] && echo '[Claude never reached for "storms"]' || echo '[nudged, then complied]')"
 printf  '   %-52s %s\n' 'EXHAUSTED storm-wording degrades:'               "$storm_exhausted   $([ "$storm_exhausted" -eq 0 ] && echo '[expected 0 -- Claude complies]' || echo '[!! read the lines below]')"
@@ -70,5 +70,5 @@ echo
 # Closing was dropped). Self-correcting retries never fail it -- they are the prompt+retry loop
 # working. Exercised = reports flowed.
 vl_verdict "$storm_exhausted" "$(( sent + scheduled ))" \
-  "an EXHAUSTED storm-wording degrade means live Claude kept 'storms' for a non-severe window across 3 retries (the Closing was still dropped), OR CheckSevereStormVocabulary mis-flagged a genuinely-severe window -- read the lines above: persistent non-compliance -> strengthen the prompt gate further; a real severe window rejected -> a validator Bug. Either way, open a Bug." \
+  "an EXHAUSTED storm-wording degrade means live Claude kept 'storms' for a non-severe window across 3 retries (the offending prose section -- Closing or ChangeSummary, named in the line -- was still dropped), OR CheckSevereStormVocabulary mis-flagged a genuinely-severe window -- read the lines above: persistent non-compliance -> strengthen the prompt gate further; a real severe window rejected -> a validator Bug. Either way, open a Bug." \
   "reports flowed with ZERO exhausted storm-wording degrades -- live Claude complies with the storm-word gate (any self-correcting retries above are the strengthened prompt + sharpened retry feedback working). Send to Done."
