@@ -77,6 +77,10 @@ public class ReconcilerSystemPromptTests
         Assert.DoesNotContain("isolated storm", prompt);           // the retired non-severe storm license
         Assert.Contains("judge a window's thunderstorm severity", prompt);   // CAPE → severeFlag, not prose
         Assert.Contains("severeFlag", prompt);
+        // WX-293 (CR round 2): severeFlag ALONE must not license "severe storms" — that is reserved for a
+        // severe CONVECTIVE window; a severe non-convective (wind) event is "severe weather" (WX-284).
+        Assert.Contains("severe CONVECTIVE window", prompt);
+        Assert.Contains("severeFlag alone does not authorize storm wording", prompt);
     }
 
     [Fact]
