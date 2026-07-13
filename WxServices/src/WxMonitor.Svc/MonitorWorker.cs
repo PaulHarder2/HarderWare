@@ -187,9 +187,15 @@ public sealed class MonitorWorker : BackgroundService
         var paths = new WxPaths(_config["InstallRoot"]);
         foreach (var svc in monitor.WatchedServices)
         {
-            var svcTag = svc.Name.Replace(".", "-", StringComparison.Ordinal).ToLowerInvariant();
-            if (string.IsNullOrEmpty(svc.LogFile)) svc.LogFile = paths.LogFile(svcTag);
-            if (string.IsNullOrEmpty(svc.HeartbeatFile)) svc.HeartbeatFile = paths.HeartbeatFile(svcTag);
+            // WX-290/WX-106: resolve the ONE canonical token for this service and derive BOTH filenames
+            // from it, so the monitor reads exactly the files the service writes. Previously this derived
+            // "wxparser-svc" (Name.Replace(".","-")) for the heartbeat while WxParser wrote "wxparser-…",
+            // so the monitor was blind to the heartbeat. An explicit LogFile/HeartbeatFile in config still
+            // wins (the token derivation is only the default) — that override is the escape hatch for a
+            // non-standard or non-service watched target.
+            var token = WxServiceToken.FromConfigName(svc.Name);
+            if (string.IsNullOrEmpty(svc.LogFile)) svc.LogFile = paths.ServiceLogFile(token);
+            if (string.IsNullOrEmpty(svc.HeartbeatFile)) svc.HeartbeatFile = paths.HeartbeatFile(token);
         }
 
         var smtp = new SmtpConfig();

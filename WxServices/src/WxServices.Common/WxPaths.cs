@@ -135,4 +135,14 @@ public sealed class WxPaths
     /// <summary>Returns the log file path for a given service name.</summary>
     public string LogFile(string serviceName)
         => Path.Combine(LogsDir, $"{serviceName}.log");
+
+    /// <summary>
+    /// Returns the log file path for a background service's canonical token (WX-290): the service
+    /// convention appends "-svc", e.g. <see cref="WxServiceToken.WxParser"/> ("wxparser") →
+    /// "wxparser-svc.log". Both the service's own log init and the monitor's log-scan derive the name
+    /// from the one token via this helper, so they cannot diverge. (WPF apps keep the plain
+    /// <see cref="LogFile"/> — they carry no "-svc" suffix and are not watched.)
+    /// </summary>
+    public string ServiceLogFile(string serviceToken)
+        => Path.Combine(LogsDir, $"{serviceToken}-svc.log");
 }
