@@ -1405,7 +1405,13 @@ public sealed class ForecastReconciler
         };
         if (storm is null)
             return;
-        bool anySevere = finalSnapshot.Blocks.Any(b => b.SevereFlag);
+        // WX-293 (CR round 3): "severe storms" requires a severe CONVECTIVE window — SevereFlag ALONE is
+        // not enough. DeriveSevereFlag trips on a wind-only event (wind >= threshold) as well as on
+        // (CAPE + wet), so a severe wind block carries SevereFlag without being convective; WX-284 renders
+        // that as "severe weather", not "severe storms". Gate the storm-word allowance on IsSevereConvective
+        // so a severe wind block can't validate storm wording, matching the reconciler prompt (the CAPE
+        // guidance + the recipient-vocabulary rule).
+        bool anySevereConvective = finalSnapshot.Blocks.Any(IsSevereConvective);
         var masked = BraceToken.Replace(prose, m => new string(' ', m.Length));
         // WX-284 (CR #3): storm wording is legitimate only for the WINDOW the prose names, not merely
         // somewhere in the snapshot — otherwise "severe storms tonight" would pass over a calm tonight
@@ -1442,20 +1448,20 @@ public sealed class ForecastReconciler
                 var window = ResolveClosingTime(masked, from, end, refDate, lex);
                 bool legitimate;
                 if (window is null)
-                    legitimate = anySevere;  // unresolvable time — allow iff any severe block exists at all
+                    legitimate = anySevereConvective;  // unresolvable time — allow iff any severe CONVECTIVE block exists at all
                 else
                 {
-                    bool anyInWindow = false, anySevereInWindow = false;
+                    bool anyInWindow = false, anySevereConvectiveInWindow = false;
                     foreach (var b in finalSnapshot.Blocks)
                     {
                         var local = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(b.StartUtc, DateTimeKind.Utc), tz);
                         if (window(DateOnly.FromDateTime(local), local.Hour))
                         {
                             anyInWindow = true;
-                            if (b.SevereFlag) anySevereInWindow = true;
+                            if (IsSevereConvective(b)) anySevereConvectiveInWindow = true;
                         }
                     }
-                    legitimate = !anyInWindow || anySevereInWindow;
+                    legitimate = !anyInWindow || anySevereConvectiveInWindow;
                 }
                 if (!legitimate)
                 {
@@ -1463,16 +1469,25 @@ public sealed class ForecastReconciler
                         .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
                     throw new NarrativeProseException(section,
                         $"structured_report narrative '{lang}' uses storm wording ('{hit.Value.Trim()}') for a time the "
-                        + $"final_snapshot carries no severe block, in this {section} sentence: \"{offending}\". A "
-                        + "non-severe thunderstorm reads as ordinary \"rain\" to the recipient (WX-284); say \"rain\", "
-                        + "and reserve \"severe storms\" for a window that carries a severe block. In a multi-window "
-                        + "sentence use the plain phase word for EVERY non-severe window — do not vary \"rain\" to "
-                        + "\"storms\" for stylistic contrast across day-parts (WX-293).");
+                        + $"final_snapshot carries no severe CONVECTIVE block, in this {section} sentence: \"{offending}\". A "
+                        + "non-severe thunderstorm reads as ordinary \"rain\" to the recipient (WX-284); say \"rain\", and "
+                        + "reserve \"severe storms\" for a window with a severe thunderstorm (a severe non-convective wind "
+                        + "event is \"severe weather\", not \"severe storms\"). In a multi-window sentence use the plain "
+                        + "phase word for EVERY non-severe window — do not vary \"rain\" to \"storms\" for stylistic "
+                        + "contrast across day-parts (WX-293).");
                 }
             }
             from = end + 1;
         }
     }
+
+    // WX-293 (CR round 3): "severe storms" recipient wording is reserved for a severe CONVECTIVE window.
+    // SevereFlag is set by DeriveSevereFlag on wind >= threshold OR (CAPE + wet), so a wind-only severe
+    // block carries SevereFlag WITHOUT being convective — WX-284 renders that as "severe weather", not
+    // "severe storms". This predicate is the storm-wording gate the deterministic validator applies,
+    // matching the reconciler prompt (the recipient-vocabulary rule + the CAPE guidance).
+    private static bool IsSevereConvective(ForecastSnapshotBlock b) =>
+        b.SevereFlag && b.PrecipPhenomenon == PrecipPhenomenon.Thunderstorm;
 
     // Scans one prose section sentence-by-sentence for a precip/storm assertion at a
     // local time the snapshot leaves entirely dry. Section-agnostic, so the WX-152

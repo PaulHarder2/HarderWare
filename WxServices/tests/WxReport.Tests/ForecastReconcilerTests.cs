@@ -1021,6 +1021,13 @@ public class ForecastReconcilerTests
         {"schemaVersion":5,"blocks":[{"startUtc":"2026-06-09T18:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":24,"max":31},"windKt":{"min":12,"max":34},"precipExpectation":"possible","precipPhenomenon":"thunderstorm","severeFlag":true},{"startUtc":"2026-06-10T18:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":22,"max":29},"windKt":{"min":8,"max":16},"precipExpectation":"possible","precipPhenomenon":"rain","severeFlag":false}]}
         """;
 
+    // A severe NON-convective block: SevereFlag set by high wind (>= threshold), no convection —
+    // precipPhenomenon null. WX-284 renders this as "severe weather", NOT "severe storms"; the validator
+    // must not let SevereFlag alone validate storm wording (WX-293 CR round 3).
+    private const string SevereWindNonConvectiveSnapshotJson = """
+        {"schemaVersion":5,"blocks":[{"startUtc":"2026-06-09T21:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":18,"max":25},"windKt":{"min":20,"max":42},"precipExpectation":"none","precipPhenomenon":null,"severeFlag":true}]}
+        """;
+
     [Fact]
     public async Task NonSeverePrecipRegister_ShowersInChangeSummary_DropsChangeSummaryOnly()
     {
@@ -1130,6 +1137,26 @@ public class ForecastReconcilerTests
 
         var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
         Assert.Equal("Severe storms are the main concern today.", success.StructuredReport.Narrative["en"].Closing);
+    }
+
+    [Fact]
+    public async Task SevereStormVocabulary_SevereNonConvectiveWind_StormWording_DropsClosingOnly()
+    {
+        // WX-293 (CR round 3): SevereFlag can be set by a wind-only event (DeriveSevereFlag trips on
+        // wind >= threshold), which is "severe weather", not "severe storms" (WX-284). The validator now
+        // requires a severe CONVECTIVE window (SevereFlag + precipPhenomenon thunderstorm) to allow storm
+        // wording, so "severe storms" over a severe NON-convective (wind) block is rejected and the closing
+        // degrades — SevereFlag alone can no longer validate storm language. (The mirror case — a severe
+        // THUNDERSTORM block — stays legal via SevereStormsWithSevereBlock_IsLegal_Succeeds, so this is a
+        // new reject with no new false-reject.)
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: SevereWindNonConvectiveSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: ClosingOnlyReport("Severe storms are the main concern this period."));
+
+        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
+        Assert.Equal("See the forecast above for the full outlook.", success.StructuredReport.Narrative["en"].Closing);
     }
 
     [Fact]
