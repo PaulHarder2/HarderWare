@@ -1465,7 +1465,9 @@ public sealed class ForecastReconciler
                         $"structured_report narrative '{lang}' uses storm wording ('{hit.Value.Trim()}') for a time the "
                         + $"final_snapshot carries no severe block, in this {section} sentence: \"{offending}\". A "
                         + "non-severe thunderstorm reads as ordinary \"rain\" to the recipient (WX-284); say \"rain\", "
-                        + "and reserve \"severe storms\" for a window that carries a severe block.");
+                        + "and reserve \"severe storms\" for a window that carries a severe block. In a multi-window "
+                        + "sentence use the plain phase word for EVERY non-severe window — do not vary \"rain\" to "
+                        + "\"storms\" for stylistic contrast across day-parts (WX-293).");
                 }
             }
             from = end + 1;

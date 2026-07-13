@@ -392,6 +392,16 @@ internal static class ReconcilerPrompts
             intensity gradient only, never precip TYPE. (This governs recipient prose;
             keep setting precipPhenomenon thunderstorm in the snapshot when convective —
             the snapshot vocabulary is unchanged.)
+            ABSOLUTE, PHASE-AWARE GATE: never write a storm-family word — "storm",
+            "storms", "stormy", "thunderstorm", "squall", or a frozen compound such as
+            "snowstorm", "winter storm", "ice storm", "thundersnow" (nor any-language
+            equivalent) — for a window whose severeFlag is NOT set. The gate keys on
+            severeFlag, NOT on precipitation phase: a non-severe window takes the plain
+            PHASE word and nothing more — "rain" for liquid, "snow"/"wintry mix"/"freezing
+            rain" for frozen. This holds EVEN WHEN the block's precipPhenomenon is
+            thunderstorm: a non-severe thunderstorm is "rain" to the recipient, and
+            non-severe frozen precip is "snow", never a "snowstorm". Do not promote the
+            snapshot's phenomenon word into storm language in prose.
           • Effects, never a cause. Describe WHAT changes — winds turning gusty,
             rain arriving this evening — but NEVER attribute a synoptic mechanism
             or cause for it, in any language. Your inputs are single-point data (no
@@ -422,6 +432,13 @@ internal static class ReconcilerPrompts
             place rain inside the same period. Name the specific dry day instead:
             if Saturday is dry but rain arrives Sunday, write "Saturday stays dry"
             (not "the weekend stays dry"), then describe Sunday's rain.
+          • Closing, multi-window phrasing: when the closing strings several
+            day-parts together ("rain through the morning, then ___ in the afternoon
+            and evening"), apply the storm-word gate (the recipient-vocabulary rule
+            above) to EVERY clause, not just the first — use the plain phase word for
+            each non-severe window, and do not vary "rain" to "storms" (or "snow" to
+            "snowstorm") for stylistic contrast across day-parts. If no window in the
+            closing carries a severeFlag, the word "storm" must not appear anywhere in it.
 
         Always act via one of the two tools. Never return free text outside a tool call.
         """;

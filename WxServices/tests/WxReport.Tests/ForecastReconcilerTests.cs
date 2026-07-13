@@ -1133,6 +1133,29 @@ public class ForecastReconcilerTests
     }
 
     [Fact]
+    public async Task SevereStormVocabulary_MultiWindowClosing_StormsInLaterNonSevereWindow_DropsClosingOnly()
+    {
+        // WX-293: the production repro — a multi-window Closing that opens with "rain" and then varies to
+        // "storms" for a later day-part of the same non-severe day ("rain ... through the morning, then
+        // storms ... through the afternoon and evening"). The snapshot carries no severe block, so "storms"
+        // is provably wrong. The sentence names several day-parts, so the time is unresolvable (multiple
+        // matches → null, ResolveClosingTime) and the check falls back to the snapshot-wide "any severe
+        // block" gate; with none severe the closing degrades to the fallback rather than shipping "storms".
+        // This pins the exact production case. The WX-293 fix is upstream (strengthened prompt + sharpened
+        // retry feedback that steer the model off this wording within the retry budget); the deterministic
+        // backstop asserted here is unchanged and still fails closed — its correctness is the invariant.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: RainBlockSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: ClosingOnlyReport(
+                "Rain looks possible through the morning, then storms possible through the afternoon and evening."));
+
+        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
+        Assert.Equal("See the forecast above for the full outlook.", success.StructuredReport.Narrative["en"].Closing);
+    }
+
+    [Fact]
     public async Task SevereStormVocabulary_SevereRenderedAsExpected_DropsClosingOnly()
     {
         // WX-284 (CR follow-up): severe is ALWAYS "possible", never "expected"/"certain". Even with a
