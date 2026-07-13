@@ -1028,6 +1028,14 @@ public class ForecastReconcilerTests
         {"schemaVersion":5,"blocks":[{"startUtc":"2026-06-09T21:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":18,"max":25},"windKt":{"min":20,"max":42},"precipExpectation":"none","precipPhenomenon":null,"severeFlag":true}]}
         """;
 
+    // A severe NON-convective WIND block that is also WET (precipPhenomenon rain), on the ref day. The
+    // wetness means the precip-at-a-dry-time check (CheckClosingSentence) passes, so a "severe storms
+    // today" closing isolates the WINDOW-SCOPED storm-convective gate (anySevereConvectiveInWindow):
+    // "today" resolves to this block, which is severe-by-wind but not convective (WX-293 CR round 4).
+    private const string SevereWindWithRainTodaySnapshotJson = """
+        {"schemaVersion":5,"blocks":[{"startUtc":"2026-06-09T18:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":18,"max":25},"windKt":{"min":20,"max":42},"precipExpectation":"possible","precipPhenomenon":"rain","severeFlag":true}]}
+        """;
+
     [Fact]
     public async Task NonSeverePrecipRegister_ShowersInChangeSummary_DropsChangeSummaryOnly()
     {
@@ -1154,6 +1162,24 @@ public class ForecastReconcilerTests
             reasoningTrace: "trace",
             inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
             structuredReportJson: ClosingOnlyReport("Severe storms are the main concern this period."));
+
+        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
+        Assert.Equal("See the forecast above for the full outlook.", success.StructuredReport.Narrative["en"].Closing);
+    }
+
+    [Fact]
+    public async Task SevereStormVocabulary_SevereNonConvectiveWindInWindow_StormWording_DropsClosingOnly()
+    {
+        // WX-293 (CR round 4): covers the WINDOW-SCOPED branch (anySevereConvectiveInWindow) — the round-3
+        // test hit only the unresolvable-time fallback (anySevereConvective). Here "today" resolves to a
+        // block that is severe by WIND (severeFlag, precipPhenomenon rain — non-convective) and WET, so the
+        // precip-at-a-dry-time check passes and this isolates the storm-convective gate. "severe storms
+        // today" over that window is rejected because the window carries no severe CONVECTIVE block.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: SevereWindWithRainTodaySnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: ClosingOnlyReport("Severe storms are the main concern today."));
 
         var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
         Assert.Equal("See the forecast above for the full outlook.", success.StructuredReport.Narrative["en"].Closing);
