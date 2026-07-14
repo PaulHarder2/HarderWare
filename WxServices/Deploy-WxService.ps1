@@ -242,7 +242,10 @@ function Invoke-ServiceDeploy {
 # git commit - so the verify scripts that grep deploy-history.log keep working.
 # ---------------------------------------------------------------------------
 function Invoke-MonitorContainerDeploy {
-    $composeDir  = "$SolutionRoot\services"
+    # services/ lives at the HarderWare repo root (a sibling of WxServices), NOT under $SolutionRoot
+    # (which is the WxServices dir where this script sits). Resolve to the repo-root services/.
+    $repoRoot    = Split-Path $SolutionRoot -Parent
+    $composeDir  = "$repoRoot\services"
     $localConfig = "$composeDir\wxmonitor\appsettings.local.json"
 
     # Prereq: Docker Desktop reachable.
