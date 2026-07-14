@@ -10,8 +10,9 @@
 
 .PARAMETER ServiceName
     The service or application to deploy, or 'all' to deploy everything:
-    WxVis Python scripts first, then the four Windows services
-    (WxParserSvc, WxReportSvc, WxMonitorSvc, WxVisSvc), WxManager, and WxViewer.
+    WxVis Python scripts first, then the three Windows services
+    (WxParserSvc, WxReportSvc, WxVisSvc), then WxMonitorSvc as a Docker
+    container (services/docker-compose.yml), then WxManager and WxViewer.
 
 .EXAMPLE
     .\Deploy-WxService.ps1 WxReportSvc
@@ -49,10 +50,11 @@ Write-Host "Solution root: $SolutionRoot"
 Write-Host "Install root:  $InstallRoot"
 Write-Host ""
 
+# WxMonitorSvc is deployed as a Docker container (Invoke-MonitorContainerDeploy),
+# not a Windows service, so it is intentionally absent from this Windows-service map.
 $ServiceMap = [ordered]@{
     'WxParserSvc'  = 'WxParser.Svc'
     'WxReportSvc'  = 'WxReport.Svc'
-    'WxMonitorSvc' = 'WxMonitor.Svc'
     'WxVisSvc'     = 'WxVis.Svc'
 }
 
@@ -225,6 +227,71 @@ function Invoke-ServiceDeploy {
 }
 
 # ---------------------------------------------------------------------------
+# Deploy WxMonitor as a Docker container (services/docker-compose.yml) instead of a
+# Windows service. The Windows-service path (Invoke-ServiceDeploy) does not apply:
+# there is no sc.exe service to stop/config/start, no publish-to-folder (the binary is
+# baked into the image), and verification is docker-based (the Hosting.Lifetime
+# "Application started" banner) rather than Get-Service. Deploy-history logging is
+# identical - same Write-DeployLog, same 'WxMonitorSvc' component label, version, and
+# git commit - so the verify scripts that grep deploy-history.log keep working.
+# ---------------------------------------------------------------------------
+function Invoke-MonitorContainerDeploy {
+    $composeDir  = "$SolutionRoot\services"
+    $localConfig = "$composeDir\wxmonitor\appsettings.local.json"
+
+    # Prereq: Docker Desktop reachable.
+    docker info *> $null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Docker is not reachable (is Docker Desktop running?). Cannot deploy the WxMonitor container."
+        return $false
+    }
+
+    # Prereq: the real (gitignored) local config must exist. The compose bind mount
+    # needs the source file; a missing source would be silently created as a directory
+    # by Docker and fail confusingly inside the container.
+    if (-not (Test-Path $localConfig)) {
+        Write-Error "Missing $localConfig - copy appsettings.local.json.example, fill it in, then re-run."
+        return $false
+    }
+
+    $started = $false
+    Push-Location $composeDir
+    try {
+        # Build the image from current source and (re)create the container. | Out-Host
+        # keeps docker output on the console but OUT of the success stream (PS 5.x: a
+        # polluted stream turns the bool return into an always-truthy array).
+        Write-Host "Building and starting the wxmonitor container..."
+        docker compose up -d --build wxmonitor | Out-Host
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "docker compose up failed for wxmonitor (exit code $LASTEXITCODE)."
+            return $false
+        }
+
+        # Verify: poll the container's logs for the "Application started" banner, which
+        # proves it reached the DB and started (not merely that the container exists).
+        Write-Host "Verifying the container reached 'Application started'..."
+        $deadline = [DateTime]::UtcNow.AddSeconds(30)
+        while ([DateTime]::UtcNow -lt $deadline) {
+            $logs = (docker compose logs wxmonitor 2>&1) -join "`n"
+            if ($logs -match 'Application started') { $started = $true; break }
+            # If the container has already exited, it crashed on startup - stop waiting.
+            if (-not (docker compose ps -q wxmonitor 2>$null)) { break }
+            Start-Sleep -Seconds 2
+        }
+    } finally {
+        Pop-Location
+    }
+
+    Write-DeployLog -App 'WxMonitorSvc' -Result $(if ($started) { 'OK' } else { 'FAIL' })
+    if ($started) {
+        Write-Host "wxmonitor container deployed and verified (Application started)." -ForegroundColor Green
+    } else {
+        Write-Warning "wxmonitor container did not reach 'Application started' within 30s. Check: docker compose logs wxmonitor (from $composeDir)."
+    }
+    return $started
+}
+
+# ---------------------------------------------------------------------------
 # Publish WxManager WPF GUI.
 # ---------------------------------------------------------------------------
 function Invoke-ManagerPublish {
@@ -330,6 +397,11 @@ if ($ServiceName -eq 'WxVis') {
     exit $(if ($ok) { 0 } else { 1 })
 }
 
+if ($ServiceName -eq 'WxMonitorSvc') {
+    $ok = Invoke-MonitorContainerDeploy
+    exit $(if ($ok) { 0 } else { 1 })
+}
+
 if ($ServiceName -eq 'all') {
     # Copy Python scripts first so WxVisSvc finds them immediately after restart.
     Write-Host ""
@@ -346,6 +418,14 @@ if ($ServiceName -eq 'all') {
         }
     }
 
+    # WxMonitor deploys as a container, after the Windows services it watches.
+    Write-Host ""
+    Write-Host "=== WxMonitorSvc (container) ===" -ForegroundColor Cyan
+    if (-not (Invoke-MonitorContainerDeploy)) {
+        Write-Warning "Stopping 'all' deploy due to failure in WxMonitorSvc."
+        exit 1
+    }
+
     Write-Host ""
     Write-Host "=== WxManager ===" -ForegroundColor Cyan
     if (-not (Invoke-ManagerPublish)) { exit 1 }
@@ -356,12 +436,9 @@ if ($ServiceName -eq 'all') {
 
     Write-Host ""
     Write-Host "All services and applications deployed." -ForegroundColor Green
-
-    if (-not (Test-ServicesRunning -Services @($ServiceMap.Keys))) {
-        Write-Host ""
-        Write-Error "One or more services are not Running after deploy."
-        exit 1
-    }
+    # No final consolidated health check: each service was already verified at its own deploy step
+    # (Invoke-ServiceDeploy verifies Running; the container deploy verifies the "Application started"
+    # banner) and any failure exits non-zero there, so a re-check would only repeat reported results.
 } else {
     Write-Host ""
     Write-Host "=== $ServiceName ===" -ForegroundColor Cyan
