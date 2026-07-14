@@ -1,7 +1,8 @@
 #Requires -RunAsAdministrator
 <#
 .SYNOPSIS
-    Publishes and redeploys one or all WxServices Windows services.
+    Publishes/redeploys the WxServices: the WxParser/WxReport/WxVis Windows services,
+    the WxMonitor Docker container, WxManager, WxViewer, and the WxVis Python scripts.
 
 .DESCRIPTION
     Developer deployment script.  Reads InstallRoot from appsettings.shared.json
@@ -25,7 +26,11 @@
 param(
     [Parameter(Mandatory)]
     [ValidateSet('WxParserSvc', 'WxReportSvc', 'WxMonitorSvc', 'WxVisSvc', 'WxViewer', 'WxManager', 'WxVis', 'all')]
-    [string]$ServiceName
+    [string]$ServiceName,
+
+    # Seconds to wait for the WxMonitor container to log "Application started" before FAIL.
+    # Aligns with the DB startup-retry budget (~5 min, Database:StartupRetry); raise for a slow cold start.
+    [int]$StartupTimeoutSec = 300
 )
 
 Set-StrictMode -Version Latest
@@ -260,6 +265,9 @@ function Invoke-MonitorContainerDeploy {
         # Build the image from current source and (re)create the container. | Out-Host
         # keeps docker output on the console but OUT of the success stream (PS 5.x: a
         # polluted stream turns the bool return into an always-truthy array).
+        # Point the compose log bind-mount at the resolved host InstallRoot\Logs (forward slashes
+        # for Docker Desktop) so a non-default InstallRoot still matches where native components look.
+        $env:WX_HOST_LOGS_DIR = (Join-Path $InstallRoot 'Logs') -replace '\\', '/'
         Write-Host "Building and starting the wxmonitor container..."
         docker compose up -d --build wxmonitor | Out-Host
         if ($LASTEXITCODE -ne 0) {
@@ -267,16 +275,20 @@ function Invoke-MonitorContainerDeploy {
             return $false
         }
 
-        # Verify: poll the container's logs for the "Application started" banner, which
-        # proves it reached the DB and started (not merely that the container exists).
-        Write-Host "Verifying the container reached 'Application started'..."
-        $deadline = [DateTime]::UtcNow.AddSeconds(30)
+        # Verify: poll the container's logs for the "Application started" banner, which proves it
+        # reached the DB and started (not merely that the container exists). The timeout matches the
+        # DB startup-retry budget (Database:StartupRetry in appsettings.shared.json sums to ~5 min):
+        # a cold SQL Server can legitimately delay EnsureSchemaAsync well past 30s, so a shorter
+        # deadline would false-FAIL a healthy start.
+        Write-Host "Verifying the container reached 'Application started' (up to ${StartupTimeoutSec}s)..."
+        $deadline = [DateTime]::UtcNow.AddSeconds($StartupTimeoutSec)
         while ([DateTime]::UtcNow -lt $deadline) {
             $logs = (docker compose logs wxmonitor 2>&1) -join "`n"
             if ($logs -match 'Application started') { $started = $true; break }
             # If the container has already exited, it crashed on startup - stop waiting.
-            if (-not (docker compose ps -q wxmonitor 2>$null)) { break }
-            Start-Sleep -Seconds 2
+            $containerId = docker compose ps -q wxmonitor 2>$null
+            if (-not $containerId) { break }
+            Start-Sleep -Seconds 3
         }
     } finally {
         Pop-Location
@@ -286,7 +298,7 @@ function Invoke-MonitorContainerDeploy {
     if ($started) {
         Write-Host "wxmonitor container deployed and verified (Application started)." -ForegroundColor Green
     } else {
-        Write-Warning "wxmonitor container did not reach 'Application started' within 30s. Check: docker compose logs wxmonitor (from $composeDir)."
+        Write-Warning "wxmonitor container did not reach 'Application started' within ${StartupTimeoutSec}s. Check: docker compose logs wxmonitor (from $composeDir)."
     }
     return $started
 }

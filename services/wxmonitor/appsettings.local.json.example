@@ -18,8 +18,10 @@
     "_README": [
       "Container override. Reach the host's SQL Server via host.docker.internal,1433 (proven in",
       "WX-67) instead of the shared config's Server=.\\SQLEXPRESS. Use SQL authentication with the",
-      "least-privilege 'wxservices' login (db_owner on WeatherData only) - a Linux container has no",
-      "Windows identity, so Trusted_Connection can't work here."
+      "'wxservices' login - scoped to db_owner on WeatherData ONLY (the minimum for the",
+      "migrate-on-startup design: EnsureSchemaAsync runs MigrateAsync, which needs DDL rights; no",
+      "server-wide or other-database access). A Linux container has no Windows identity, so",
+      "Trusted_Connection can't work here."
     ],
     "WeatherData": "Server=host.docker.internal,1433;Database=WeatherData;User Id=wxservices;Password=<WXSERVICES_SQL_PASSWORD>;TrustServerCertificate=True;"
   },
@@ -28,8 +30,10 @@
     "_README": [
       "Container override. The OTel collector is reached at the host's PUBLISHED 4318 port; the",
       "shared config's http://localhost:4318 would resolve to the container itself. Include the",
-      "full signal path (/v1/metrics)."
+      "full signal path (/v1/metrics). Enabled is set explicitly here (shared config also sets it",
+      "true) so a copied config can't silently disable metrics - AddWxTelemetry exports only when true."
     ],
+    "Enabled": true,
     "OtlpEndpoint": "http://host.docker.internal:4318/v1/metrics"
   },
 

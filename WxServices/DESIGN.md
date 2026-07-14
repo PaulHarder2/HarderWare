@@ -276,7 +276,7 @@ flowchart TD
 WxServices/
 ├── DESIGN.md                        ← this file
 ├── WxServices.sln
-├── Directory.Build.props            ← single product version (e.g. 1.0.0) applied to all assemblies
+├── Directory.Build.props            ← single product version (e.g. 1.51.0) applied to all assemblies
 ├── appsettings.shared.json          ← single source of truth for all config (InstallRoot, DB, SMTP, Claude, WxVis, Monitor, etc.) — git-tracked
 ├── Deploy-WxService.ps1             ← PowerShell deploy script (run as Administrator)
 ├── wgrib2/                          ← runtime-installed, not in repo; operator downloads NOAA native Windows build here
@@ -1224,7 +1224,7 @@ The Recipients tab's **Locality** control is a single editable ComboBox doing do
 ## 9. Installation and Deployment
 
 ### Prerequisites
-- Windows 10/11 (64-bit) — all services use `UseWindowsService`
+- Windows 10/11 (64-bit) — services run via `UseWindowsService` (WxMonitor runs as a Docker container; its binary keeps `UseWindowsService` for the reversible Windows-service fallback)
 - .NET 8 runtime
 - SQL Server Express (or higher); default instance name `SQLEXPRESS`
 - Gmail account with an App Password configured for SMTP
@@ -1239,7 +1239,7 @@ The Recipients tab's **Locality** control is a single editable ComboBox doing do
 1. Run `.\Build-Release.ps1` to publish all components into the `release\` staging directory. The script reads the product version from `Directory.Build.props` and prints the ISCC command to run.
 2. Compile the `.iss` script with Inno Setup: `ISCC.exe /DAppVer=1.0.0 HarderWare_WxServices.iss` (use the version printed by the build script).
 
-The installer copies files to the chosen directory (default `C:\HarderWare`), registers the four Windows services, updates `InstallRoot` in `appsettings.shared.json` to match the install path, creates Start Menu and optional desktop shortcuts, and launches WxManager for first-run configuration.  Uninstall stops and removes the services.
+The installer copies files to the chosen directory (default `C:\HarderWare`), registers the four Windows services (WxMonitor can then be switched to its container per *Containerized deployment (WX-63)*), updates `InstallRoot` in `appsettings.shared.json` to match the install path, creates Start Menu and optional desktop shortcuts, and launches WxManager for first-run configuration.  Uninstall stops and removes the services.
 
 ### Developer deploy script
 
@@ -1259,7 +1259,7 @@ Valid names: `WxParserSvc`, `WxReportSvc`, `WxMonitorSvc`, `WxVisSvc`, `WxViewer
 
 `all` copies WxVis Python scripts to `{InstallRoot}\WxVis\` first, then deploys the three Windows services (WxParser/WxReport/WxVis) and the WxMonitor container (see *Containerized deployment (WX-63)* below), then WxManager and WxViewer.
 
-After restarting a service the script verifies it reaches **Running** before reporting success (and `all` runs a final consolidated check, exiting non-zero if any service is down).  Each deployed app appends one timestamped line to `{InstallRoot}\Logs\deploy-history.log` — UTC time, product version, and git short SHA, in the services' log4net format so the deploy timeline reads alongside the `wx*-svc.log` files.  A service is logged `OK` only once it verifies as Running, `FAIL` if it starts but does not stay up.  The deploy-history logging is best-effort: a logging failure is reported as a warning but never aborts the deploy.
+Each service is verified at its own deploy step — a Windows service must reach **Running**, and the WxMonitor container must log the `Application started` banner — before that step reports success; any failure exits non-zero there (there is no separate final consolidated re-check).  Each deployed app appends one timestamped line to `{InstallRoot}\Logs\deploy-history.log` — UTC time, product version, and git short SHA, in the services' log4net format so the deploy timeline reads alongside the `wx*-svc.log` files.  A service/container is logged `OK` only once it verifies, `FAIL` if it starts but does not stay up.  The deploy-history logging is best-effort: a logging failure is reported as a warning but never aborts the deploy.
 
 ### Containerized deployment (WX-63)
 
@@ -1375,8 +1375,8 @@ All assemblies share a single version defined in `Directory.Build.props` (`<Vers
 
 Where the version appears:
 - **WxManager / WxViewer title bars** — via a `Run` element in the custom WindowChrome title bar
-- **Email report footer** — `· WxServices 1.0.0` appended to the station/GFS line
-- **All six program log files** — `WxReport.Svc 1.0.0 (commit abc1234) starting.`
+- **Email report footer** — `· WxServices <version>` appended to the station/GFS line
+- **Service startup log banner** — `WxReport.Svc <version> starting.` (as of WX-63 the git commit is no longer in the banner — it lives in `deploy-history.log`; the `WxManager`/`WxViewer` "About" screens still show it)
 - **Windows Apps list** — from the Inno Setup `AppVersion` (passed via `/DAppVer=` at compile time)
 
 ### Log files

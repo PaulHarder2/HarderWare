@@ -4,6 +4,8 @@
 // provenance lives in deploy-history.log. These lock in the format and, critically, that the
 // commit stays out.
 
+using System.Reflection;
+
 using WxServices.Common;
 
 using Xunit;
@@ -27,12 +29,11 @@ public sealed class StartupBannerTests
         Assert.DoesNotContain("commit", WxPaths.StartupBanner().ToLowerInvariant());
 
     [Fact]
-    public void StartupBanner_LeadsWithAServiceName()
+    public void StartupBanner_LeadsWithTheEntryAssemblyName()
     {
-        // A non-empty name self-derives from the entry assembly, so the banner never starts
-        // with a space or leads with the version (there is a name token before it).
-        var banner = WxPaths.StartupBanner();
-        Assert.False(banner.StartsWith(' '));
-        Assert.False(banner.StartsWith(WxPaths.ProductVersion));
+        // Lock in the documented derivation: the banner starts with the actual entry-assembly
+        // name (mirroring WxPaths.StartupBanner's own fallback), not a hard-coded or generic name.
+        var expectedName = Assembly.GetEntryAssembly()?.GetName().Name ?? "WxService";
+        Assert.StartsWith(expectedName, WxPaths.StartupBanner());
     }
 }

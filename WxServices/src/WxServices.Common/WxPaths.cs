@@ -76,7 +76,7 @@ public sealed class WxPaths
 
     /// <summary>
     /// The one-line startup banner each service logs at launch, e.g.
-    /// <c>"WxVis.Svc 1.50.2 starting."</c>. The service name self-derives from the entry
+    /// e.g. <c>"WxVis.Svc &lt;version&gt; starting."</c>. The service name self-derives from the entry
     /// assembly (<c>WxVis.Svc</c>, <c>WxMonitor.Svc</c>, …), so there is no per-service
     /// literal to keep in sync. The git commit is intentionally omitted (WX-63): it is
     /// unavailable in a container build, and per-deploy provenance already lives in
