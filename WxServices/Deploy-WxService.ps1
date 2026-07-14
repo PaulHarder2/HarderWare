@@ -30,6 +30,7 @@ param(
 
     # Seconds to wait for the WxMonitor container to log "Application started" before FAIL.
     # Aligns with the DB startup-retry budget (~5 min, Database:StartupRetry); raise for a slow cold start.
+    [ValidateRange(1, [int]::MaxValue)]
     [int]$StartupTimeoutSec = 300
 )
 
@@ -275,19 +276,19 @@ function Invoke-MonitorContainerDeploy {
             return $false
         }
 
-        # Verify: poll the container's logs for the "Application started" banner, which proves it
-        # reached the DB and started (not merely that the container exists). The timeout matches the
-        # DB startup-retry budget (Database:StartupRetry in appsettings.shared.json sums to ~5 min):
-        # a cold SQL Server can legitimately delay EnsureSchemaAsync well past 30s, so a shorter
-        # deadline would false-FAIL a healthy start.
+        # Verify: confirm the container we just (re)created reaches "Application started" AND is
+        # still running. Pin to the NEW instance's ID so a crash-after-banner (or a stale prior
+        # container's logs) can't be mistaken for success. The timeout matches the DB startup-retry
+        # budget (Database:StartupRetry in appsettings.shared.json sums to ~5 min): a cold SQL Server
+        # can legitimately delay EnsureSchemaAsync well past 30s, so a shorter deadline false-FAILs.
+        $containerId = (docker compose ps -q wxmonitor 2>$null | Select-Object -First 1)
         Write-Host "Verifying the container reached 'Application started' (up to ${StartupTimeoutSec}s)..."
         $deadline = [DateTime]::UtcNow.AddSeconds($StartupTimeoutSec)
-        while ([DateTime]::UtcNow -lt $deadline) {
-            $logs = (docker compose logs wxmonitor 2>&1) -join "`n"
+        while ($containerId -and [DateTime]::UtcNow -lt $deadline) {
+            # Check this exact instance is still up first; a crashed container fails fast here.
+            if ((docker inspect -f '{{.State.Running}}' $containerId 2>$null) -ne 'true') { break }
+            $logs = (docker logs $containerId 2>&1) -join "`n"
             if ($logs -match 'Application started') { $started = $true; break }
-            # If the container has already exited, it crashed on startup - stop waiting.
-            $containerId = docker compose ps -q wxmonitor 2>$null
-            if (-not $containerId) { break }
             Start-Sleep -Seconds 3
         }
     } finally {

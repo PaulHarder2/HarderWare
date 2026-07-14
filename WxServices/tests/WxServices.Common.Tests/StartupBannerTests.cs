@@ -34,6 +34,7 @@ public sealed class StartupBannerTests
         // Lock in the documented derivation: the banner starts with the actual entry-assembly
         // name (mirroring WxPaths.StartupBanner's own fallback), not a hard-coded or generic name.
         var expectedName = Assembly.GetEntryAssembly()?.GetName().Name ?? "WxService";
-        Assert.StartsWith(expectedName, WxPaths.StartupBanner());
+        // "+ ' '" locks in the "{name} {version}" separator, not just the name prefix.
+        Assert.StartsWith(expectedName + " ", WxPaths.StartupBanner());
     }
 }
