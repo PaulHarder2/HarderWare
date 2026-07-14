@@ -1,0 +1,15 @@
+# WX-63 - keep the Docker build context (the HarderWare repo root) lean, and prevent a
+# Windows-built bin/obj from poisoning the Linux build inside the container (the WX-62 lesson).
+# Globs are **/ so nested build output at any depth is excluded, not just repo-root dirs.
+**/bin/
+**/obj/
+**/.vs/
+**/*.user
+.git/
+release/
+
+# Secrets / per-machine config must never enter the build context (COPY . . would otherwise sweep
+# them into the build cache): the container's DB-password config and observability's Grafana admin
+# password. The image carries none of these — they are bind-mounted / injected at run time.
+**/appsettings.local.json
+**/.env

@@ -24,7 +24,7 @@ var installRoot = WxPaths.ReadInstallRoot();
 var paths = new WxPaths(installRoot);
 
 Logger.Initialise(paths.ServiceLogFile(WxServiceToken.WxReport));
-Logger.Info($"WxReport.Svc {WxPaths.ProductVersion} (commit {WxPaths.GitCommit}) starting.");
+Logger.Info(WxPaths.StartupBanner());
 
 var host = Host.CreateDefaultBuilder(args)
     .UseWindowsService(options =>

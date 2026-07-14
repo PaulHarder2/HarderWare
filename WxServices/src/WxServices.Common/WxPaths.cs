@@ -11,9 +11,13 @@ namespace WxServices.Common;
 public sealed class WxPaths
 {
     /// <summary>
-    /// Reads <c>InstallRoot</c> from <c>appsettings.shared.json</c> in the
-    /// application's base directory.  Returns <see cref="DefaultInstallRoot"/>
-    /// if the file or property is missing.
+    /// Resolves the install root in precedence order: (1) the
+    /// <c>WXSERVICES_INSTALL_ROOT</c> environment variable when set — how a
+    /// container deploy points the same binary at its Linux install root
+    /// (see <c>services/wxmonitor/Dockerfile</c>); (2) <c>InstallRoot</c> from
+    /// <c>appsettings.shared.json</c> in the application's base directory — the
+    /// Windows-service default; (3) <see cref="DefaultInstallRoot"/> if neither
+    /// is present.
     /// </summary>
     /// <remarks>
     /// Call this early in startup — before the configuration builder runs — so
@@ -22,6 +26,12 @@ public sealed class WxPaths
     /// </remarks>
     public static string ReadInstallRoot()
     {
+        // (1) Container deploys set WXSERVICES_INSTALL_ROOT; it wins so the same binary resolves a
+        // Linux install root without editing the shared config. Windows services leave it unset and
+        // fall through to appsettings.shared.json below.
+        var envOverride = Environment.GetEnvironmentVariable("WXSERVICES_INSTALL_ROOT");
+        if (!string.IsNullOrWhiteSpace(envOverride)) return envOverride;
+
         var path = Path.Combine(AppContext.BaseDirectory, "appsettings.shared.json");
         if (!File.Exists(path)) return DefaultInstallRoot;
 
@@ -63,6 +73,17 @@ public sealed class WxPaths
             return full.Length > 7 ? full[..7] : full;
         }
     }
+
+    /// <summary>
+    /// The one-line startup banner each service logs at launch, e.g.
+    /// e.g. <c>"WxVis.Svc &lt;version&gt; starting."</c>. The service name self-derives from the entry
+    /// assembly (<c>WxVis.Svc</c>, <c>WxMonitor.Svc</c>, …), so there is no per-service
+    /// literal to keep in sync. The git commit is intentionally omitted (WX-63): it is
+    /// unavailable in a container build, and per-deploy provenance already lives in
+    /// deploy-history.log (<see cref="GitCommit"/> remains for the WPF About screens).
+    /// </summary>
+    public static string StartupBanner() =>
+        $"{Assembly.GetEntryAssembly()?.GetName().Name ?? "WxService"} {ProductVersion} starting.";
 
     /// <summary>Root directory for the entire WxServices installation.</summary>
     public string InstallRoot { get; }

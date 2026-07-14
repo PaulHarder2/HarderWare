@@ -1,0 +1,44 @@
+# services/docker-compose.yml
+# WX-63 - run the containerized WxMonitor.Svc. Step 1 of the WX-7 containerization arc; the
+# pattern here (build a region-agnostic image, then inject its world at run time) is what
+# WX-64/65/66 will reuse. Launch from this directory:  docker compose up -d --build
+#
+# ============================================================================================
+# NETWORK TOPOLOGY  (settled for WX-63; named per-region networks belong to the OpRegion work)
+# --------------------------------------------------------------------------------------------
+# wxmonitor runs on Compose's default (project-scoped) network and reaches everything it needs
+# through the SAME host doorway it already uses for the database - no custom Docker network:
+#     SQL Server   (native on the host)                        -> host.docker.internal,1433  (WX-67 proved this)
+#     otel-collector (a container publishing 4318 to the host) -> host.docker.internal:4318
+# The four WxServices never talk to each other directly - they coordinate through the shared
+# database - so the only cross-container hop is to otel-collector, which the host's published
+# port already covers. This keeps WX-63 minimal and touches nothing in the (boot-race-sensitive)
+# observability stack.
+#
+# This forecloses no future topology: the network is a run-time-injected property (the image is
+# network-agnostic), and Compose already namespaces the default network per project name, so a
+# `-p hw-prod` / `-p hw-dev` launch each gets an isolated net where internal names resolve per
+# region. Explicit named/shared networks become a deliberate call in the OpRegion epic, driven
+# by the per-region-vs-shared observability decision - not needed here.
+# ============================================================================================
+
+services:
+  wxmonitor:
+    build:
+      context: ..                                  # build context = HarderWare repo root (same for all 4 services)
+      dockerfile: services/wxmonitor/Dockerfile
+    image: wxmonitor:dev                           # image tag; a real OpRegion pins a versioned tag (e.g. 1.51.0) later
+    extra_hosts:
+      - "host.docker.internal:host-gateway"        # guarantees the host is reachable by that name on any Docker engine
+    volumes:
+      # CONFIG door: secrets + per-deploy overrides (DB connection string, OTel endpoint at
+      # host.docker.internal:4318, AlertEmail), injected READ-ONLY. The image never carries these.
+      # The real file is gitignored; commit only appsettings.local.json.example beside this compose.
+      - ./wxmonitor/appsettings.local.json:/opt/wxservices/appsettings.local.json:ro
+      # STORAGE door: log + heartbeat bind mount. The containerized service writes here and
+      # WxManager (still native on Windows) reads the SAME files via the host InstallRoot\Logs.
+      # Source = the resolved host InstallRoot\Logs, passed by Deploy-WxService.ps1 as
+      # WX_HOST_LOGS_DIR (default C:/HarderWare/Logs) so a non-default InstallRoot still matches
+      # where native components look. From WSL the path would be /mnt/c/... - see the walkthrough.
+      - ${WX_HOST_LOGS_DIR:-C:/HarderWare/Logs}:/opt/wxservices/Logs:rw
+    # restart policy + healthcheck are deliberately OUT OF SCOPE here - WX-68 (Step 6) owns them.
