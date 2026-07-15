@@ -1,8 +1,8 @@
 #Requires -RunAsAdministrator
 <#
 .SYNOPSIS
-    Publishes/redeploys the WxServices: the WxParser Windows service, the
-    WxVis/WxReport/WxMonitor Docker containers, WxManager, and WxViewer.
+    Publishes/redeploys the WxServices: the WxParser/WxVis/WxReport/WxMonitor Docker
+    containers, WxManager, and WxViewer.
 
 .DESCRIPTION
     Developer deployment script.  Reads InstallRoot from appsettings.shared.json
@@ -11,8 +11,8 @@
 
 .PARAMETER ServiceName
     The service or application to deploy, or 'all' to deploy everything:
-    the WxParserSvc Windows service, then WxVisSvc, WxReportSvc, and WxMonitorSvc
-    as Docker containers (services/docker-compose.yml), then WxManager and WxViewer.
+    the WxParserSvc, WxVisSvc, WxReportSvc, and WxMonitorSvc Docker containers
+    (services/docker-compose.yml), then WxManager and WxViewer.
 
 .EXAMPLE
     .\Deploy-WxService.ps1 WxReportSvc
@@ -54,13 +54,8 @@ Write-Host "Solution root: $SolutionRoot"
 Write-Host "Install root:  $InstallRoot"
 Write-Host ""
 
-# WxVisSvc (WX-65), WxReportSvc (WX-64), and WxMonitorSvc (WX-63) deploy as Docker
-# containers via Invoke-ContainerDeploy, not Windows services, so they are
-# intentionally absent from this Windows-service map. WxParserSvc is the last
-# remaining native Windows service (its containerization is WX-66).
-$ServiceMap = [ordered]@{
-    'WxParserSvc'  = 'WxParser.Svc'
-}
+# All four headless services (WxParser/WxVis/WxReport/WxMonitor) deploy as Docker containers via
+# Invoke-ContainerDeploy (WX-63..66); there are no Windows-service deploys left in this script.
 
 # ---------------------------------------------------------------------------
 # Deploy-history log + build identity (version from Directory.Build.props,
@@ -106,133 +101,25 @@ function Write-DeployLog {
     }
 }
 
-# Poll the given Windows services until all are Running or the timeout elapses
-# (one overall deadline; all services are checked each pass, so the wait is
-# bounded by the slowest service, not the sum). Prints a per-service summary.
-# Returns $true only if every service is Running.
-function Test-ServicesRunning {
-    param([string[]]$Services, [int]$TimeoutSeconds = 60)
-
-    Write-Host ""
-    Write-Host "Verifying services are running (timeout ${TimeoutSeconds}s)..." -ForegroundColor Cyan
-
-    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
-    while ($true) {
-        $pending = @($Services | Where-Object {
-            $svc = Get-Service -Name $_ -ErrorAction SilentlyContinue
-            (-not $svc) -or ($svc.Status -ne 'Running')
-        })
-        if ($pending.Count -eq 0) { break }
-        if ([DateTime]::UtcNow -ge $deadline) { break }
-        Start-Sleep -Seconds 2
+# Warn (non-fatally) if WxParser's home location isn't configured yet - it won't fetch until it is.
+# (This lived inside the old Invoke-ServiceDeploy; kept when WX-66 moved WxParser to a container and
+# retired the Windows-service deploy path entirely.)
+function Show-HomeIcaoWarningIfUnset {
+    if (-not $sharedConfig) { return }
+    $homeIcao = $null
+    # Read the nested value inside try/catch: under StrictMode, indexing a missing JSON property
+    # (a shared config with no Fetch node) throws, and we want a warning here, not a terminating error.
+    try { $homeIcao = $sharedConfig.Fetch.HomeIcao } catch {
+        Write-Verbose "Could not read Fetch.HomeIcao from shared config ($($_.Exception.Message))."
     }
-
-    $allOk = $true
-    foreach ($s in $Services) {
-        $svc = Get-Service -Name $s -ErrorAction SilentlyContinue
-        $status = if ($svc) { "$($svc.Status)" } else { 'NotInstalled' }
-        if ($status -eq 'Running') {
-            Write-Host ("  [OK]   {0}: {1}" -f $s, $status) -ForegroundColor Green
-        } else {
-            Write-Host ("  [FAIL] {0}: {1}" -f $s, $status) -ForegroundColor Red
-            $allOk = $false
-        }
+    if (-not $homeIcao) {
+        Write-Warning "Fetch:HomeIcao is not configured in appsettings.shared.json. WxParser will not fetch data until a home location is set."
     }
-    return $allOk
-}
-
-# ---------------------------------------------------------------------------
-# Stop, publish, and start a single service.
-# ---------------------------------------------------------------------------
-function Invoke-ServiceDeploy {
-    param([string]$SvcName)
-
-    $projectFolder = $ServiceMap[$SvcName]
-    $projectPath   = "$SolutionRoot\src\$projectFolder"
-    $publishDir    = "$InstallRoot\BuildCache\WxServices\$projectFolder\bin\Release\net8.0\publish"
-    $binPath       = "$publishDir\$projectFolder.exe"
-
-    # Warn if home location is not yet configured (first-time setup). Read the
-    # nested value inside try/catch: under StrictMode, indexing a missing JSON
-    # property (e.g. a shared config with no Fetch node) throws, and we want a
-    # warning here, not a terminating error.
-    if ($SvcName -eq 'WxParserSvc' -and $sharedConfig) {
-        $homeIcao = $null
-        try { $homeIcao = $sharedConfig.Fetch.HomeIcao } catch {
-            # Non-fatal: shared config has no Fetch node. The "not configured"
-            # warning below still fires; note the detail under -Verbose.
-            Write-Verbose "Could not read Fetch.HomeIcao from shared config for ${SvcName} ($($_.Exception.Message))."
-        }
-        if (-not $homeIcao) {
-            Write-Warning "Fetch:HomeIcao is not configured in appsettings.shared.json. Services will not fetch data until a home location is set."
-        }
-    }
-
-    # Stop
-    $svc = Get-Service -Name $SvcName -ErrorAction SilentlyContinue
-    if ($svc -and $svc.Status -ne 'Stopped') {
-        Write-Host "Stopping $SvcName..."
-        sc.exe stop $SvcName | Out-Null
-
-        $timeout = 30
-        $elapsed = 0
-        while ($elapsed -lt $timeout) {
-            Start-Sleep -Seconds 1
-            $elapsed++
-            $svc = Get-Service -Name $SvcName -ErrorAction SilentlyContinue
-            if (-not $svc -or $svc.Status -eq 'Stopped') { break }
-        }
-        if ($svc -and $svc.Status -ne 'Stopped') {
-            Write-Warning "$SvcName did not stop within ${timeout}s - aborting deploy of this service."
-            return $false
-        }
-    }
-
-    # Publish
-    Write-Host "Publishing $projectFolder..."
-    # | Out-Host keeps the build output on the console but OUT of this function's
-    # success stream; otherwise it pollutes the return value, making it a
-    # multi-element array (always truthy), which defeats the callers' -not checks.
-    dotnet publish $projectPath -c Release | Out-Host
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "dotnet publish failed for $projectFolder (exit code $LASTEXITCODE)."
-        return $false
-    }
-
-    if (-not (Test-Path $binPath)) {
-        Write-Error "Expected executable not found after publish: $binPath"
-        return $false
-    }
-
-    $sourceLocalConfig = "$projectPath\appsettings.local.json"
-    if (Test-Path $sourceLocalConfig) {
-        Copy-Item $sourceLocalConfig $publishDir
-        Write-Host "Copied appsettings.local.json to publish dir."
-    }
-
-    # Update registered binary path in case it has changed (e.g. after build output was relocated)
-    sc.exe config $SvcName binpath= "`"$binPath`"" | Out-Null
-
-    # Start, then verify the service actually reaches Running before logging the
-    # deploy. sc.exe start is asynchronous, so a service that starts but crashes
-    # during init (e.g. the WX-113 SCM-30s migration timeout) would otherwise be
-    # logged as a successful deploy. Test-ServicesRunning gates the log line.
-    Write-Host "Starting $SvcName..."
-    sc.exe start $SvcName | Out-Null
-
-    $running = Test-ServicesRunning -Services @($SvcName)
-    Write-DeployLog -App $SvcName -Result $(if ($running) { 'OK' } else { 'FAIL' })
-    if ($running) {
-        Write-Host "$SvcName deployed and verified Running." -ForegroundColor Green
-    } else {
-        Write-Warning "$SvcName was published and started but is not Running."
-    }
-    return $running
 }
 
 # ---------------------------------------------------------------------------
 # Deploy a headless WxService as a Docker container (services/docker-compose.yml) instead of a
-# Windows service. The Windows-service path (Invoke-ServiceDeploy) does not apply: there is no
+# Windows service - so (unlike the retired Windows-service path) there is no
 # sc.exe service to stop/config/start, no publish-to-folder (the binary is baked into the image),
 # and verification is docker-based (the Hosting.Lifetime "Application started" banner) rather than
 # Get-Service. Deploy-history logging is identical - same Write-DeployLog, same component label,
@@ -364,7 +251,7 @@ function Invoke-ManagerPublish {
     $outputDir   = "$InstallRoot\WxManager"
 
     Write-Host "Publishing WxManager to $outputDir..."
-    dotnet publish $projectPath -c Release -o $outputDir | Out-Host   # | Out-Host: keep build output off the bool return (see Invoke-ServiceDeploy)
+    dotnet publish $projectPath -c Release -o $outputDir | Out-Host   # | Out-Host: keeps build output off this function's bool return (PS 5.x stream-pollution guard)
     if ($LASTEXITCODE -ne 0) {
         Write-Error "dotnet publish failed for WxManager (exit code $LASTEXITCODE)."
         return $false
@@ -392,7 +279,7 @@ function Invoke-ViewerPublish {
     $outputDir   = "$InstallRoot\WxViewer"
 
     Write-Host "Publishing WxViewer to $outputDir..."
-    dotnet publish $projectPath -c Release -o $outputDir | Out-Host   # | Out-Host: keep build output off the bool return (see Invoke-ServiceDeploy)
+    dotnet publish $projectPath -c Release -o $outputDir | Out-Host   # | Out-Host: keeps build output off this function's bool return (PS 5.x stream-pollution guard)
     if ($LASTEXITCODE -ne 0) {
         Write-Error "dotnet publish failed for WxViewer (exit code $LASTEXITCODE)."
         return $false
@@ -454,6 +341,12 @@ if ($ServiceName -eq 'WxVisSvc') {
     exit $(if ($ok) { 0 } else { 1 })
 }
 
+if ($ServiceName -eq 'WxParserSvc') {
+    Show-HomeIcaoWarningIfUnset
+    $ok = Invoke-ContainerDeploy -ComposeService 'wxparser' -DeployApp 'WxParserSvc'
+    exit $(if ($ok) { 0 } else { 1 })
+}
+
 if ($ServiceName -eq 'WxReportSvc') {
     $ok = Invoke-ContainerDeploy -ComposeService 'wxreport' -DeployApp 'WxReportSvc'
     exit $(if ($ok) { 0 } else { 1 })
@@ -473,11 +366,12 @@ if ($ServiceName -eq 'all') {
     $results = New-Object System.Collections.Generic.List[object]
     $failed  = $false
 
-    # WxParser (native Windows service) first - it populates the DB every other service reads.
+    # WxParser (container) first - it populates the DB every other service reads.
+    Show-HomeIcaoWarningIfUnset
     Write-Host ""
-    Write-Host "=== WxParserSvc ===" -ForegroundColor Cyan
-    $ok = Invoke-ServiceDeploy -SvcName 'WxParserSvc'
-    $results.Add([pscustomobject]@{ Name = 'WxParserSvc'; Kind = 'service'; Ok = $ok; Compose = '' })
+    Write-Host "=== WxParserSvc (container) ===" -ForegroundColor Cyan
+    $ok = Invoke-ContainerDeploy -ComposeService 'wxparser' -DeployApp 'WxParserSvc'
+    $results.Add([pscustomobject]@{ Name = 'WxParserSvc'; Kind = 'container'; Ok = $ok; Compose = 'wxparser' })
     if (-not $ok) { $failed = $true }
 
     # WxVis (container) - after WxParser (needs GFS/METAR data), before WxReport (WxVis renders the
@@ -533,10 +427,4 @@ if ($ServiceName -eq 'all') {
     Write-Host ""
     Write-Host "All services and applications deployed." -ForegroundColor Green
     exit 0
-} else {
-    Write-Host ""
-    Write-Host "=== $ServiceName ===" -ForegroundColor Cyan
-    # Invoke-ServiceDeploy now verifies-then-logs internally; its return value is
-    # the running status, so no separate Test-ServicesRunning call is needed here.
-    if (-not (Invoke-ServiceDeploy -SvcName $ServiceName)) { exit 1 }
 }

@@ -46,7 +46,7 @@
 
 ## 1. Purpose
 
-WxServices is a set of headless services (one native Windows service, three Linux containers — see *Containerized deployment (WX-7)*) that:
+WxServices is a set of headless services (four Linux containers — see *Containerized deployment (WX-7)*) that:
 
 - Periodically fetch METAR and TAF aviation weather reports from the Aviation Weather Center API and store them in a local SQL Server database.
 - Download GFS numerical weather prediction model data from NOAA (via the AWS Open Data mirror) and extract gridded medium-range forecasts covering temperature, wind, cloud cover, precipitation rate, and convective energy (CAPE) for the configured region.
@@ -65,7 +65,7 @@ Recipients each have their own location. The system automatically resolves the n
 
 ### 2.1 Overview
 
-Four headless services share a log directory and a SQL Server database: WxParser.Svc feeds the database, WxReport.Svc reads from it, WxMonitor.Svc watches both, and WxVis.Svc renders maps from it. WxParser runs as a native Windows service; the other three run as Linux containers (see *Containerized deployment (WX-7)*).
+Four headless services share a log directory and a SQL Server database: WxParser.Svc feeds the database, WxReport.Svc reads from it, WxMonitor.Svc watches both, and WxVis.Svc renders maps from it. All four run as Linux containers (see *Containerized deployment (WX-7)*).
 
 ```mermaid
 flowchart TD
@@ -290,7 +290,7 @@ WxServices/
     ├── WxServices.Logging/          ← log4net wrapper (static Logger class)
     ├── WxServices.Common/           ← shared utilities (WxPaths, SmtpSender, SmtpConfig, Util)
     ├── WxInterp/                    ← snapshot interpreter (METAR+TAF+GFS → WeatherSnapshot)
-    ├── WxParser.Svc/                ← Windows service: periodic METAR/TAF + GFS fetch
+    ├── WxParser.Svc/                ← container: periodic METAR/TAF + GFS fetch
     ├── WxReport.Svc/                ← container: report generation and email
     ├── WxMonitor.Svc/               ← container: log and heartbeat monitoring
     ├── WxVis.Svc/                   ← container: automated map rendering
@@ -1191,7 +1191,7 @@ The Recipients tab's **Locality** control is a single editable ComboBox doing do
 | WxParser.Svc / WxReport.Svc | AWC Airport API | Resolve ICAO → coordinates; nearest station lookup | None (public) |
 | WxParser.Svc | [OurAirports](https://davidmegginson.github.io/ourairports-data/airports.csv) | Airport names, municipalities, coordinates for all ICAO airports | None (public) |
 | WxParser.Svc | [NOAA GFS / AWS Open Data](https://noaa-gfs-bdp-pds.s3.amazonaws.com) | Download GFS GRIB2 forecast files | None (public) |
-| WxParser.Svc | wgrib2.exe (native Windows) | Extract sub-grid values from GRIB2 files | n/a (local binary) |
+| WxParser.Svc | wgrib2 (bundled Linux binary in the container; native `wgrib2.exe` on a Windows host) | Extract sub-grid values from GRIB2 files | n/a (local binary) |
 | WxReport.Svc | [Nominatim](https://nominatim.openstreetmap.org/) | Geocode recipient address | None (User-Agent required) |
 | WxReport.Svc | Anthropic Claude API | Generate natural-language reports | API key |
 | WxReport.Svc / WxMonitor.Svc | Gmail SMTP | Send emails | App password |
@@ -1239,7 +1239,7 @@ The Recipients tab's **Locality** control is a single editable ComboBox doing do
 1. Run `.\Build-Release.ps1` to publish all components into the `release\` staging directory. The script reads the product version from `Directory.Build.props` and prints the ISCC command to run.
 2. Compile the `.iss` script with Inno Setup: `ISCC.exe /DAppVer=1.0.0 HarderWare_WxServices.iss` (use the version printed by the build script).
 
-The installer copies files to the chosen directory (default `C:\HarderWare`), registers the WxParser Windows service (WxVis, WxReport, and WxMonitor instead run as Docker containers per *Containerized deployment (WX-7)*), updates `InstallRoot` in `appsettings.shared.json` to match the install path, creates Start Menu and optional desktop shortcuts, and launches WxManager for first-run configuration.  Docker Desktop is a prerequisite for the three containerized services (WxVis/WxReport/WxMonitor); the containerized WxVis carries its own Python + matplotlib/cartopy stack, so a host Miniconda/conda install is **not** required to run the system (it remains the render reference used for version pinning — see *Containerized deployment (WX-7)*).  Uninstall stops and removes the services.
+The installer copies files to the chosen directory (default `C:\HarderWare`), registers no Windows services — all four headless services (WxParser/WxVis/WxReport/WxMonitor) run as Docker containers per *Containerized deployment (WX-7)*, updates `InstallRoot` in `appsettings.shared.json` to match the install path, creates Start Menu and optional desktop shortcuts, and launches WxManager for first-run configuration.  Docker Desktop is a prerequisite for all four containerized services; the containerized WxVis carries its own Python + matplotlib/cartopy stack, so a host Miniconda/conda install is **not** required to run the system (it remains the render reference used for version pinning — see *Containerized deployment (WX-7)*).  Uninstall stops and removes the services.
 
 ### Developer deploy script
 
@@ -1256,13 +1256,13 @@ Run from an **elevated** PowerShell prompt:
 
 Valid names: `WxParserSvc`, `WxReportSvc`, `WxMonitorSvc`, `WxVisSvc`, `WxViewer`, `WxManager`, `all`.
 
-`all` deploys the WxParser Windows service, then the WxVis, WxReport, and WxMonitor containers (see *Containerized deployment (WX-7)* below), then WxManager and WxViewer, printing a consolidated status summary at the end.
+`all` deploys the WxParser, WxVis, WxReport, and WxMonitor containers (see *Containerized deployment (WX-7)* below), then WxManager and WxViewer, printing a consolidated status summary at the end.
 
 Each service is verified at its own deploy step — a Windows service must reach **Running**, and a containerized service must log the `Application started` banner — before that step reports success; any failure exits non-zero there (there is no separate final consolidated re-check).  Once a step reaches its verify it appends one timestamped line to `{InstallRoot}\Logs\deploy-history.log` — UTC time, product version, and git short SHA, in the services' log4net format so the deploy timeline reads alongside the `wx*-svc.log` files — `OK` if it verified, `FAIL` if it started but did not stay up.  A hard failure *before* that point (a missing prerequisite, or a failed build/publish) aborts the deploy and writes no line.  The deploy-history logging is itself best-effort: a logging failure is reported as a warning but never aborts the deploy.
 
 ### Containerized deployment (WX-7)
 
-Epic WX-7 moves the four headless services off Windows services and onto Linux **containers**, one step at a time. `WxMonitor.Svc` went first (WX-63) and established the pattern; `WxReport.Svc` followed (WX-64), then `WxVis.Svc` (WX-65); `WxParser.Svc` (WX-66) remains. Artifacts live under `services/`. The WxMonitor pattern:
+Epic WX-7 moves the four headless services off Windows services and onto Linux **containers**, one step at a time. `WxMonitor.Svc` went first (WX-63) and established the pattern; `WxReport.Svc` followed (WX-64), then `WxVis.Svc` (WX-65) and `WxParser.Svc` (WX-66) — all four are now containerized. Artifacts live under `services/`. The WxMonitor pattern:
 
 - **`services/wxmonitor/Dockerfile`** — a multi-stage build: a `dotnet/sdk:8.0` stage publishes `WxMonitor.Svc` (`linux-x64`, framework-dependent), and a `dotnet/runtime:8.0-bookworm-slim` stage copies the output and runs it as non-root UID 1000. The image is **region-agnostic** — no connection string, no secrets baked in; those are injected at run time.
 - **`services/docker-compose.yml`** — runs the container and injects its world: the DB and the OTel collector are reached through `host.docker.internal` (`extra_hosts: ["host.docker.internal:host-gateway"]`); `services/wxmonitor/appsettings.local.json` is bind-mounted read-only (secrets, the container connection string, and the `host.docker.internal:4318` telemetry endpoint that overrides the shared config's `localhost`); and `C:\HarderWare\Logs` is bind-mounted read-write so the containerized service's `wxmonitor-svc.log` and heartbeat land where WxManager (still native) already reads them. It joins Compose's default (project-scoped) network — a shared/named network is deferred to the OpRegion work, since the four services coordinate through the database rather than container-to-container. A repo-root `.dockerignore` keeps the build context lean and prevents a Windows-built `bin/obj` from poisoning the Linux build.
@@ -1292,17 +1292,26 @@ The generic `Invoke-ContainerDeploy` in `Deploy-WxService.ps1` is shared by both
 
 `WxVisSvc` routes through the shared `Invoke-ContainerDeploy` exactly as WxReport/WxMonitor do, and is absent from the Windows-service map. Its native `WxVisSvc` service is disabled at cutover.
 
+#### WxParser.Svc container (WX-66)
+
+`WxParser.Svc` is the fourth and final service containerized — it fetches METAR/TAF (HTTP) and GFS GRIB2 (byte-range) and writes them to the DB, and shells out to `wgrib2` to extract the GFS sub-grid (the one wrinkle):
+
+- **A bundled Linux `wgrib2`.** `wgrib2` isn't in Debian's apt repos, and the host uses the native `wgrib2.exe` (WX-33), so the image `COPY`s a prebuilt Linux binary from `WxServices/tools/wgrib2-linux/` — `wgrib2 v3.1.3` built on `debian:bookworm` for glibc-2.36 parity with the runtime base (a WSL-Ubuntu build needed `GLIBC_2.38` and failed on bookworm-slim; the folder carries a README + reproducible `build.sh`). Its only dynamic deps are `libgfortran5` + `libgomp1` (apt-installed; jasper/libpng/libaec are statically bundled), and `Gfs:Wgrib2Path` in the container config points at `/usr/local/bin/wgrib2`.
+- **A writable GRIB scratch dir.** `GfsFetchWorker` downloads GRIB and `GribExtractor` writes the `-small_grib`/`-csv` intermediates to `WxPaths.TempDir` (`/opt/wxservices/temp`), created writable for UID 1000 in the Dockerfile. It's ephemeral (cleaned each cycle), so no host mount — the leanest of the four (Logs mount only).
+- **`AddInstallRoot`** (parity with WX-64/65) so the workers resolve the heartbeat + temp dir to `/opt/wxservices`, not the shared-config `C:\HarderWare`.
+
+Landing this **completes the arc**: all four headless services run as containers, so `Deploy-WxService.ps1` is now fully container-based — the Windows-service deploy path (`Invoke-ServiceDeploy`, `Test-ServicesRunning`, the `$ServiceMap`, the single-service `else` fallback) is removed, `WxParserSvc` routes through the shared `Invoke-ContainerDeploy`, and its native service is disabled at cutover (then `sc delete`d once proven).
+
 ### First-time install (run as Administrator)
 
-The Windows services — WxVis, WxReport, and WxMonitor deploy as containers instead (see *Containerized deployment (WX-7)*). Only WxParser remains a native Windows service. Paths below use `{InstallRoot}` — the installer-configured base directory (default `C:\HarderWare`); substitute your install path:
+There are **no native Windows services** to register — all four headless services run as Docker containers. Deploy the whole stack (the four containers + WxManager/WxViewer) from an elevated shell:
 
 ```powershell
-sc.exe create WxParserSvc  binPath= "{InstallRoot}\BuildCache\WxServices\WxParser.Svc\bin\Release\net8.0\publish\WxParser.Svc.exe"
-
-sc.exe start WxParserSvc
+cd C:\Code\HarderWare\WxServices
+.\Deploy-WxService.ps1 all
 ```
 
-Then deploy the containers: `.\Deploy-WxService.ps1 WxVisSvc`, `.\Deploy-WxService.ps1 WxReportSvc`, and `.\Deploy-WxService.ps1 WxMonitorSvc`.
+Or deploy them individually by name — `WxParserSvc`, `WxVisSvc`, `WxReportSvc`, `WxMonitorSvc` — each of which rebuilds and starts its container (and retires any same-named native service left over from a pre-container install).
 
 ### Database setup
 
