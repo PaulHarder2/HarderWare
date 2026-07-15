@@ -1,0 +1,53 @@
+{
+  "_README": [
+    "TEMPLATE for services/wxvis/appsettings.local.json (the REAL file is gitignored).",
+    "Copy this file to 'appsettings.local.json' in THIS folder and fill the <...> placeholders",
+    "(the SQL password lives in RoboForm). docker-compose.yml bind-mounts the real file READ-ONLY",
+    "into the container at /opt/wxservices/appsettings.local.json.",
+    "",
+    "The service loads appsettings.shared.json (baked into the image) FIRST, then this file on",
+    "top, last-value-wins. So this carries ONLY the keys that must DIFFER for a container: the",
+    "database doorway (+ SQL login), the telemetry endpoint, and the in-container Python path.",
+    "Everything else - map extent, poll intervals, zoom levels, the ODBC driver name (Driver 17,",
+    "which the image installs) - comes from shared.",
+    "",
+    "InstallRoot is NOT set here: it is resolved solely by WxPaths.ReadInstallRoot() (the",
+    "WXSERVICES_INSTALL_ROOT env var the Dockerfile sets), and Program.cs projects that one value",
+    "into IConfiguration[\"InstallRoot\"]. Setting it here would be ignored.",
+    "",
+    "Keys beginning with underscore are documentation; the .NET config binder ignores them."
+  ],
+
+  "ConnectionStrings": {
+    "_README": [
+      "Container override. Reach the host's SQL Server via host.docker.internal,1433 (proven in",
+      "WX-67) instead of the shared config's Server=.\\SQLEXPRESS. Use SQL authentication with the",
+      "'wxservices' login. A Linux container has no Windows identity, so Trusted_Connection can't",
+      "work here - and WX-65 teaches the WxVis Python DB path (db.py) to use this same SQL login,",
+      "passed through as WXVIS_DB_USER / WXVIS_DB_PASSWORD by WxVisConfig.BuildPythonEnv."
+    ],
+    "WeatherData": "Server=host.docker.internal,1433;Database=WeatherData;User Id=wxservices;Password=<WXSERVICES_SQL_PASSWORD>;TrustServerCertificate=True;"
+  },
+
+  "Telemetry": {
+    "_README": [
+      "Container override. The OTel collector is reached at the host's PUBLISHED 4318 port; the",
+      "shared config's http://localhost:4318 would resolve to the container itself. Include the",
+      "full signal path (/v1/metrics). Enabled is set explicitly so a copied config can't silently",
+      "disable metrics - AddWxTelemetry exports only when true."
+    ],
+    "Enabled": true,
+    "OtlpEndpoint": "http://host.docker.internal:4318/v1/metrics"
+  },
+
+  "WxVis": {
+    "_README": [
+      "Container override. The image installs a system Python at /usr/bin/python3 (with the pinned",
+      "matplotlib/cartopy stack), so CondaPythonExe must point there instead of the host's Windows",
+      "conda path. MapRenderer checks File.Exists on this before shelling out, so a wrong value",
+      "fails every render. DbDriver is NOT overridden here - the shared config's 'ODBC Driver 17",
+      "for SQL Server' matches the msodbcsql17 the image installs."
+    ],
+    "CondaPythonExe": "/usr/bin/python3"
+  }
+}

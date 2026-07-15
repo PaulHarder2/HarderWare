@@ -42,7 +42,13 @@ var host = Host.CreateDefaultBuilder(args)
     {
         cfg.SetBasePath(AppContext.BaseDirectory)
            .AddJsonFile("appsettings.shared.json", optional: false, reloadOnChange: true)
-           .AddJsonFile(new PhysicalFileProvider(installRoot), "appsettings.local.json", optional: true, reloadOnChange: true);
+           .AddJsonFile(new PhysicalFileProvider(installRoot), "appsettings.local.json", optional: true, reloadOnChange: true)
+           // Single source of truth for InstallRoot (WX-65, same fix WX-64 applied to WxMonitor/WxReport):
+           // the map workers resolve ScriptDir + OutputDir via IConfiguration["InstallRoot"]. Without this,
+           // that key stays the shared-config C:\HarderWare, so in the container the workers look for the
+           // Python scripts under a non-existent Windows path and hand it to Python as the plots output
+           // dir — renders never reach the host mount. Must come last so it wins. No-op on Windows.
+           .AddInstallRoot(installRoot);
     })
     .ConfigureServices((ctx, services) =>
     {

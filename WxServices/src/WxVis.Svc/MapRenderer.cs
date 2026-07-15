@@ -44,17 +44,6 @@ public static class MapRenderer
             return false;
         }
 
-        // Augment PATH with the conda environment directories so that the Python
-        // executable can locate its dependent DLLs when launched from a Windows
-        // service (which runs with a minimal environment and no conda activation).
-        var condaEnvDir = Path.GetDirectoryName(pythonExe)!;
-        var existingPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
-        var augmentedPath = string.Join(';',
-            condaEnvDir,
-            Path.Combine(condaEnvDir, "Library", "bin"),
-            Path.Combine(condaEnvDir, "Scripts"),
-            existingPath);
-
         var psi = new ProcessStartInfo
         {
             FileName = pythonExe,
@@ -65,7 +54,22 @@ public static class MapRenderer
             UseShellExecute = false,
             CreateNoWindow = true,
         };
-        psi.Environment["PATH"] = augmentedPath;
+
+        // On Windows the service runs with a minimal environment and no conda activation,
+        // so augment PATH with the conda environment directories so the interpreter can
+        // locate its dependent DLLs. On Linux (containerized) the interpreter is a system
+        // Python that resolves its own shared libraries and these conda subdirs don't exist,
+        // so the inherited PATH is already correct — leave it untouched.
+        if (OperatingSystem.IsWindows())
+        {
+            var condaEnvDir = Path.GetDirectoryName(pythonExe)!;
+            var existingPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+            psi.Environment["PATH"] = string.Join(';',
+                condaEnvDir,
+                Path.Combine(condaEnvDir, "Library", "bin"),
+                Path.Combine(condaEnvDir, "Scripts"),
+                existingPath);
+        }
 
         if (env is not null)
             foreach (var (key, value) in env)

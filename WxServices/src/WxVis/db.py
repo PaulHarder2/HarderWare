@@ -1,8 +1,10 @@
 """
 db.py — SQLAlchemy engine and query functions for WxVis.
 
-Uses Windows Authentication (trusted connection) against the local SQL Server
-instance.  All query functions return pandas DataFrames suitable for direct
+Authenticates by Windows Authentication (trusted connection) on a native Windows
+host, or by SQL login (UID/PWD) when a containerized deploy supplies one via the
+WXVIS_DB_USER / WXVIS_DB_PASSWORD environment variables — a Linux container has no
+Windows identity.  All query functions return pandas DataFrames suitable for direct
 use with MetPy / matplotlib.
 
 Configuration is read from environment variables set by WxVis.Svc, with
@@ -31,6 +33,9 @@ def _load_config() -> dict:
                 "server":   server,
                 "database": os.environ.get("WXVIS_DB_NAME", "WeatherData"),
                 "driver":   os.environ.get("WXVIS_DB_DRIVER", "ODBC Driver 17 for SQL Server"),
+                # SQL login for containerized deploys; absent on Windows hosts (Windows Auth).
+                "user":     os.environ.get("WXVIS_DB_USER"),
+                "password": os.environ.get("WXVIS_DB_PASSWORD"),
             },
             "output_dir": os.environ.get("WXVIS_OUTPUT_DIR", r"C:\HarderWare\plots"),
         }
@@ -40,22 +45,42 @@ def _load_config() -> dict:
         return json.load(f)
 
 
+def _odbc_brace(value: str) -> str:
+    """Wrap an ODBC connection-string value in braces so a ``;``, ``=``, or ``{`` in it
+    can't break parsing; a literal ``}`` is doubled, per the ODBC connection-string spec."""
+    return "{" + value.replace("}", "}}") + "}"
+
+
 def get_engine():
     """
     Build and return a SQLAlchemy engine for the WeatherData database.
 
-    Uses the ODBC connection string style with Windows Authentication so no
-    username or password is required.  The engine is lightweight to create and
-    can be kept alive for the duration of a script.
+    Uses the ODBC connection string style.  When a SQL login is supplied (UID/PWD,
+    the containerized case) it authenticates with those; otherwise it uses Windows
+    Authentication (Trusted_Connection) and no username or password is required.
+    The engine is lightweight to create and can be kept alive for the duration of
+    a script.
     """
     cfg = _load_config()
     db_cfg = cfg["db"]
-    odbc_str = (
-        f"DRIVER={{{db_cfg['driver']}}};"
-        f"SERVER={db_cfg['server']};"
-        f"DATABASE={db_cfg['database']};"
-        "Trusted_Connection=yes;"
-    )
+    odbc_parts = [
+        f"DRIVER={{{db_cfg['driver']}}}",
+        f"SERVER={db_cfg['server']}",
+        f"DATABASE={db_cfg['database']}",
+    ]
+    user = db_cfg.get("user")
+    password = db_cfg.get("password")
+    if user and password:
+        # SQL authentication: a Linux container has no Windows identity, so a
+        # containerized deploy supplies a SQL login (WX-65). ODBC Driver 17 defaults
+        # to Encrypt=no, so UID/PWD alone authenticates — no TrustServerCertificate needed.
+        # Brace the values so a ';', '=', or '{' in the credential can't break the ODBC
+        # string (a literal '}' is doubled, per the ODBC spec).
+        odbc_parts += [f"UID={_odbc_brace(user)}", f"PWD={_odbc_brace(password)}"]
+    else:
+        # Windows Authentication: native Windows-service deploy on the host.
+        odbc_parts.append("Trusted_Connection=yes")
+    odbc_str = ";".join(odbc_parts) + ";"
     conn_url = f"mssql+pyodbc:///?odbc_connect={urllib.parse.quote_plus(odbc_str)}"
     return create_engine(conn_url)
 

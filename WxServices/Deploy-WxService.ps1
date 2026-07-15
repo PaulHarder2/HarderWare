@@ -1,8 +1,8 @@
 #Requires -RunAsAdministrator
 <#
 .SYNOPSIS
-    Publishes/redeploys the WxServices: the WxParser/WxReport/WxVis Windows services,
-    the WxMonitor Docker container, WxManager, WxViewer, and the WxVis Python scripts.
+    Publishes/redeploys the WxServices: the WxParser Windows service, the
+    WxVis/WxReport/WxMonitor Docker containers, WxManager, and WxViewer.
 
 .DESCRIPTION
     Developer deployment script.  Reads InstallRoot from appsettings.shared.json
@@ -11,21 +11,19 @@
 
 .PARAMETER ServiceName
     The service or application to deploy, or 'all' to deploy everything:
-    WxVis Python scripts first, then the Windows services (WxParserSvc,
-    WxVisSvc), then WxReportSvc and WxMonitorSvc as Docker containers
-    (services/docker-compose.yml), then WxManager and WxViewer.
+    the WxParserSvc Windows service, then WxVisSvc, WxReportSvc, and WxMonitorSvc
+    as Docker containers (services/docker-compose.yml), then WxManager and WxViewer.
 
 .EXAMPLE
     .\Deploy-WxService.ps1 WxReportSvc
     .\Deploy-WxService.ps1 all
     .\Deploy-WxService.ps1 WxViewer
     .\Deploy-WxService.ps1 WxManager
-    .\Deploy-WxService.ps1 WxVis
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [ValidateSet('WxParserSvc', 'WxReportSvc', 'WxMonitorSvc', 'WxVisSvc', 'WxViewer', 'WxManager', 'WxVis', 'all')]
+    [ValidateSet('WxParserSvc', 'WxReportSvc', 'WxMonitorSvc', 'WxVisSvc', 'WxViewer', 'WxManager', 'all')]
     [string]$ServiceName,
 
     # Seconds to wait for a containerized service to log "Application started" before FAIL.
@@ -56,12 +54,12 @@ Write-Host "Solution root: $SolutionRoot"
 Write-Host "Install root:  $InstallRoot"
 Write-Host ""
 
-# WxMonitorSvc (WX-63) and WxReportSvc (WX-64) deploy as Docker containers
-# via Invoke-ContainerDeploy, not Windows services, so they are intentionally
-# absent from this Windows-service map.
+# WxVisSvc (WX-65), WxReportSvc (WX-64), and WxMonitorSvc (WX-63) deploy as Docker
+# containers via Invoke-ContainerDeploy, not Windows services, so they are
+# intentionally absent from this Windows-service map. WxParserSvc is the last
+# remaining native Windows service (its containerization is WX-66).
 $ServiceMap = [ordered]@{
     'WxParserSvc'  = 'WxParser.Svc'
-    'WxVisSvc'     = 'WxVis.Svc'
 }
 
 # ---------------------------------------------------------------------------
@@ -349,41 +347,6 @@ function Invoke-ManagerPublish {
 }
 
 # ---------------------------------------------------------------------------
-# Copy WxVis Python scripts to InstallRoot\WxVis and clear bytecode cache.
-# ---------------------------------------------------------------------------
-function Invoke-WxVisPublish {
-    $sourceDir = "$SolutionRoot\src\WxVis"
-    $targetDir = "$InstallRoot\WxVis"
-
-    if (-not (Test-Path $sourceDir)) {
-        Write-Error "WxVis source directory not found: $sourceDir"
-        return $false
-    }
-
-    # Create target directory if needed.
-    if (-not (Test-Path $targetDir)) {
-        New-Item -ItemType Directory -Path $targetDir | Out-Null
-    }
-
-    # Copy Python scripts and supporting files.
-    foreach ($pattern in @('*.py', 'requirements.txt')) {
-        Copy-Item "$sourceDir\$pattern" $targetDir -Force -ErrorAction SilentlyContinue
-    }
-    Write-Host "Copied WxVis Python scripts to $targetDir."
-
-    # Clear bytecode cache in target directory.
-    $cacheDir = "$targetDir\__pycache__"
-    if (Test-Path $cacheDir) {
-        Remove-Item $cacheDir -Recurse -Force
-        Write-Host "Cleared WxVis __pycache__."
-    }
-
-    Write-Host "WxVis published to $targetDir." -ForegroundColor Green
-    Write-DeployLog -App 'WxVis'
-    return $true
-}
-
-# ---------------------------------------------------------------------------
 # Publish WxViewer WPF desktop app.
 # ---------------------------------------------------------------------------
 function Invoke-ViewerPublish {
@@ -409,6 +372,33 @@ function Invoke-ViewerPublish {
 }
 
 # ---------------------------------------------------------------------------
+# Consolidated end-of-run status table. The per-step [OK]/messages scroll off
+# under each container's docker-build output, so this final summary is the
+# at-a-glance "did everything come up?" - in particular whether each container
+# deployed and (re)started. Printed at the end of an 'all' run (and before a
+# non-zero exit on failure, so a partial run still reports how far it got).
+# ---------------------------------------------------------------------------
+function Show-DeploySummary {
+    param([System.Collections.Generic.List[object]]$Results)
+
+    Write-Host ""
+    Write-Host "=== Deployment summary ===" -ForegroundColor Cyan
+    foreach ($r in $Results) {
+        $detail = switch ($r.Kind) {
+            'service'   { if ($r.Ok) { 'Running' }             else { 'NOT Running' } }
+            'container' { if ($r.Ok) { 'Application started' } else { 'did NOT start' } }
+            default     { if ($r.Ok) { 'published' }           else { 'publish FAILED' } }
+        }
+        $tag = if ($r.Ok) { '[OK]  ' } else { '[FAIL]' }
+        $line = '  {0} {1,-14} {2,-9} {3}' -f $tag, $r.Name, $r.Kind, $detail
+        if (-not $r.Ok -and $r.Kind -eq 'container' -and $r.Compose) {
+            $line += "  <- docker compose logs $($r.Compose)"
+        }
+        Write-Host $line -ForegroundColor $(if ($r.Ok) { 'Green' } else { 'Red' })
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 if ($ServiceName -eq 'WxViewer') {
@@ -421,8 +411,8 @@ if ($ServiceName -eq 'WxManager') {
     exit $LASTEXITCODE
 }
 
-if ($ServiceName -eq 'WxVis') {
-    $ok = Invoke-WxVisPublish
+if ($ServiceName -eq 'WxVisSvc') {
+    $ok = Invoke-ContainerDeploy -ComposeService 'wxvis' -DeployApp 'WxVisSvc'
     exit $(if ($ok) { 0 } else { 1 })
 }
 
@@ -437,50 +427,74 @@ if ($ServiceName -eq 'WxMonitorSvc') {
 }
 
 if ($ServiceName -eq 'all') {
-    # Copy Python scripts first so WxVisSvc finds them immediately after restart.
-    Write-Host ""
-    Write-Host "=== WxVis ===" -ForegroundColor Cyan
-    if (-not (Invoke-WxVisPublish)) { exit 1 }
+    # WxVis Python scripts are no longer copied to the host: WxVisSvc runs in a container (WX-65)
+    # with the scripts baked into the image, and nothing on the host reads InstallRoot\WxVis anymore.
+    #
+    # Each step records its outcome into $results; on the first failure we stop (a broken dependency
+    # must not deploy its dependents) but still print the summary of what was attempted before exiting.
+    $results = New-Object System.Collections.Generic.List[object]
+    $failed  = $false
 
-    foreach ($target in $ServiceMap.Keys) {
+    # WxParser (native Windows service) first - it populates the DB every other service reads.
+    Write-Host ""
+    Write-Host "=== WxParserSvc ===" -ForegroundColor Cyan
+    $ok = Invoke-ServiceDeploy -SvcName 'WxParserSvc'
+    $results.Add([pscustomobject]@{ Name = 'WxParserSvc'; Kind = 'service'; Ok = $ok; Compose = '' })
+    if (-not $ok) { $failed = $true }
+
+    # WxVis (container) - after WxParser (needs GFS/METAR data), before WxReport (WxVis renders the
+    # meteogram/synoptic plots WxReport inlines).
+    if (-not $failed) {
         Write-Host ""
-        Write-Host "=== $target ===" -ForegroundColor Cyan
-        $ok = Invoke-ServiceDeploy -SvcName $target
-        if (-not $ok) {
-            Write-Warning "Stopping 'all' deploy due to failure in $target."
-            exit 1
-        }
+        Write-Host "=== WxVisSvc (container) ===" -ForegroundColor Cyan
+        $ok = Invoke-ContainerDeploy -ComposeService 'wxvis' -DeployApp 'WxVisSvc'
+        $results.Add([pscustomobject]@{ Name = 'WxVisSvc'; Kind = 'container'; Ok = $ok; Compose = 'wxvis' })
+        if (-not $ok) { $failed = $true }
     }
 
-    # WxReport deploys as a container (WX-64), after the Windows services that feed its DB + plots.
-    Write-Host ""
-    Write-Host "=== WxReportSvc (container) ===" -ForegroundColor Cyan
-    if (-not (Invoke-ContainerDeploy -ComposeService 'wxreport' -DeployApp 'WxReportSvc')) {
-        Write-Warning "Stopping 'all' deploy due to failure in WxReportSvc."
+    # WxReport (container) - after the services that feed its DB + plots.
+    if (-not $failed) {
+        Write-Host ""
+        Write-Host "=== WxReportSvc (container) ===" -ForegroundColor Cyan
+        $ok = Invoke-ContainerDeploy -ComposeService 'wxreport' -DeployApp 'WxReportSvc'
+        $results.Add([pscustomobject]@{ Name = 'WxReportSvc'; Kind = 'container'; Ok = $ok; Compose = 'wxreport' })
+        if (-not $ok) { $failed = $true }
+    }
+
+    # WxMonitor (container) - last, after the services it watches.
+    if (-not $failed) {
+        Write-Host ""
+        Write-Host "=== WxMonitorSvc (container) ===" -ForegroundColor Cyan
+        $ok = Invoke-ContainerDeploy -ComposeService 'wxmonitor' -DeployApp 'WxMonitorSvc'
+        $results.Add([pscustomobject]@{ Name = 'WxMonitorSvc'; Kind = 'container'; Ok = $ok; Compose = 'wxmonitor' })
+        if (-not $ok) { $failed = $true }
+    }
+
+    # WxManager / WxViewer (WPF apps).
+    if (-not $failed) {
+        Write-Host ""
+        Write-Host "=== WxManager ===" -ForegroundColor Cyan
+        $ok = Invoke-ManagerPublish
+        $results.Add([pscustomobject]@{ Name = 'WxManager'; Kind = 'app'; Ok = $ok; Compose = '' })
+        if (-not $ok) { $failed = $true }
+    }
+    if (-not $failed) {
+        Write-Host ""
+        Write-Host "=== WxViewer ===" -ForegroundColor Cyan
+        $ok = Invoke-ViewerPublish
+        $results.Add([pscustomobject]@{ Name = 'WxViewer'; Kind = 'app'; Ok = $ok; Compose = '' })
+        if (-not $ok) { $failed = $true }
+    }
+
+    Show-DeploySummary -Results $results
+    if ($failed) {
+        Write-Host ""
+        Write-Warning "Deployment stopped at the first failure above; components after it were not attempted."
         exit 1
     }
-
-    # WxMonitor deploys as a container, after the Windows services it watches.
-    Write-Host ""
-    Write-Host "=== WxMonitorSvc (container) ===" -ForegroundColor Cyan
-    if (-not (Invoke-ContainerDeploy -ComposeService 'wxmonitor' -DeployApp 'WxMonitorSvc')) {
-        Write-Warning "Stopping 'all' deploy due to failure in WxMonitorSvc."
-        exit 1
-    }
-
-    Write-Host ""
-    Write-Host "=== WxManager ===" -ForegroundColor Cyan
-    if (-not (Invoke-ManagerPublish)) { exit 1 }
-
-    Write-Host ""
-    Write-Host "=== WxViewer ===" -ForegroundColor Cyan
-    if (-not (Invoke-ViewerPublish)) { exit 1 }
-
     Write-Host ""
     Write-Host "All services and applications deployed." -ForegroundColor Green
-    # No final consolidated health check: each service was already verified at its own deploy step
-    # (Invoke-ServiceDeploy verifies Running; the container deploy verifies the "Application started"
-    # banner) and any failure exits non-zero there, so a re-check would only repeat reported results.
+    exit 0
 } else {
     Write-Host ""
     Write-Host "=== $ServiceName ===" -ForegroundColor Cyan

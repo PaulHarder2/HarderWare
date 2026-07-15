@@ -57,26 +57,47 @@ public class WxVisConfig
 
     /// <summary>
     /// Builds environment variables passed to WxVis Python scripts so they can
-    /// locate the database, output directory, and log directory without reading
-    /// <c>config.json</c>.
+    /// locate the database, authenticate, and find the output and log directories
+    /// without reading <c>config.json</c>.
     /// </summary>
-    /// <param name="connectionString">SQL Server connection string (parsed to extract server and database).</param>
+    /// <param name="connectionString">SQL Server connection string (parsed to extract server, database, and — for containerized deploys — the SQL login).</param>
     /// <param name="logsDir">Directory for Python log files.</param>
     public Dictionary<string, string> BuildPythonEnv(string connectionString, string logsDir)
     {
-        // Parse "Server=.\SQLEXPRESS;Database=WeatherData;..." into components.
-        var parts = connectionString.Split(';', StringSplitOptions.RemoveEmptyEntries)
-            .Select(p => p.Split('=', 2))
-            .Where(p => p.Length == 2)
-            .ToDictionary(p => p[0].Trim(), p => p[1].Trim(), StringComparer.OrdinalIgnoreCase);
-
-        return new Dictionary<string, string>
+        // Parse with DbConnectionStringBuilder (BCL) rather than a naive ';'/'=' split, so a value
+        // containing ';' or '=' (e.g. a quoted password) is decoded correctly. Lookups are
+        // case-insensitive; synonyms are tried explicitly since the generic builder doesn't alias them.
+        var csb = new System.Data.Common.DbConnectionStringBuilder { ConnectionString = connectionString };
+        string? Value(params string[] keys)
         {
-            ["WXVIS_DB_SERVER"] = parts.GetValueOrDefault("Server", @".\SQLEXPRESS"),
-            ["WXVIS_DB_NAME"] = parts.GetValueOrDefault("Database", "WeatherData"),
+            foreach (var key in keys)
+                if (csb.TryGetValue(key, out var v) && v is not null)
+                    return v.ToString();
+            return null;
+        }
+
+        var env = new Dictionary<string, string>
+        {
+            ["WXVIS_DB_SERVER"] = Value("Server", "Data Source") ?? @".\SQLEXPRESS",
+            ["WXVIS_DB_NAME"] = Value("Database", "Initial Catalog") ?? "WeatherData",
             ["WXVIS_DB_DRIVER"] = DbDriver,
             ["WXVIS_OUTPUT_DIR"] = OutputDir,
             ["WXVIS_LOG_DIR"] = logsDir,
         };
+
+        // SQL authentication for containerized deploys: a Linux container has no Windows
+        // identity, so when the connection string carries a SQL login, pass it through and
+        // db.py authenticates with UID/PWD. Windows-native deploys use Trusted_Connection and
+        // omit these keys, so db.py falls back to Windows Auth — the connection string is the
+        // single source of truth for the auth mode, mirroring the .NET side.
+        var user = Value("User Id", "Uid");
+        var password = Value("Password", "Pwd");
+        if (!string.IsNullOrEmpty(user) && !string.IsNullOrEmpty(password))
+        {
+            env["WXVIS_DB_USER"] = user;
+            env["WXVIS_DB_PASSWORD"] = password;
+        }
+
+        return env;
     }
 }
