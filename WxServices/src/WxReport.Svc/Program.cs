@@ -35,7 +35,12 @@ var host = Host.CreateDefaultBuilder(args)
     {
         cfg.SetBasePath(AppContext.BaseDirectory)
            .AddJsonFile("appsettings.shared.json", optional: false, reloadOnChange: true)
-           .AddJsonFile(new PhysicalFileProvider(installRoot), "appsettings.local.json", optional: true, reloadOnChange: true);
+           .AddJsonFile(new PhysicalFileProvider(installRoot), "appsettings.local.json", optional: true, reloadOnChange: true)
+           // Single source of truth (WX-64): make IConfiguration["InstallRoot"] — what the workers
+           // read to build WxPaths — equal the env-aware root resolved above, not the baked-in
+           // shared-config C:\HarderWare. Must come last so it wins. No-op on Windows (same value);
+           // in the container it points plots/heartbeat resolution at WXSERVICES_INSTALL_ROOT.
+           .AddInstallRoot(installRoot);
     })
     .ConfigureServices((ctx, services) =>
     {

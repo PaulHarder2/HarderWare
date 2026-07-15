@@ -35,7 +35,14 @@ var host = Host.CreateDefaultBuilder(args)
     {
         cfg.SetBasePath(AppContext.BaseDirectory)
            .AddJsonFile("appsettings.shared.json", optional: false, reloadOnChange: true)
-           .AddJsonFile(new PhysicalFileProvider(installRoot), "appsettings.local.json", optional: true, reloadOnChange: true);
+           .AddJsonFile(new PhysicalFileProvider(installRoot), "appsettings.local.json", optional: true, reloadOnChange: true)
+           // Single source of truth (WX-64, fixing a WX-63 regression): MonitorWorker resolves the
+           // watched services' heartbeat + log paths via IConfiguration["InstallRoot"]. Without this,
+           // that key stays the shared-config C:\HarderWare, so in the container every file watcher
+           // looked under a non-existent Windows path — the heartbeat watcher logged "heartbeat file
+           // not found" every cycle regardless of service health (only the DB-based METAR-staleness
+           // watcher still worked). Must come last so it wins. No-op on Windows (same value).
+           .AddInstallRoot(installRoot);
     })
     .ConfigureServices((ctx, services) =>
     {

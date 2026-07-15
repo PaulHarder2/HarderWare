@@ -9,6 +9,9 @@
   <ItemGroup>
     <PackageReference Include="MailKit" Version="4.16.0" />
     <PackageReference Include="Microsoft.Data.SqlClient" Version="5.2.2" />
+    <!-- AddInMemoryCollection for WxConfigurationExtensions.AddInstallRoot (WX-64): projects the
+         resolved install root into config so IConfiguration["InstallRoot"] == WxPaths.ReadInstallRoot(). -->
+    <PackageReference Include="Microsoft.Extensions.Configuration" Version="8.0.0" />
     <!-- OTel wiring lives here (WX-159): the AddWxTelemetry helper owns AddOpenTelemetry,
          the OTLP exporter, and the export-failure diagnostics listener for all four services. -->
     <PackageReference Include="OpenTelemetry" Version="1.15.3" />

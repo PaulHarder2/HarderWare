@@ -1239,7 +1239,7 @@ The Recipients tab's **Locality** control is a single editable ComboBox doing do
 1. Run `.\Build-Release.ps1` to publish all components into the `release\` staging directory. The script reads the product version from `Directory.Build.props` and prints the ISCC command to run.
 2. Compile the `.iss` script with Inno Setup: `ISCC.exe /DAppVer=1.0.0 HarderWare_WxServices.iss` (use the version printed by the build script).
 
-The installer copies files to the chosen directory (default `C:\HarderWare`), registers the four Windows services (WxMonitor can then be switched to its container per *Containerized deployment (WX-63)*), updates `InstallRoot` in `appsettings.shared.json` to match the install path, creates Start Menu and optional desktop shortcuts, and launches WxManager for first-run configuration.  Uninstall stops and removes the services.
+The installer copies files to the chosen directory (default `C:\HarderWare`), registers the Windows services (WxParser and WxVis; WxReport and WxMonitor instead run as Docker containers per *Containerized deployment (WX-7)*), updates `InstallRoot` in `appsettings.shared.json` to match the install path, creates Start Menu and optional desktop shortcuts, and launches WxManager for first-run configuration.  Uninstall stops and removes the services.
 
 ### Developer deploy script
 
@@ -1257,34 +1257,44 @@ Run from an **elevated** PowerShell prompt:
 
 Valid names: `WxParserSvc`, `WxReportSvc`, `WxMonitorSvc`, `WxVisSvc`, `WxViewer`, `WxManager`, `WxVis`, `all`.
 
-`all` copies WxVis Python scripts to `{InstallRoot}\WxVis\` first, then deploys the three Windows services (WxParser/WxReport/WxVis) and the WxMonitor container (see *Containerized deployment (WX-63)* below), then WxManager and WxViewer.
+`all` copies WxVis Python scripts to `{InstallRoot}\WxVis\` first, then deploys the Windows services (WxParser/WxVis) and the WxReport + WxMonitor containers (see *Containerized deployment (WX-7)* below), then WxManager and WxViewer.
 
-Each service is verified at its own deploy step — a Windows service must reach **Running**, and the WxMonitor container must log the `Application started` banner — before that step reports success; any failure exits non-zero there (there is no separate final consolidated re-check).  Once a step reaches its verify it appends one timestamped line to `{InstallRoot}\Logs\deploy-history.log` — UTC time, product version, and git short SHA, in the services' log4net format so the deploy timeline reads alongside the `wx*-svc.log` files — `OK` if it verified, `FAIL` if it started but did not stay up.  A hard failure *before* that point (a missing prerequisite, or a failed build/publish) aborts the deploy and writes no line.  The deploy-history logging is itself best-effort: a logging failure is reported as a warning but never aborts the deploy.
+Each service is verified at its own deploy step — a Windows service must reach **Running**, and a containerized service must log the `Application started` banner — before that step reports success; any failure exits non-zero there (there is no separate final consolidated re-check).  Once a step reaches its verify it appends one timestamped line to `{InstallRoot}\Logs\deploy-history.log` — UTC time, product version, and git short SHA, in the services' log4net format so the deploy timeline reads alongside the `wx*-svc.log` files — `OK` if it verified, `FAIL` if it started but did not stay up.  A hard failure *before* that point (a missing prerequisite, or a failed build/publish) aborts the deploy and writes no line.  The deploy-history logging is itself best-effort: a logging failure is reported as a warning but never aborts the deploy.
 
-### Containerized deployment (WX-63)
+### Containerized deployment (WX-7)
 
-Step 1 of Epic WX-7. `WxMonitor.Svc` is the first of the four headless services to run as a Linux **container** instead of a Windows service; it establishes the pattern WX-64/65/66 reuse. Artifacts live under `services/`:
+Epic WX-7 moves the four headless services off Windows services and onto Linux **containers**, one step at a time. `WxMonitor.Svc` went first (WX-63) and established the pattern; `WxReport.Svc` followed (WX-64); `WxVis.Svc` (WX-65) and `WxParser.Svc` (WX-66) remain. Artifacts live under `services/`. The WxMonitor pattern:
 
 - **`services/wxmonitor/Dockerfile`** — a multi-stage build: a `dotnet/sdk:8.0` stage publishes `WxMonitor.Svc` (`linux-x64`, framework-dependent), and a `dotnet/runtime:8.0-bookworm-slim` stage copies the output and runs it as non-root UID 1000. The image is **region-agnostic** — no connection string, no secrets baked in; those are injected at run time.
 - **`services/docker-compose.yml`** — runs the container and injects its world: the DB and the OTel collector are reached through `host.docker.internal` (`extra_hosts: ["host.docker.internal:host-gateway"]`); `services/wxmonitor/appsettings.local.json` is bind-mounted read-only (secrets, the container connection string, and the `host.docker.internal:4318` telemetry endpoint that overrides the shared config's `localhost`); and `C:\HarderWare\Logs` is bind-mounted read-write so the containerized service's `wxmonitor-svc.log` and heartbeat land where WxManager (still native) already reads them. It joins Compose's default (project-scoped) network — a shared/named network is deferred to the OpRegion work, since the four services coordinate through the database rather than container-to-container. A repo-root `.dockerignore` keeps the build context lean and prevents a Windows-built `bin/obj` from poisoning the Linux build.
 - **The InstallRoot seam** — `WxPaths.ReadInstallRoot()` checks the `WXSERVICES_INSTALL_ROOT` env var first (set to `/opt/wxservices` in the Dockerfile), falling back to `appsettings.shared.json`'s `C:\HarderWare` for Windows deploys — the same binary serves both with no config fork.
-- **Deploy path** — `.\Deploy-WxService.ps1 WxMonitorSvc` (and `all`) deploys the container via `Invoke-MonitorContainerDeploy`: `docker compose up -d --build`, then verifies the `Application started` banner in the container logs, and appends the same `deploy-history.log` line (`WxMonitorSvc`, version, git SHA) as the Windows path — so the verify scripts that grep that log are unaffected. At cutover the Windows `WxMonitorSvc` service is **disabled** (a reversible fallback), and `sc delete`d only once the container is proven stable.
+- **Deploy path** — `.\Deploy-WxService.ps1 WxMonitorSvc` (and `all`) deploys the container via `Invoke-ContainerDeploy` (the generic container deploy, `-ComposeService wxmonitor -DeployApp WxMonitorSvc`): `docker compose up -d --build`, then verifies the `Application started` banner in the container logs, and appends the same `deploy-history.log` line (`WxMonitorSvc`, version, git SHA) as the Windows path — so the verify scripts that grep that log are unaffected. At cutover the Windows `WxMonitorSvc` service is **disabled** (a reversible fallback), and `sc delete`d only once the container is proven stable.
 
 Database connectivity from the container — the host SQL Server TCP/Mixed-Mode configuration and the least-privilege `wxservices` login — is covered in §10 under *Containerized deployment — database connectivity (WX-67)*.
 
+#### WxReport.Svc container (WX-64)
+
+`WxReport.Svc` is the second service containerized, reusing every piece of the WxMonitor pattern above with three service-specific differences:
+
+- **Three bind mounts, not one.** Beyond the read-write `Logs` mount (log + heartbeat, read by WxManager and WxMonitor), the `wxreport` service mounts `{InstallRoot}\plots` **read-only** — the meteogram PNGs `WxVis` renders and `WxReport` inlines into report emails; WxReport only reads them — and `{InstallRoot}\translation-qa` read-write, where the operator "Rerun QA" path (WX-235) writes its review packages. `Deploy-WxService.ps1` passes the resolved host dirs as `WX_HOST_LOGS_DIR` / `WX_HOST_PLOTS_DIR` / `WX_HOST_QA_DIR` (all three are set for every container deploy; each compose service uses only the ones it declares).
+- **No secrets in the config file, and no `chown`.** WxReport's SMTP credentials and Claude/Gemini API keys are read from the `GlobalSettings` database row, not a file, so its bind-mounted `appsettings.local.json` carries only the container DB connection string and the OTel endpoint — as lean as WxMonitor's. And because WxReport persists nothing to the image WORKDIR (it only *reads* the baked-in `AboutPaul.md` and shared config; every write goes to a bind mount), the Dockerfile drops WxMonitor's `chown` — the COPY-root-owned read files are world-readable, which is all the non-root UID needs.
+- **One source of truth for the install root.** WxReport's workers resolve runtime paths (plots, heartbeat) through `IConfiguration["InstallRoot"]`, which is seeded from `appsettings.shared.json` (`C:\HarderWare`) — *not* the env-aware `ReadInstallRoot()` the container seam overrides. On Windows the two are the same string, so the split is invisible; in a container the workers would resolve those paths under a non-existent `C:\HarderWare` — silently dropping meteograms and writing the heartbeat outside the mounted `Logs` (so WxMonitor would report WxReport as permanently down). `WxConfigurationExtensions.AddInstallRoot(installRoot)` (WxServices.Common) closes this by projecting the resolved root into configuration as the **last** source, so `IConfiguration["InstallRoot"]` always equals `ReadInstallRoot()`. It is a no-op on Windows (identical value) and is added to each service's `Program.cs` as it is containerized (WX-65/66 reuse it). WX-64 also adds it to `WxMonitor.Svc`, folding in a fix for a live WX-63 regression: `MonitorWorker` resolves the *watched* services' heartbeat and log paths through `IConfiguration["InstallRoot"]` as well, so the containerized monitor was resolving them under a non-existent `C:\HarderWare` and logging `heartbeat file not found` for every watched service each cycle (only its DB-based watchers were unaffected).
+
+The generic `Invoke-ContainerDeploy` in `Deploy-WxService.ps1` is shared by both containerized services (and the two to come); `WxReportSvc` is routed to it exactly as `WxMonitorSvc` is, and is absent from the Windows-service map.
+
 ### First-time install (run as Administrator)
 
-The three Windows services (WxMonitor deploys as a container instead — see *Containerized deployment (WX-63)*):
-```
-sc.exe create WxParserSvc  binPath= "C:\HarderWare\BuildCache\WxServices\WxParser.Svc\bin\Release\net8.0\publish\WxParser.Svc.exe"
-sc.exe create WxReportSvc  binPath= "C:\HarderWare\BuildCache\WxServices\WxReport.Svc\bin\Release\net8.0\publish\WxReport.Svc.exe"
-sc.exe create WxVisSvc     binPath= "C:\HarderWare\BuildCache\WxServices\WxVis.Svc\bin\Release\net8.0\publish\WxVis.Svc.exe"
+The Windows services — WxReport and WxMonitor deploy as containers instead (see *Containerized deployment (WX-7)*). Paths below use `{InstallRoot}` — the installer-configured base directory (default `C:\HarderWare`); substitute your install path:
+
+```powershell
+sc.exe create WxParserSvc  binPath= "{InstallRoot}\BuildCache\WxServices\WxParser.Svc\bin\Release\net8.0\publish\WxParser.Svc.exe"
+sc.exe create WxVisSvc     binPath= "{InstallRoot}\BuildCache\WxServices\WxVis.Svc\bin\Release\net8.0\publish\WxVis.Svc.exe"
 
 sc.exe start WxParserSvc
-sc.exe start WxReportSvc
 sc.exe start WxVisSvc
 ```
-Then deploy the WxMonitor container: `.\Deploy-WxService.ps1 WxMonitorSvc`.
+
+Then deploy the containers: `.\Deploy-WxService.ps1 WxReportSvc` and `.\Deploy-WxService.ps1 WxMonitorSvc`.
 
 ### Database setup
 
