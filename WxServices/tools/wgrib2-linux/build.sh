@@ -11,7 +11,10 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-docker run --rm -v "$HERE":/out debian:bookworm bash -c '
+# --platform=linux/amd64: the committed binary must be x86-64 (to match the amd64 container
+# runtime); pin the build so a rebuild on an ARM host still produces an amd64 binary rather than
+# a wrong-arch one that would fail the verify step below and at container start.
+docker run --rm --platform=linux/amd64 -v "$HERE":/out debian:bookworm bash -c '
   set -e
   apt-get update -qq
   # cmake is needed to build the bundled AEC (CCSDS) library; gfortran for the Fortran bits.
