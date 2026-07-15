@@ -1285,13 +1285,15 @@ The generic `Invoke-ContainerDeploy` in `Deploy-WxService.ps1` is shared by both
 ### First-time install (run as Administrator)
 
 The Windows services (WxReport and WxMonitor deploy as containers instead — see *Containerized deployment (WX-7)*):
-```
+
+```powershell
 sc.exe create WxParserSvc  binPath= "C:\HarderWare\BuildCache\WxServices\WxParser.Svc\bin\Release\net8.0\publish\WxParser.Svc.exe"
 sc.exe create WxVisSvc     binPath= "C:\HarderWare\BuildCache\WxServices\WxVis.Svc\bin\Release\net8.0\publish\WxVis.Svc.exe"
 
 sc.exe start WxParserSvc
 sc.exe start WxVisSvc
 ```
+
 Then deploy the containers: `.\Deploy-WxService.ps1 WxReportSvc` and `.\Deploy-WxService.ps1 WxMonitorSvc`.
 
 ### Database setup
