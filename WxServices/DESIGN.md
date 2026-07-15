@@ -46,7 +46,7 @@
 
 ## 1. Purpose
 
-WxServices is a set of Windows services that:
+WxServices is a set of headless services (one native Windows service, three Linux containers — see *Containerized deployment (WX-7)*) that:
 
 - Periodically fetch METAR and TAF aviation weather reports from the Aviation Weather Center API and store them in a local SQL Server database.
 - Download GFS numerical weather prediction model data from NOAA (via the AWS Open Data mirror) and extract gridded medium-range forecasts covering temperature, wind, cloud cover, precipitation rate, and convective energy (CAPE) for the configured region.
@@ -65,7 +65,7 @@ Recipients each have their own location. The system automatically resolves the n
 
 ### 2.1 Overview
 
-Three Windows services share a log directory and a SQL Server database. WxParser.Svc feeds the database; WxReport.Svc reads from it; WxMonitor.Svc watches both.
+Four headless services share a log directory and a SQL Server database: WxParser.Svc feeds the database, WxReport.Svc reads from it, WxMonitor.Svc watches both, and WxVis.Svc renders maps from it. WxParser runs as a native Windows service; the other three run as Linux containers (see *Containerized deployment (WX-7)*).
 
 ```mermaid
 flowchart TD
@@ -81,7 +81,7 @@ flowchart TD
     REPORT["WxReport.Svc (every 5 min)"]
     MONITOR["WxMonitor.Svc (every 5 min)"]
 
-    WVISSVC["WxVis.Svc (Windows service — map renderer)"]
+    WVISSVC["WxVis.Svc (map renderer)"]
     WXVIS["WxVis Python scripts"]
     PLOTS["C:\\HarderWare\\plots\\"]
     VIEWER["WxViewer (WPF desktop app)"]
@@ -291,9 +291,9 @@ WxServices/
     ├── WxServices.Common/           ← shared utilities (WxPaths, SmtpSender, SmtpConfig, Util)
     ├── WxInterp/                    ← snapshot interpreter (METAR+TAF+GFS → WeatherSnapshot)
     ├── WxParser.Svc/                ← Windows service: periodic METAR/TAF + GFS fetch
-    ├── WxReport.Svc/                ← Windows service: report generation and email
-    ├── WxMonitor.Svc/               ← Windows service: log and heartbeat monitoring
-    ├── WxVis.Svc/                   ← Windows service: automated map rendering
+    ├── WxReport.Svc/                ← container: report generation and email
+    ├── WxMonitor.Svc/               ← container: log and heartbeat monitoring
+    ├── WxVis.Svc/                   ← container: automated map rendering
     ├── WxViewer/                    ← WPF desktop app: animated weather map viewer
     ├── WxManager/                   ← WPF management GUI: recipient editor + announcement sender
     └── WxVis/                       ← Python visualisation project (conda env: wxvis)
@@ -556,7 +556,7 @@ All workers check for existing current output files before invoking Python; alre
 
 **Map rendering (`MapRenderer`):**
 - Invokes the appropriate WxVis Python script via `Process`/`ProcessStartInfo`.
-- Augments the process `PATH` with the conda environment's `bin`, `Library\bin`, and `Scripts` directories so Python and its DLL dependencies resolve correctly when the service runs under the Windows service account (which has a minimal PATH).
+- On Windows, augments the process `PATH` with the conda environment's `bin`, `Library\bin`, and `Scripts` directories so Python and its DLL dependencies resolve correctly when the service runs under the Windows service account (which has a minimal PATH). In a container (WX-65) the interpreter is a system `python3` that resolves its own shared libraries, so this augmentation is skipped (`OperatingSystem.IsWindows()` guard).
 - Captures stdout and stderr separately: stdout lines are logged at INFO; stderr lines are logged at WARN (so genuine Python tracebacks surface as warnings). WxVis's `logger.py` directs its console handler to `sys.stdout` so that normal Python log output does not trigger spurious WARN entries in the service log.
 - On cancellation (service stop or redeploy), kills the Python subprocess via `Kill(entireProcessTree: true)` before re-throwing, preventing orphaned render processes from running after the service exits.
 - All three Python scripts (`forecast_map.py`, `synoptic_map.py`, `meteogram.py`) write output to a `.tmp` file and atomically rename it to the final `.png` via `os.replace()`. This ensures the output directory never contains a partially-written image, so WxVis.Svc is safe to stop and redeploy at any time without risk of serving corrupt maps. Each `plt.savefig()` call explicitly passes `format="png"` because matplotlib infers the output format from the file extension — without it, `.png.tmp` would be treated as an unknown format and the render would fail.
@@ -1239,7 +1239,7 @@ The Recipients tab's **Locality** control is a single editable ComboBox doing do
 1. Run `.\Build-Release.ps1` to publish all components into the `release\` staging directory. The script reads the product version from `Directory.Build.props` and prints the ISCC command to run.
 2. Compile the `.iss` script with Inno Setup: `ISCC.exe /DAppVer=1.0.0 HarderWare_WxServices.iss` (use the version printed by the build script).
 
-The installer copies files to the chosen directory (default `C:\HarderWare`), registers the Windows services (WxParser and WxVis; WxReport and WxMonitor instead run as Docker containers per *Containerized deployment (WX-7)*), updates `InstallRoot` in `appsettings.shared.json` to match the install path, creates Start Menu and optional desktop shortcuts, and launches WxManager for first-run configuration.  Uninstall stops and removes the services.
+The installer copies files to the chosen directory (default `C:\HarderWare`), registers the WxParser Windows service (WxVis, WxReport, and WxMonitor instead run as Docker containers per *Containerized deployment (WX-7)*), updates `InstallRoot` in `appsettings.shared.json` to match the install path, creates Start Menu and optional desktop shortcuts, and launches WxManager for first-run configuration.  Docker Desktop is a prerequisite for the three containerized services (WxVis/WxReport/WxMonitor); the containerized WxVis carries its own Python + matplotlib/cartopy stack, so a host Miniconda/conda install is **not** required to run the system (it remains the render reference used for version pinning — see *Containerized deployment (WX-7)*).  Uninstall stops and removes the services.
 
 ### Developer deploy script
 
@@ -1252,18 +1252,17 @@ Run from an **elevated** PowerShell prompt:
 .\Deploy-WxService.ps1 WxReportSvc   # Single service
 .\Deploy-WxService.ps1 WxManager     # Management GUI only
 .\Deploy-WxService.ps1 WxViewer      # Desktop viewer only
-.\Deploy-WxService.ps1 WxVis         # Python scripts only
 ```
 
-Valid names: `WxParserSvc`, `WxReportSvc`, `WxMonitorSvc`, `WxVisSvc`, `WxViewer`, `WxManager`, `WxVis`, `all`.
+Valid names: `WxParserSvc`, `WxReportSvc`, `WxMonitorSvc`, `WxVisSvc`, `WxViewer`, `WxManager`, `all`.
 
-`all` copies WxVis Python scripts to `{InstallRoot}\WxVis\` first, then deploys the Windows services (WxParser/WxVis) and the WxReport + WxMonitor containers (see *Containerized deployment (WX-7)* below), then WxManager and WxViewer.
+`all` deploys the WxParser Windows service, then the WxVis, WxReport, and WxMonitor containers (see *Containerized deployment (WX-7)* below), then WxManager and WxViewer, printing a consolidated status summary at the end.
 
 Each service is verified at its own deploy step — a Windows service must reach **Running**, and a containerized service must log the `Application started` banner — before that step reports success; any failure exits non-zero there (there is no separate final consolidated re-check).  Once a step reaches its verify it appends one timestamped line to `{InstallRoot}\Logs\deploy-history.log` — UTC time, product version, and git short SHA, in the services' log4net format so the deploy timeline reads alongside the `wx*-svc.log` files — `OK` if it verified, `FAIL` if it started but did not stay up.  A hard failure *before* that point (a missing prerequisite, or a failed build/publish) aborts the deploy and writes no line.  The deploy-history logging is itself best-effort: a logging failure is reported as a warning but never aborts the deploy.
 
 ### Containerized deployment (WX-7)
 
-Epic WX-7 moves the four headless services off Windows services and onto Linux **containers**, one step at a time. `WxMonitor.Svc` went first (WX-63) and established the pattern; `WxReport.Svc` followed (WX-64); `WxVis.Svc` (WX-65) and `WxParser.Svc` (WX-66) remain. Artifacts live under `services/`. The WxMonitor pattern:
+Epic WX-7 moves the four headless services off Windows services and onto Linux **containers**, one step at a time. `WxMonitor.Svc` went first (WX-63) and established the pattern; `WxReport.Svc` followed (WX-64), then `WxVis.Svc` (WX-65); `WxParser.Svc` (WX-66) remains. Artifacts live under `services/`. The WxMonitor pattern:
 
 - **`services/wxmonitor/Dockerfile`** — a multi-stage build: a `dotnet/sdk:8.0` stage publishes `WxMonitor.Svc` (`linux-x64`, framework-dependent), and a `dotnet/runtime:8.0-bookworm-slim` stage copies the output and runs it as non-root UID 1000. The image is **region-agnostic** — no connection string, no secrets baked in; those are injected at run time.
 - **`services/docker-compose.yml`** — runs the container and injects its world: the DB and the OTel collector are reached through `host.docker.internal` (`extra_hosts: ["host.docker.internal:host-gateway"]`); `services/wxmonitor/appsettings.local.json` is bind-mounted read-only (secrets, the container connection string, and the `host.docker.internal:4318` telemetry endpoint that overrides the shared config's `localhost`); and `C:\HarderWare\Logs` is bind-mounted read-write so the containerized service's `wxmonitor-svc.log` and heartbeat land where WxManager (still native) already reads them. It joins Compose's default (project-scoped) network — a shared/named network is deferred to the OpRegion work, since the four services coordinate through the database rather than container-to-container. A repo-root `.dockerignore` keeps the build context lean and prevents a Windows-built `bin/obj` from poisoning the Linux build.
@@ -1282,19 +1281,28 @@ Database connectivity from the container — the host SQL Server TCP/Mixed-Mode 
 
 The generic `Invoke-ContainerDeploy` in `Deploy-WxService.ps1` is shared by both containerized services (and the two to come); `WxReportSvc` is routed to it exactly as `WxMonitorSvc` is, and is absent from the Windows-service map.
 
+#### WxVis.Svc container (WX-65)
+
+`WxVis.Svc` is the third service containerized — the most involved, because it shells out to the WxVis **Python** render scripts (matplotlib + cartopy), so the image carries a Python stack beside the .NET runtime. It reuses the WxMonitor/WxReport pattern with these WxVis-specific points:
+
+- **A Python render stack in the runtime image.** On top of `dotnet/runtime:8.0-bookworm-slim`, `services/wxvis/Dockerfile` apt-installs `python3`, matplotlib's fonts (`fonts-dejavu`, `fonts-liberation`), and `msodbcsql17` (matching the shared config's `WxVis.DbDriver`), then `pip`-installs the pinned `requirements.txt` (`WxServices/src/WxVis/requirements.txt`) — cartopy/shapely ship manylinux wheels that bundle GEOS/PROJ, so no `-dev` libraries or compiler are needed. The versions are **pinned to the host `wxvis` conda env** so container renders match the host's. The Python scripts are copied to `/opt/wxservices/WxVis` (= `WxPaths.WxVisDir`).
+- **The plots mount is read-write.** WxVis is the *producer* of the synoptic/forecast/meteogram PNGs, so `wxvis` mounts `{InstallRoot}\plots` **read-write** (WxReport mounts the same host dir read-only to inline them). A dedicated writable `HOME` (`/var/cache/wxvis`, plus `MPLCONFIGDIR`) is set because the root-owned WORKDIR is read-only to UID 1000, and matplotlib/cartopy must write their font caches. cartopy's 50m Natural Earth data is **pre-baked into the image** at build time (cached above the app `COPY` so a code change doesn't re-fetch it), so the first render needs no runtime download and can't fail when the host is offline after a recreate.
+- **Two config seams.** `WxVis:CondaPythonExe` is overridden to `/usr/bin/python3` in the bind-mounted `appsettings.local.json` — without it `MapRenderer` would look for the host's Windows conda path and every render would fail. And `Program.cs` adds `AddInstallRoot` (the same fix WX-64 applied to WxReport/WxMonitor) so the three map workers resolve the script and plots dirs to `/opt/wxservices` instead of the shared-config `C:\HarderWare`.
+- **A second DB path — the Python side.** Unlike the other services, WxVis reaches SQL Server twice: the .NET `WeatherDataContext` *and* the Python scripts' own SQLAlchemy/pyodbc engine (`db.py`). The host uses Windows Authentication for both, but a Linux container has no Windows identity, so `db.py` and `WxVisConfig.BuildPythonEnv` gained SQL-login support: when the container connection string carries a `User Id`/`Password`, they flow to Python as `WXVIS_DB_USER`/`WXVIS_DB_PASSWORD` and `db.py` authenticates with `UID`/`PWD`; a Windows host has no such keys and keeps `Trusted_Connection`.
+
+`WxVisSvc` routes through the shared `Invoke-ContainerDeploy` exactly as WxReport/WxMonitor do, and is absent from the Windows-service map. Its native `WxVisSvc` service is disabled at cutover.
+
 ### First-time install (run as Administrator)
 
-The Windows services — WxReport and WxMonitor deploy as containers instead (see *Containerized deployment (WX-7)*). Paths below use `{InstallRoot}` — the installer-configured base directory (default `C:\HarderWare`); substitute your install path:
+The Windows services — WxVis, WxReport, and WxMonitor deploy as containers instead (see *Containerized deployment (WX-7)*). Only WxParser remains a native Windows service. Paths below use `{InstallRoot}` — the installer-configured base directory (default `C:\HarderWare`); substitute your install path:
 
 ```powershell
 sc.exe create WxParserSvc  binPath= "{InstallRoot}\BuildCache\WxServices\WxParser.Svc\bin\Release\net8.0\publish\WxParser.Svc.exe"
-sc.exe create WxVisSvc     binPath= "{InstallRoot}\BuildCache\WxServices\WxVis.Svc\bin\Release\net8.0\publish\WxVis.Svc.exe"
 
 sc.exe start WxParserSvc
-sc.exe start WxVisSvc
 ```
 
-Then deploy the containers: `.\Deploy-WxService.ps1 WxReportSvc` and `.\Deploy-WxService.ps1 WxMonitorSvc`.
+Then deploy the containers: `.\Deploy-WxService.ps1 WxVisSvc`, `.\Deploy-WxService.ps1 WxReportSvc`, and `.\Deploy-WxService.ps1 WxMonitorSvc`.
 
 ### Database setup
 

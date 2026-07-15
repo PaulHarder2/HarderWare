@@ -13,3 +13,12 @@ release/
 # password. The image carries none of these — they are bind-mounted / injected at run time.
 **/appsettings.local.json
 **/.env
+
+# WX-65 - Python build/IDE cruft must not ride into the WxVis image (the WX-62 lesson, applied to
+# Python): stale Windows-compiled bytecode and the VS project file. config.json is the host-only
+# standalone-CLI fallback - it hardcodes .\SQLEXPRESS and C:\HarderWare\plots, so it must not ship
+# in a region-agnostic image whose DB/plots settings are always injected via env vars.
+**/__pycache__/
+**/*.pyc
+**/*.pyproj
+WxServices/src/WxVis/config.json

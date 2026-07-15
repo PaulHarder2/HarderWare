@@ -1,8 +1,10 @@
 """
 db.py — SQLAlchemy engine and query functions for WxVis.
 
-Uses Windows Authentication (trusted connection) against the local SQL Server
-instance.  All query functions return pandas DataFrames suitable for direct
+Authenticates by Windows Authentication (trusted connection) on a native Windows
+host, or by SQL login (UID/PWD) when a containerized deploy supplies one via the
+WXVIS_DB_USER / WXVIS_DB_PASSWORD environment variables — a Linux container has no
+Windows identity.  All query functions return pandas DataFrames suitable for direct
 use with MetPy / matplotlib.
 
 Configuration is read from environment variables set by WxVis.Svc, with
@@ -31,6 +33,13 @@ def _load_config() -> dict:
                 "server":   server,
                 "database": os.environ.get("WXVIS_DB_NAME", "WeatherData"),
                 "driver":   os.environ.get("WXVIS_DB_DRIVER", "ODBC Driver 17 for SQL Server"),
+                # SQL login for containerized deploys; absent on Windows hosts (Windows Auth).
+                "user":     os.environ.get("WXVIS_DB_USER"),
+                "password": os.environ.get("WXVIS_DB_PASSWORD"),
+                # Encryption posture, propagated from the .NET connection string so it stays the
+                # single source of truth; when unset the ODBC driver's default applies.
+                "encrypt":    os.environ.get("WXVIS_DB_ENCRYPT"),
+                "trust_cert": os.environ.get("WXVIS_DB_TRUST_CERT"),
             },
             "output_dir": os.environ.get("WXVIS_OUTPUT_DIR", r"C:\HarderWare\plots"),
         }
@@ -40,22 +49,54 @@ def _load_config() -> dict:
         return json.load(f)
 
 
+def _odbc_brace(value: str) -> str:
+    """Wrap an ODBC connection-string value in braces so a ``;``, ``=``, or ``{`` in it
+    can't break parsing; a literal ``}`` is doubled, per the ODBC connection-string spec."""
+    return "{" + value.replace("}", "}}") + "}"
+
+
+def _odbc_bool(value: str) -> str:
+    """Normalize a .NET-style boolean (``True`` / ``yes`` / ``1`` ...) to the ODBC
+    connection-string spelling (``yes`` / ``no``)."""
+    return "yes" if str(value).strip().lower() in ("true", "yes", "1") else "no"
+
+
 def get_engine():
     """
     Build and return a SQLAlchemy engine for the WeatherData database.
 
-    Uses the ODBC connection string style with Windows Authentication so no
-    username or password is required.  The engine is lightweight to create and
-    can be kept alive for the duration of a script.
+    Uses the ODBC connection string style.  When a SQL login is supplied (UID/PWD,
+    the containerized case) it authenticates with those; otherwise it uses Windows
+    Authentication (Trusted_Connection) and no username or password is required.
+    The engine is lightweight to create and can be kept alive for the duration of
+    a script.
     """
     cfg = _load_config()
     db_cfg = cfg["db"]
-    odbc_str = (
-        f"DRIVER={{{db_cfg['driver']}}};"
-        f"SERVER={db_cfg['server']};"
-        f"DATABASE={db_cfg['database']};"
-        "Trusted_Connection=yes;"
-    )
+    # Brace every reconstructed value so a ';', '=', or '{' in it can't break the ODBC string
+    # (a literal '}' is doubled). DRIVER already required bracing for the spaces in its name.
+    odbc_parts = [
+        f"DRIVER={_odbc_brace(db_cfg['driver'])}",
+        f"SERVER={_odbc_brace(db_cfg['server'])}",
+        f"DATABASE={_odbc_brace(db_cfg['database'])}",
+    ]
+    user = db_cfg.get("user")
+    password = db_cfg.get("password")
+    if user and password:
+        # SQL authentication: a Linux container has no Windows identity, so a containerized
+        # deploy supplies a SQL login (WX-65).
+        odbc_parts += [f"UID={_odbc_brace(user)}", f"PWD={_odbc_brace(password)}"]
+    else:
+        # Windows Authentication: native Windows-service deploy on the host.
+        odbc_parts.append("Trusted_Connection=yes")
+    # Encryption flags flow from the connection string (the single source of truth), normalized to
+    # the ODBC yes/no spelling. When unset, the ODBC driver's default applies (Driver 17 => no
+    # encryption); turning encryption on end-to-end is a separate cross-service posture decision.
+    if db_cfg.get("encrypt") is not None:
+        odbc_parts.append(f"Encrypt={_odbc_bool(db_cfg['encrypt'])}")
+    if db_cfg.get("trust_cert") is not None:
+        odbc_parts.append(f"TrustServerCertificate={_odbc_bool(db_cfg['trust_cert'])}")
+    odbc_str = ";".join(odbc_parts) + ";"
     conn_url = f"mssql+pyodbc:///?odbc_connect={urllib.parse.quote_plus(odbc_str)}"
     return create_engine(conn_url)
 

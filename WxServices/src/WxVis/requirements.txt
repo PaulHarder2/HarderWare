@@ -1,8 +1,12 @@
-metpy>=1.6
-matplotlib>=3.8
-cartopy>=0.23
-shapely>=2.0
-sqlalchemy>=2.0
-pyodbc>=5.0
-pandas>=2.0
-numpy>=1.26
+# WX-65 - pinned to the host wxvis conda env (the render reference) so containerized renders match
+# the host's and image rebuilds are reproducible. Bump deliberately, together with a re-validation
+# of a sample render against the host. Host versions captured 2026-07-15.
+metpy==1.7.1
+matplotlib==3.10.8
+cartopy==0.25.0
+shapely==2.1.2
+scipy==1.17.1
+sqlalchemy==2.0.48
+pyodbc==5.3.0
+pandas==3.0.2
+numpy==2.4.3
