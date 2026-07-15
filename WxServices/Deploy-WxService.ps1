@@ -309,29 +309,51 @@ function Invoke-ContainerDeploy {
         Pop-Location
     }
 
-    Write-DeployLog -App $DeployApp -Result $(if ($started) { 'OK' } else { 'FAIL' })
+    # Cutover: retire the native Windows service of the same name if one is still installed, so it
+    # can't run beside the container (dual writers to the same DB + Logs/plots, the collision seen
+    # when WxVis was first containerized). Done ONLY after the container is verified started, so a
+    # failed container deploy leaves the native service as a fallback. Idempotent - a missing or
+    # already-stopped/disabled service is a no-op. Requires elevation (#Requires -RunAsAdministrator).
+    $cutoverOk = $true
     if ($started) {
-        # Cutover: retire the native Windows service of the same name if one is still installed, so it
-        # can't run beside the container (dual writers to the same DB + Logs/plots, the collision seen
-        # when WxVis was first containerized). Done ONLY after the container is verified started, so a
-        # failed container deploy leaves the native service as a fallback. Idempotent - a missing or
-        # already-stopped/disabled service is a no-op. Requires elevation (#Requires -RunAsAdministrator).
         $native = Get-Service -Name $DeployApp -ErrorAction SilentlyContinue
         if ($native) {
             if ($native.Status -ne 'Stopped') {
                 Write-Host "Stopping native $DeployApp service (superseded by the container)..."
                 Stop-Service -Name $DeployApp -Force -ErrorAction SilentlyContinue
+                # Stop-Service returns before the SCM finishes the stop; wait, then re-check, so we
+                # never log a clean deploy while the old service is still writing beside the container.
+                try { $native.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30)) } catch { <# timed out; the re-check below handles it #> }
+                $native.Refresh()
+                if ($native.Status -ne 'Stopped') {
+                    Write-Warning "Native $DeployApp service did not stop within 30s - it is running beside the container (dual writers)."
+                    $cutoverOk = $false
+                }
             }
-            if ($native.StartType -ne 'Disabled') {
+            if ($cutoverOk -and $native.StartType -ne 'Disabled') {
                 Write-Host "Disabling native $DeployApp service (containerized; reversible fallback)..."
                 Set-Service -Name $DeployApp -StartupType Disabled -ErrorAction SilentlyContinue
+                $native.Refresh()
+                if ($native.StartType -ne 'Disabled') {
+                    Write-Warning "Could not disable native $DeployApp service - it may start again on reboot."
+                    $cutoverOk = $false
+                }
             }
         }
+    }
+
+    # Log OK only when BOTH the container verified AND (if a native counterpart existed) its cutover
+    # completed - never report success while the old service could still run beside the container.
+    $deployOk = $started -and $cutoverOk
+    Write-DeployLog -App $DeployApp -Result $(if ($deployOk) { 'OK' } else { 'FAIL' })
+    if ($deployOk) {
         Write-Host "$ComposeService container deployed and verified (Application started)." -ForegroundColor Green
+    } elseif ($started) {
+        Write-Warning "$ComposeService container is up, but the native $DeployApp service could not be retired; resolve the dual-run before relying on this deploy."
     } else {
         Write-Warning "$ComposeService container did not reach 'Application started' within ${StartupTimeoutSec}s. Check: docker compose logs $ComposeService (from $composeDir)."
     }
-    return $started
+    return $deployOk
 }
 
 # ---------------------------------------------------------------------------
