@@ -311,6 +311,22 @@ function Invoke-ContainerDeploy {
 
     Write-DeployLog -App $DeployApp -Result $(if ($started) { 'OK' } else { 'FAIL' })
     if ($started) {
+        # Cutover: retire the native Windows service of the same name if one is still installed, so it
+        # can't run beside the container (dual writers to the same DB + Logs/plots, the collision seen
+        # when WxVis was first containerized). Done ONLY after the container is verified started, so a
+        # failed container deploy leaves the native service as a fallback. Idempotent - a missing or
+        # already-stopped/disabled service is a no-op. Requires elevation (#Requires -RunAsAdministrator).
+        $native = Get-Service -Name $DeployApp -ErrorAction SilentlyContinue
+        if ($native) {
+            if ($native.Status -ne 'Stopped') {
+                Write-Host "Stopping native $DeployApp service (superseded by the container)..."
+                Stop-Service -Name $DeployApp -Force -ErrorAction SilentlyContinue
+            }
+            if ($native.StartType -ne 'Disabled') {
+                Write-Host "Disabling native $DeployApp service (containerized; reversible fallback)..."
+                Set-Service -Name $DeployApp -StartupType Disabled -ErrorAction SilentlyContinue
+            }
+        }
         Write-Host "$ComposeService container deployed and verified (Application started)." -ForegroundColor Green
     } else {
         Write-Warning "$ComposeService container did not reach 'Application started' within ${StartupTimeoutSec}s. Check: docker compose logs $ComposeService (from $composeDir)."

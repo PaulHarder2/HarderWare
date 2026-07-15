@@ -98,6 +98,15 @@ public class WxVisConfig
             env["WXVIS_DB_PASSWORD"] = password;
         }
 
+        // Propagate the encryption posture so the connection string stays the single source of truth
+        // for it (db.py applies these to the ODBC string; absent keys leave the driver's default).
+        var encrypt = Value("Encrypt");
+        if (!string.IsNullOrEmpty(encrypt))
+            env["WXVIS_DB_ENCRYPT"] = encrypt;
+        var trustCert = Value("TrustServerCertificate");
+        if (!string.IsNullOrEmpty(trustCert))
+            env["WXVIS_DB_TRUST_CERT"] = trustCert;
+
         return env;
     }
 }

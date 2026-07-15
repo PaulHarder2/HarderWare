@@ -36,6 +36,10 @@ def _load_config() -> dict:
                 # SQL login for containerized deploys; absent on Windows hosts (Windows Auth).
                 "user":     os.environ.get("WXVIS_DB_USER"),
                 "password": os.environ.get("WXVIS_DB_PASSWORD"),
+                # Encryption posture, propagated from the .NET connection string so it stays the
+                # single source of truth; when unset the ODBC driver's default applies.
+                "encrypt":    os.environ.get("WXVIS_DB_ENCRYPT"),
+                "trust_cert": os.environ.get("WXVIS_DB_TRUST_CERT"),
             },
             "output_dir": os.environ.get("WXVIS_OUTPUT_DIR", r"C:\HarderWare\plots"),
         }
@@ -51,6 +55,12 @@ def _odbc_brace(value: str) -> str:
     return "{" + value.replace("}", "}}") + "}"
 
 
+def _odbc_bool(value: str) -> str:
+    """Normalize a .NET-style boolean (``True`` / ``yes`` / ``1`` ...) to the ODBC
+    connection-string spelling (``yes`` / ``no``)."""
+    return "yes" if str(value).strip().lower() in ("true", "yes", "1") else "no"
+
+
 def get_engine():
     """
     Build and return a SQLAlchemy engine for the WeatherData database.
@@ -63,23 +73,29 @@ def get_engine():
     """
     cfg = _load_config()
     db_cfg = cfg["db"]
+    # Brace every reconstructed value so a ';', '=', or '{' in it can't break the ODBC string
+    # (a literal '}' is doubled). DRIVER already required bracing for the spaces in its name.
     odbc_parts = [
-        f"DRIVER={{{db_cfg['driver']}}}",
-        f"SERVER={db_cfg['server']}",
-        f"DATABASE={db_cfg['database']}",
+        f"DRIVER={_odbc_brace(db_cfg['driver'])}",
+        f"SERVER={_odbc_brace(db_cfg['server'])}",
+        f"DATABASE={_odbc_brace(db_cfg['database'])}",
     ]
     user = db_cfg.get("user")
     password = db_cfg.get("password")
     if user and password:
-        # SQL authentication: a Linux container has no Windows identity, so a
-        # containerized deploy supplies a SQL login (WX-65). ODBC Driver 17 defaults
-        # to Encrypt=no, so UID/PWD alone authenticates — no TrustServerCertificate needed.
-        # Brace the values so a ';', '=', or '{' in the credential can't break the ODBC
-        # string (a literal '}' is doubled, per the ODBC spec).
+        # SQL authentication: a Linux container has no Windows identity, so a containerized
+        # deploy supplies a SQL login (WX-65).
         odbc_parts += [f"UID={_odbc_brace(user)}", f"PWD={_odbc_brace(password)}"]
     else:
         # Windows Authentication: native Windows-service deploy on the host.
         odbc_parts.append("Trusted_Connection=yes")
+    # Encryption flags flow from the connection string (the single source of truth), normalized to
+    # the ODBC yes/no spelling. When unset, the ODBC driver's default applies (Driver 17 => no
+    # encryption); turning encryption on end-to-end is a separate cross-service posture decision.
+    if db_cfg.get("encrypt") is not None:
+        odbc_parts.append(f"Encrypt={_odbc_bool(db_cfg['encrypt'])}")
+    if db_cfg.get("trust_cert") is not None:
+        odbc_parts.append(f"TrustServerCertificate={_odbc_bool(db_cfg['trust_cert'])}")
     odbc_str = ";".join(odbc_parts) + ";"
     conn_url = f"mssql+pyodbc:///?odbc_connect={urllib.parse.quote_plus(odbc_str)}"
     return create_engine(conn_url)

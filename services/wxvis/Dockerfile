@@ -42,6 +42,21 @@ RUN apt-get update \
 COPY WxServices/src/WxVis/requirements.txt /tmp/requirements.txt
 RUN pip3 install --no-cache-dir --break-system-packages -r /tmp/requirements.txt
 
+# matplotlib and cartopy need a writable HOME for their font/config caches and cartopy's Natural
+# Earth data. Point HOME at a dedicated writable dir owned by the runtime user (the /opt/wxservices
+# WORKDIR below is root-owned and read-only to this UID); MPLCONFIGDIR pins matplotlib's cache there.
+ENV HOME=/var/cache/wxvis
+ENV MPLCONFIGDIR=/var/cache/wxvis/matplotlib
+# Pre-bake cartopy's 50m Natural Earth data - the only scale the WxVis scripts use (LAND, OCEAN,
+# LAKES, COASTLINE, BORDERS, STATES, RIVERS) - so the first render does not depend on a runtime
+# download from naturalearth.s3.amazonaws.com (which would otherwise re-fetch on every recreate and
+# fail when the host is offline). Placed right after the pip layer it depends on and BEFORE the app
+# COPY, so Docker caches it across code changes instead of re-downloading on every source edit. Runs
+# as root with HOME set, then chowns the cache tree so the runtime UID can read it.
+RUN mkdir -p "$MPLCONFIGDIR" \
+    && python3 -c "import cartopy.feature as c; [list(f.with_scale('50m').geometries()) for f in (c.LAND, c.OCEAN, c.LAKES, c.COASTLINE, c.BORDERS, c.STATES, c.RIVERS)]" \
+    && chown -R 1000:1000 /var/cache/wxvis
+
 WORKDIR /opt/wxservices
 COPY --from=build /app .
 # The WxVis Python scripts live at InstallRoot/WxVis (WxPaths.WxVisDir); the .NET workers shell out
@@ -53,22 +68,6 @@ COPY WxServices/src/WxVis /opt/wxservices/WxVis
 # plots output dir to this Linux root instead of the appsettings.shared.json C:\HarderWare default.
 ENV WXSERVICES_INSTALL_ROOT=/opt/wxservices
 ENV DOTNET_RUNNING_IN_CONTAINER=true
-
-# matplotlib and cartopy need a writable HOME for their font/config caches and cartopy's Natural
-# Earth data. /opt/wxservices is root-owned (COPY) and read-only to this UID, so point HOME at a
-# dedicated writable dir owned by the runtime user. MPLCONFIGDIR pins matplotlib's cache there too
-# (otherwise it warns and falls back to a temp dir each run).
-ENV HOME=/var/cache/wxvis
-ENV MPLCONFIGDIR=/var/cache/wxvis/matplotlib
-# Pre-bake cartopy's 50m Natural Earth data - the only scale the WxVis scripts use (LAND, OCEAN,
-# LAKES, COASTLINE, BORDERS, STATES, RIVERS) - so the first render does not depend on a runtime
-# download from naturalearth.s3.amazonaws.com. Without this, cartopy fetches the shapefiles lazily
-# on first render into this (container-local, non-volume) cache and re-fetches them on every
-# recreate, so a recreate while the host is offline would fail the first renders. The download runs
-# as root with HOME set, then the cache tree is chown'd so the runtime UID can read it.
-RUN mkdir -p "$MPLCONFIGDIR" \
-    && python3 -c "import cartopy.feature as c; [list(f.with_scale('50m').geometries()) for f in (c.LAND, c.OCEAN, c.LAKES, c.COASTLINE, c.BORDERS, c.STATES, c.RIVERS)]" \
-    && chown -R 1000:1000 /var/cache/wxvis
 
 # Least privilege: drop from root to an unprivileged UID (matches the other service images).
 USER 1000:1000
