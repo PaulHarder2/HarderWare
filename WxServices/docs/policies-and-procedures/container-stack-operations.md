@@ -32,7 +32,8 @@ The four services never talk to each other directly — they coordinate through 
 Each service container carries **`restart: unless-stopped`** (`services/docker-compose.yml`). This means
 the Docker engine restarts the container:
 
-- when it **crashes or exits** non-zero, and
+- when it **stops for any reason** — a crash, an error, or even a clean exit (`unless-stopped`
+  ignores the exit code, unlike `on-failure` which restarts only on a non-zero exit), and
 - when the **engine itself starts** (e.g. after a host reboot + Docker Desktop autostart),
 
 **unless** it was **explicitly stopped** (`docker compose stop`). That's the one deliberate exception:
@@ -116,8 +117,8 @@ On a host reboot:
 1. Windows **auto-login** signs in unattended (no one at the keyboard).
 2. That fires Docker Desktop's autostart → the **engine** comes up (this can take several minutes on
    a congested boot while security/OEM services contend for CPU — it does come up).
-3. The engine restarts every `restart: unless-stopped` container → **all four services + the
-   observability stack return**, no `docker compose up` needed.
+3. The engine restarts every `restart: unless-stopped` container → **all four services return**
+   (and the observability trio too, already `unless-stopped` since WX-16), no `docker compose up` needed.
 
 **Verify after a reboot** (no manual action first):
 
@@ -128,8 +129,11 @@ docker inspect --format '{{.Name}} {{.State.Status}}' \
   services-wxmonitor-1 services-wxreport-1 services-wxvis-1 services-wxparser-1
 ```
 
-Then confirm the forecasting stack actually resumed: a fresh report cycle in `wxreport-svc.log`, and
-recent `wxparser-heartbeat.txt` / `wxreport-heartbeat.txt` mtimes.
+Then confirm the forecasting stack actually resumed: fresh activity in each service log under
+`{InstallRoot}\Logs` — `wxmonitor-svc.log`, `wxparser-svc.log`, `wxreport-svc.log`, `wxvis-svc.log`
+(e.g. a new report cycle in `wxreport-svc.log`) — plus recent mtimes on the heartbeat files that
+exist (`wxparser-heartbeat.txt`, `wxreport-heartbeat.txt`; WxMonitor/WxVis don't emit one yet — that
+comes with the WX-68 Unit 2 healthchecks).
 
 **If a service did NOT come back:**
 
