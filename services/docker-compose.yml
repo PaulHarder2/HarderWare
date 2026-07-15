@@ -88,3 +88,21 @@ services:
       # WxManager/WxViewer read them too. Source = host InstallRoot\plots, via WX_HOST_PLOTS_DIR.
       - ${WX_HOST_PLOTS_DIR:-C:/HarderWare/plots}:/opt/wxservices/plots:rw
     # restart policy + healthcheck are deliberately OUT OF SCOPE here - WX-68 (Step 6) owns them.
+
+  wxparser:
+    build:
+      context: ..                                  # build context = HarderWare repo root (same for all 4 services)
+      dockerfile: services/wxparser/Dockerfile
+    image: wxparser:dev                            # image tag; a real OpRegion pins a versioned tag later
+    extra_hosts:
+      - "host.docker.internal:host-gateway"        # guarantees the host is reachable by that name on any Docker engine
+    volumes:
+      # CONFIG door: DB connection string (+ SQL login) and OTel endpoint, plus the in-container wgrib2
+      # path (Gfs:Wgrib2Path -> /usr/local/bin/wgrib2). Injected READ-ONLY; the real file is gitignored -
+      # commit only appsettings.local.json.example beside this compose.
+      - ./wxparser/appsettings.local.json:/opt/wxservices/appsettings.local.json:ro
+      # STORAGE door: log + heartbeat bind mount, shared with the native WxManager/WxMonitor readers.
+      - ${WX_HOST_LOGS_DIR:-C:/HarderWare/Logs}:/opt/wxservices/Logs:rw
+      # No plots/temp mount: WxParser writes GRIB download/extract scratch to the ephemeral in-container
+      # /opt/wxservices/temp (created writable in the Dockerfile), cleaned up after each fetch cycle.
+    # restart policy + healthcheck are deliberately OUT OF SCOPE here - WX-68 (Step 6) owns them.

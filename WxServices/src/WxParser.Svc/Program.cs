@@ -34,7 +34,13 @@ var host = Host.CreateDefaultBuilder(args)
     {
         cfg.SetBasePath(AppContext.BaseDirectory)
            .AddJsonFile("appsettings.shared.json", optional: false, reloadOnChange: true)
-           .AddJsonFile(new PhysicalFileProvider(installRoot), "appsettings.local.json", optional: true, reloadOnChange: true);
+           .AddJsonFile(new PhysicalFileProvider(installRoot), "appsettings.local.json", optional: true, reloadOnChange: true)
+           // Single source of truth for InstallRoot (WX-66, same fix WX-64/65 applied to the other
+           // services): FetchWorker/GfsFetchWorker resolve the heartbeat and the GRIB temp dir via
+           // IConfiguration["InstallRoot"]. Without this that key stays the shared-config C:\HarderWare,
+           // so in the container they land under a non-existent Windows path. Must come last so it wins.
+           // No-op on Windows (same value).
+           .AddInstallRoot(installRoot);
     })
     .ConfigureServices((ctx, services) =>
     {
