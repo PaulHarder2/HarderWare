@@ -41,7 +41,7 @@ services:
       # WX_HOST_LOGS_DIR (default C:/HarderWare/Logs) so a non-default InstallRoot still matches
       # where native components look. From WSL the path would be /mnt/c/... - see the walkthrough.
       - ${WX_HOST_LOGS_DIR:-C:/HarderWare/Logs}:/opt/wxservices/Logs:rw
-    # restart policy + healthcheck are deliberately OUT OF SCOPE here - WX-68 (Step 6) owns them.
+    restart: unless-stopped                        # WX-68: the engine restarts this on crash AND on reboot (Docker Desktop autostarts the engine at login, then restarts unless-stopped containers) - this is the auto-recovery gap fix. Compose healthcheck is added in WX-68 Unit 2 (needs heartbeats on WxMonitor/WxVis first).
 
   wxreport:
     build:
@@ -67,7 +67,7 @@ services:
       # review packages under InstallRoot\translation-qa; mount it so those land on the host, not in
       # the ephemeral container layer.
       - ${WX_HOST_QA_DIR:-C:/HarderWare/translation-qa}:/opt/wxservices/translation-qa:rw
-    # restart policy + healthcheck are deliberately OUT OF SCOPE here - WX-68 (Step 6) owns them.
+    restart: unless-stopped                        # WX-68: the engine restarts this on crash AND on reboot (Docker Desktop autostarts the engine at login, then restarts unless-stopped containers) - this is the auto-recovery gap fix. Compose healthcheck is added in WX-68 Unit 2 (needs heartbeats on WxMonitor/WxVis first).
 
   wxvis:
     build:
@@ -87,7 +87,7 @@ services:
       # into WxPaths.PlotsDir. WxReport (WX-64) mounts this SAME host dir READ-ONLY to inline them, and
       # WxManager/WxViewer read them too. Source = host InstallRoot\plots, via WX_HOST_PLOTS_DIR.
       - ${WX_HOST_PLOTS_DIR:-C:/HarderWare/plots}:/opt/wxservices/plots:rw
-    # restart policy + healthcheck are deliberately OUT OF SCOPE here - WX-68 (Step 6) owns them.
+    restart: unless-stopped                        # WX-68: the engine restarts this on crash AND on reboot (Docker Desktop autostarts the engine at login, then restarts unless-stopped containers) - this is the auto-recovery gap fix. Compose healthcheck is added in WX-68 Unit 2 (needs heartbeats on WxMonitor/WxVis first).
 
   wxparser:
     build:
@@ -105,4 +105,4 @@ services:
       - ${WX_HOST_LOGS_DIR:-C:/HarderWare/Logs}:/opt/wxservices/Logs:rw
       # No plots/temp mount: WxParser writes GRIB download/extract scratch to the ephemeral in-container
       # /opt/wxservices/temp (created writable in the Dockerfile), cleaned up after each fetch cycle.
-    # restart policy + healthcheck are deliberately OUT OF SCOPE here - WX-68 (Step 6) owns them.
+    restart: unless-stopped                        # WX-68: the engine restarts this on crash AND on reboot (Docker Desktop autostarts the engine at login, then restarts unless-stopped containers) - this is the auto-recovery gap fix. Compose healthcheck is added in WX-68 Unit 2 (needs heartbeats on WxMonitor/WxVis first).
