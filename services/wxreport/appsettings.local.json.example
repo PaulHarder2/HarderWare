@@ -1,0 +1,43 @@
+{
+  "_README": [
+    "TEMPLATE for services/wxreport/appsettings.local.json (the REAL file is gitignored).",
+    "Copy this file to 'appsettings.local.json' in THIS folder and fill the <...> placeholders",
+    "(the SQL password lives in RoboForm). docker-compose.yml bind-mounts the real file READ-ONLY",
+    "into the container at /opt/wxservices/appsettings.local.json.",
+    "",
+    "The service loads appsettings.shared.json (baked into the image) FIRST, then this file on",
+    "top, last-value-wins. So this carries ONLY the keys that must DIFFER for a container: the",
+    "database doorway (+ SQL login) and the telemetry endpoint. Everything else - Claude model,",
+    "report cadence, glossary - comes from shared. WxReport's secrets (SMTP username/password/",
+    "from-address, the Claude API key, the Gemini key) are read from the GlobalSettings DATABASE",
+    "row, NOT from here, so no API keys belong in this file.",
+    "",
+    "InstallRoot is NOT set here: it is resolved solely by WxPaths.ReadInstallRoot() (the",
+    "WXSERVICES_INSTALL_ROOT env var the Dockerfile sets), and WX-64 projects that one value into",
+    "IConfiguration[\"InstallRoot\"]. Setting it here would be ignored.",
+    "",
+    "Keys beginning with underscore are documentation; the .NET config binder ignores them."
+  ],
+
+  "ConnectionStrings": {
+    "_README": [
+      "Container override. Reach the host's SQL Server via host.docker.internal,1433 (proven in",
+      "WX-67) instead of the shared config's Server=.\\SQLEXPRESS. Use SQL authentication with the",
+      "'wxservices' login - scoped to db_owner on WeatherData ONLY (the minimum for the",
+      "migrate-on-startup design: EnsureSchemaAsync runs MigrateAsync, which needs DDL rights). A",
+      "Linux container has no Windows identity, so Trusted_Connection can't work here."
+    ],
+    "WeatherData": "Server=host.docker.internal,1433;Database=WeatherData;User Id=wxservices;Password=<WXSERVICES_SQL_PASSWORD>;TrustServerCertificate=True;"
+  },
+
+  "Telemetry": {
+    "_README": [
+      "Container override. The OTel collector is reached at the host's PUBLISHED 4318 port; the",
+      "shared config's http://localhost:4318 would resolve to the container itself. Include the",
+      "full signal path (/v1/metrics). Enabled is set explicitly here (shared config also sets it",
+      "true) so a copied config can't silently disable metrics - AddWxTelemetry exports only when true."
+    ],
+    "Enabled": true,
+    "OtlpEndpoint": "http://host.docker.internal:4318/v1/metrics"
+  }
+}

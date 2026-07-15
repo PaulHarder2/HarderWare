@@ -11,9 +11,9 @@
 
 .PARAMETER ServiceName
     The service or application to deploy, or 'all' to deploy everything:
-    WxVis Python scripts first, then the three Windows services
-    (WxParserSvc, WxReportSvc, WxVisSvc), then WxMonitorSvc as a Docker
-    container (services/docker-compose.yml), then WxManager and WxViewer.
+    WxVis Python scripts first, then the Windows services (WxParserSvc,
+    WxVisSvc), then WxReportSvc and WxMonitorSvc as Docker containers
+    (services/docker-compose.yml), then WxManager and WxViewer.
 
 .EXAMPLE
     .\Deploy-WxService.ps1 WxReportSvc
@@ -28,7 +28,7 @@ param(
     [ValidateSet('WxParserSvc', 'WxReportSvc', 'WxMonitorSvc', 'WxVisSvc', 'WxViewer', 'WxManager', 'WxVis', 'all')]
     [string]$ServiceName,
 
-    # Seconds to wait for the WxMonitor container to log "Application started" before FAIL.
+    # Seconds to wait for a containerized service to log "Application started" before FAIL.
     # Aligns with the DB startup-retry budget (~5 min, Database:StartupRetry); raise for a slow cold start.
     [ValidateRange(1, [int]::MaxValue)]
     [int]$StartupTimeoutSec = 300
@@ -56,11 +56,11 @@ Write-Host "Solution root: $SolutionRoot"
 Write-Host "Install root:  $InstallRoot"
 Write-Host ""
 
-# WxMonitorSvc is deployed as a Docker container (Invoke-MonitorContainerDeploy),
-# not a Windows service, so it is intentionally absent from this Windows-service map.
+# WxMonitorSvc (WX-63) and WxReportSvc (WX-64) deploy as Docker containers
+# via Invoke-ContainerDeploy, not Windows services, so they are intentionally
+# absent from this Windows-service map.
 $ServiceMap = [ordered]@{
     'WxParserSvc'  = 'WxParser.Svc'
-    'WxReportSvc'  = 'WxReport.Svc'
     'WxVisSvc'     = 'WxVis.Svc'
 }
 
@@ -233,25 +233,34 @@ function Invoke-ServiceDeploy {
 }
 
 # ---------------------------------------------------------------------------
-# Deploy WxMonitor as a Docker container (services/docker-compose.yml) instead of a
-# Windows service. The Windows-service path (Invoke-ServiceDeploy) does not apply:
-# there is no sc.exe service to stop/config/start, no publish-to-folder (the binary is
-# baked into the image), and verification is docker-based (the Hosting.Lifetime
-# "Application started" banner) rather than Get-Service. Deploy-history logging is
-# identical - same Write-DeployLog, same 'WxMonitorSvc' component label, version, and
-# git commit - so the verify scripts that grep deploy-history.log keep working.
+# Deploy a headless WxService as a Docker container (services/docker-compose.yml) instead of a
+# Windows service. The Windows-service path (Invoke-ServiceDeploy) does not apply: there is no
+# sc.exe service to stop/config/start, no publish-to-folder (the binary is baked into the image),
+# and verification is docker-based (the Hosting.Lifetime "Application started" banner) rather than
+# Get-Service. Deploy-history logging is identical - same Write-DeployLog, same component label,
+# version, and git commit - so the verify scripts that grep deploy-history.log keep working.
+#
+# Generic over the compose service (WX-63 WxMonitor established it; WX-64 WxReport made it the
+# second caller and motivated the extraction; WX-65/66 reuse it). $ComposeService is the
+# docker-compose service name (e.g. 'wxmonitor', 'wxreport'); $DeployApp is the deploy-history
+# component label (e.g. 'WxMonitorSvc').
 # ---------------------------------------------------------------------------
-function Invoke-MonitorContainerDeploy {
+function Invoke-ContainerDeploy {
+    param(
+        [Parameter(Mandatory)][string]$ComposeService,
+        [Parameter(Mandatory)][string]$DeployApp
+    )
+
     # services/ lives at the HarderWare repo root (a sibling of WxServices), NOT under $SolutionRoot
     # (which is the WxServices dir where this script sits). Resolve to the repo-root services/.
     $repoRoot    = Split-Path $SolutionRoot -Parent
     $composeDir  = "$repoRoot\services"
-    $localConfig = "$composeDir\wxmonitor\appsettings.local.json"
+    $localConfig = "$composeDir\$ComposeService\appsettings.local.json"
 
     # Prereq: Docker Desktop reachable.
     docker info *> $null
     if ($LASTEXITCODE -ne 0) {
-        Write-Error "Docker is not reachable (is Docker Desktop running?). Cannot deploy the WxMonitor container."
+        Write-Error "Docker is not reachable (is Docker Desktop running?). Cannot deploy the $ComposeService container."
         return $false
     }
 
@@ -269,13 +278,17 @@ function Invoke-MonitorContainerDeploy {
         # Build the image from current source and (re)create the container. | Out-Host
         # keeps docker output on the console but OUT of the success stream (PS 5.x: a
         # polluted stream turns the bool return into an always-truthy array).
-        # Point the compose log bind-mount at the resolved host InstallRoot\Logs (forward slashes
+        # Point the compose bind-mounts at the resolved host InstallRoot subdirs (forward slashes
         # for Docker Desktop) so a non-default InstallRoot still matches where native components look.
-        $env:WX_HOST_LOGS_DIR = (Join-Path $InstallRoot 'Logs') -replace '\\', '/'
-        Write-Host "Building and starting the wxmonitor container..."
-        docker compose up -d --build wxmonitor | Out-Host
+        # All WX_HOST_* are set for every service; each compose service uses only the ones it mounts
+        # (wxmonitor: Logs; wxreport: Logs + plots + translation-qa).
+        $env:WX_HOST_LOGS_DIR  = (Join-Path $InstallRoot 'Logs')           -replace '\\', '/'
+        $env:WX_HOST_PLOTS_DIR = (Join-Path $InstallRoot 'plots')          -replace '\\', '/'
+        $env:WX_HOST_QA_DIR    = (Join-Path $InstallRoot 'translation-qa') -replace '\\', '/'
+        Write-Host "Building and starting the $ComposeService container..."
+        docker compose up -d --build $ComposeService | Out-Host
         if ($LASTEXITCODE -ne 0) {
-            Write-Error "docker compose up failed for wxmonitor (exit code $LASTEXITCODE)."
+            Write-Error "docker compose up failed for $ComposeService (exit code $LASTEXITCODE)."
             return $false
         }
 
@@ -284,7 +297,7 @@ function Invoke-MonitorContainerDeploy {
         # container's logs) can't be mistaken for success. The timeout matches the DB startup-retry
         # budget (Database:StartupRetry in appsettings.shared.json sums to ~5 min): a cold SQL Server
         # can legitimately delay EnsureSchemaAsync well past 30s, so a shorter deadline false-FAILs.
-        $containerId = (docker compose ps -q wxmonitor 2>$null | Select-Object -First 1)
+        $containerId = (docker compose ps -q $ComposeService 2>$null | Select-Object -First 1)
         Write-Host "Verifying the container reached 'Application started' (up to ${StartupTimeoutSec}s)..."
         $deadline = [DateTime]::UtcNow.AddSeconds($StartupTimeoutSec)
         while ($containerId -and [DateTime]::UtcNow -lt $deadline) {
@@ -298,11 +311,11 @@ function Invoke-MonitorContainerDeploy {
         Pop-Location
     }
 
-    Write-DeployLog -App 'WxMonitorSvc' -Result $(if ($started) { 'OK' } else { 'FAIL' })
+    Write-DeployLog -App $DeployApp -Result $(if ($started) { 'OK' } else { 'FAIL' })
     if ($started) {
-        Write-Host "wxmonitor container deployed and verified (Application started)." -ForegroundColor Green
+        Write-Host "$ComposeService container deployed and verified (Application started)." -ForegroundColor Green
     } else {
-        Write-Warning "wxmonitor container did not reach 'Application started' within ${StartupTimeoutSec}s. Check: docker compose logs wxmonitor (from $composeDir)."
+        Write-Warning "$ComposeService container did not reach 'Application started' within ${StartupTimeoutSec}s. Check: docker compose logs $ComposeService (from $composeDir)."
     }
     return $started
 }
@@ -413,8 +426,13 @@ if ($ServiceName -eq 'WxVis') {
     exit $(if ($ok) { 0 } else { 1 })
 }
 
+if ($ServiceName -eq 'WxReportSvc') {
+    $ok = Invoke-ContainerDeploy -ComposeService 'wxreport' -DeployApp 'WxReportSvc'
+    exit $(if ($ok) { 0 } else { 1 })
+}
+
 if ($ServiceName -eq 'WxMonitorSvc') {
-    $ok = Invoke-MonitorContainerDeploy
+    $ok = Invoke-ContainerDeploy -ComposeService 'wxmonitor' -DeployApp 'WxMonitorSvc'
     exit $(if ($ok) { 0 } else { 1 })
 }
 
@@ -434,10 +452,18 @@ if ($ServiceName -eq 'all') {
         }
     }
 
+    # WxReport deploys as a container (WX-64), after the Windows services that feed its DB + plots.
+    Write-Host ""
+    Write-Host "=== WxReportSvc (container) ===" -ForegroundColor Cyan
+    if (-not (Invoke-ContainerDeploy -ComposeService 'wxreport' -DeployApp 'WxReportSvc')) {
+        Write-Warning "Stopping 'all' deploy due to failure in WxReportSvc."
+        exit 1
+    }
+
     # WxMonitor deploys as a container, after the Windows services it watches.
     Write-Host ""
     Write-Host "=== WxMonitorSvc (container) ===" -ForegroundColor Cyan
-    if (-not (Invoke-MonitorContainerDeploy)) {
+    if (-not (Invoke-ContainerDeploy -ComposeService 'wxmonitor' -DeployApp 'WxMonitorSvc')) {
         Write-Warning "Stopping 'all' deploy due to failure in WxMonitorSvc."
         exit 1
     }
