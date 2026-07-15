@@ -310,7 +310,6 @@ function Show-DeploySummary {
     Write-Host "=== Deployment summary ===" -ForegroundColor Cyan
     foreach ($r in $Results) {
         $detail = switch ($r.Kind) {
-            'service'   { if ($r.Ok) { 'Running' }             else { 'NOT Running' } }
             'container' { if ($r.Ok) { 'Application started' } else { 'did NOT start' } }
             default     { if ($r.Ok) { 'published' }           else { 'publish FAILED' } }
         }

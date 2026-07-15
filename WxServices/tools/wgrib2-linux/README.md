@@ -20,10 +20,11 @@ sub-grid via `wgrib2`. `GribParser/GribExtractor.cs` shells out to it twice per 
 1. `wgrib2 <in> -small_grib <lon0:lon1> <lat0:lat1> <out>` — crop to the bounding box, then
 2. `wgrib2 <sub> -csv <out.csv>` — emit the sub-grid as CSV, which the parser reads into `GfsGrid`.
 
-The **native Windows service** uses NOAA's Windows `wgrib2.exe` at `{InstallRoot}\wgrib2\wgrib2.exe`
-(WX-33 moved off the old WSL-invoked build). The **Linux container** needs a Linux `wgrib2` — and
+The **Linux container is the deployment path** (WX-66; all four services are containers, WX-7) — and
 `wgrib2` is **not in Debian's apt repos**, so we bundle this prebuilt binary. The WxParser Dockerfile
-copies it in and points `Gfs:Wgrib2Path` at it.
+copies it in and points `Gfs:Wgrib2Path` at it. The **native Windows service** — now only a
+reversible/manual fallback — used NOAA's Windows `wgrib2.exe` at `{InstallRoot}\wgrib2\wgrib2.exe`
+(WX-33 moved off the old WSL-invoked build); that host executable is not used by the container.
 
 ## ⚠️ Why bookworm (the glibc trap)
 

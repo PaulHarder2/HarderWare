@@ -1217,20 +1217,19 @@ The Recipients tab's **Locality** control is a single editable ComboBox doing do
 **System prerequisites:**
 | Prerequisite | Notes |
 |---|---|
-| wgrib2 | NOAA native Windows build; default path `{InstallRoot}\wgrib2\wgrib2.exe` resolved via `WxPaths.Wgrib2DefaultPath`. Overrideable via `Gfs:Wgrib2Path`. |
+| wgrib2 | The WxParser container bundles a Linux `wgrib2` binary (`services/wxparser`, from `tools/wgrib2-linux/`) at `/usr/local/bin/wgrib2`. The NOAA native Windows build at `{InstallRoot}\wgrib2\wgrib2.exe` (`WxPaths.Wgrib2DefaultPath`) is the reversible native-service fallback. Overrideable via `Gfs:Wgrib2Path`. |
 
 ---
 
 ## 9. Installation and Deployment
 
 ### Prerequisites
-- Windows 10/11 (64-bit) — services run via `UseWindowsService` (WxMonitor runs as a Docker container; its binary keeps `UseWindowsService` for the reversible Windows-service fallback)
+- Windows 10/11 (64-bit) — WxManager/WxViewer run natively; the four headless services run as Docker containers (their binaries keep `UseWindowsService` only as a reversible fallback)
 - .NET 8 runtime
 - SQL Server Express (or higher); default instance name `SQLEXPRESS`
 - Gmail account with an App Password configured for SMTP
-- NOAA native Windows `wgrib2.exe` installed at `{InstallRoot}\wgrib2\wgrib2.exe` (Cygwin-based build; ships with `cygwin1.dll`)
-- Miniconda with the wxvis conda environment (for map rendering)
-- Docker Desktop (optional, for Prometheus + Grafana observability)
+- **Docker Desktop — required:** all four headless services (WxParser/WxVis/WxReport/WxMonitor) run as containers, and it also hosts the Prometheus + Grafana observability stack (see *Containerized deployment (WX-7)*)
+- NOAA native Windows `wgrib2.exe` (at `{InstallRoot}\wgrib2\wgrib2.exe`, Cygwin-based, ships `cygwin1.dll`) and Miniconda with the wxvis conda environment — needed **only** for the reversible native-service fallback; the containers bundle their own `wgrib2` and Python/matplotlib/cartopy stacks
 
 ### Installer
 
@@ -1239,7 +1238,7 @@ The Recipients tab's **Locality** control is a single editable ComboBox doing do
 1. Run `.\Build-Release.ps1` to publish all components into the `release\` staging directory. The script reads the product version from `Directory.Build.props` and prints the ISCC command to run.
 2. Compile the `.iss` script with Inno Setup: `ISCC.exe /DAppVer=1.0.0 HarderWare_WxServices.iss` (use the version printed by the build script).
 
-The installer copies files to the chosen directory (default `C:\HarderWare`), registers no Windows services — all four headless services (WxParser/WxVis/WxReport/WxMonitor) run as Docker containers per *Containerized deployment (WX-7)*, updates `InstallRoot` in `appsettings.shared.json` to match the install path, creates Start Menu and optional desktop shortcuts, and launches WxManager for first-run configuration.  Docker Desktop is a prerequisite for all four containerized services; the containerized WxVis carries its own Python + matplotlib/cartopy stack, so a host Miniconda/conda install is **not** required to run the system (it remains the render reference used for version pinning — see *Containerized deployment (WX-7)*).  Uninstall stops and removes the services.
+The installer copies files to the chosen directory (default `C:\HarderWare`), registers no Windows services — all four headless services (WxParser/WxVis/WxReport/WxMonitor) run as Docker containers per *Containerized deployment (WX-7)*, updates `InstallRoot` in `appsettings.shared.json` to match the install path, creates Start Menu and optional desktop shortcuts, and launches WxManager for first-run configuration.  Docker Desktop is a prerequisite for all four containerized services; the containerized WxVis carries its own Python + matplotlib/cartopy stack, so a host Miniconda/conda install is **not** required to run the system (it remains the render reference used for version pinning — see *Containerized deployment (WX-7)*).  Uninstall stops and removes the four Docker containers (no Windows services are registered to remove).
 
 ### Developer deploy script
 
@@ -1258,7 +1257,7 @@ Valid names: `WxParserSvc`, `WxReportSvc`, `WxMonitorSvc`, `WxVisSvc`, `WxViewer
 
 `all` deploys the WxParser, WxVis, WxReport, and WxMonitor containers (see *Containerized deployment (WX-7)* below), then WxManager and WxViewer, printing a consolidated status summary at the end.
 
-Each service is verified at its own deploy step — a Windows service must reach **Running**, and a containerized service must log the `Application started` banner — before that step reports success; any failure exits non-zero there (there is no separate final consolidated re-check).  Once a step reaches its verify it appends one timestamped line to `{InstallRoot}\Logs\deploy-history.log` — UTC time, product version, and git short SHA, in the services' log4net format so the deploy timeline reads alongside the `wx*-svc.log` files — `OK` if it verified, `FAIL` if it started but did not stay up.  A hard failure *before* that point (a missing prerequisite, or a failed build/publish) aborts the deploy and writes no line.  The deploy-history logging is itself best-effort: a logging failure is reported as a warning but never aborts the deploy.
+Each component is verified at its own deploy step — a containerized service must log the `Application started` banner, and a published app (WxManager/WxViewer) must publish successfully — before that step reports success; any failure exits non-zero there (there is no separate final consolidated re-check).  Once a step reaches its verify it appends one timestamped line to `{InstallRoot}\Logs\deploy-history.log` — UTC time, product version, and git short SHA, in the services' log4net format so the deploy timeline reads alongside the `wx*-svc.log` files — `OK` if it verified, `FAIL` if it started but did not stay up.  A hard failure *before* that point (a missing prerequisite, or a failed build/publish) aborts the deploy and writes no line.  The deploy-history logging is itself best-effort: a logging failure is reported as a warning but never aborts the deploy.
 
 ### Containerized deployment (WX-7)
 
