@@ -18,6 +18,9 @@ docker run --rm -v "$HERE":/out debian:bookworm bash -c '
   apt-get install -y -qq build-essential gfortran cmake wget file
   cd /tmp
   wget -q https://www.ftp.cpc.ncep.noaa.gov/wd51we/wgrib2/wgrib2.tgz
+  # This is NOAA rolling "latest" (not version-pinned) - log the checksum so a rebuild is at least
+  # traceable to what it fetched. Deterministic pinning (fixed URL + verified checksum) is WX-296.
+  echo "fetched wgrib2.tgz: $(sha256sum wgrib2.tgz | cut -c1-16)... ($(stat -c%s wgrib2.tgz) bytes)"
   tar xf wgrib2.tgz
   cd grib2
   # Full build: bundles jasper/libpng/libaec statically (so decode covers GFS packing) and leaves
