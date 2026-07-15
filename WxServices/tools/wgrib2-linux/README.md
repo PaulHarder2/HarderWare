@@ -61,7 +61,9 @@ packing). Confirm the current deps any time with `ldd wgrib2`.
 After `./build.sh`, confirm it actually runs on the runtime base — not just wherever it was built:
 
 ```bash
-docker run --rm -v "$PWD":/t:ro debian:bookworm-slim \
+# --platform=linux/amd64 so this exercises the x86-64 binary even on an ARM host
+# (without it, debian:bookworm-slim pulls arm64 and the binary fails "Exec format error").
+docker run --rm --platform=linux/amd64 -v "$PWD":/t:ro debian:bookworm-slim \
   bash -c 'apt-get update -qq && apt-get install -y libgfortran5 libgomp1 >/dev/null && /t/wgrib2 -version'
 ```
 

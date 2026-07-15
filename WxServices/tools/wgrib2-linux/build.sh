@@ -35,5 +35,5 @@ docker run --rm -v "$HERE":/out debian:bookworm bash -c '
 echo ""
 echo "Rebuilt: $HERE/wgrib2"
 echo "Now verify it runs on the runtime base (not just wherever it built):"
-echo "  docker run --rm -v \"$HERE\":/t:ro debian:bookworm-slim \\"
+echo "  docker run --rm --platform=linux/amd64 -v \"$HERE\":/t:ro debian:bookworm-slim \\"
 echo "    bash -c 'apt-get update -qq && apt-get install -y libgfortran5 libgomp1 >/dev/null && /t/wgrib2 -version'"
