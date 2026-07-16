@@ -1,12 +1,17 @@
 using System.Text;
 
+using WxServices.Common;
 using WxServices.Logging;
 
 namespace WxMonitor.Svc.Watchers;
 
 /// <summary>
-/// Checks each watched service's heartbeat file and raises a finding when the heartbeat is older
-/// than the service's configured maximum age (the service may be stopped, crashed, or hung).
+/// Checks every registered worker's heartbeat file and raises a finding when a heartbeat is older than
+/// that worker's registered maximum age (the worker may be stopped, crashed, or hung). The watch-set is
+/// the shared <see cref="WxWorkers.All"/> registry — the same source each worker derives its own
+/// heartbeat filename from — so the writer and this reader can never disagree about a name (the WX-106
+/// blind-spot class, closed at the worker grain in WX-68 Unit 2). The monitor's OWN service is skipped:
+/// a worker cannot report its own death, so wxmonitor self-liveness is left to the container healthcheck.
 /// </summary>
 public sealed class HeartbeatWatcher : IWatcher
 {
@@ -18,47 +23,50 @@ public sealed class HeartbeatWatcher : IWatcher
     {
         var findings = new List<Finding>();
 
-        foreach (var svc in ctx.Config.WatchedServices)
+        foreach (var worker in WxWorkers.All)
         {
-            if (string.IsNullOrWhiteSpace(svc.Name) || string.IsNullOrWhiteSpace(svc.HeartbeatFile))
+            // The monitor can't meaningfully watch its own heartbeat — if its cycle is dead it isn't
+            // running to notice. wxmonitor self-liveness is the container healthcheck's job.
+            if (worker.Service == WxServiceToken.WxMonitor)
                 continue;
 
-            var age = HeartbeatChecker.GetAge(svc.HeartbeatFile);
+            var path = ctx.Paths.HeartbeatFile(worker);
+            var age = HeartbeatChecker.GetAge(path);
 
             if (age is null)
             {
-                Logger.Warn($"{svc.Name}: heartbeat file not found at '{svc.HeartbeatFile}'.");
+                Logger.Warn($"{worker.Token}: heartbeat file not found at '{path}'.");
                 continue;
             }
 
-            if (age.Value.TotalMinutes > svc.HeartbeatMaxAgeMinutes)
+            if (age.Value.TotalMinutes > worker.DefaultMaxAgeMinutes)
             {
-                var svcState = ctx.State.GetOrCreate(svc.Name);
-                Logger.Warn($"{svc.Name}: heartbeat is {(int)age.Value.TotalMinutes} minute(s) old (max {svc.HeartbeatMaxAgeMinutes}).");
+                var workerState = ctx.State.GetOrCreate(worker.Token);
+                Logger.Warn($"{worker.Token}: heartbeat is {(int)age.Value.TotalMinutes} minute(s) old (max {worker.DefaultMaxAgeMinutes}).");
                 findings.Add(new Finding(
                     Id,
-                    $"[WxMonitor] {svc.Name} — service may be stopped",
-                    BuildBody(svc.Name, age.Value, svc.HeartbeatMaxAgeMinutes, ctx.UtcNow),
+                    $"[WxMonitor] {worker.Token} — worker may be stopped",
+                    BuildBody(worker.Token, age.Value, worker.DefaultMaxAgeMinutes, ctx.UtcNow),
                     ctx.NewCooldownSlot(
-                        () => svcState.LastHeartbeatAlertSentUtc,
-                        v => svcState.LastHeartbeatAlertSentUtc = v)));
+                        () => workerState.LastHeartbeatAlertSentUtc,
+                        v => workerState.LastHeartbeatAlertSentUtc = v)));
             }
         }
 
         return Task.FromResult<IReadOnlyList<Finding>>(findings);
     }
 
-    /// <summary>Builds the plain-text alert body explaining that a heartbeat has gone stale.</summary>
-    private static string BuildBody(string serviceName, TimeSpan age, int maxAgeMinutes, DateTime now)
+    /// <summary>Builds the plain-text alert body explaining that a worker's heartbeat has gone stale.</summary>
+    private static string BuildBody(string workerToken, TimeSpan age, int maxAgeMinutes, DateTime now)
     {
         var sb = new StringBuilder();
-        sb.AppendLine($"WxMonitor detected a stale heartbeat for {serviceName}.");
+        sb.AppendLine($"WxMonitor detected a stale heartbeat for {workerToken}.");
         sb.AppendLine();
         sb.AppendLine($"  Last heartbeat:  {(int)age.TotalMinutes} minute(s) ago");
         sb.AppendLine($"  Maximum allowed: {maxAgeMinutes} minute(s)");
         sb.AppendLine();
-        sb.AppendLine("This may indicate the service has stopped, crashed, or is hung.");
-        sb.AppendLine("Check the Windows Service Manager and the service log for details.");
+        sb.AppendLine("This may indicate the worker has stopped, crashed, or is hung.");
+        sb.AppendLine("Check the container status (docker ps) and the service log for details.");
         sb.AppendLine();
         AlertBody.AppendFooter(sb, now);
         return sb.ToString();

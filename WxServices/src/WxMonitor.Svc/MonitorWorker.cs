@@ -89,6 +89,12 @@ public sealed class MonitorWorker : BackgroundService
                 Logger.Error("Unhandled exception in monitor cycle.", ex);
             }
 
+            // Beat after every cycle (success OR handled fault) — the monitor is a heartbeat READER for the
+            // other services, but it needs its OWN heartbeat too: as a diagnostic breadcrumb (last-alive
+            // stamp if it dies) and as the input to its own container healthcheck. It does not watch this
+            // file itself — a worker cannot report its own death (WxWorkers.All is filtered to exclude it).
+            Heartbeat.Write(new WxPaths(_config["InstallRoot"]).HeartbeatFile(WxWorkers.Monitor));
+
             var intervalMinutes = _config.GetValue<int>("Monitor:IntervalMinutes", 5);
             if (intervalMinutes <= 0)
             {
@@ -187,15 +193,13 @@ public sealed class MonitorWorker : BackgroundService
         var paths = new WxPaths(_config["InstallRoot"]);
         foreach (var svc in monitor.WatchedServices)
         {
-            // WX-290/WX-106: resolve the ONE canonical token for this service and derive BOTH filenames
-            // from it, so the monitor reads exactly the files the service writes. Previously this derived
-            // "wxparser-svc" (Name.Replace(".","-")) for the heartbeat while WxParser wrote "wxparser-…",
-            // so the monitor was blind to the heartbeat. An explicit LogFile/HeartbeatFile in config still
-            // wins (the token derivation is only the default) — that override is the escape hatch for a
-            // non-standard or non-service watched target.
+            // WX-290/WX-106: resolve the ONE canonical token and derive the LOG path from it, so the
+            // log-scan watcher reads exactly the file the service writes. An explicit LogFile in config
+            // still wins — the escape hatch for a non-standard watched target. Heartbeats are no longer
+            // derived here: HeartbeatWatcher watches them per-worker from the WxWorkers registry (WX-68
+            // Unit 2), independent of this per-service log-scan list.
             var token = WxServiceToken.FromConfigName(svc.Name);
             if (string.IsNullOrEmpty(svc.LogFile)) svc.LogFile = paths.ServiceLogFile(token);
-            if (string.IsNullOrEmpty(svc.HeartbeatFile)) svc.HeartbeatFile = paths.HeartbeatFile(token);
         }
 
         var smtp = new SmtpConfig();

@@ -1,9 +1,9 @@
-// Anti-drift tests for the WX-290 canonical service token: the component that WRITES a service's
-// log/heartbeat and the monitor that READS them must resolve IDENTICAL paths, so the WX-106 heartbeat
-// blind spot — a writer/monitor filename divergence — cannot recur. Also pins that the derived
-// filenames are byte-identical to the pre-WX-290 names (no rename) and that unknown names still
-// normalize sensibly. Path separators differ by OS (CI is Linux), so filename assertions use
-// Path.GetFileName rather than a hardcoded separator.
+// Anti-drift tests for the WX-290 canonical service token: the component that WRITES a service's LOG
+// and the monitor that READS it must resolve IDENTICAL paths, so a writer/monitor filename divergence
+// (the WX-106 blind-spot class) cannot recur. Also pins the stable per-service log filenames and that
+// unknown names still normalize sensibly. Heartbeats moved to the per-worker WxWorkers registry in
+// WX-68 (WxWorkersTests pins those). Path separators differ by OS (CI is Linux), so filename
+// assertions use Path.GetFileName rather than a hardcoded separator.
 
 using System.IO;
 
@@ -34,25 +34,24 @@ public sealed class WxServiceTokenTests
     [InlineData(WxServiceToken.WxReport, "WxReport.Svc")]
     [InlineData(WxServiceToken.WxVis, "WxVis.Svc")]
     [InlineData(WxServiceToken.WxMonitor, "WxMonitor.Svc")]
-    public void WriterAndMonitorResolveIdenticalHeartbeatAndLogPaths(string writerToken, string configName)
+    public void WriterAndMonitorResolveIdenticalLogPaths(string writerToken, string configName)
     {
-        // WX-106 was exactly these two diverging (writer "wxparser-heartbeat.txt" vs monitor
-        // "wxparser-svc-heartbeat.txt"). Assert they cannot: writer side uses the constant, monitor side
-        // resolves from its config Name, and both land on the same file.
+        // The service LOG is the surface this token now protects: the service's own log init and the
+        // monitor's log-scan must resolve the SAME file. (Heartbeats moved to the per-worker WxWorkers
+        // registry in WX-68 — their writer/reader agreement is pinned in WxWorkersTests.)
         var monitorToken = WxServiceToken.FromConfigName(configName);
-        Assert.Equal(Paths.HeartbeatFile(writerToken), Paths.HeartbeatFile(monitorToken));
         Assert.Equal(Paths.ServiceLogFile(writerToken), Paths.ServiceLogFile(monitorToken));
     }
 
     [Fact]
-    public void DerivedFilenames_MatchPreWx290Names_NoRename()
+    public void ServiceLogFilenames_DeriveFromCanonicalToken()
     {
-        // The canonical token keeps every filename byte-identical to the pre-WX-290 names, so no file is
-        // renamed (the scheduling-gate-avoidance premise) and no verify script or log target moves.
+        // The canonical token yields the stable per-service log name (one -svc.log per process),
+        // unchanged by WX-68 — only heartbeats went per-worker (see WxWorkersTests).
         Assert.Equal("wxparser-svc.log", Path.GetFileName(Paths.ServiceLogFile(WxServiceToken.WxParser)));
-        Assert.Equal("wxparser-heartbeat.txt", Path.GetFileName(Paths.HeartbeatFile(WxServiceToken.WxParser)));
         Assert.Equal("wxreport-svc.log", Path.GetFileName(Paths.ServiceLogFile(WxServiceToken.WxReport)));
-        Assert.Equal("wxreport-heartbeat.txt", Path.GetFileName(Paths.HeartbeatFile(WxServiceToken.WxReport)));
+        Assert.Equal("wxvis-svc.log", Path.GetFileName(Paths.ServiceLogFile(WxServiceToken.WxVis)));
+        Assert.Equal("wxmonitor-svc.log", Path.GetFileName(Paths.ServiceLogFile(WxServiceToken.WxMonitor)));
     }
 
     [Theory]

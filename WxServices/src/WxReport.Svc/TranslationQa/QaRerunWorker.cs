@@ -4,6 +4,7 @@ using MetarParser.Data.Entities;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 
+using WxServices.Common;
 using WxServices.Logging;
 
 namespace WxReport.Svc.TranslationQa;
@@ -76,6 +77,9 @@ public sealed class QaRerunWorker : BackgroundService
                     // A poll fault must never kill the worker — log and try again next tick.
                     Logger.Error("QaRerunWorker poll failed.", ex);
                 }
+                // Beat after each poll (success OR handled fault) so the heartbeat tracks "this loop is
+                // still turning", not "a rerun was claimed" — reruns are operator-triggered and rare.
+                Heartbeat.Write(new WxPaths(_config["InstallRoot"]).HeartbeatFile(WxWorkers.ReportQa));
                 await Task.Delay(PollInterval, stoppingToken);
             }
         }

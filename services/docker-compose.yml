@@ -41,7 +41,20 @@ services:
       # WX_HOST_LOGS_DIR (default C:/HarderWare/Logs) so a non-default InstallRoot still matches
       # where native components look. From WSL the path would be /mnt/c/... - see the walkthrough.
       - ${WX_HOST_LOGS_DIR:-C:/HarderWare/Logs}:/opt/wxservices/Logs:rw
-    restart: unless-stopped                        # WX-68: the engine restarts this on crash AND on reboot (Docker Desktop autostarts the engine at login, then restarts unless-stopped containers) - this is the auto-recovery gap fix. Compose healthcheck is added in WX-68 Unit 2 (needs heartbeats on WxMonitor/WxVis first).
+    restart: unless-stopped                        # WX-68: the engine restarts this on crash AND on reboot (Docker Desktop autostarts the engine at login, then restarts unless-stopped containers) - this is the auto-recovery gap fix.
+    labels:
+      - autoheal=true                              # WX-68 Unit 2: the autoheal sidecar restarts this container when its healthcheck reports `unhealthy` (a hung-but-alive worker) - plain compose's restart policy only fires on process EXIT, not on health status.
+    # WX-68 Unit 2 healthcheck: the container is healthy while its worker's heartbeat is fresh. The
+    # probe reads the file mtime (bookworm-slim has coreutils stat/date + /bin/sh); a missing file
+    # (stat fails -> epoch 0) reads as unbounded age -> unhealthy. Threshold = WxWorkers.Monitor's
+    # DefaultMaxAgeMinutes (15 min = 900 s), a generous multiple of the 5-min monitor cycle.
+    # MonitorWorker: wxmonitor-monitor-heartbeat.txt
+    healthcheck:
+      test: ["CMD-SHELL", "test $(( $(date +%s) - $(stat -c %Y /opt/wxservices/Logs/wxmonitor-monitor-heartbeat.txt 2>/dev/null || echo 0) )) -lt 900"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 180s                           # let the first cycle land a heartbeat before failures count
 
   wxreport:
     build:
@@ -67,7 +80,18 @@ services:
       # review packages under InstallRoot\translation-qa; mount it so those land on the host, not in
       # the ephemeral container layer.
       - ${WX_HOST_QA_DIR:-C:/HarderWare/translation-qa}:/opt/wxservices/translation-qa:rw
-    restart: unless-stopped                        # WX-68: the engine restarts this on crash AND on reboot (Docker Desktop autostarts the engine at login, then restarts unless-stopped containers) - this is the auto-recovery gap fix. Compose healthcheck is added in WX-68 Unit 2 (needs heartbeats on WxMonitor/WxVis first).
+    restart: unless-stopped                        # WX-68: the engine restarts this on crash AND on reboot (Docker Desktop autostarts the engine at login, then restarts unless-stopped containers) - this is the auto-recovery gap fix.
+    labels:
+      - autoheal=true                              # WX-68 Unit 2: autoheal sidecar restarts this on `unhealthy` (plain compose only restarts on process EXIT).
+    # WX-68 Unit 2 healthcheck: healthy while BOTH WxReport worker heartbeats are fresh (AND-ed).
+    # Thresholds = each worker's WxWorkers DefaultMaxAgeMinutes: report 15 min (900 s, 5-min cycle),
+    # qa 5 min (300 s, 10-s poll). ReportWorker: wxreport-report; QaRerunWorker: wxreport-qa.
+    healthcheck:
+      test: ["CMD-SHELL", "test $(( $(date +%s) - $(stat -c %Y /opt/wxservices/Logs/wxreport-report-heartbeat.txt 2>/dev/null || echo 0) )) -lt 900 && test $(( $(date +%s) - $(stat -c %Y /opt/wxservices/Logs/wxreport-qa-heartbeat.txt 2>/dev/null || echo 0) )) -lt 300"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 180s
 
   wxvis:
     build:
@@ -87,7 +111,19 @@ services:
       # into WxPaths.PlotsDir. WxReport (WX-64) mounts this SAME host dir READ-ONLY to inline them, and
       # WxManager/WxViewer read them too. Source = host InstallRoot\plots, via WX_HOST_PLOTS_DIR.
       - ${WX_HOST_PLOTS_DIR:-C:/HarderWare/plots}:/opt/wxservices/plots:rw
-    restart: unless-stopped                        # WX-68: the engine restarts this on crash AND on reboot (Docker Desktop autostarts the engine at login, then restarts unless-stopped containers) - this is the auto-recovery gap fix. Compose healthcheck is added in WX-68 Unit 2 (needs heartbeats on WxMonitor/WxVis first).
+    restart: unless-stopped                        # WX-68: the engine restarts this on crash AND on reboot (Docker Desktop autostarts the engine at login, then restarts unless-stopped containers) - this is the auto-recovery gap fix.
+    labels:
+      - autoheal=true                              # WX-68 Unit 2: autoheal sidecar restarts this on `unhealthy` (plain compose only restarts on process EXIT).
+    # WX-68 Unit 2 healthcheck: healthy while ALL THREE WxVis worker heartbeats are fresh (AND-ed) -
+    # the three render loops are independent, so one hung worker (e.g. a stuck Python render) must be
+    # able to fail the container on its own. Threshold 5 min (300 s) each: analysis ticks every 1 min,
+    # forecast/meteogram every 30 s. Files: wxvis-analysis / wxvis-forecast / wxvis-meteogram.
+    healthcheck:
+      test: ["CMD-SHELL", "test $(( $(date +%s) - $(stat -c %Y /opt/wxservices/Logs/wxvis-analysis-heartbeat.txt 2>/dev/null || echo 0) )) -lt 300 && test $(( $(date +%s) - $(stat -c %Y /opt/wxservices/Logs/wxvis-forecast-heartbeat.txt 2>/dev/null || echo 0) )) -lt 300 && test $(( $(date +%s) - $(stat -c %Y /opt/wxservices/Logs/wxvis-meteogram-heartbeat.txt 2>/dev/null || echo 0) )) -lt 300"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 180s
 
   wxparser:
     build:
@@ -105,4 +141,41 @@ services:
       - ${WX_HOST_LOGS_DIR:-C:/HarderWare/Logs}:/opt/wxservices/Logs:rw
       # No plots/temp mount: WxParser writes GRIB download/extract scratch to the ephemeral in-container
       # /opt/wxservices/temp (created writable in the Dockerfile), cleaned up after each fetch cycle.
-    restart: unless-stopped                        # WX-68: the engine restarts this on crash AND on reboot (Docker Desktop autostarts the engine at login, then restarts unless-stopped containers) - this is the auto-recovery gap fix. Compose healthcheck is added in WX-68 Unit 2 (needs heartbeats on WxMonitor/WxVis first).
+    restart: unless-stopped                        # WX-68: the engine restarts this on crash AND on reboot (Docker Desktop autostarts the engine at login, then restarts unless-stopped containers) - this is the auto-recovery gap fix.
+    labels:
+      - autoheal=true                              # WX-68 Unit 2: autoheal sidecar restarts this on `unhealthy` (plain compose only restarts on process EXIT).
+    # WX-68 Unit 2 healthcheck: healthy while BOTH WxParser worker heartbeats are fresh (AND-ed).
+    # Thresholds = each worker's WxWorkers DefaultMaxAgeMinutes: fetch 30 min (1800 s, ~10-min METAR
+    # cycle), gfs 90 min (5400 s, 60-min GFS cycle). FetchWorker: wxparser-fetch; GfsFetchWorker:
+    # wxparser-gfs. Longer start_period: the first GFS cycle (a full model-run fetch) can run for
+    # several minutes before it stamps its first heartbeat.
+    healthcheck:
+      test: ["CMD-SHELL", "test $(( $(date +%s) - $(stat -c %Y /opt/wxservices/Logs/wxparser-fetch-heartbeat.txt 2>/dev/null || echo 0) )) -lt 1800 && test $(( $(date +%s) - $(stat -c %Y /opt/wxservices/Logs/wxparser-gfs-heartbeat.txt 2>/dev/null || echo 0) )) -lt 5400"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      # 30 min: the GfsFetchWorker stamps its first heartbeat only after its first full GfsCycleAsync,
+      # and a cold-start GFS fetch (up to 121 forecast hours, empty DB) can run many minutes. During
+      # start_period a failing probe keeps the container "starting" (never "unhealthy"), so autoheal
+      # won't restart it mid-fetch. Must comfortably exceed the worst-case first GFS cycle.
+      start_period: 1800s
+
+  # WX-68 Unit 2 — autoheal sidecar. A compose healthcheck only *reports* health; the Docker daemon's
+  # restart policy fires on process EXIT, not on a container going `unhealthy`. This sidecar closes that
+  # gap: it watches containers labelled `autoheal=true` and restarts any that report `unhealthy` (a
+  # hung-but-alive worker whose heartbeat went stale). Crash/exit recovery is still `restart:
+  # unless-stopped` (Unit 1); this adds wedged-but-alive recovery. It respects each container's
+  # start_period (only ever-`unhealthy` containers are restarted, never `starting` ones).
+  # NOTE: it mounts the Docker socket read-write (it must call `restart`), which is root-equivalent on
+  # the host. Acceptable on this single-host box; the hardened option (a docker-socket-proxy exposing
+  # only the restart endpoint) is noted for the WX-296 image/topology pass.
+  autoheal:
+    image: willfarrell/autoheal:1.2.0              # pinned tag (WX-296 will add a digest, per the WX-17 precedent)
+    restart: unless-stopped
+    environment:
+      - AUTOHEAL_CONTAINER_LABEL=autoheal          # only touch containers with label autoheal=true (the four services)
+      - AUTOHEAL_INTERVAL=30                        # poll health every 30 s
+      - AUTOHEAL_START_PERIOD=30                    # grace after the sidecar itself starts, before it acts
+      - CURL_TIMEOUT=30                             # cap the docker restart call so a slow daemon can't wedge the sidecar
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:rw

@@ -68,6 +68,7 @@ public sealed class ForecastMapWorker : BackgroundService
             }
 
             var cfg2 = LoadConfig();
+            Heartbeat.Write(new WxPaths(_config["InstallRoot"]).HeartbeatFile(WxWorkers.VisForecast));
             try { await Task.Delay(TimeSpan.FromSeconds(cfg2.ForecastPollIntervalSeconds), stoppingToken); }
             catch (OperationCanceledException) { break; }
         }

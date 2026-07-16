@@ -106,9 +106,17 @@ docker logs --tail 50 services-wxreport-1    # recent log for one container
 docker stats --no-stream                     # live CPU/mem
 ```
 
-Host-side, each service also writes its log + (WxParser/WxReport) heartbeat under `{InstallRoot}\Logs\`
-(default `C:\HarderWare\Logs\`, the `${WX_HOST_LOGS_DIR}` compose mount) — e.g. `wxreport-svc.log`,
-`wxreport-heartbeat.txt`.
+Host-side, each service writes its `-svc.log` plus a **per-worker heartbeat** for every one of its
+background workers under `{InstallRoot}\Logs\` (default `C:\HarderWare\Logs\`, the `${WX_HOST_LOGS_DIR}`
+compose mount) — named `<service>-<worker>-heartbeat.txt` (WX-68). The eight: `wxmonitor-monitor`,
+`wxparser-fetch`, `wxparser-gfs`, `wxreport-report`, `wxreport-qa`, `wxvis-analysis`, `wxvis-forecast`,
+`wxvis-meteogram`. Each container's `healthcheck:` reads the freshness of its own service's files (AND-ed),
+so `docker inspect --format '{{.State.Health.Status}}'` reports `healthy`/`unhealthy`. A compose
+healthcheck only *reports* health — the Docker restart policy fires on process **exit**, not on an
+`unhealthy` status — so an **`autoheal` sidecar** (WX-68 Unit 2) watches the `autoheal=true`-labelled
+containers and restarts any that go `unhealthy` (a hung-but-alive worker). Crash/exit recovery stays
+`restart: unless-stopped` (Unit 1); autoheal adds wedged-but-alive recovery. It respects each
+container's `start_period`, so it never restarts one still `starting`.
 
 ## Reboot recovery (the point of WX-68)
 
@@ -118,22 +126,24 @@ On a host reboot:
 2. That fires Docker Desktop's autostart → the **engine** comes up (this can take several minutes on
    a congested boot while security/OEM services contend for CPU — it does come up).
 3. The engine restarts every `restart: unless-stopped` container → **all four services return**
-   (and the observability trio too, already `unless-stopped` since WX-16), no `docker compose up` needed.
+   (and the observability trio too, already `unless-stopped` since WX-16, plus the `autoheal` sidecar,
+   which resumes watching), no `docker compose up` needed.
 
 **Verify after a reboot** (no manual action first):
 
 ```bash
-docker compose -f C:/Code/HarderWare/services/docker-compose.yml ps        # all four Up
-# or, quick policy+state check:
-docker inspect --format '{{.Name}} {{.State.Status}}' \
+docker compose -f C:/Code/HarderWare/services/docker-compose.yml ps        # all four Up (+ health)
+# or, quick policy + state + health check:
+docker inspect --format '{{.Name}} {{.State.Status}} {{.State.Health.Status}}' \
   services-wxmonitor-1 services-wxreport-1 services-wxvis-1 services-wxparser-1
 ```
 
-Then confirm the forecasting stack actually resumed: fresh activity in each service log under
-`{InstallRoot}\Logs` — `wxmonitor-svc.log`, `wxparser-svc.log`, `wxreport-svc.log`, `wxvis-svc.log`
-(e.g. a new report cycle in `wxreport-svc.log`) — plus recent mtimes on the heartbeat files that
-exist (`wxparser-heartbeat.txt`, `wxreport-heartbeat.txt`; WxMonitor/WxVis don't emit one yet — that
-comes with the WX-68 Unit 2 healthchecks).
+Each service should read `running healthy` once its workers have stamped a heartbeat (allow each
+container's `start_period` — up to ~10 min for wxparser, whose first GFS cycle is slow). Then confirm
+the forecasting stack actually resumed: fresh activity in each service log under `{InstallRoot}\Logs`
+— `wxmonitor-svc.log`, `wxparser-svc.log`, `wxreport-svc.log`, `wxvis-svc.log` (e.g. a new report
+cycle in `wxreport-svc.log`) — plus recent mtimes on the per-worker heartbeat files
+(`<service>-<worker>-heartbeat.txt`, WX-68; all eight listed above).
 
 **If a service did NOT come back:**
 

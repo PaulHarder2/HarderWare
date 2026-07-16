@@ -103,6 +103,8 @@ public sealed class AnalysisMapWorker : BackgroundService
 
             PurgeStalePlots(cfg);
 
+            Heartbeat.Write(new WxPaths(_config["InstallRoot"]).HeartbeatFile(WxWorkers.VisAnalysis));
+
             try { await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken); }
             catch (OperationCanceledException) { break; }
         }

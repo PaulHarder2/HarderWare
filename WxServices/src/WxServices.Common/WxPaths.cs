@@ -149,9 +149,19 @@ public sealed class WxPaths
         Wgrib2DefaultPath = Path.Combine(InstallRoot, "wgrib2", "wgrib2.exe");
     }
 
-    /// <summary>Returns the heartbeat file path for a given service name.</summary>
+    /// <summary>Returns the heartbeat file path for a given token, e.g. <c>{LogsDir}\{token}-heartbeat.txt</c>.</summary>
+    /// <remarks>
+    /// The token is a service token (<see cref="WxServiceToken"/>) or, since WX-68 Unit 2, a per-worker
+    /// token (<c>"{service}-{worker}"</c>). This primitive owns the <c>-heartbeat.txt</c> suffix; the
+    /// <see cref="HeartbeatFile(WxWorker)"/> overload derives the token so writers and the monitor share
+    /// one filename format.
+    /// </remarks>
     public string HeartbeatFile(string serviceName)
         => Path.Combine(LogsDir, $"{serviceName}-heartbeat.txt");
+
+    /// <summary>Returns the heartbeat file path for a registered worker (WX-68), e.g. <c>wxvis-analysis-heartbeat.txt</c>.</summary>
+    public string HeartbeatFile(WxWorker worker)
+        => HeartbeatFile(worker.Token);
 
     /// <summary>Returns the log file path for a given service name.</summary>
     public string LogFile(string serviceName)

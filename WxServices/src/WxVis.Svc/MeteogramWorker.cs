@@ -79,6 +79,7 @@ public sealed class MeteogramWorker : BackgroundService
             }
 
             var cfg2 = LoadConfig();
+            Heartbeat.Write(new WxPaths(_config["InstallRoot"]).HeartbeatFile(WxWorkers.VisMeteogram));
             try { await Task.Delay(TimeSpan.FromSeconds(cfg2.ForecastPollIntervalSeconds), stoppingToken); }
             catch (OperationCanceledException) { break; }
         }

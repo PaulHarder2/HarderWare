@@ -117,7 +117,7 @@ flowchart TD
     AWC2["AWC Airport API (ICAO to coordinates)"]
     DB[("SQL Server WeatherData DB")]
     PLOG["wxparser-svc.log"]
-    PHB["wxparser-heartbeat.txt"]
+    PHB["wxparser-fetch-heartbeat.txt"]
 
     START([Cycle starts]) --> COORDS{Coordinates configured?}
     COORDS -->|Yes| FETCH
@@ -187,7 +187,7 @@ flowchart TD
     DB[("SQL Server WeatherData DB")]
     CLAUDE["Anthropic Claude API"]
     SMTP["Gmail SMTP"]
-    RHB["wxreport-heartbeat.txt"]
+    RHB["wxreport-report-heartbeat.txt"]
     RLOG["wxreport-svc.log"]
 
     START([Cycle starts]) --> EACH["For each locality (with members);\nlocality-less recipients → ERROR + skip"]
@@ -230,8 +230,7 @@ flowchart TD
 flowchart TD
     PLOG["wxparser-svc.log"]
     RLOG["wxreport-svc.log"]
-    PHB["wxparser-heartbeat.txt"]
-    RHB["wxreport-heartbeat.txt"]
+    HBFILES["Per-worker heartbeats — WxWorkers.All minus wxmonitor\n(wxparser-fetch/-gfs, wxreport-report/-qa,\nwxvis-analysis/-forecast/-meteogram)"]
     STATE["wxmonitor-state.json (last-seen timestamps)"]
     SMTP["Gmail SMTP"]
     MLOG["wxmonitor-svc.log"]
@@ -239,7 +238,7 @@ flowchart TD
     START([Cycle starts]) --> LOAD["Load state"]
     LOAD --> STATE
 
-    LOAD --> EACH["For each watched service"]
+    LOAD --> EACH["For each watched service (log scan)"]
 
     EACH --> SCAN["Scan log file for ERROR+ entries newer than last seen"]
     PLOG --> SCAN
@@ -251,9 +250,8 @@ flowchart TD
 
     LOGEMAIL --> SMTP
 
-    HB["Read heartbeat file and check age"]
-    PHB --> HB
-    RHB --> HB
+    HB["For each registered worker (WxWorkers.All minus wxmonitor):\nread its heartbeat and compare age to its registry max-age"]
+    HBFILES --> HB
 
     HB --> STALE{Heartbeat stale?}
     STALE -->|Yes, not on cooldown| HBEMAIL["Send heartbeat-stale alert email"]
@@ -360,7 +358,7 @@ graph TD
 4. **Station gap fill (WX-140, `StationGapFiller` — shared with WxManager's save flow, WX-141):** AWC omits individual stations from bbox results even when boxes are small (the long-standing reason `AlwaysFetchDirect` exists). Every defined station within the fallback radius (`StationCoverage.MaxFallbackDistanceKm`, shared with `WxInterpreter`) of a locality centroid or locality-less recipient — plus every station named by a locality/recipient `MetarIcao`, regardless of distance — is checked for an observation within `StationCoverage.FreshObservationWindow`; gaps are direct-fetched in batched `ids=` calls **over that same window**. A gap station whose returned observation is old enough that the bbox pass should have carried it (and not a just-published timing race) is **automatically promoted to `AlwaysFetchDirect`**; silent stations back off for several hours between retries instead of refetching every cycle.
 5. Fetch TAFs per the same split geometry, then every TAF station referenced by a locality or recipient in a **batched** `ids=` call (the by-station TAF rescue path, WX-140).
 6. Insert new records (unique index on station + observation time + report type). The AWC feed can carry the same observation more than once in a single response — some stations (e.g. KJXI) are re-served byte-for-byte ~3× — and a correction (`COR`) shares its key with the observation it amends, so the insert is **reconciled by correction rank** rather than a plain skip-if-present (WX-210): duplicates within one response collapse to a single survivor (a `COR` beats a non-`COR` regardless of feed order); against the stored row, a new observation is **inserted** if absent, a later-arriving `COR` **overwrites** the stored uncorrected row in place (same primary key; child sky/weather/RVR rows replaced), a stored `COR` is **never** clobbered by a later non-`COR`, and an identical re-arrival is skipped. The batch is one transaction; on a row-level fault the inserts are retried one-per-context so a single bad row cannot discard the co-batched rows. Repeated identical METAR parse failures (e.g. a structurally malformed automated feed) WARN once and DEBUG thereafter.
-7. Write the current UTC timestamp to `wxparser-heartbeat.txt`.
+7. Write the current UTC timestamp to `wxparser-fetch-heartbeat.txt` (the FetchWorker's per-worker heartbeat, WX-68).
 
 **GFS cycle (default: every 60 minutes):**
 1. Check for any incomplete model run registered in `GfsModelRuns`. If one exists, resume it; otherwise compute the most recent GFS cycle (00Z/06Z/12Z/18Z) that should be available on NOMADS.
@@ -369,6 +367,7 @@ graph TD
 4. Invoke `wgrib2.exe` (NOAA native Windows build) to crop to the configured fetch region and emit a CSV of grid values.
 5. Assemble `GfsGridPoint` entities (applying unit conversions) and insert into `GfsGrid`.
 6. When all 121 hours are stored, mark the run `IsComplete = true` and purge old runs (retaining the 2 most recent).
+7. Write the current UTC timestamp to `wxparser-gfs-heartbeat.txt` (the GfsFetchWorker's per-worker heartbeat, WX-68 — it beats on every loop iteration, not only when a run completes).
 
 **Airport metadata refresh cycle (once per week, and on first startup):**
 1. Download `airports.csv`, `countries.csv`, and `regions.csv` from OurAirports (`https://davidmegginson.github.io/ourairports-data/`), decoded as UTF-8.
@@ -656,11 +655,13 @@ Output PNGs are saved to the directory configured in `config.json` (default `C:\
 **Purpose:** Alert the operator by email when either watched service logs errors, goes silent, or METAR data goes stale.
 
 **Cycle (default: every 5 minutes):**
-1. For each watched service, scan its log file for entries at or above `AlertOnSeverity` (default: ERROR) with a timestamp newer than the last one processed.
-2. For each watched service, read its heartbeat file and compare its age to `HeartbeatMaxAgeMinutes`.
+1. For each watched service (`Monitor:WatchedServices`), scan its log file for entries at or above `AlertOnSeverity` (default: ERROR) with a timestamp newer than the last one processed.
+2. For each **registered worker** — `WxWorkers.All` minus WxMonitor's own service (a worker cannot report its own death) — read its per-worker heartbeat and compare the age to that worker's registry `DefaultMaxAgeMinutes` (WX-68). The watch-set is the shared `WxWorkers` registry each worker also writes from, so reader and writer cannot diverge on a filename.
 3. Query the database for the most recent METAR observation timestamp; if it is older than `MetarStalenessThresholdMinutes` (default 120), send a staleness alert.
 4. Send alert emails for any findings not on cooldown (`AlertCooldownMinutes`, default 60).
 5. Persist state (last-seen log timestamp, last-alert timestamps) to `wxmonitor-state.json`.
+
+**Per-worker heartbeats & container healthchecks (WX-68 Unit 2):** every background worker in all four services (`WxWorkers.All` — 8: monitor, parser fetch/gfs, report report/qa, vis analysis/forecast/meteogram) stamps a `<service>-<worker>-heartbeat.txt` at the bottom of each loop iteration via the shared `Heartbeat.Write`. Two independent readers consume these files: (a) this monitor's `HeartbeatWatcher`, which emails on staleness, and (b) each container's compose `healthcheck:`, which `stat`s the freshness of its own service's worker files (AND-ed) so Docker reports `.State.Health.Status`. Compose's restart policy fires only on process **exit**, so an **`autoheal` sidecar** restarts any container that goes `unhealthy` (a wedged-but-alive worker); crash/exit recovery stays `restart: unless-stopped`. WxMonitor's own heartbeat is watched only by (b) — it can't watch itself. This split from the per-service `WxServiceToken` (which still names the one `-svc.log` per process) is why heartbeats live in their own registry.
 
 **First-run behaviour:** On first run, `LastSeenLogTimestamp` is null. The scanner baselines to the latest entry in the log without sending alerts, so installation does not flood the inbox with historical errors.
 
