@@ -345,7 +345,7 @@ function Start-AutohealSidecar {
     } else {
         # Include -f <compose file>: this runs after Pop-Location, so a bare 'docker compose logs' would
         # miss the file from the caller's cwd.
-        Write-Error "autoheal sidecar did not reach a running state. Check: docker compose -f $composeDir\docker-compose.yml logs autoheal" -ErrorAction Continue
+        Write-Error "autoheal sidecar did not reach a running state. Check: docker compose -f '$composeDir\docker-compose.yml' logs autoheal" -ErrorAction Continue
     }
     return $running
 }
