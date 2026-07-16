@@ -314,7 +314,10 @@ function Start-AutohealSidecar {
 
     docker info *> $null
     if ($LASTEXITCODE -ne 0) {
-        Write-Error "Docker is not reachable (is Docker Desktop running?). Cannot start the autoheal sidecar."
+        # -ErrorAction Continue: $ErrorActionPreference is 'Stop' script-wide, under which a bare
+        # Write-Error terminates BEFORE the return, breaking the boolean contract (the 'all' caller
+        # relies on $false to record [FAIL] + print the partial summary rather than abort).
+        Write-Error "Docker is not reachable (is Docker Desktop running?). Cannot start the autoheal sidecar." -ErrorAction Continue
         return $false
     }
 
@@ -326,7 +329,7 @@ function Start-AutohealSidecar {
         Write-Host "Starting the autoheal sidecar..."
         docker compose up -d autoheal | Out-Host
         if ($LASTEXITCODE -ne 0) {
-            Write-Error "docker compose up failed for autoheal (exit code $LASTEXITCODE)."
+            Write-Error "docker compose up failed for autoheal (exit code $LASTEXITCODE)." -ErrorAction Continue
             return $false
         }
         $id = (docker compose ps -q autoheal 2>$null | Select-Object -First 1)
@@ -340,7 +343,7 @@ function Start-AutohealSidecar {
     if ($running) {
         Write-Host "autoheal sidecar is running (restarts autoheal=true containers that go unhealthy)." -ForegroundColor Green
     } else {
-        Write-Error "autoheal sidecar did not reach a running state. Check: docker compose logs autoheal"
+        Write-Error "autoheal sidecar did not reach a running state. Check: docker compose logs autoheal" -ErrorAction Continue
     }
     return $running
 }
