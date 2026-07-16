@@ -185,14 +185,19 @@ the database.
 
 | Setting | Description | Example |
 |---|---|---|
-| `InstallRoot` | Installation directory (change only if not `C:\HarderWare`) | `C:\\HarderWare` |
+| `InstallRoot` | Installation directory. Set in `appsettings.shared.json` **before deploy** (or the `WXSERVICES_INSTALL_ROOT` env var); the Configure tab shows it **read-only** (WX-69). | `C:\\HarderWare` |
 | `Fetch:HomeIcao` | ICAO code of your nearest METAR station | `KDWH` |
 | `Fetch:HomeLatitude` | Your latitude in decimal degrees | `30.07` |
 | `Fetch:HomeLongitude` | Your longitude in decimal degrees (negative = west) | `-95.55` |
-| `WxVis:CondaPythonExe` | Full path to the wxvis conda `python.exe` | `C:\\Users\\You\\miniconda3\\envs\\wxvis\\python.exe` |
 
 To find your nearest METAR station, search for your location at:
 > https://aviationweather.gov/data/metar/
+
+> **Native-fallback only:** `WxVis:CondaPythonExe` (the wxvis conda `python.exe` path) is **not**
+> required for the containerized deployment — WxVis runs its own in-image `python3`, and the field
+> was removed from the Configure tab (WX-69). Set it in `appsettings.shared.json` only if you run
+> the reversible native-service fallback. `Gfs:Wgrib2Path` (below) is likewise native-fallback only —
+> the containerized WxParser uses its image-bundled `wgrib2`.
 
 ### Secrets (SMTP Credentials and Claude API Key)
 
@@ -238,7 +243,7 @@ addresses and `lat, lon` decimal entries continue to work normally.
 |---|---|---|
 | `ConnectionStrings:WeatherData` | `Server=.\SQLEXPRESS;...` | Change if your SQL Server instance differs |
 | `Fetch:BoundingBoxDegrees` | `9` | Radius around home location for data collection |
-| `Gfs:Wgrib2Path` | `{InstallRoot}\wgrib2\wgrib2.exe` | Absolute Windows path to `wgrib2.exe`.  Leave empty to use the default derived from `InstallRoot`. |
+| `Gfs:Wgrib2Path` | `{InstallRoot}\wgrib2\wgrib2.exe` | Absolute Windows path to `wgrib2.exe` — **native-fallback only** (the containerized WxParser bundles its own `wgrib2`).  Leave empty to use the default derived from `InstallRoot`. |
 | `WxVis:MapExtent` | `south_central` | Map extent: preset name or W,E,S,N coordinates |
 | `Monitor:AlertEmail` | (empty) | Email address for service health alerts |
 
@@ -311,7 +316,7 @@ still runs.
 The report service picks up new recipients automatically on its next cycle.
 
 > **Tip:** WxManager's **Setup tab** runs prerequisite checks with
-> pass/fail indicators for SQL Server, wgrib2, conda, and Docker.
+> pass/fail indicators for SQL Server, the database, and Docker.
 > Use it to verify that everything is working before adding recipients.
 
 ## 8. Start the Observability Stack (Optional)

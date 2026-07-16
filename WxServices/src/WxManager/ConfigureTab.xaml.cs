@@ -40,8 +40,9 @@ public partial class ConfigureTab : UserControl
         InitializeComponent();
 
         // Dirty-tracking (WX-134): Save Configuration enables only on a user edit.
+        // TxtInstallRoot is display-only (WX-69) — not dirty-tracked; the wgrib2/Conda path
+        // fields were removed (those deps now live inside the containers).
         DirtyTracking.Attach(MarkDirty,
-            TxtInstallRoot, TxtCondaPythonExe, TxtWgrib2Path,
             TxtHomeIcao, TxtHomeLatitude, TxtHomeLongitude, TxtBoundingBoxDeg,
             TxtRegionSouth, TxtRegionNorth, TxtRegionWest, TxtRegionEast,
             TxtConnectionString,
@@ -95,12 +96,9 @@ public partial class ConfigureTab : UserControl
     /// <summary>Synchronous field-population body of <see cref="LoadCurrentValuesAsync"/> under the dirty-suppression wrapper.</summary>
     private void ApplyLoadedValues(Microsoft.Extensions.Configuration.IConfiguration cfg, GlobalSettings? gs)
     {
-        TxtInstallRoot.Text = cfg["InstallRoot"] ?? WxPaths.DefaultInstallRoot;
-        TxtCondaPythonExe.Text = cfg["WxVis:CondaPythonExe"] ?? "";
-        var configuredWgrib2 = cfg["Gfs:Wgrib2Path"];
-        TxtWgrib2Path.Text = string.IsNullOrWhiteSpace(configuredWgrib2)
-            ? new WxPaths(TxtInstallRoot.Text).Wgrib2DefaultPath
-            : configuredWgrib2;
+        // Display-only (WX-69): show the authoritative resolved InstallRoot (env var →
+        // appsettings.shared.json → default), the same value WxPaths hands the rest of the system.
+        TxtInstallRoot.Text = WxPaths.ReadInstallRoot();
 
         TxtHomeIcao.Text = cfg["Fetch:HomeIcao"] ?? "";
         TxtHomeLatitude.Text = cfg["Fetch:HomeLatitude"] ?? "";
@@ -137,17 +135,14 @@ public partial class ConfigureTab : UserControl
     {
         try
         {
-            var installRoot = TxtInstallRoot.Text.Trim();
-            if (string.IsNullOrEmpty(installRoot))
-            {
-                SetStatus("Install Root is required.", false);
-                return;
-            }
+            // InstallRoot is resolved (env var → shared.json → default), not set from this tab
+            // (WX-69): it is display-only, and appsettings.local.json is *located by* InstallRoot,
+            // so it cannot live inside that file. Used here only to place the local config + dirs.
+            var installRoot = WxPaths.ReadInstallRoot();
 
             // Non-secret settings → appsettings.local.json
             var root = new JsonObject
             {
-                ["InstallRoot"] = installRoot,
                 ["ConnectionStrings"] = new JsonObject
                 {
                     ["WeatherData"] = TxtConnectionString.Text.Trim(),
@@ -172,13 +167,8 @@ public partial class ConfigureTab : UserControl
                 {
                     ["Model"] = TxtClaudeModel.Text.Trim(),
                 },
-                ["Gfs"] = new JsonObject
-                {
-                    ["Wgrib2Path"] = TxtWgrib2Path.Text.Trim(),
-                },
                 ["WxVis"] = new JsonObject
                 {
-                    ["CondaPythonExe"] = TxtCondaPythonExe.Text.Trim(),
                     ["MapExtent"] = TxtMapExtent.Text.Trim(),
                 },
                 ["Monitor"] = new JsonObject
