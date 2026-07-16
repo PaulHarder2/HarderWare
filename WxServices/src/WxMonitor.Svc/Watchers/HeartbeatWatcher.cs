@@ -31,7 +31,7 @@ public sealed class HeartbeatWatcher : IWatcher
                 continue;
 
             var path = ctx.Paths.HeartbeatFile(worker);
-            var age = HeartbeatChecker.GetAge(path);
+            var age = HeartbeatChecker.GetAge(path, ctx.UtcNow);
 
             if (age is null)
             {

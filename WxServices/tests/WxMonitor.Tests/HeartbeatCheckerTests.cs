@@ -18,7 +18,7 @@ public class HeartbeatCheckerTests : IDisposable
     [Fact]
     public void MissingFile_ReturnsNull()
     {
-        var age = HeartbeatChecker.GetAge("nonexistent-heartbeat.txt");
+        var age = HeartbeatChecker.GetAge("nonexistent-heartbeat.txt", DateTime.UtcNow);
         Assert.Null(age);
     }
 
@@ -30,7 +30,7 @@ public class HeartbeatCheckerTests : IDisposable
         var writtenAt = DateTime.UtcNow.AddMinutes(-5);
         File.WriteAllText(_path, writtenAt.ToString("o"));
 
-        var age = HeartbeatChecker.GetAge(_path);
+        var age = HeartbeatChecker.GetAge(_path, DateTime.UtcNow);
 
         Assert.NotNull(age);
         // Allow a generous window to absorb any test execution delay.
@@ -42,7 +42,7 @@ public class HeartbeatCheckerTests : IDisposable
     {
         File.WriteAllText(_path, DateTime.UtcNow.ToString("o"));
 
-        var age = HeartbeatChecker.GetAge(_path);
+        var age = HeartbeatChecker.GetAge(_path, DateTime.UtcNow);
 
         Assert.NotNull(age);
         Assert.True(age!.Value.TotalSeconds < 5,
@@ -57,7 +57,7 @@ public class HeartbeatCheckerTests : IDisposable
         var writtenAt = DateTime.UtcNow.AddMinutes(-2);
         File.WriteAllText(_path, "  " + writtenAt.ToString("o") + "  ");
 
-        var age = HeartbeatChecker.GetAge(_path);
+        var age = HeartbeatChecker.GetAge(_path, DateTime.UtcNow);
 
         Assert.NotNull(age);
         Assert.InRange(age!.Value.TotalMinutes, 1.9, 2.1);
@@ -69,20 +69,20 @@ public class HeartbeatCheckerTests : IDisposable
     public void InvalidContent_ReturnsNull()
     {
         File.WriteAllText(_path, "not a timestamp");
-        Assert.Null(HeartbeatChecker.GetAge(_path));
+        Assert.Null(HeartbeatChecker.GetAge(_path, DateTime.UtcNow));
     }
 
     [Fact]
     public void EmptyFile_ReturnsNull()
     {
         File.WriteAllText(_path, "");
-        Assert.Null(HeartbeatChecker.GetAge(_path));
+        Assert.Null(HeartbeatChecker.GetAge(_path, DateTime.UtcNow));
     }
 
     [Fact]
     public void WhitespaceOnlyFile_ReturnsNull()
     {
         File.WriteAllText(_path, "   ");
-        Assert.Null(HeartbeatChecker.GetAge(_path));
+        Assert.Null(HeartbeatChecker.GetAge(_path, DateTime.UtcNow));
     }
 }

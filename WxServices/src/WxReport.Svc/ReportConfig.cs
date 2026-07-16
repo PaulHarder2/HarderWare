@@ -70,9 +70,6 @@ public class ReportConfig
     /// <summary>Check interval; loaded from appsettings.json (service-specific).</summary>
     public int IntervalMinutes { get; set; } = 5;
 
-    /// <summary>Path to the heartbeat file written after each successful report cycle. Read by WxMonitor.Svc.</summary>
-    public string? HeartbeatFile { get; set; }
-
     /// <summary>
     /// Minimum precipitation rate in mm/hr for a GFS forecast hour to be counted
     /// as precipitation in the daily summary.  Hours below this threshold are

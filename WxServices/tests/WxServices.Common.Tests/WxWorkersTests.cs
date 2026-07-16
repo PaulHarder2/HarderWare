@@ -6,6 +6,8 @@
 
 using System.IO;
 using System.Linq;
+using System.Runtime.CompilerServices;
+using System.Text.RegularExpressions;
 
 using WxServices.Common;
 
@@ -73,5 +75,45 @@ public sealed class WxWorkersTests
     {
         // A non-positive threshold would make the freshness check meaningless (always stale / never stale).
         Assert.All(WxWorkers.All, w => Assert.True(w.DefaultMaxAgeMinutes > 0));
+    }
+
+    [Fact]
+    public void ComposeHealthchecks_ReferenceExactlyTheRegistryFilenames()
+    {
+        // The registry↔Compose recovery contract: services/docker-compose.yml hard-codes each heartbeat
+        // filename in its healthcheck probes, and nothing else ties those strings to WxWorkers. Without
+        // this test, renaming/adding a worker leaves container recovery watching a stale/absent name
+        // while the rest of the suite stays green. Pin both directions.
+        var compose = ReadComposeFile();
+
+        // (1) Every registered worker's heartbeat filename appears in a compose healthcheck.
+        foreach (var w in WxWorkers.All)
+        {
+            var file = $"{w.Token}-heartbeat.txt";
+            Assert.True(compose.Contains(file, StringComparison.Ordinal),
+                $"docker-compose.yml has no healthcheck referencing '{file}' (worker {w.Token}).");
+        }
+
+        // (2) No orphan: every *-heartbeat.txt named in compose is a registered worker (catches a
+        // filename left behind after a rename).
+        var known = WxWorkers.All.Select(w => $"{w.Token}-heartbeat.txt").ToHashSet(StringComparer.Ordinal);
+        foreach (Match m in Regex.Matches(compose, @"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*-heartbeat\.txt"))
+            Assert.True(known.Contains(m.Value),
+                $"docker-compose.yml references heartbeat file '{m.Value}', which is not in WxWorkers.All.");
+    }
+
+    /// <summary>
+    /// Reads the repo's <c>services/docker-compose.yml</c>. Located via <see cref="CallerFilePathAttribute"/>
+    /// (the source path baked at compile time) rather than <c>AppContext.BaseDirectory</c>, because the
+    /// test binary runs from an out-of-tree build cache from which the repo root can't be walked to.
+    /// </summary>
+    private static string ReadComposeFile([CallerFilePath] string thisFile = "")
+    {
+        for (var dir = new DirectoryInfo(Path.GetDirectoryName(thisFile)!); dir is not null; dir = dir.Parent)
+        {
+            var candidate = Path.Combine(dir.FullName, "services", "docker-compose.yml");
+            if (File.Exists(candidate)) return File.ReadAllText(candidate);
+        }
+        throw new FileNotFoundException($"Could not locate services/docker-compose.yml from source path '{thisFile}'.");
     }
 }

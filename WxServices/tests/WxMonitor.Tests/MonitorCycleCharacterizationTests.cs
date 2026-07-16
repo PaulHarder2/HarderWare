@@ -7,9 +7,9 @@
 // exercise the whole cycle through the injected seams (IEmailer, clock, IMonitorStateStore)
 // rather than any single detector.
 //
-// Note the injected clock governs everything the worker itself times (cooldown, METAR age,
-// body footers); heartbeat staleness is judged by HeartbeatChecker against the real wall
-// clock (it is not seamed), so heartbeat files are written relative to DateTime.UtcNow.
+// Note the injected clock governs everything the cycle times — cooldown, METAR age, body footers,
+// and (since WX-68) heartbeat staleness, which HeartbeatChecker.GetAge now judges against the passed
+// ctx.UtcNow rather than the wall clock. So heartbeat files here are written relative to Now.
 
 using MetarParser.Data;
 using MetarParser.Data.Entities;
@@ -204,9 +204,10 @@ public sealed class MonitorCycleCharacterizationTests : IDisposable
         var db = NewDb();
         var root = NewInstallRoot();
         var log = NewTempFile(LogLine(Now.AddMinutes(-5), "INFO", "just info") + Environment.NewLine);
-        // FetchWorker's heartbeat 60 min old > its 30-min registry threshold → stale. The other 6
-        // workers' files are absent (empty Logs) → "not found" WARNs, no findings → exactly one alert.
-        WriteHeartbeat(root, WxWorkers.ParserFetch, DateTime.UtcNow.AddMinutes(-60));
+        // FetchWorker's heartbeat 60 min old > its 30-min registry threshold → stale. Timestamps are
+        // relative to the injected cycle clock (Now), which HeartbeatChecker.GetAge now uses. The other
+        // 6 workers' files are absent (empty Logs) → "not found" WARNs, no findings → exactly one alert.
+        WriteHeartbeat(root, WxWorkers.ParserFetch, Now.AddMinutes(-60));
         var emailer = new FakeEmailer();
         var state = new InMemoryStateStore(SeededLogBaseline(Now.AddMinutes(-10)));
 
@@ -224,7 +225,7 @@ public sealed class MonitorCycleCharacterizationTests : IDisposable
         var db = NewDb();
         var root = NewInstallRoot();
         var log = NewTempFile(LogLine(Now.AddMinutes(-5), "INFO", "just info") + Environment.NewLine);
-        WriteHeartbeat(root, WxWorkers.ParserFetch, DateTime.UtcNow); // fresh → no finding
+        WriteHeartbeat(root, WxWorkers.ParserFetch, Now); // fresh (relative to the injected cycle clock) → no finding
         var emailer = new FakeEmailer();
         var state = new InMemoryStateStore(SeededLogBaseline(Now.AddMinutes(-10)));
 

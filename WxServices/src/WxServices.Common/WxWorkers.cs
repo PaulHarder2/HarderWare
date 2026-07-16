@@ -41,15 +41,17 @@ public static class WxWorkers
     public static readonly WxWorker VisMeteogram = new(WxServiceToken.WxVis, "meteogram", 5);
 
     /// <summary>
-    /// Every registered worker, grouped by service. Exposed as a read-only interface over a
-    /// compiler-generated array (a C# 12 collection expression), so the canonical set is immutable —
-    /// a caller cannot cast it back to a mutable list and tamper with it.
+    /// Every registered worker, grouped by service. Wrapped in <see cref="Array.AsReadOnly{T}"/> so it
+    /// is genuinely immutable: a bare collection expression targeting <see cref="IReadOnlyList{T}"/>
+    /// compiles to a <c>WxWorker[]</c> that a caller could cast back and mutate, whereas the
+    /// <see cref="System.Collections.ObjectModel.ReadOnlyCollection{T}"/> this produces cannot be
+    /// cast to a mutable array — the canonical set can't be tampered with at runtime.
     /// </summary>
-    public static readonly IReadOnlyList<WxWorker> All =
-    [
+    public static readonly IReadOnlyList<WxWorker> All = Array.AsReadOnly(new[]
+    {
         Monitor,
         ParserFetch, ParserGfs,
         ReportReport, ReportQa,
         VisAnalysis, VisForecast, VisMeteogram,
-    ];
+    });
 }

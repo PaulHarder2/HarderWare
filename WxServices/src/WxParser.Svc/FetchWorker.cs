@@ -90,7 +90,8 @@ public sealed class FetchWorker : BackgroundService
     /// <sideeffects>
     /// Inserts new METAR and TAF records into the database.
     /// May write resolved coordinates and home ICAO to <c>appsettings.local.json</c> on first run.
-    /// Writes the heartbeat file on success.
+    /// Writes the heartbeat file at the end of every iteration (in <c>finally</c>, including a
+    /// handled fetch fault) — an end-of-iteration liveness update, not a fetch-success signal.
     /// Makes HTTP calls to the Aviation Weather Center API.
     /// Writes log entries throughout.
     /// </sideeffects>

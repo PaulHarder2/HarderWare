@@ -139,7 +139,9 @@ docker inspect --format '{{.Name}} {{.State.Status}} {{.State.Health.Status}}' \
 ```
 
 Each service should read `running healthy` once its workers have stamped a heartbeat (allow each
-container's `start_period` — up to ~10 min for wxparser, whose first GFS cycle is slow). Then confirm
+container's configured `start_period` before diagnosing a still-`starting` container as unhealthy —
+the others are 3 min, wxparser is **30 min** because its first GFS cycle, a full cold model-run fetch,
+can run many minutes before it stamps its first heartbeat). Then confirm
 the forecasting stack actually resumed: fresh activity in each service log under `{InstallRoot}\Logs`
 — `wxmonitor-svc.log`, `wxparser-svc.log`, `wxreport-svc.log`, `wxvis-svc.log` (e.g. a new report
 cycle in `wxreport-svc.log`) — plus recent mtimes on the per-worker heartbeat files
