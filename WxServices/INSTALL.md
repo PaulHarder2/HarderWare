@@ -185,11 +185,11 @@ the database.
 
 | Setting | Description | Example |
 |---|---|---|
-| `InstallRoot` | Installation directory (change only if not `C:\HarderWare`) | `C:\\HarderWare` |
+| `InstallRoot` | Installation directory. Set in `appsettings.shared.json` **before deploy** (or the `WXSERVICES_INSTALL_ROOT` env var); the Configure tab shows it **read-only** (WX-69). | `C:\\HarderWare` |
 | `Fetch:HomeIcao` | ICAO code of your nearest METAR station | `KDWH` |
 | `Fetch:HomeLatitude` | Your latitude in decimal degrees | `30.07` |
 | `Fetch:HomeLongitude` | Your longitude in decimal degrees (negative = west) | `-95.55` |
-| `WxVis:CondaPythonExe` | Full path to the wxvis conda `python.exe` | `C:\\Users\\You\\miniconda3\\envs\\wxvis\\python.exe` |
+| `WxVis:CondaPythonExe` | Full path to the wxvis conda `python.exe`. **Native-fallback only** — the containerized WxVis uses its own in-image `python3`; this is no longer a Configure-tab field (WX-69). | `C:\\Users\\You\\miniconda3\\envs\\wxvis\\python.exe` |
 
 To find your nearest METAR station, search for your location at:
 > https://aviationweather.gov/data/metar/
@@ -311,7 +311,7 @@ still runs.
 The report service picks up new recipients automatically on its next cycle.
 
 > **Tip:** WxManager's **Setup tab** runs prerequisite checks with
-> pass/fail indicators for SQL Server, wgrib2, conda, and Docker.
+> pass/fail indicators for SQL Server, the database, and Docker.
 > Use it to verify that everything is working before adding recipients.
 
 ## 8. Start the Observability Stack (Optional)
