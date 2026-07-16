@@ -26,6 +26,8 @@ The four services never talk to each other directly — they coordinate through 
 - `SQLEXPRESS` running (the containers' database).
 - Docker Desktop installed with **autostart-on-login** enabled, and Windows **auto-login** on
   (so the engine starts unattended after a reboot — see *Reboot recovery*).
+- The **autoheal reboot-reconcile task** registered once (`WxServices\tools\Register-AutohealTask.ps1`,
+  elevated) — autoheal alone does not self-recover on reboot (see *Autoheal reboot reconcile*).
 
 ## Restart policy (WX-68)
 
@@ -126,8 +128,11 @@ On a host reboot:
 2. That fires Docker Desktop's autostart → the **engine** comes up (this can take several minutes on
    a congested boot while security/OEM services contend for CPU — it does come up).
 3. The engine restarts every `restart: unless-stopped` container → **all four services return**
-   (and the observability trio too, already `unless-stopped` since WX-16, plus the `autoheal` sidecar,
-   which resumes watching), no `docker compose up` needed.
+   (and the observability trio too, already `unless-stopped` since WX-16), no `docker compose up`
+   needed.
+4. The **`autoheal` sidecar is the exception** — it does **not** self-recover on reboot (its single-FILE
+   socket mount goes stale; see *Autoheal reboot reconcile* below). A logon-triggered scheduled task
+   re-creates it once the engine is up.
 
 **Verify after a reboot** (no manual action first):
 
@@ -155,6 +160,53 @@ cycle in `wxreport-svc.log`) — plus recent mtimes on the per-worker heartbeat 
 - Was it hand-stopped before the reboot? `unless-stopped` keeps it stopped by design — `docker
   compose start <svc>`.
 
+## Autoheal reboot reconcile (WX-68)
+
+The `autoheal` sidecar needs special handling that the four services do not. Its **only** mount is the
+Docker socket — a single **file** (`/var/run/docker.sock`). On Docker Desktop, a host reboot auto-starts
+`restart: unless-stopped` containers before that socket source is resolvable, and the engine's own restart
+reuses the container's baked (now-stale) bind-mount proxy path. The result is a hard failure:
+
+```text
+docker inspect services-autoheal-1 --format '{{.State.Status}} {{.State.ExitCode}}'
+# exited 127     <- "mounting ... /var/run/docker.sock ... not a directory"
+```
+
+`restart: unless-stopped` **cannot** heal this — a mount-*create* failure never counts as a restart
+(`RestartCount` stays 0). Only a `docker compose up --force-recreate` re-mints a fresh, valid mount. The
+four services survive the same reboot because their mount is a **directory** (`C:\HarderWare\Logs`), not a
+single file.
+
+The fix is a **logon-triggered scheduled task** — *HarderWare Autoheal Reboot Reconcile* — that waits for
+the engine, then force-recreates autoheal only if it is not already running:
+
+```powershell
+# One-time install (elevated), and after each reboot it runs itself:
+cd C:\Code\HarderWare\WxServices\tools
+.\Register-AutohealTask.ps1                     # installs the reconcile script + registers the logon task
+
+# Manual run / recovery any time (also the exact path Deploy-WxService.ps1 autoheal takes):
+cd C:\Code\HarderWare\services
+docker compose up -d --force-recreate autoheal
+```
+
+It runs **as the interactive user at logon** (not SYSTEM-at-startup): Docker Desktop is a per-user tray app
+whose engine pipe is session-bound, so a SYSTEM task would race its start and never see the engine.
+`Register-AutohealTask.ps1` resolves `InstallRoot` from `appsettings.shared.json` (as `Deploy-WxService.ps1`
+does), so the install and log dirs follow a non-default `InstallRoot`. The run logs to
+`{InstallRoot}\Logs\autoheal-reconcile.log` (default `C:\HarderWare\Logs\`).
+
+> This is a Docker-Desktop-specific patch. Running the stack on **Docker Engine** (a Linux host, or `dockerd`
+> via systemd in WSL2) would make the socket local and un-proxied, retiring this task and the stale-mount
+> class entirely — tracked as a forward-looking evaluation under WX-7.
+
+**Verify autoheal after a reboot:**
+
+```bash
+docker inspect services-autoheal-1 --format '{{.State.Status}} restart={{.HostConfig.RestartPolicy.Name}}'
+# expect: running restart=unless-stopped
+```
+
 ## ⚠️ Reboot test — back up FIRST
 
 Before **any** deliberate reboot test on this (fragile, pre-replacement) host, run the daily backup so
@@ -170,4 +222,8 @@ Only then reboot. This is a required pre-step in WX-68's §13.
 
 - `DEVELOPER-README.md` — full host system-configuration for a reboot-survivable box (WX-298).
 - Boot watchdog (`C:\HarderWare\service-watchdog.ps1`) — being reconciled for the container world (WX-297).
+  The autoheal reboot-reconcile task above is the autoheal-scoped instance of that idea; generalizing a
+  post-boot reconcile across the whole stack stays WX-297.
+- `Register-AutohealTask.ps1` / `Reconcile-AutohealSidecar.ps1` (`WxServices\tools\`) — the autoheal
+  reboot-reconcile task (WX-68).
 - DB-connection resiliency at startup — WX-299.
