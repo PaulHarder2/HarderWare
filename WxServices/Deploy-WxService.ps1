@@ -306,7 +306,10 @@ function Invoke-ViewerPublish {
 # (willfarrell/autoheal) watches the autoheal=true-labelled service containers and restarts any that go
 # unhealthy - the wedged-but-alive recovery plain compose does not provide. Started explicitly here (no
 # --build; a pinned pulled image; no WX_HOST_* mounts - it only mounts the Docker socket) and verified
-# running. restart:unless-stopped then carries it across reboots once started.
+# running. Unlike the four services (whose directory mount survives), autoheal's single-FILE socket mount
+# does NOT survive a reboot on Docker Desktop (see the --force-recreate note below), so restart:unless-stopped
+# alone does NOT carry it across reboots - a logon-triggered boot reconcile (Reconcile-AutohealSidecar.ps1,
+# registered by Register-AutohealTask.ps1) re-creates it once the engine is up. WX-68.
 # ---------------------------------------------------------------------------
 function Start-AutohealSidecar {
     $repoRoot   = Split-Path $SolutionRoot -Parent
@@ -326,8 +329,14 @@ function Start-AutohealSidecar {
     try {
         # | Out-Host keeps docker output off the success stream (PS 5.x: a polluted stream turns the
         # bool return into an always-truthy array).
+        # --force-recreate (WX-68): autoheal's ONLY mount is the Docker socket (a single FILE). After a
+        # host reboot Docker Desktop auto-starts it before the socket source is resolvable, and the
+        # daemon's own restart reuses the container's baked (now-stale) bind-mount proxy path -> exit 127,
+        # RestartCount stuck at 0 (unless-stopped can't heal a mount-create failure). Only a recreate
+        # re-mints a fresh, valid bind-mount source. Recreating a stale-but-"running" sidecar is cheap and
+        # idempotent, so we always force it here (this is also the boot-reconcile path, Reconcile-AutohealSidecar.ps1).
         Write-Host "Starting the autoheal sidecar..."
-        docker compose up -d autoheal | Out-Host
+        docker compose up -d --force-recreate autoheal | Out-Host
         if ($LASTEXITCODE -ne 0) {
             Write-Error "docker compose up failed for autoheal (exit code $LASTEXITCODE)." -ErrorAction Continue
             return $false
