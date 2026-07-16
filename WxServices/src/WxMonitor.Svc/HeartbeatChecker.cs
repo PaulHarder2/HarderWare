@@ -3,20 +3,22 @@ using WxServices.Logging;
 namespace WxMonitor.Svc;
 
 /// <summary>
-/// Reads a heartbeat file written by a monitored service and determines
-/// whether the service appears to be running.
+/// Reads a heartbeat file written by a monitored worker and determines
+/// whether the worker appears to be running.
 /// <para>
 /// The heartbeat file contains a single line: an ISO 8601 UTC timestamp
-/// written by the service at the end of each successful cycle.
+/// written by the worker at the end of every loop iteration (including
+/// iterations that handle a fault without exiting).
 /// </para>
 /// </summary>
 public static class HeartbeatChecker
 {
     /// <summary>
-    /// Returns the age of the most recent heartbeat, or <see langword="null"/>
-    /// if the file is missing or unreadable.
+    /// Returns the age of the most recent heartbeat relative to <paramref name="nowUtc"/>, or
+    /// <see langword="null"/> if the file is missing or unreadable. The caller passes the monitor
+    /// cycle's clock so heartbeat age, cooldown windows, and test time all key off one "now".
     /// </summary>
-    public static TimeSpan? GetAge(string filePath)
+    public static TimeSpan? GetAge(string filePath, DateTime nowUtc)
     {
         if (!File.Exists(filePath))
             return null;
@@ -28,7 +30,7 @@ public static class HeartbeatChecker
                     System.Globalization.DateTimeStyles.RoundtripKind,
                     out var ts))
             {
-                return DateTime.UtcNow - ts.ToUniversalTime();
+                return nowUtc - ts.ToUniversalTime();
             }
 
             Logger.Warn($"Could not parse heartbeat timestamp from '{filePath}' — content: '{text}'.");

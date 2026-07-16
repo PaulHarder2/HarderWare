@@ -61,6 +61,7 @@ public sealed class GfsFetchWorker : BackgroundService
         while (!stoppingToken.IsCancellationRequested)
         {
             await GfsCycleAsync(stoppingToken);
+            Heartbeat.Write(new WxPaths(_config["InstallRoot"]).HeartbeatFile(WxWorkers.ParserGfs));
 
             var cfg = LoadConfig();
             var intervalMinutes = cfg.IntervalMinutes;

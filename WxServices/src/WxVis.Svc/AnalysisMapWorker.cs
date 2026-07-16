@@ -84,6 +84,11 @@ public sealed class AnalysisMapWorker : BackgroundService
                         stoppingToken,
                         _pythonEnv);
 
+                    // Beat after each zoom render (before the failure break) so the beat represents loop
+                    // liveness including a handled failed zoom, and a long multi-zoom batch stays fresh.
+                    // The end-of-iteration beat below still runs too.
+                    Heartbeat.Write(new WxPaths(_config["InstallRoot"]).HeartbeatFile(WxWorkers.VisAnalysis));
+
                     if (!ok) { allOk = false; break; }
                 }
 
@@ -102,6 +107,8 @@ public sealed class AnalysisMapWorker : BackgroundService
             }
 
             PurgeStalePlots(cfg);
+
+            Heartbeat.Write(new WxPaths(_config["InstallRoot"]).HeartbeatFile(WxWorkers.VisAnalysis));
 
             try { await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken); }
             catch (OperationCanceledException) { break; }

@@ -68,6 +68,7 @@ public sealed class ForecastMapWorker : BackgroundService
             }
 
             var cfg2 = LoadConfig();
+            Heartbeat.Write(new WxPaths(_config["InstallRoot"]).HeartbeatFile(WxWorkers.VisForecast));
             try { await Task.Delay(TimeSpan.FromSeconds(cfg2.ForecastPollIntervalSeconds), stoppingToken); }
             catch (OperationCanceledException) { break; }
         }
@@ -150,6 +151,12 @@ public sealed class ForecastMapWorker : BackgroundService
                     "forecast_map.py", $"--fh {fh} --run {latestRun:yyyyMMdd_HH} --zoom-level {z}{extentSuffix}",
                     ct,
                     _pythonEnv);
+
+                // Beat after each zoom render (before the failure break) so a long backlog — a new run
+                // makes up to 121 hours × ZoomLevels renders pending — keeps the heartbeat fresh mid-batch,
+                // and the beat represents loop liveness including a handled failed zoom. The end-of-cycle
+                // beat (in ExecuteAsync) still runs.
+                Heartbeat.Write(new WxPaths(_config["InstallRoot"]).HeartbeatFile(WxWorkers.VisForecast));
 
                 if (!ok) { allOk = false; break; }
             }

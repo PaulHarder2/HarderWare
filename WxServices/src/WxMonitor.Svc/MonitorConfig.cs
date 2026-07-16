@@ -54,18 +54,16 @@ public class MonitorConfig
     public List<WatchedServiceConfig> WatchedServices { get; set; } = [];
 }
 
-/// <summary>Configuration for a single service watched by WxMonitor.</summary>
+/// <summary>
+/// Configuration for a single service whose LOG the monitor scans (<see cref="LogScanWatcher"/>).
+/// Heartbeats are no longer configured per watched service — they're watched per-worker from the
+/// shared <see cref="WxWorkers"/> registry (WX-68 Unit 2), so this carries only the log-scan target.
+/// </summary>
 public class WatchedServiceConfig
 {
     /// <summary>Display name used in alert subjects and log messages.</summary>
     public string Name { get; set; } = "";
 
-    /// <summary>Absolute path to the service's log4net log file.</summary>
+    /// <summary>Absolute path to the service's log4net log file (derived from the canonical token when blank).</summary>
     public string LogFile { get; set; } = "";
-
-    /// <summary>Absolute path to the service's heartbeat file.</summary>
-    public string HeartbeatFile { get; set; } = "";
-
-    /// <summary>Age in minutes beyond which a heartbeat is considered stale.</summary>
-    public int HeartbeatMaxAgeMinutes { get; set; } = 30;
 }

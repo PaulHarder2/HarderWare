@@ -7,9 +7,9 @@
 // exercise the whole cycle through the injected seams (IEmailer, clock, IMonitorStateStore)
 // rather than any single detector.
 //
-// Note the injected clock governs everything the worker itself times (cooldown, METAR age,
-// body footers); heartbeat staleness is judged by HeartbeatChecker against the real wall
-// clock (it is not seamed), so heartbeat files are written relative to DateTime.UtcNow.
+// Note the injected clock governs everything the cycle times — cooldown, METAR age, body footers,
+// and (since WX-68) heartbeat staleness, which HeartbeatChecker.GetAge now judges against the passed
+// ctx.UtcNow rather than the wall clock. So heartbeat files here are written relative to Now.
 
 using MetarParser.Data;
 using MetarParser.Data.Entities;
@@ -31,6 +31,7 @@ public sealed class MonitorCycleCharacterizationTests : IDisposable
     private static readonly DateTime Now = new(2026, 7, 8, 12, 0, 0, DateTimeKind.Utc);
 
     private readonly List<string> _tempFiles = [];
+    private readonly List<string> _tempDirs = [];
     private readonly SqliteConnection _conn = new("DataSource=:memory:");
 
     public void Dispose()
@@ -39,6 +40,10 @@ public sealed class MonitorCycleCharacterizationTests : IDisposable
         foreach (var f in _tempFiles)
         {
             try { File.Delete(f); } catch { /* best-effort cleanup */ }
+        }
+        foreach (var d in _tempDirs)
+        {
+            try { Directory.Delete(d, recursive: true); } catch { /* best-effort cleanup */ }
         }
     }
 
@@ -98,6 +103,24 @@ public sealed class MonitorCycleCharacterizationTests : IDisposable
         return path;
     }
 
+    /// <summary>
+    /// Creates a fresh temp InstallRoot with an empty <c>Logs</c> subdir and returns its path. The
+    /// registry-driven HeartbeatWatcher (WX-68) resolves each worker's heartbeat under
+    /// <c>{InstallRoot}\Logs</c>, so pointing every test at an isolated empty root keeps heartbeat
+    /// scanning deterministic — no real host heartbeat under the default C:\HarderWare can leak in.
+    /// </summary>
+    private string NewInstallRoot()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "wxmon-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(dir, "Logs"));
+        _tempDirs.Add(dir);
+        return dir;
+    }
+
+    /// <summary>Writes a worker's heartbeat file under <paramref name="installRoot"/> with the given timestamp.</summary>
+    private static void WriteHeartbeat(string installRoot, WxWorker worker, DateTime utc)
+        => File.WriteAllText(new WxPaths(installRoot).HeartbeatFile(worker), utc.ToString("O"));
+
     private static string LogLine(DateTime ts, string level, string message)
         => $"{ts:yyyy-MM-dd HH:mm:ss.fff} {level,-5} [Test.cs::Method:1] {message}";
 
@@ -109,17 +132,21 @@ public sealed class MonitorCycleCharacterizationTests : IDisposable
         FakeEmailer emailer, IMonitorStateStore state)
         => new(config, db, _ => emailer, state, () => Now);
 
-    /// <summary>One watched service; caller supplies log + heartbeat file paths. METAR check disabled unless overridden.</summary>
-    private static Dictionary<string, string?> BaseConfig(string logFile, string heartbeatFile) => new()
+    /// <summary>
+    /// One watched service for log-scan; caller supplies the InstallRoot (its <c>Logs</c> dir is where
+    /// the registry-driven heartbeat watcher looks) and the log-file path. METAR check disabled unless
+    /// overridden. Heartbeats are no longer configured here — they're watched per-worker from the
+    /// WxWorkers registry (WX-68), so a test opts into a heartbeat alert by dropping a file under Logs.
+    /// </summary>
+    private static Dictionary<string, string?> BaseConfig(string installRoot, string logFile) => new()
     {
+        ["InstallRoot"] = installRoot,
         ["Monitor:AlertEmail"] = "alerts@example.com",
         ["Monitor:AlertOnSeverity"] = "ERROR",
         ["Monitor:AlertCooldownMinutes"] = "60",
         ["Monitor:MetarStalenessThresholdMinutes"] = "0",
         ["Monitor:WatchedServices:0:Name"] = "WxParser.Svc",
         ["Monitor:WatchedServices:0:LogFile"] = logFile,
-        ["Monitor:WatchedServices:0:HeartbeatFile"] = heartbeatFile,
-        ["Monitor:WatchedServices:0:HeartbeatMaxAgeMinutes"] = "30",
     };
 
     private static MonitorState SeededLogBaseline(DateTime lastSeen, DateTime? lastAlert = null)
@@ -138,11 +165,11 @@ public sealed class MonitorCycleCharacterizationTests : IDisposable
     {
         var db = NewDb();
         var log = NewTempFile(LogLine(Now.AddMinutes(-5), "ERROR", "boom disk full") + Environment.NewLine);
-        var hb = NewTempFile(DateTime.UtcNow.ToString("O")); // fresh → no heartbeat alert
         var emailer = new FakeEmailer();
         var state = new InMemoryStateStore(SeededLogBaseline(Now.AddMinutes(-10)));
 
-        await NewWorker(Config(BaseConfig(log, hb)), db, emailer, state).RunCycleAsync(CancellationToken.None);
+        // Empty Logs dir under a fresh InstallRoot → no worker heartbeats found → heartbeat watcher silent.
+        await NewWorker(Config(BaseConfig(NewInstallRoot(), log)), db, emailer, state).RunCycleAsync(CancellationToken.None);
 
         var msg = Assert.Single(emailer.Sent);
         Assert.Equal("alerts@example.com", msg.To);
@@ -159,12 +186,11 @@ public sealed class MonitorCycleCharacterizationTests : IDisposable
     {
         var db = NewDb();
         var log = NewTempFile(LogLine(Now.AddMinutes(-5), "ERROR", "boom disk full") + Environment.NewLine);
-        var hb = NewTempFile(DateTime.UtcNow.ToString("O"));
         var emailer = new FakeEmailer();
         // Last alert sent 5 minutes ago; cooldown is 60 → suppressed.
         var state = new InMemoryStateStore(SeededLogBaseline(Now.AddMinutes(-10), lastAlert: Now.AddMinutes(-5)));
 
-        await NewWorker(Config(BaseConfig(log, hb)), db, emailer, state).RunCycleAsync(CancellationToken.None);
+        await NewWorker(Config(BaseConfig(NewInstallRoot(), log)), db, emailer, state).RunCycleAsync(CancellationToken.None);
 
         Assert.Empty(emailer.Sent);
         Assert.Equal(Now.AddMinutes(-5), state.State.GetOrCreate("WxParser.Svc").LastSeenLogTimestamp);
@@ -176,29 +202,34 @@ public sealed class MonitorCycleCharacterizationTests : IDisposable
     public async Task Heartbeat_Stale_SendsOneAlert()
     {
         var db = NewDb();
+        var root = NewInstallRoot();
         var log = NewTempFile(LogLine(Now.AddMinutes(-5), "INFO", "just info") + Environment.NewLine);
-        var hb = NewTempFile(DateTime.UtcNow.AddMinutes(-60).ToString("O")); // age ~60 > 30 → stale
+        // FetchWorker's heartbeat 60 min old > its 30-min registry threshold → stale. Timestamps are
+        // relative to the injected cycle clock (Now), which HeartbeatChecker.GetAge now uses. The other
+        // 6 workers' files are absent (empty Logs) → "not found" WARNs, no findings → exactly one alert.
+        WriteHeartbeat(root, WxWorkers.ParserFetch, Now.AddMinutes(-60));
         var emailer = new FakeEmailer();
         var state = new InMemoryStateStore(SeededLogBaseline(Now.AddMinutes(-10)));
 
-        await NewWorker(Config(BaseConfig(log, hb)), db, emailer, state).RunCycleAsync(CancellationToken.None);
+        await NewWorker(Config(BaseConfig(root, log)), db, emailer, state).RunCycleAsync(CancellationToken.None);
 
         var msg = Assert.Single(emailer.Sent);
-        Assert.Equal("[WxMonitor] WxParser.Svc — service may be stopped", msg.Subject);
+        Assert.Equal("[WxMonitor] wxparser-fetch — worker may be stopped", msg.Subject);
         Assert.Contains("stopped, crashed, or is hung", msg.Body);
-        Assert.Equal(Now, state.State.GetOrCreate("WxParser.Svc").LastHeartbeatAlertSentUtc);
+        Assert.Equal(Now, state.State.GetOrCreate("wxparser-fetch").LastHeartbeatAlertSentUtc);
     }
 
     [Fact]
     public async Task Heartbeat_Fresh_NoAlert()
     {
         var db = NewDb();
+        var root = NewInstallRoot();
         var log = NewTempFile(LogLine(Now.AddMinutes(-5), "INFO", "just info") + Environment.NewLine);
-        var hb = NewTempFile(DateTime.UtcNow.ToString("O")); // fresh
+        WriteHeartbeat(root, WxWorkers.ParserFetch, Now); // fresh (relative to the injected cycle clock) → no finding
         var emailer = new FakeEmailer();
         var state = new InMemoryStateStore(SeededLogBaseline(Now.AddMinutes(-10)));
 
-        await NewWorker(Config(BaseConfig(log, hb)), db, emailer, state).RunCycleAsync(CancellationToken.None);
+        await NewWorker(Config(BaseConfig(root, log)), db, emailer, state).RunCycleAsync(CancellationToken.None);
 
         Assert.Empty(emailer.Sent);
     }
@@ -211,8 +242,7 @@ public sealed class MonitorCycleCharacterizationTests : IDisposable
         var db = NewDb();
         SeedMostRecentMetar(db, Now.AddMinutes(-200)); // > 120 threshold → stale
         var log = NewTempFile(LogLine(Now.AddMinutes(-5), "INFO", "just info") + Environment.NewLine);
-        var hb = NewTempFile(DateTime.UtcNow.ToString("O")); // fresh → service alerts silent
-        var cfg = BaseConfig(log, hb);
+        var cfg = BaseConfig(NewInstallRoot(), log); // empty Logs → heartbeat alerts silent
         cfg["Monitor:MetarStalenessThresholdMinutes"] = "120";
         var emailer = new FakeEmailer();
         var state = new InMemoryStateStore(SeededLogBaseline(Now.AddMinutes(-10)));
@@ -231,8 +261,7 @@ public sealed class MonitorCycleCharacterizationTests : IDisposable
         var db = NewDb();
         SeedMostRecentMetar(db, Now.AddMinutes(-10)); // < 120 threshold → fresh
         var log = NewTempFile(LogLine(Now.AddMinutes(-5), "INFO", "just info") + Environment.NewLine);
-        var hb = NewTempFile(DateTime.UtcNow.ToString("O"));
-        var cfg = BaseConfig(log, hb);
+        var cfg = BaseConfig(NewInstallRoot(), log); // empty Logs → heartbeat alerts silent
         cfg["Monitor:MetarStalenessThresholdMinutes"] = "120";
         var emailer = new FakeEmailer();
         var state = new InMemoryStateStore(SeededLogBaseline(Now.AddMinutes(-10)));

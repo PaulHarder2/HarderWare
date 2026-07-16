@@ -79,6 +79,7 @@ public sealed class MeteogramWorker : BackgroundService
             }
 
             var cfg2 = LoadConfig();
+            Heartbeat.Write(new WxPaths(_config["InstallRoot"]).HeartbeatFile(WxWorkers.VisMeteogram));
             try { await Task.Delay(TimeSpan.FromSeconds(cfg2.ForecastPollIntervalSeconds), stoppingToken); }
             catch (OperationCanceledException) { break; }
         }
@@ -248,6 +249,11 @@ public sealed class MeteogramWorker : BackgroundService
                 Logger.Error($"MeteogramWorker: render failed for {loc.Icao} [{loc.Language}] — will retry next poll.");
                 allOk = false;
             }
+
+            // Keep the heartbeat fresh through a long backlog (one pair per recipient location/language):
+            // stamp after each location so a render batch exceeding the freshness window isn't read as a
+            // dead worker (-> false unhealthy -> autoheal restart mid-batch). The end-of-cycle beat still runs.
+            Heartbeat.Write(new WxPaths(_config["InstallRoot"]).HeartbeatFile(WxWorkers.VisMeteogram));
         }
 
         if (manifestEntries.Count > 0)

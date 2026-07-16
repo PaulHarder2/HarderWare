@@ -90,7 +90,8 @@ public sealed class FetchWorker : BackgroundService
     /// <sideeffects>
     /// Inserts new METAR and TAF records into the database.
     /// May write resolved coordinates and home ICAO to <c>appsettings.local.json</c> on first run.
-    /// Writes the heartbeat file on success.
+    /// Writes the heartbeat file at the end of every iteration (in <c>finally</c>, including a
+    /// handled fetch fault) — an end-of-iteration liveness update, not a fetch-success signal.
     /// Makes HTTP calls to the Aviation Weather Center API.
     /// Writes log entries throughout.
     /// </sideeffects>
@@ -246,8 +247,6 @@ public sealed class FetchWorker : BackgroundService
             await TafFetcher.FetchAndInsertByStationsAsync(targets.TafIcaos, _dbOptions, _http);
 
             Logger.Info("Fetch cycle complete.");
-            WriteHeartbeat(_config["Fetch:HeartbeatFile"]
-                ?? new WxPaths(_config["InstallRoot"]).HeartbeatFile(WxServiceToken.WxParser));
             _fetchCycles.Add(1);
             _fetchDuration.Record(sw.Elapsed.TotalSeconds);
         }
@@ -255,20 +254,14 @@ public sealed class FetchWorker : BackgroundService
         {
             Logger.Error("Unhandled exception in fetch cycle.", ex);
         }
-    }
-
-    /// <summary>
-    /// Writes the current UTC timestamp to the heartbeat file so that WxMonitor
-    /// can confirm this service is still running.  Does nothing if
-    /// <paramref name="path"/> is null or whitespace.
-    /// </summary>
-    /// <param name="path">Absolute path to the heartbeat file, or <see langword="null"/> to skip.</param>
-    /// <sideeffects>Creates or overwrites the file at <paramref name="path"/> with an ISO 8601 UTC timestamp.</sideeffects>
-    private static void WriteHeartbeat(string? path)
-    {
-        if (string.IsNullOrWhiteSpace(path)) return;
-        try { File.WriteAllText(path, DateTime.UtcNow.ToString("o")); }
-        catch (Exception ex) { Logger.Warn($"Could not write heartbeat to '{path}': {ex.Message}"); }
+        finally
+        {
+            // Beat on the loop turning (success OR handled fault), not on the fetch succeeding — a fetch
+            // that throws every cycle (e.g. an upstream AWC outage, WX-183) is still a live loop, and the
+            // heartbeat tracks liveness, not fetch success. Mirrors ReportWorker's finally-placed beat;
+            // the success-only counters above stay in the try.
+            Heartbeat.Write(new WxPaths(_config["InstallRoot"]).HeartbeatFile(WxWorkers.ParserFetch));
+        }
     }
 
     /// <summary>

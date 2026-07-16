@@ -155,6 +155,13 @@ public sealed class ReportWorker : BackgroundService
                 Logger.Error("Unhandled exception in report cycle.", ex);
             }
 
+            // Beat after every cycle (success OR handled fault) so the heartbeat tracks loop liveness,
+            // not report success. Placed here rather than inside RunCycleAsync because LoadConfigsAsync
+            // runs before that method's try/finally: a DB/config outage would otherwise skip the beat and
+            // falsely mark the still-alive worker unhealthy (-> autoheal restart-loop). Path from the
+            // registry, independent of config load (WX-68).
+            Heartbeat.Write(new WxPaths(_config["InstallRoot"]).HeartbeatFile(WxWorkers.ReportReport));
+
             var intervalMinutes = _config.GetValue<int>("Report:IntervalMinutes", 5);
             if (intervalMinutes <= 0)
             {
@@ -467,7 +474,7 @@ public sealed class ReportWorker : BackgroundService
         finally
         {
             _cycleDuration.Record(cycleSw.Elapsed.TotalSeconds);
-            WriteHeartbeat(cfg.HeartbeatFile);
+            // Heartbeat is emitted by the ExecuteAsync loop (WX-68), not here — see the note there.
         }
     }
 
@@ -2373,20 +2380,6 @@ public sealed class ReportWorker : BackgroundService
     }
 
     /// <summary>
-    /// Writes the current UTC timestamp to the heartbeat file so that WxMonitor
-    /// can confirm this service is still running.  Does nothing if
-    /// <paramref name="path"/> is null or whitespace.
-    /// </summary>
-    /// <param name="path">Absolute path to the heartbeat file, or <see langword="null"/> to skip.</param>
-    /// <sideeffects>Creates or overwrites the file at <paramref name="path"/> with an ISO 8601 UTC timestamp.</sideeffects>
-    private static void WriteHeartbeat(string? path)
-    {
-        if (string.IsNullOrWhiteSpace(path)) return;
-        try { File.WriteAllText(path, DateTime.UtcNow.ToString("o")); }
-        catch (Exception ex) { Logger.Warn($"Could not write heartbeat to '{path}': {ex.Message}"); }
-    }
-
-    /// <summary>
     /// Parses a comma-separated list of ICAO station identifiers into a list of
     /// trimmed, non-empty strings.
     /// </summary>
@@ -2423,7 +2416,6 @@ public sealed class ReportWorker : BackgroundService
     {
         var report = new ReportConfig();
         _config.GetSection("Report").Bind(report);
-        report.HeartbeatFile ??= new WxPaths(_config["InstallRoot"]).HeartbeatFile(WxServiceToken.WxReport);
 
         var dbRecipients = await ctx.Recipients.OrderBy(r => r.Id).ToListAsync(ct);
         if (dbRecipients.Count > 0)
