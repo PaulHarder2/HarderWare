@@ -4,6 +4,7 @@
 // fail until the expected map below is updated in lockstep — the guardrail that also keeps the compose
 // healthchecks, which hard-code the same filenames, honest.
 
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
@@ -78,28 +79,45 @@ public sealed class WxWorkersTests
     }
 
     [Fact]
-    public void ComposeHealthchecks_ReferenceExactlyTheRegistryFilenames()
+    public void ComposeHealthchecks_MatchRegistryFilenamesAndThresholds()
     {
-        // The registry↔Compose recovery contract: services/docker-compose.yml hard-codes each heartbeat
-        // filename in its healthcheck probes, and nothing else ties those strings to WxWorkers. Without
-        // this test, renaming/adding a worker leaves container recovery watching a stale/absent name
-        // while the rest of the suite stays green. Pin both directions.
-        var compose = ReadComposeFile();
+        // The registry↔Compose recovery contract. Scoped to the REAL healthcheck probe commands (the
+        // CMD-SHELL test strings), not the whole YAML — a filename in a comment must not satisfy this,
+        // only an actual probe. Assert each worker's filename AND its freshness threshold
+        // (DefaultMaxAgeMinutes × 60 s) appear together in one probe; and no probe names an unknown file.
+        // Without this, a registry rename or a threshold edit could drift from the probe while green.
+        var probes = ExtractHealthcheckProbes(ReadComposeFile());
+        Assert.NotEmpty(probes);
 
-        // (1) Every registered worker's heartbeat filename appears in a compose healthcheck.
         foreach (var w in WxWorkers.All)
         {
             var file = $"{w.Token}-heartbeat.txt";
-            Assert.True(compose.Contains(file, StringComparison.Ordinal),
-                $"docker-compose.yml has no healthcheck referencing '{file}' (worker {w.Token}).");
+            var probe = probes.FirstOrDefault(p => p.Contains(file, StringComparison.Ordinal));
+            Assert.True(probe is not null, $"No healthcheck probe references '{file}' (worker {w.Token}).");
+
+            var seconds = w.DefaultMaxAgeMinutes * 60;
+            Assert.True(probe!.Contains($"-lt {seconds}", StringComparison.Ordinal),
+                $"The probe for '{file}' does not test freshness against {seconds}s " +
+                $"(DefaultMaxAgeMinutes {w.DefaultMaxAgeMinutes}). Probe: {probe}");
         }
 
-        // (2) No orphan: every *-heartbeat.txt named in compose is a registered worker (catches a
-        // filename left behind after a rename).
+        // No orphan: every *-heartbeat.txt named in an actual probe is a registered worker.
         var known = WxWorkers.All.Select(w => $"{w.Token}-heartbeat.txt").ToHashSet(StringComparer.Ordinal);
-        foreach (Match m in Regex.Matches(compose, @"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*-heartbeat\.txt"))
+        foreach (Match m in Regex.Matches(string.Join("\n", probes), @"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*-heartbeat\.txt"))
             Assert.True(known.Contains(m.Value),
-                $"docker-compose.yml references heartbeat file '{m.Value}', which is not in WxWorkers.All.");
+                $"A healthcheck probe references '{m.Value}', which is not in WxWorkers.All.");
+    }
+
+    /// <summary>
+    /// Extracts the shell command from each compose <c>healthcheck.test: ["CMD-SHELL", "…"]</c> so the
+    /// contract test inspects the actual probes rather than the whole file (comments included).
+    /// </summary>
+    private static List<string> ExtractHealthcheckProbes(string compose)
+    {
+        var probes = new List<string>();
+        foreach (Match m in Regex.Matches(compose, @"test:\s*\[\s*""CMD-SHELL""\s*,\s*""(?<cmd>(?:[^""\\]|\\.)*)""\s*\]"))
+            probes.Add(m.Groups["cmd"].Value);
+        return probes;
     }
 
     /// <summary>

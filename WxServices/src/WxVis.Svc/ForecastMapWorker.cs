@@ -152,6 +152,12 @@ public sealed class ForecastMapWorker : BackgroundService
                     ct,
                     _pythonEnv);
 
+                // Beat after each zoom render (before the failure break) so a long backlog — a new run
+                // makes up to 121 hours × ZoomLevels renders pending — keeps the heartbeat fresh mid-batch,
+                // and the beat represents loop liveness including a handled failed zoom. The end-of-cycle
+                // beat (in ExecuteAsync) still runs.
+                Heartbeat.Write(new WxPaths(_config["InstallRoot"]).HeartbeatFile(WxWorkers.VisForecast));
+
                 if (!ok) { allOk = false; break; }
             }
 
@@ -165,11 +171,6 @@ public sealed class ForecastMapWorker : BackgroundService
                 _forecastFailures.Add(1);
                 Logger.Error($"ForecastMapWorker: render failed for f{fh:D3} — will retry next poll.");
             }
-
-            // Keep the heartbeat fresh through a long backlog (a new run makes up to 121 hours pending):
-            // stamp after each frame so a render batch exceeding the freshness window isn't read as a dead
-            // worker (-> false unhealthy -> autoheal restart mid-batch). The end-of-cycle beat still runs.
-            Heartbeat.Write(new WxPaths(_config["InstallRoot"]).HeartbeatFile(WxWorkers.VisForecast));
         }
     }
 

@@ -84,11 +84,12 @@ public sealed class AnalysisMapWorker : BackgroundService
                         stoppingToken,
                         _pythonEnv);
 
-                    if (!ok) { allOk = false; break; }
-
-                    // Stamp after each zoom render so a multi-zoom batch that runs long doesn't let the
-                    // heartbeat go stale mid-render (the end-of-iteration beat below still runs too).
+                    // Beat after each zoom render (before the failure break) so the beat represents loop
+                    // liveness including a handled failed zoom, and a long multi-zoom batch stays fresh.
+                    // The end-of-iteration beat below still runs too.
                     Heartbeat.Write(new WxPaths(_config["InstallRoot"]).HeartbeatFile(WxWorkers.VisAnalysis));
+
+                    if (!ok) { allOk = false; break; }
                 }
 
                 _analysisRenderDuration.Record(renderSw.Elapsed.TotalSeconds, new KeyValuePair<string, object?>("map_type", "analysis"));
