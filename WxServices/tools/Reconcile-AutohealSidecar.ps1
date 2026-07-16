@@ -55,7 +55,11 @@ if (-not $LogDir) {
   $installRoot = 'C:\HarderWare'
   $sharedConfig = Join-Path (Split-Path -Parent (Split-Path -Parent $ComposeFile)) 'WxServices\appsettings.shared.json'
   if (Test-Path $sharedConfig) {
-    try { $sc = Get-Content $sharedConfig -Raw | ConvertFrom-Json; if ($sc.InstallRoot) { $installRoot = $sc.InstallRoot } } catch {}
+    # Fail closed on a malformed/unreadable shared config: let it throw under the script-wide 'Stop'
+    # (as Deploy-WxService.ps1 does) rather than silently reverting to the default root and writing the
+    # reconcile log to the wrong {InstallRoot}\Logs tree, which would mask a real config problem.
+    $sc = Get-Content $sharedConfig -Raw | ConvertFrom-Json
+    if ($sc.InstallRoot) { $installRoot = $sc.InstallRoot }
   }
   $LogDir = Join-Path $installRoot 'Logs'
 }

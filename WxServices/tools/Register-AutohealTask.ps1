@@ -40,7 +40,8 @@ if (Test-Path $sharedConfigPath) {
 $InstallDir = Join-Path $InstallRoot 'autoheal'
 $LogDir = Join-Path $InstallRoot 'Logs'
 if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir -Force | Out-Null }
-try { Start-Transcript -Path (Join-Path $LogDir 'register-autoheal.out') -Force | Out-Null } catch {}
+try { Start-Transcript -Path (Join-Path $LogDir 'register-autoheal.out') -Force | Out-Null }
+catch { Write-Warning "Could not start registration transcript: $($_.Exception.Message)" }
 Write-Output "Install root:  $InstallRoot"
 
 $elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
