@@ -189,10 +189,14 @@ the database.
 | `Fetch:HomeIcao` | ICAO code of your nearest METAR station | `KDWH` |
 | `Fetch:HomeLatitude` | Your latitude in decimal degrees | `30.07` |
 | `Fetch:HomeLongitude` | Your longitude in decimal degrees (negative = west) | `-95.55` |
-| `WxVis:CondaPythonExe` | Full path to the wxvis conda `python.exe`. **Native-fallback only** — the containerized WxVis uses its own in-image `python3`; this is no longer a Configure-tab field (WX-69). | `C:\\Users\\You\\miniconda3\\envs\\wxvis\\python.exe` |
 
 To find your nearest METAR station, search for your location at:
 > https://aviationweather.gov/data/metar/
+
+> **Native-fallback only:** `WxVis:CondaPythonExe` (the wxvis conda `python.exe` path) is **not**
+> required for the containerized deployment — WxVis runs its own in-image `python3`, and the field
+> was removed from the Configure tab (WX-69). Set it in `appsettings.shared.json` only if you run
+> the reversible native-service fallback.
 
 ### Secrets (SMTP Credentials and Claude API Key)
 
