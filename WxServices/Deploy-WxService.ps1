@@ -12,18 +12,20 @@
 .PARAMETER ServiceName
     The service or application to deploy, or 'all' to deploy everything:
     the WxParserSvc, WxVisSvc, WxReportSvc, and WxMonitorSvc Docker containers
-    (services/docker-compose.yml), then WxManager and WxViewer.
+    (services/docker-compose.yml), the autoheal sidecar, then WxManager and WxViewer.
+    'autoheal' brings up just the sidecar.
 
 .EXAMPLE
     .\Deploy-WxService.ps1 WxReportSvc
     .\Deploy-WxService.ps1 all
+    .\Deploy-WxService.ps1 autoheal
     .\Deploy-WxService.ps1 WxViewer
     .\Deploy-WxService.ps1 WxManager
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [ValidateSet('WxParserSvc', 'WxReportSvc', 'WxMonitorSvc', 'WxVisSvc', 'WxViewer', 'WxManager', 'all')]
+    [ValidateSet('WxParserSvc', 'WxReportSvc', 'WxMonitorSvc', 'WxVisSvc', 'WxViewer', 'WxManager', 'autoheal', 'all')]
     [string]$ServiceName,
 
     # Seconds to wait for a containerized service to log "Application started" before FAIL.
@@ -297,6 +299,58 @@ function Invoke-ViewerPublish {
 }
 
 # ---------------------------------------------------------------------------
+# Bring up the autoheal sidecar (WX-68). Unlike the four service containers it is NOT deployed by name
+# via Invoke-ContainerDeploy: it has no "Application started" banner to verify, and nothing depends_on
+# it, so a per-service 'compose up <service>' never creates it. A compose healthcheck only REPORTS
+# health; the Docker restart policy fires on process EXIT, not on 'unhealthy'. This sidecar
+# (willfarrell/autoheal) watches the autoheal=true-labelled service containers and restarts any that go
+# unhealthy - the wedged-but-alive recovery plain compose does not provide. Started explicitly here (no
+# --build; a pinned pulled image; no WX_HOST_* mounts - it only mounts the Docker socket) and verified
+# running. restart:unless-stopped then carries it across reboots once started.
+# ---------------------------------------------------------------------------
+function Start-AutohealSidecar {
+    $repoRoot   = Split-Path $SolutionRoot -Parent
+    $composeDir = "$repoRoot\services"
+
+    docker info *> $null
+    if ($LASTEXITCODE -ne 0) {
+        # -ErrorAction Continue: $ErrorActionPreference is 'Stop' script-wide, under which a bare
+        # Write-Error terminates BEFORE the return, breaking the boolean contract (the 'all' caller
+        # relies on $false to record [FAIL] + print the partial summary rather than abort).
+        Write-Error "Docker is not reachable (is Docker Desktop running?). Cannot start the autoheal sidecar." -ErrorAction Continue
+        return $false
+    }
+
+    $running = $false
+    Push-Location $composeDir
+    try {
+        # | Out-Host keeps docker output off the success stream (PS 5.x: a polluted stream turns the
+        # bool return into an always-truthy array).
+        Write-Host "Starting the autoheal sidecar..."
+        docker compose up -d autoheal | Out-Host
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "docker compose up failed for autoheal (exit code $LASTEXITCODE)." -ErrorAction Continue
+            return $false
+        }
+        $id = (docker compose ps -q autoheal 2>$null | Select-Object -First 1)
+        if ($id -and (docker inspect -f '{{.State.Running}}' $id 2>$null) -eq 'true') {
+            $running = $true
+        }
+    } finally {
+        Pop-Location
+    }
+
+    if ($running) {
+        Write-Host "autoheal sidecar is running (restarts autoheal=true containers that go unhealthy)." -ForegroundColor Green
+    } else {
+        # Include -f <compose file>: this runs after Pop-Location, so a bare 'docker compose logs' would
+        # miss the file from the caller's cwd.
+        Write-Error "autoheal sidecar did not reach a running state. Check: docker compose -f '$composeDir\docker-compose.yml' logs autoheal" -ErrorAction Continue
+    }
+    return $running
+}
+
+# ---------------------------------------------------------------------------
 # Consolidated end-of-run status table. The per-step [OK]/messages scroll off
 # under each container's docker-build output, so this final summary is the
 # at-a-glance "did everything come up?" - in particular whether each container
@@ -311,6 +365,7 @@ function Show-DeploySummary {
     foreach ($r in $Results) {
         $detail = switch ($r.Kind) {
             'container' { if ($r.Ok) { 'Application started' } else { 'did NOT start' } }
+            'sidecar'   { if ($r.Ok) { 'running' }             else { 'did NOT start' } }
             default     { if ($r.Ok) { 'published' }           else { 'publish FAILED' } }
         }
         $tag = if ($r.Ok) { '[OK]  ' } else { '[FAIL]' }
@@ -356,6 +411,11 @@ if ($ServiceName -eq 'WxMonitorSvc') {
     exit $(if ($ok) { 0 } else { 1 })
 }
 
+if ($ServiceName -eq 'autoheal') {
+    $ok = Start-AutohealSidecar
+    exit $(if ($ok) { 0 } else { 1 })
+}
+
 if ($ServiceName -eq 'all') {
     # WxVis Python scripts are no longer copied to the host: WxVisSvc runs in a container (WX-65)
     # with the scripts baked into the image, and nothing on the host reads InstallRoot\WxVis anymore.
@@ -398,6 +458,18 @@ if ($ServiceName -eq 'all') {
         Write-Host "=== WxMonitorSvc (container) ===" -ForegroundColor Cyan
         $ok = Invoke-ContainerDeploy -ComposeService 'wxmonitor' -DeployApp 'WxMonitorSvc'
         $results.Add([pscustomobject]@{ Name = 'WxMonitorSvc'; Kind = 'container'; Ok = $ok; Compose = 'wxmonitor' })
+        if (-not $ok) { $failed = $true }
+    }
+
+    # autoheal sidecar - after the service containers it watches. Not an Invoke-ContainerDeploy target
+    # (no "Application started" banner, nothing depends_on it), so the per-service deploys never create
+    # it; it needs this explicit bring-up (WX-68) or the healthchecks report health with nothing acting
+    # on 'unhealthy'.
+    if (-not $failed) {
+        Write-Host ""
+        Write-Host "=== autoheal sidecar ===" -ForegroundColor Cyan
+        $ok = Start-AutohealSidecar
+        $results.Add([pscustomobject]@{ Name = 'autoheal'; Kind = 'sidecar'; Ok = $ok; Compose = 'autoheal' })
         if (-not $ok) { $failed = $true }
     }
 
