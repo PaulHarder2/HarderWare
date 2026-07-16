@@ -343,7 +343,9 @@ function Start-AutohealSidecar {
     if ($running) {
         Write-Host "autoheal sidecar is running (restarts autoheal=true containers that go unhealthy)." -ForegroundColor Green
     } else {
-        Write-Error "autoheal sidecar did not reach a running state. Check: docker compose logs autoheal" -ErrorAction Continue
+        # Include -f <compose file>: this runs after Pop-Location, so a bare 'docker compose logs' would
+        # miss the file from the caller's cwd.
+        Write-Error "autoheal sidecar did not reach a running state. Check: docker compose -f $composeDir\docker-compose.yml logs autoheal" -ErrorAction Continue
     }
     return $running
 }
