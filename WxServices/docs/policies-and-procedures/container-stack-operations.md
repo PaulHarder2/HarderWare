@@ -167,7 +167,7 @@ Docker socket — a single **file** (`/var/run/docker.sock`). On Docker Desktop,
 `restart: unless-stopped` containers before that socket source is resolvable, and the engine's own restart
 reuses the container's baked (now-stale) bind-mount proxy path. The result is a hard failure:
 
-```
+```text
 docker inspect services-autoheal-1 --format '{{.State.Status}} {{.State.ExitCode}}'
 # exited 127     <- "mounting ... /var/run/docker.sock ... not a directory"
 ```
@@ -191,8 +191,10 @@ docker compose up -d --force-recreate autoheal
 ```
 
 It runs **as the interactive user at logon** (not SYSTEM-at-startup): Docker Desktop is a per-user tray app
-whose engine pipe is session-bound, so a SYSTEM task would race its start and never see the engine. The run
-logs to `C:\HarderWare\Logs\autoheal-reconcile.log`.
+whose engine pipe is session-bound, so a SYSTEM task would race its start and never see the engine.
+`Register-AutohealTask.ps1` resolves `InstallRoot` from `appsettings.shared.json` (as `Deploy-WxService.ps1`
+does), so the install and log dirs follow a non-default `InstallRoot`. The run logs to
+`{InstallRoot}\Logs\autoheal-reconcile.log` (default `C:\HarderWare\Logs\`).
 
 > This is a Docker-Desktop-specific patch. Running the stack on **Docker Engine** (a Linux host, or `dockerd`
 > via systemd in WSL2) would make the socket local and un-proxied, retiring this task and the stale-mount

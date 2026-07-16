@@ -41,20 +41,36 @@ param(
   [string]$ComposeFile = 'C:\Code\HarderWare\services\docker-compose.yml',
   [string]$Service = 'autoheal',
   [int]$DockerReadyTimeoutSec = 300,
-  [string]$LogDir = 'C:\HarderWare\Logs'
+  # The registered task passes the InstallRoot-resolved dir explicitly (Register-AutohealTask.ps1). Left
+  # empty here it is resolved below from InstallRoot so a manual run still logs beside the service logs.
+  [string]$LogDir = ''
 )
 
 $ErrorActionPreference = 'Stop'
+
+# Honor a non-default InstallRoot (WxServices\appsettings.shared.json) so the reconcile log sits with the
+# other service logs, exactly as Deploy-WxService.ps1 resolves it. The compose file lives at
+# <repoRoot>\services\docker-compose.yml, so its grandparent is the repo root that holds WxServices\.
+if (-not $LogDir) {
+  $installRoot = 'C:\HarderWare'
+  $sharedConfig = Join-Path (Split-Path -Parent (Split-Path -Parent $ComposeFile)) 'WxServices\appsettings.shared.json'
+  if (Test-Path $sharedConfig) {
+    try { $sc = Get-Content $sharedConfig -Raw | ConvertFrom-Json; if ($sc.InstallRoot) { $installRoot = $sc.InstallRoot } } catch {}
+  }
+  $LogDir = Join-Path $installRoot 'Logs'
+}
 
 if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir -Force | Out-Null }
 $LogFile = Join-Path $LogDir 'autoheal-reconcile.log'
 
 function Write-Log {
   param([string]$Level, [string]$Message)
+  # Shared HarderWare PS-tool log format (matches Backup-WeatherData.ps1): literal '-' date separator
+  # (culture-independent), level padded to 5, no brackets - so entries correlate with the other logs.
   $ts = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss.fff')
-  $line = "$ts [$Level] $Message"
-  Write-Host $line
+  $line = '{0} {1,-5} {2}' -f $ts, $Level, $Message
   try { Add-Content -Path $LogFile -Value $line } catch { Write-Warning "log write failed: $($_.Exception.Message)" }
+  Write-Host $line
 }
 
 Write-Log 'INFO' "Autoheal reconcile start: service=$Service compose=$ComposeFile"
