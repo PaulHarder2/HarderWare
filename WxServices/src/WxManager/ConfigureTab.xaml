@@ -14,8 +14,8 @@
         <StackPanel Grid.Row="0" Margin="0,0,0,8">
             <TextBlock Text="System Configuration"
                        FontSize="18" FontWeight="SemiBold" Foreground="#e0e0e0"/>
-            <TextBlock Text="Settings are saved to appsettings.local.json in the install root. Services pick up changes automatically."
-                       FontSize="11" Foreground="#909090" Margin="0,4,0,0"/>
+            <TextBlock Text="Secrets are saved to the database and reach the services; other settings go to appsettings.local.json and apply to the desktop apps only — the containerized services read their own config."
+                       FontSize="11" Foreground="#909090" Margin="0,4,0,0" TextWrapping="Wrap"/>
         </StackPanel>
 
         <!-- Scrollable settings form -->
@@ -31,18 +31,15 @@
                         </Grid.ColumnDefinitions>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
 
+                        <!-- Display-only (WX-69): InstallRoot is set in appsettings.shared.json before
+                             deploy (or via the WXSERVICES_INSTALL_ROOT env var), not from this tab. The
+                             Conda Python / wgrib2 path fields were removed — those deps live in the containers. -->
                         <TextBlock Grid.Row="0" Grid.Column="0" Text="Install Root" VerticalAlignment="Center" Margin="0,4"/>
-                        <TextBox   Grid.Row="0" Grid.Column="1" x:Name="TxtInstallRoot" Margin="0,4"/>
-
-                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Conda Python Exe" VerticalAlignment="Center" Margin="0,4"/>
-                        <TextBox   Grid.Row="1" Grid.Column="1" x:Name="TxtCondaPythonExe" Margin="0,4"/>
-
-                        <TextBlock Grid.Row="2" Grid.Column="0" Text="wgrib2.exe Path" VerticalAlignment="Center" Margin="0,4"/>
-                        <TextBox   Grid.Row="2" Grid.Column="1" x:Name="TxtWgrib2Path" Margin="0,4"/>
+                        <TextBox   Grid.Row="0" Grid.Column="1" x:Name="TxtInstallRoot" Margin="0,4"
+                                   IsReadOnly="True" Focusable="False"
+                                   ToolTip="Set in appsettings.shared.json before deploy (or the WXSERVICES_INSTALL_ROOT env var). Read-only here — it cannot be changed from this tab."/>
                     </Grid>
                 </GroupBox>
 

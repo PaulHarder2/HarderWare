@@ -40,36 +40,35 @@ public partial class SetupTab : UserControl
         CheckList.Children.Clear();
 
         var connStr = App.Configuration?["ConnectionStrings:WeatherData"] ?? "";
-        var wgrib2Path = App.Configuration?["Gfs:Wgrib2Path"];
-        if (string.IsNullOrWhiteSpace(wgrib2Path))
-            wgrib2Path = new WxPaths(App.Configuration?["InstallRoot"]).Wgrib2DefaultPath;
-        var pythonExe = App.Configuration?["WxVis:CondaPythonExe"] ?? "";
 
-        var checks = new (string Label, string Hint, Func<Task<CheckResult>> Check)[]
+        // Post-containerization (WX-69): wgrib2, Conda Python, and the wxvis packages moved
+        // inside the WxParser/WxVis images (WX-65/66), so they are no longer host prerequisites.
+        // Docker is now REQUIRED — the four headless services run in containers, so no Docker
+        // means the machine cannot produce reports.  Runtime container HEALTH is deliberately
+        // not surfaced here: it is owned by WxMonitor + the autoheal sidecar (WX-68) + Grafana,
+        // and per-container `docker inspect` shell-outs would only slow this init.
+        // GatesTabs = does failing this check block the other tabs. SQL Server + the database are
+        // what WxManager itself needs, so they gate. Docker is required for the *services* to run
+        // (shown, and its failure surfaced), but WxManager's own management functions don't need it
+        // — so a Docker-down box must not lock you out of the very UI you'd use to fix things.
+        var checks = new (string Label, string Hint, bool GatesTabs, Func<Task<CheckResult>> Check)[]
         {
             ("SQL Server",      "Install SQL Server Express and enable TCP/IP.",
-                () => PrerequisiteChecker.CheckSqlServerAsync(connStr)),
+                true,  () => PrerequisiteChecker.CheckSqlServerAsync(connStr)),
 
             ("Database",        "The database is created automatically on first service startup.",
-                () => PrerequisiteChecker.CheckDatabaseAsync(connStr)),
+                true,  () => PrerequisiteChecker.CheckDatabaseAsync(connStr)),
 
-            ("wgrib2",          $"Install native Windows wgrib2.exe at {wgrib2Path}.",
-                () => PrerequisiteChecker.CheckWgrib2Async(wgrib2Path)),
-
-            ("Conda Python",    "Install Miniconda and set WxVis:CondaPythonExe in config.",
-                () => Task.FromResult(PrerequisiteChecker.CheckCondaPython(pythonExe))),
-
-            ("wxvis packages",  "Run: conda activate wxvis && pip install -r requirements.txt",
-                () => PrerequisiteChecker.CheckWxVisPackagesAsync(pythonExe)),
-
-            ("Docker",          "Install Docker Desktop (optional — needed for Grafana dashboard).",
-                () => PrerequisiteChecker.CheckDockerAsync()),
+            ("Docker",          "Install Docker Desktop and start the stack — the four WxServices run in containers.",
+                false, () => PrerequisiteChecker.CheckDockerAsync()),
         };
 
         int passed = 0;
         int total = checks.Length;
+        int gatingTotal = 0;
+        int gatingPassed = 0;
 
-        foreach (var (label, hint, check) in checks)
+        foreach (var (label, hint, gatesTabs, check) in checks)
         {
             var row = CreateCheckRow(label, "Checking...", null);
             CheckList.Children.Add(row);
@@ -86,27 +85,37 @@ public partial class SetupTab : UserControl
 
             UpdateCheckRow(row, result, hint);
             if (result.Ok) passed++;
+            if (gatesTabs)
+            {
+                gatingTotal++;
+                if (result.Ok) gatingPassed++;
+            }
         }
 
+        // WX-69: the other tabs enable when the *gating* checks (SQL Server + database) pass — the
+        // things WxManager itself needs. Docker is required for the services but must not lock the
+        // management UI when it is the only thing down.
+        var tabsEnabled = gatingPassed == gatingTotal;
         var allOk = passed == total;
-        // Docker is optional — count as pass even if Docker fails.
-        var dockerResult = checks[^1];
-        var requiredPassed = passed >= total - 1; // all except Docker
 
-        StatusText.Text = requiredPassed
-            ? $"All required checks passed ({passed}/{total})."
-            : $"{passed}/{total} checks passed.";
-        StatusText.Foreground = new SolidColorBrush(requiredPassed ? Color.FromRgb(0x4C, 0xAF, 0x50) : Color.FromRgb(0xEF, 0x53, 0x50));
+        // green = fully ready; amber = usable but a non-gating check (Docker) is down; red = blocked.
+        (string text, Color color) = allOk
+            ? ($"All checks passed ({passed}/{total}).", Color.FromRgb(0x4C, 0xAF, 0x50))
+            : tabsEnabled
+                ? ($"{passed}/{total} passed — start Docker Desktop to run the services.", Color.FromRgb(0xFF, 0xB3, 0x00))
+                : ($"{passed}/{total} checks passed.", Color.FromRgb(0xEF, 0x53, 0x50));
+        StatusText.Text = text;
+        StatusText.Foreground = new SolidColorBrush(color);
         RecheckButton.IsEnabled = true;
 
-        if (requiredPassed)
+        if (tabsEnabled)
         {
-            Logger.Info($"Prerequisites check: {passed}/{total} passed.");
+            Logger.Info($"Prerequisites check: {passed}/{total} passed (gating {gatingPassed}/{gatingTotal}).");
             AllChecksPassed?.Invoke();
         }
         else
         {
-            Logger.Warn($"Prerequisites check: {passed}/{total} passed — some required checks failed.");
+            Logger.Warn($"Prerequisites check: {passed}/{total} passed — a required prerequisite failed.");
         }
     }
 
