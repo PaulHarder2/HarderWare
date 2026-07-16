@@ -196,7 +196,8 @@ To find your nearest METAR station, search for your location at:
 > **Native-fallback only:** `WxVis:CondaPythonExe` (the wxvis conda `python.exe` path) is **not**
 > required for the containerized deployment — WxVis runs its own in-image `python3`, and the field
 > was removed from the Configure tab (WX-69). Set it in `appsettings.shared.json` only if you run
-> the reversible native-service fallback.
+> the reversible native-service fallback. `Gfs:Wgrib2Path` (below) is likewise native-fallback only —
+> the containerized WxParser uses its image-bundled `wgrib2`.
 
 ### Secrets (SMTP Credentials and Claude API Key)
 
@@ -242,7 +243,7 @@ addresses and `lat, lon` decimal entries continue to work normally.
 |---|---|---|
 | `ConnectionStrings:WeatherData` | `Server=.\SQLEXPRESS;...` | Change if your SQL Server instance differs |
 | `Fetch:BoundingBoxDegrees` | `9` | Radius around home location for data collection |
-| `Gfs:Wgrib2Path` | `{InstallRoot}\wgrib2\wgrib2.exe` | Absolute Windows path to `wgrib2.exe`.  Leave empty to use the default derived from `InstallRoot`. |
+| `Gfs:Wgrib2Path` | `{InstallRoot}\wgrib2\wgrib2.exe` | Absolute Windows path to `wgrib2.exe` — **native-fallback only** (the containerized WxParser bundles its own `wgrib2`).  Leave empty to use the default derived from `InstallRoot`. |
 | `WxVis:MapExtent` | `south_central` | Map extent: preset name or W,E,S,N coordinates |
 | `Monitor:AlertEmail` | (empty) | Email address for service health alerts |
 
