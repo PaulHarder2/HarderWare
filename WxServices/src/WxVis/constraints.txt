@@ -1,6 +1,7 @@
 # WxVis pip transitive lock (WX-296) — the full resolved dependency closure of requirements.txt.
 # Captured 2026-07-17 from a clean `pip install -r requirements.txt` in the pinned runtime base
-# image (mcr.microsoft.com/dotnet/runtime:8.0-bookworm-slim). The Dockerfile installs with
+# image (mcr.microsoft.com/dotnet/runtime:8.0-bookworm-slim@sha256:f7519e953be71b6a8bc8987530b8c453ab13cfd3db2dff5c9ae7babc0e1740ae).
+# The Dockerfile installs with
 # `pip install -r requirements.txt -c constraints.txt`, so every rebuild resolves the SAME
 # transitive versions, not just the top-level pins in requirements.txt.
 #

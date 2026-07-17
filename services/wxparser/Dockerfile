@@ -22,8 +22,9 @@ FROM mcr.microsoft.com/dotnet/runtime:8.0-bookworm-slim@sha256:f7519e953be71b6a8
 
 # wgrib2's runtime shared-lib deps. The binary bundles jasper/libpng/libaec statically, so only these
 # are dynamic; libc/libm/libmvec come from the base. See WxServices/tools/wgrib2-linux/README.md.
-# WX-296: apt packages version-pinned (Debian bookworm candidates resolved 2026-07-17); bump
-# deliberately per DESIGN.md (Container image pinning).
+# WX-296: these directly-named apt packages are version-pinned; their transitive apt deps still
+# resolve at build time (see DESIGN.md for the reproducibility scope). Debian bookworm candidates
+# resolved 2026-07-17; bump deliberately per DESIGN.md (Container image pinning).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libgfortran5=12.2.0-14+deb12u1 libgomp1=12.2.0-14+deb12u1 \
     && rm -rf /var/lib/apt/lists/*

@@ -28,9 +28,10 @@ FROM mcr.microsoft.com/dotnet/runtime:8.0-bookworm-slim@sha256:f7519e953be71b6a8
 #                             except for the auth mode (WX-65 adds SQL-login support to db.py).
 # msodbcsql17 lives in Microsoft's apt repo (registered by packages-microsoft-prod.deb) and its
 # install requires accepting the EULA via ACCEPT_EULA=Y.
-# WX-296: apt packages are version-pinned and the Microsoft repo .deb is checksum-verified, so a
-# rebuild installs the same versions. These are the Debian bookworm / MS-repo candidates resolved
-# 2026-07-17; bump deliberately per DESIGN.md (Container image pinning).
+# WX-296: the directly-named apt packages are version-pinned and the Microsoft repo .deb is
+# checksum-verified; their transitive apt deps still resolve at build time (see DESIGN.md for the
+# reproducibility scope). Debian bookworm / MS-repo candidates resolved 2026-07-17; bump
+# deliberately per DESIGN.md (Container image pinning).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
          curl=7.88.1-10+deb12u15 \
