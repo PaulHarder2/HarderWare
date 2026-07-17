@@ -7,7 +7,10 @@
 # consistent across all four services so each Dockerfile sees the same repo layout.
 
 # -- STAGE 1: build (full SDK; discarded once the publish output is copied out) --
-FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+# WX-296: base images are digest-pinned for reproducibility - the :tag is kept for readability,
+# the @sha256 is authoritative. Resolved 2026-07-17; bump deliberately per DESIGN.md (Container
+# image pinning).
+FROM mcr.microsoft.com/dotnet/sdk:8.0@sha256:89ce6291bde9acdf59594e79fb8277c6d84c46e4b1f5bf126a4f18766e4bd597 AS build
 WORKDIR /src
 COPY . .
 RUN dotnet publish WxServices/src/WxMonitor.Svc/WxMonitor.Svc.csproj \
@@ -15,7 +18,7 @@ RUN dotnet publish WxServices/src/WxMonitor.Svc/WxMonitor.Svc.csproj \
       -o /app
 
 # -- STAGE 2: runtime (only the .NET runtime, no compiler; this is what ships) --
-FROM mcr.microsoft.com/dotnet/runtime:8.0-bookworm-slim AS runtime
+FROM mcr.microsoft.com/dotnet/runtime:8.0-bookworm-slim@sha256:f7519e953be71b6a8bc8987530b8c453ab13cfd3db2dff5c9ae7babc0e1740ae AS runtime
 WORKDIR /opt/wxservices
 COPY --from=build /app .
 # The one code seam (WxPaths.ReadInstallRoot): resolves the install root to this Linux path

@@ -170,7 +170,7 @@ services:
   # the host. Acceptable on this single-host box; the hardened option (a docker-socket-proxy exposing
   # only the restart endpoint) is noted for the WX-296 image/topology pass.
   autoheal:
-    image: willfarrell/autoheal:1.2.0              # pinned tag (WX-296 will add a digest, per the WX-17 precedent)
+    image: willfarrell/autoheal:1.2.0@sha256:31f580ef0279eaced5b38d631b08c474d70d8403c1c2fdd6ddcf2e879d5f3f7c   # WX-296: digest-pinned (tag kept for readability), per the WX-17 precedent
     restart: unless-stopped
     environment:
       - AUTOHEAL_CONTAINER_LABEL=autoheal          # only touch containers with label autoheal=true (the four services)
