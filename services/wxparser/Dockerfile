@@ -7,7 +7,10 @@
 # Build context is the HarderWare repo root (the compose service uses `context: ..`).
 
 # -- STAGE 1: build (full SDK; discarded once the publish output is copied out) --
-FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+# WX-296: base images are digest-pinned for reproducibility - the :tag is kept for readability,
+# the @sha256 is authoritative. Resolved 2026-07-17; bump deliberately per DESIGN.md (Container
+# image pinning).
+FROM mcr.microsoft.com/dotnet/sdk:8.0@sha256:89ce6291bde9acdf59594e79fb8277c6d84c46e4b1f5bf126a4f18766e4bd597 AS build
 WORKDIR /src
 COPY . .
 RUN dotnet publish WxServices/src/WxParser.Svc/WxParser.Svc.csproj \
@@ -15,11 +18,15 @@ RUN dotnet publish WxServices/src/WxParser.Svc/WxParser.Svc.csproj \
       -o /app
 
 # -- STAGE 2: runtime (.NET runtime + the Linux wgrib2 + its libs; this is what ships) --
-FROM mcr.microsoft.com/dotnet/runtime:8.0-bookworm-slim AS runtime
+FROM mcr.microsoft.com/dotnet/runtime:8.0-bookworm-slim@sha256:f7519e953be71b6a8bc8987530b8c453ab13cfd3db2dff5c9ae7babc0e1740ae AS runtime
 
 # wgrib2's runtime shared-lib deps. The binary bundles jasper/libpng/libaec statically, so only these
 # are dynamic; libc/libm/libmvec come from the base. See WxServices/tools/wgrib2-linux/README.md.
-RUN apt-get update && apt-get install -y --no-install-recommends libgfortran5 libgomp1 \
+# WX-296: these directly-named apt packages are version-pinned; their transitive apt deps still
+# resolve at build time (see DESIGN.md for the reproducibility scope). Debian bookworm candidates
+# resolved 2026-07-17; bump deliberately per DESIGN.md (Container image pinning).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libgfortran5=12.2.0-14+deb12u1 libgomp1=12.2.0-14+deb12u1 \
     && rm -rf /var/lib/apt/lists/*
 
 # The bundled Linux wgrib2 (built on bookworm for glibc-2.36 parity with this base - see
