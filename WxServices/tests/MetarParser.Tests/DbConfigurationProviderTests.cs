@@ -150,14 +150,18 @@ public class DbConfigurationProviderTests
     {
         using var conn = new SqliteConnection("DataSource=:memory:");
         var options = NewDbWithSchema(conn);
-        // Only Claude:TimeoutSeconds is bootstrap-critical; Claude:Model is DB-configurable (WX-307).
-        Seed(options, ("Claude:Model", "claude-test-model"));
+        // Only the exact Claude:TimeoutSeconds is bootstrap-critical; Claude:Model is
+        // DB-configurable (WX-307), and a prefix-sibling of the timeout key must NOT be
+        // over-guarded — the guard matches that key by equality, not prefix.
+        Seed(options, ("Claude:Model", "claude-test-model"), ("Claude:TimeoutSecondsOverride", "keep"));
 
         var provider = new DbConfigurationProvider(() => new WeatherDataContext(options));
         provider.Load();
 
         Assert.True(provider.TryGet("Claude:Model", out var model));
         Assert.Equal("claude-test-model", model);
+        Assert.True(provider.TryGet("Claude:TimeoutSecondsOverride", out var sibling));   // exact-match guard
+        Assert.Equal("keep", sibling);
     }
 
     [Fact]
