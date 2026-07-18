@@ -67,13 +67,11 @@ internal sealed class DbConfigurationProvider : ConfigurationProvider
             var data = NewData();
             foreach (var row in db.Config.AsNoTracking())
             {
-                // Bootstrap guard: never let a DB row override a connection string —
-                // the provider needs that string to reach the very database it would
-                // read the override from (a circular-bootstrap trap).  Connection
-                // strings stay file-sourced; the broader bootstrap-key policy (retry,
-                // telemetry) is enforced on the write side (WX-315).  Config keys are
-                // case-insensitive, so match the section name that way.
-                if (row.Key.StartsWith("ConnectionStrings:", StringComparison.OrdinalIgnoreCase))
+                // Bootstrap-critical keys stay file-sourced — never taken from the DB
+                // overlay (see BootstrapKeyPrefixes).  Skip them so a stray Config row
+                // cannot override config the process consumes BEFORE this load runs (or,
+                // for the connection string, the very value used to reach the DB).
+                if (IsBootstrapKey(row.Key))
                     continue;
 
                 data[row.Key] = row.Value;
@@ -104,4 +102,28 @@ internal sealed class DbConfigurationProvider : ConfigurationProvider
 
     private static Dictionary<string, string?> NewData() =>
         new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Config-key prefixes that stay file-sourced and are never overlaid from the DB —
+    /// each is consumed before the post-schema reload runs (or, for the connection string,
+    /// is what the provider needs to reach the DB at all), so a DB value would be read too
+    /// late or be circular. This read-side guard is the belt to the WX-315 write-side policy's
+    /// suspenders. Matched case-insensitively (config keys are case-insensitive):
+    /// <list type="bullet">
+    /// <item><c>ConnectionStrings:</c> — circular: the provider needs the connection string to reach the very DB it would read the override from.</item>
+    /// <item><c>Database:StartupRetry:</c> — governs reaching the DB; consumed before this load.</item>
+    /// <item><c>Telemetry:</c> — wired at host-build time (AddWxTelemetry), before the reload.</item>
+    /// <item><c>Claude:TimeoutSeconds</c> — the Claude HttpClient timeout is fixed at host-build time; the rest of <c>Claude:</c> (Model, MaxTokens, …) IS DB-configurable, so only this exact key is guarded.</item>
+    /// </list>
+    /// </summary>
+    private static readonly string[] BootstrapKeyPrefixes =
+    {
+        "ConnectionStrings:",
+        "Database:StartupRetry:",
+        "Telemetry:",
+        "Claude:TimeoutSeconds",
+    };
+
+    private static bool IsBootstrapKey(string key) =>
+        BootstrapKeyPrefixes.Any(p => key.StartsWith(p, StringComparison.OrdinalIgnoreCase));
 }

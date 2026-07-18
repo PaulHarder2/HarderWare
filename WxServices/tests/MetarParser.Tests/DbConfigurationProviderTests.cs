@@ -124,21 +124,40 @@ public class DbConfigurationProviderTests
         Assert.Equal("KAUS", icao);
     }
 
-    [Fact]
-    public void Load_IgnoresConnectionStringKeys_BootstrapGuard()
+    [Theory]
+    [InlineData("ConnectionStrings:WeatherData")]
+    [InlineData("connectionstrings:weatherdata")]         // case-insensitive
+    [InlineData("Database:StartupRetry:MaxAttempts")]
+    [InlineData("Telemetry:Enabled")]
+    [InlineData("Claude:TimeoutSeconds")]
+    public void Load_SkipsBootstrapKeys_ButKeepsOthers(string bootstrapKey)
     {
         using var conn = new SqliteConnection("DataSource=:memory:");
         var options = NewDbWithSchema(conn);
-        // A stray ConnectionStrings row must never be overlaid — the provider needs
-        // the connection string to reach the very DB it would read the override from.
-        Seed(options, ("ConnectionStrings:WeatherData", "Server=stray;"), ("Smtp:Host", "db-host"));
+        // A stray bootstrap-critical row must never be overlaid; a normal key beside it must.
+        Seed(options, (bootstrapKey, "stray"), ("Smtp:Host", "db-host"));
 
         var provider = new DbConfigurationProvider(() => new WeatherDataContext(options));
         provider.Load();
 
-        Assert.False(provider.TryGet("ConnectionStrings:WeatherData", out _));   // guarded out
-        Assert.True(provider.TryGet("Smtp:Host", out var host));                 // other keys still load
+        Assert.False(provider.TryGet(bootstrapKey, out _));        // guarded out
+        Assert.True(provider.TryGet("Smtp:Host", out var host));   // non-bootstrap still loads
         Assert.Equal("db-host", host);
+    }
+
+    [Fact]
+    public void Load_DoesNotGuard_NonTimeout_ClaudeKeys()
+    {
+        using var conn = new SqliteConnection("DataSource=:memory:");
+        var options = NewDbWithSchema(conn);
+        // Only Claude:TimeoutSeconds is bootstrap-critical; Claude:Model is DB-configurable (WX-307).
+        Seed(options, ("Claude:Model", "claude-test-model"));
+
+        var provider = new DbConfigurationProvider(() => new WeatherDataContext(options));
+        provider.Load();
+
+        Assert.True(provider.TryGet("Claude:Model", out var model));
+        Assert.Equal("claude-test-model", model);
     }
 
     [Fact]
