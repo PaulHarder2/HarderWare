@@ -79,7 +79,9 @@ public static class DbConfigurationExtensions
     /// Returns <paramref name="connectionString"/> with its connect timeout capped at
     /// <see cref="ConfigReadConnectTimeoutSeconds"/>. A malformed string can't be parsed here;
     /// it is returned unchanged so the provider's resilient <see cref="DbConfigurationProvider.Load"/>
-    /// surfaces it as a caught <c>DbException</c> rather than a wiring-time throw.
+    /// degrades to file configuration — a malformed string throws <c>ArgumentException</c> /
+    /// <c>FormatException</c> when the connection is opened (not <c>DbException</c>), and
+    /// <c>Load</c> catches all three — rather than aborting at wiring time.
     /// </summary>
     private static string WithConnectTimeoutCap(string connectionString)
     {

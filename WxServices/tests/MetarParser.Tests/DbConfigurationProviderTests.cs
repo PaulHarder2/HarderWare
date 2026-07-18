@@ -125,6 +125,23 @@ public class DbConfigurationProviderTests
     }
 
     [Fact]
+    public void Load_IgnoresConnectionStringKeys_BootstrapGuard()
+    {
+        using var conn = new SqliteConnection("DataSource=:memory:");
+        var options = NewDbWithSchema(conn);
+        // A stray ConnectionStrings row must never be overlaid — the provider needs
+        // the connection string to reach the very DB it would read the override from.
+        Seed(options, ("ConnectionStrings:WeatherData", "Server=stray;"), ("Smtp:Host", "db-host"));
+
+        var provider = new DbConfigurationProvider(() => new WeatherDataContext(options));
+        provider.Load();
+
+        Assert.False(provider.TryGet("ConnectionStrings:WeatherData", out _));   // guarded out
+        Assert.True(provider.TryGet("Smtp:Host", out var host));                 // other keys still load
+        Assert.Equal("db-host", host);
+    }
+
+    [Fact]
     public void DatabaseSource_AddedLast_WinsOverEarlierProviders()
     {
         using var conn = new SqliteConnection("DataSource=:memory:");

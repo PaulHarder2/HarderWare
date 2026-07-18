@@ -67,6 +67,15 @@ internal sealed class DbConfigurationProvider : ConfigurationProvider
             var data = NewData();
             foreach (var row in db.Config.AsNoTracking())
             {
+                // Bootstrap guard: never let a DB row override a connection string —
+                // the provider needs that string to reach the very database it would
+                // read the override from (a circular-bootstrap trap).  Connection
+                // strings stay file-sourced; the broader bootstrap-key policy (retry,
+                // telemetry) is enforced on the write side (WX-315).  Config keys are
+                // case-insensitive, so match the section name that way.
+                if (row.Key.StartsWith("ConnectionStrings:", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
                 data[row.Key] = row.Value;
             }
 
@@ -74,14 +83,18 @@ internal sealed class DbConfigurationProvider : ConfigurationProvider
             Logger.Debug(
                 $"DbConfigurationProvider loaded {data.Count} configuration key(s) from the Config table.");
         }
-        catch (DbException ex)
+        catch (Exception ex) when (ex is DbException or ArgumentException or FormatException)
         {
             // Unreachable database, or the Config table doesn't exist yet — the
             // fresh-DB case before EnsureSchemaAsync has run.  SQL Server raises
-            // SqlException and SQLite raises SqliteException; both derive from
-            // DbException, so this one catch covers production and the test
-            // harness.  Overlay nothing and never break bootstrap; the host
-            // reloads configuration right after schema-ensure to re-run this.
+            // SqlException and SQLite raises SqliteException (both DbException).  A
+            // malformed connection string that WithConnectTimeoutCap could not parse
+            // is passed through unchanged and surfaces HERE as ArgumentException /
+            // FormatException on connect (not DbException), so we catch those too —
+            // a bad file value must degrade to file configuration, never abort
+            // startup (for the services this Load runs during host .Build(), outside
+            // the startup try/catch).  Overlay nothing and never break bootstrap; the
+            // host reloads configuration right after schema-ensure to re-run this.
             Data = NewData();
             Logger.Warn(
                 "DbConfigurationProvider could not read the Config table " +
