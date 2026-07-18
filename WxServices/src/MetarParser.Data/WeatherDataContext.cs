@@ -79,6 +79,9 @@ public sealed class WeatherDataContext : DbContext
     /// <summary>The <c>GlobalSettings</c> table — single row (Id = 1) storing application-wide secrets (Claude API key, SMTP credentials).</summary>
     public DbSet<GlobalSettings> GlobalSettings => Set<GlobalSettings>();
 
+    /// <summary>The <c>Config</c> table — key/value application configuration (WX-313), layered into <c>IConfiguration</c> by a DB-backed provider; the runtime single source of truth for app config (WX-307).</summary>
+    public DbSet<Config> Config => Set<Config>();
+
     /// <summary>The <c>QaRerunRequests</c> table — one row per language tracking a service-side "Rerun QA" judge-package regeneration (WX-235).</summary>
     public DbSet<QaRerunRequest> QaRerunRequests => Set<QaRerunRequest>();
 
@@ -438,6 +441,19 @@ public sealed class WeatherDataContext : DbContext
             e.Property(x => x.SmtpUsername).HasMaxLength(200);
             e.Property(x => x.SmtpPassword).HasMaxLength(200);
             e.Property(x => x.SmtpFromAddress).HasMaxLength(200);
+        });
+
+        // ── Config (WX-313) ──────────────────────────────────────────────────
+        // Key/value application configuration, layered into IConfiguration by a
+        // DB-backed provider.  Key is the natural PK — the Section:SubKey path.
+        modelBuilder.Entity<Config>(e =>
+        {
+            e.ToTable("Config");
+            e.HasKey(x => x.Key);
+
+            e.Property(x => x.Key).HasMaxLength(200);
+            e.Property(x => x.Value);            // nvarchar(max) — no length cap
+            e.Property(x => x.UpdatedUtc).IsRequired();
         });
 
         // ── QaRerunRequests (WX-235) ─────────────────────────────────────────
