@@ -68,9 +68,10 @@ internal sealed class DbConfigurationProvider : ConfigurationProvider
             foreach (var row in db.Config.AsNoTracking())
             {
                 // Bootstrap-critical keys stay file-sourced — never taken from the DB
-                // overlay (see BootstrapKeyPrefixes).  Skip them so a stray Config row
-                // cannot override config the process consumes BEFORE this load runs (or,
-                // for the connection string, the very value used to reach the DB).
+                // overlay (see IsBootstrapKey: BootstrapSectionPrefixes + ClaudeTimeoutKey).
+                // Skip them so a stray Config row cannot override config the process
+                // consumes BEFORE this load runs (or, for the connection string, the very
+                // value used to reach the DB).
                 if (IsBootstrapKey(row.Key))
                     continue;
 
