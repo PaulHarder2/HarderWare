@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Windows;
 
 using MetarParser.Data;
+using MetarParser.Data.Configuration;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -122,11 +123,20 @@ public partial class App : Application
         IConfigurationRoot config;
         try
         {
-            config = new ConfigurationBuilder()
+            var configBuilder = new ConfigurationBuilder()
                 .SetBasePath(AppContext.BaseDirectory)
                 .AddJsonFile("appsettings.shared.json", optional: false)
-                .AddJsonFile(new PhysicalFileProvider(wxPaths.InstallRoot), "appsettings.local.json", optional: true, reloadOnChange: false)
-                .Build();
+                .AddJsonFile(new PhysicalFileProvider(wxPaths.InstallRoot), "appsettings.local.json", optional: true, reloadOnChange: false);
+
+            // DB-backed config overlay (WX-313): the Config table is the runtime source of
+            // truth for application config, layered LAST so it wins over the JSON files.
+            // AddDatabaseConfig resolves the connection string from the file layers just added.
+            // Unlike the services, WxManager does not ensure the schema (the services own that),
+            // so it reads an already-migrated DB and needs no post-schema reload; if the DB is
+            // unreachable or the table is absent, the provider overlays nothing and file values remain.
+            configBuilder.AddDatabaseConfig();
+
+            config = configBuilder.Build();
         }
         catch (Exception ex)
         {

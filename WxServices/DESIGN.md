@@ -1138,6 +1138,33 @@ Each service loads configuration from up to two files, merged in order (later fi
 
 Most secrets (SMTP credentials, the Claude API key, and the Gemini API key used by the translation-QA judge — WX-235) are stored in the `GlobalSettings` database row (Id = 1) and never appear in any configuration file. `What3Words:ApiKey` is currently the file-based exception (in `appsettings.local.json`). Use WxManager → Configure tab to set the database-stored secrets.
 
+### Configuration layering — the provider stack
+
+The two files above are not the whole story. Each host assembles `IConfiguration` from an ordered stack of **providers**, and the **last source wins** on any given key. In precedence order (lowest to highest):
+
+1. **`appsettings.shared.json`** — baked, git-tracked defaults for every service and application.
+2. **`appsettings.local.json`** — per-machine / per-container overrides (the connection string, container tool paths, the telemetry endpoint).
+3. **`InstallRoot`** — an in-memory value (`AddInstallRoot`, `WxServices.Common`) projecting the env-aware runtime root so `IConfiguration["InstallRoot"]` is authoritative even inside a container (WX-64/65/66). *The four services only* — WxManager resolves its install root directly through `WxPaths` and omits this layer (its stack is shared JSON → local JSON → DB).
+4. **The `Config` database table** — a key/value table read by `DbConfigurationProvider` (WX-313, `MetarParser.Data.Configuration`), added **last** so the database wins. Each row's `Key` is a full configuration path in the `Section:SubKey` convention, so a DB value lands at exactly the slot the equivalent JSON key would — transparently to every `GetSection`/`Bind` call site (no consumer knows a database is involved). This is what makes the **database the runtime single source of truth for application configuration** (the WX-307 direction): when the DB later moves to the cloud, all config travels with it, and only the per-environment connection string changes.
+
+The layers below merge low → high, so **Layer 4 (the DB) wins**; the file-only connection string is what bootstraps that DB layer:
+
+```mermaid
+flowchart TB
+    shared["Layer 1: appsettings.shared.json<br/>baked defaults, git-tracked"]
+    local["Layer 2: appsettings.local.json<br/>per-machine / per-container overrides"]
+    install["Layer 3: InstallRoot in-memory, env-aware<br/>via AddInstallRoot"]
+    db["Layer 4: Config DB table<br/>DbConfigurationProvider WX-313, wins last"]
+    app["GetSection / Bind<br/>callers see the merged value"]
+
+    shared --> local --> install --> db --> app
+    local -.->|"connection string is file-only; it bootstraps the DB layer"| db
+```
+
+**Bootstrap ordering.** The DB layer cannot supply the string used to reach it, so the connection string — and the other bootstrap-critical keys — stay file-sourced and are never read from the DB. The provider **enforces** this: `Load` skips any key under `ConnectionStrings:`, `Database:StartupRetry:`, or `Telemetry:`, plus the exact `Claude:TimeoutSeconds`. Each is consumed *before* this load runs — the retry schedule governs reaching the DB; telemetry and the Claude HttpClient timeout are wired at host-build time, ahead of the post-schema reload — or, for the connection string, is the very value used to reach the DB (a circular trap). So a stray `Config` row cannot subvert bootstrap. (Only the *timeout* under `Claude:` is fixed this way; `Claude:Model`, `MaxTokens`, and the rest **are** DB-configurable.) This read-side guard is the belt; the WX-315 write-side policy — which keeps these keys out of the DB in the first place — is the suspenders. On startup the provider's first load runs *before* the schema is ensured, so on a fresh database the `Config` table may not exist yet: the provider is **resilient** (a missing table or unreachable DB overlays nothing and never throws), and each service calls `IConfigurationRoot.Reload()` immediately after `EnsureSchemaAsync` — before it reads any config — so DB values populate once the table is guaranteed present. WxManager reads an already-migrated database and needs no reload.
+
+**Scope today.** WX-313 established this mechanism; the `Config` table currently ships **empty**, so there is no behaviour change. Migrating the operator-editable keys into it, and repointing the WxManager → Configure tab to write to the DB instead of `appsettings.local.json`, are tracked in **WX-315**. Secrets stay in the separate `GlobalSettings` row (read imperatively at each use site, not through this provider).
+
 ### appsettings.shared.json (WxServices root)
 
 This single file contains every non-secret setting for all services and applications. Key sections:

@@ -8,6 +8,7 @@
 // Stop:      sc.exe stop WxMonitorSvc
 
 using MetarParser.Data;
+using MetarParser.Data.Configuration;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -43,6 +44,14 @@ var host = Host.CreateDefaultBuilder(args)
            // not found" every cycle regardless of service health (only the DB-based METAR-staleness
            // watcher still worked). Must come last so it wins. No-op on Windows (same value).
            .AddInstallRoot(installRoot);
+
+        // DB-backed config overlay (WX-313): the Config table is the runtime source of
+        // truth for application config, layered LAST so it wins over the JSON files.
+        // AddDatabaseConfig resolves the connection string from the file layers just added.
+        // On a fresh DB the Config table may not exist until EnsureSchemaAsync runs, so this
+        // first load overlays nothing; IConfigurationRoot.Reload() re-runs it after
+        // schema-ensure (below).
+        cfg.AddDatabaseConfig();
     })
     .ConfigureServices((ctx, services) =>
     {
@@ -74,6 +83,12 @@ try
         DatabaseStartupRetryOptions.FromConfiguration(cfg),
         lifetime.ApplicationStopping);
     Logger.Info("Database ready.");
+
+    // The Config table is guaranteed to exist now (EnsureSchemaAsync ran), so
+    // re-run the DB config provider to overlay its values before configuration is
+    // read below: the provider's first load during host build ran before the
+    // schema existed and overlaid nothing (WX-313).
+    ((IConfigurationRoot)cfg).Reload();
 
     await ValidateConfigAsync(cfg, dbOptions);
 
