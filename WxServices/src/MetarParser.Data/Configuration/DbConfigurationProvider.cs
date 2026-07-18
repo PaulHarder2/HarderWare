@@ -105,31 +105,9 @@ internal sealed class DbConfigurationProvider : ConfigurationProvider
         new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
-    /// Config sections that stay file-sourced and are never overlaid from the DB — each is
-    /// consumed before the post-schema reload runs (or, for the connection string, is what the
-    /// provider needs to reach the DB at all), so a DB value would be read too late or be
-    /// circular. This read-side guard is the belt to the WX-315 write-side policy's suspenders.
-    /// Matched case-insensitively, by prefix:
-    /// <list type="bullet">
-    /// <item><c>ConnectionStrings:</c> — circular: the provider needs the connection string to reach the very DB it would read the override from.</item>
-    /// <item><c>Database:StartupRetry:</c> — governs reaching the DB; consumed before this load.</item>
-    /// <item><c>Telemetry:</c> — wired at host-build time (AddWxTelemetry), before the reload.</item>
-    /// </list>
-    /// The Claude HttpClient timeout (<see cref="ClaudeTimeoutKey"/>) is guarded separately by
-    /// EXACT equality — the rest of <c>Claude:</c> (Model, MaxTokens, …) is DB-configurable
-    /// (WX-307), so a prefix match would wrongly block a sibling like <c>Claude:TimeoutSecondsOverride</c>.
+    /// Whether a key stays file-sourced and is never overlaid from the DB. The rule itself lives in
+    /// <see cref="BootstrapKeys"/> (extracted in WX-314) so this read-side guard — the belt — and the
+    /// write-side guards in the setup console and WX-315's Configure tab — the suspenders — cannot drift apart.
     /// </summary>
-    private static readonly string[] BootstrapSectionPrefixes =
-    {
-        "ConnectionStrings:",
-        "Database:StartupRetry:",
-        "Telemetry:",
-    };
-
-    /// <summary>The one bootstrap key matched by exact equality (a prefix match would over-guard <c>Claude:</c> siblings).</summary>
-    private const string ClaudeTimeoutKey = "Claude:TimeoutSeconds";
-
-    private static bool IsBootstrapKey(string key) =>
-        key.Equals(ClaudeTimeoutKey, StringComparison.OrdinalIgnoreCase)
-        || BootstrapSectionPrefixes.Any(p => key.StartsWith(p, StringComparison.OrdinalIgnoreCase));
+    private static bool IsBootstrapKey(string key) => BootstrapKeys.IsBootstrapKey(key);
 }
