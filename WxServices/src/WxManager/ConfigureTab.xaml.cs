@@ -1,17 +1,16 @@
-using System.Globalization;
 using System.IO;
 using System.Net.Http;
 using System.Net.Http.Json;
-using System.Text.Json;
-using System.Text.Json.Nodes;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 
 using MetarParser.Data;
+using MetarParser.Data.Configuration;
 using MetarParser.Data.Entities;
 
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 
 using WxServices.Common;
 using WxServices.Logging;
@@ -19,10 +18,16 @@ using WxServices.Logging;
 namespace WxManager;
 
 /// <summary>
-/// Settings editor tab.  Non-secret settings are read from configuration
-/// files and written to <c>{InstallRoot}\appsettings.local.json</c>.
-/// Secrets (SMTP credentials, Claude API key) are stored in the
-/// <see cref="GlobalSettings"/> database row and never touch the filesystem.
+/// Settings editor tab.  Since WX-315 this tab writes only to the database and never to a
+/// configuration file: operational settings (SMTP host/port, alert email) go to the <c>Config</c>
+/// table via <see cref="ConfigStore"/>, where every service reads them through the WX-313
+/// provider; secrets (SMTP credentials, Claude API key) go to the <see cref="GlobalSettings"/> row.
+/// <para>
+/// The remaining fields are read-only.  The foundational location values and the map extent are
+/// set by the setup console (WX-314) and change only by re-running it; the connection string is
+/// bootstrap-critical — it is how the database is reached in the first place, so it must stay in
+/// <c>appsettings.local.json</c> and cannot be edited from an app that needs it to start.
+/// </para>
 /// </summary>
 public partial class ConfigureTab : UserControl
 {
@@ -39,15 +44,13 @@ public partial class ConfigureTab : UserControl
     {
         InitializeComponent();
 
-        // Dirty-tracking (WX-134): Save Configuration enables only on a user edit.
-        // TxtInstallRoot is display-only (WX-69) — not dirty-tracked; the wgrib2/Conda path
-        // fields were removed (those deps now live inside the containers).
+        // Dirty-tracking (WX-134): Save enables only on a user edit. Only the editable fields are
+        // tracked — the read-only ones (install root, the foundational location values, map extent,
+        // connection string, Claude model) cannot be edited, so tracking them could only ever
+        // enable Save for a change the tab is unable to persist (WX-315).
         DirtyTracking.Attach(MarkDirty,
-            TxtHomeIcao, TxtHomeLatitude, TxtHomeLongitude, TxtBoundingBoxDeg,
-            TxtRegionSouth, TxtRegionNorth, TxtRegionWest, TxtRegionEast,
-            TxtConnectionString,
             TxtSmtpHost, TxtSmtpPort, TxtSmtpUsername, TxtSmtpPassword, TxtSmtpFromAddress,
-            TxtClaudeApiKey, TxtClaudeModel, TxtMapExtent, TxtAlertEmail);
+            TxtClaudeApiKey, TxtAlertEmail);
 
         Loaded += async (_, _) => await LoadCurrentValuesAsync();
     }
@@ -94,27 +97,37 @@ public partial class ConfigureTab : UserControl
     }
 
     /// <summary>Synchronous field-population body of <see cref="LoadCurrentValuesAsync"/> under the dirty-suppression wrapper.</summary>
-    private void ApplyLoadedValues(Microsoft.Extensions.Configuration.IConfiguration cfg, GlobalSettings? gs)
+    private void ApplyLoadedValues(IConfiguration cfg, GlobalSettings? gs)
     {
         // Display-only (WX-69): show the authoritative resolved InstallRoot (env var →
         // appsettings.shared.json → default), the same value WxPaths hands the rest of the system.
         TxtInstallRoot.Text = WxPaths.ReadInstallRoot();
 
+        // Every field shows exactly what is configured, and nothing when a value is unset (WX-315).
+        //
+        // The old hardcoded fallbacks ("9", "smtp.gmail.com", "587", "claude-sonnet-4-6", a default
+        // connection string) were harmless while Save wrote them to a file — displaying one and
+        // saving made it true. They are not harmless now, in two different ways:
+        //   * on a READ-ONLY field the fallback asserts a configuration that does not exist and
+        //     that the operator can no longer set from this screen;
+        //   * on an EDITABLE field it would be written to Config by the next save even though the
+        //     operator never chose it, turning a shared default into an explicit override that
+        //     silently shadows appsettings.shared.json from then on.
+        // Blank means "not set here" — which is the truth, and is visible as such.
         TxtHomeIcao.Text = cfg["Fetch:HomeIcao"] ?? "";
         TxtHomeLatitude.Text = cfg["Fetch:HomeLatitude"] ?? "";
         TxtHomeLongitude.Text = cfg["Fetch:HomeLongitude"] ?? "";
-        TxtBoundingBoxDeg.Text = cfg["Fetch:BoundingBoxDegrees"] ?? "9";
+        TxtBoundingBoxDeg.Text = cfg["Fetch:BoundingBoxDegrees"] ?? "";
         TxtRegionSouth.Text = cfg["Fetch:RegionSouth"] ?? "";
         TxtRegionNorth.Text = cfg["Fetch:RegionNorth"] ?? "";
         TxtRegionWest.Text = cfg["Fetch:RegionWest"] ?? "";
         TxtRegionEast.Text = cfg["Fetch:RegionEast"] ?? "";
 
-        TxtConnectionString.Text = cfg["ConnectionStrings:WeatherData"]
-            ?? @"Server=.\SQLEXPRESS;Database=WeatherData;Trusted_Connection=True;TrustServerCertificate=True;";
+        TxtConnectionString.Text = cfg["ConnectionStrings:WeatherData"] ?? "";
 
-        TxtSmtpHost.Text = cfg["Smtp:Host"] ?? "smtp.gmail.com";
-        TxtSmtpPort.Text = cfg["Smtp:Port"] ?? "587";
-        TxtClaudeModel.Text = cfg["Claude:Model"] ?? "claude-sonnet-4-6";
+        TxtSmtpHost.Text = cfg["Smtp:Host"] ?? "";
+        TxtSmtpPort.Text = cfg["Smtp:Port"] ?? "";
+        TxtClaudeModel.Text = cfg["Claude:Model"] ?? "";
         TxtMapExtent.Text = cfg["WxVis:MapExtent"] ?? "";
         TxtAlertEmail.Text = cfg["Monitor:AlertEmail"] ?? "";
 
@@ -135,60 +148,22 @@ public partial class ConfigureTab : UserControl
     {
         try
         {
-            // InstallRoot is resolved (env var → shared.json → default), not set from this tab
-            // (WX-69): it is display-only, and appsettings.local.json is *located by* InstallRoot,
-            // so it cannot live inside that file. Used here only to place the local config + dirs.
-            var installRoot = WxPaths.ReadInstallRoot();
-
-            // Non-secret settings → appsettings.local.json
-            var root = new JsonObject
-            {
-                ["ConnectionStrings"] = new JsonObject
-                {
-                    ["WeatherData"] = TxtConnectionString.Text.Trim(),
-                },
-                ["Fetch"] = new JsonObject
-                {
-                    ["HomeIcao"] = TxtHomeIcao.Text.Trim().ToUpperInvariant(),
-                    ["HomeLatitude"] = ParseDoubleOrNull(TxtHomeLatitude.Text),
-                    ["HomeLongitude"] = ParseDoubleOrNull(TxtHomeLongitude.Text),
-                    ["BoundingBoxDegrees"] = ParseDoubleOrNull(TxtBoundingBoxDeg.Text),
-                    ["RegionSouth"] = ParseDoubleOrNull(TxtRegionSouth.Text),
-                    ["RegionNorth"] = ParseDoubleOrNull(TxtRegionNorth.Text),
-                    ["RegionWest"] = ParseDoubleOrNull(TxtRegionWest.Text),
-                    ["RegionEast"] = ParseDoubleOrNull(TxtRegionEast.Text),
-                },
-                ["Smtp"] = new JsonObject
-                {
-                    ["Host"] = TxtSmtpHost.Text.Trim(),
-                    ["Port"] = int.TryParse(TxtSmtpPort.Text, out var port) ? port : 587,
-                },
-                ["Claude"] = new JsonObject
-                {
-                    ["Model"] = TxtClaudeModel.Text.Trim(),
-                },
-                ["WxVis"] = new JsonObject
-                {
-                    ["MapExtent"] = TxtMapExtent.Text.Trim(),
-                },
-                ["Monitor"] = new JsonObject
-                {
-                    ["AlertEmail"] = TxtAlertEmail.Text.Trim(),
-                },
-            };
-
-            var paths = new WxPaths(installRoot);
+            // This tab no longer writes appsettings.local.json (WX-315). Everything editable here
+            // now lives in the database: operational settings in the Config table (read by every
+            // service through the WX-313 provider) and secrets in the GlobalSettings row. The
+            // connection string stays in the file because it is bootstrap-critical — it is how we
+            // reach the database at all — and is now set by the setup script, not from here.
+            //
+            // The runtime directories are still ensured: they are located by InstallRoot and the
+            // rest of the system assumes they exist.
+            var paths = new WxPaths(WxPaths.ReadInstallRoot());
             Directory.CreateDirectory(paths.LogsDir);
             Directory.CreateDirectory(paths.PlotsDir);
             Directory.CreateDirectory(paths.TempDir);
 
-            var localConfigPath = paths.LocalConfigPath;
-            var json = root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
-            File.WriteAllText(localConfigPath, json);
-            Logger.Info($"Configuration saved to {localConfigPath}.");
-
-            // Secrets → GlobalSettings database row
             await using var db = new WeatherDataContext(App.DbOptions);
+
+            // Secrets → GlobalSettings row.
             var gs = await db.GlobalSettings.FirstOrDefaultAsync(x => x.Id == 1);
             if (gs is null)
             {
@@ -200,8 +175,17 @@ public partial class ConfigureTab : UserControl
             gs.SmtpPassword = TxtSmtpPassword.Password;
             gs.SmtpFromAddress = TxtSmtpFromAddress.Text.Trim();
             gs.ClaudeApiKey = TxtClaudeApiKey.Password;
-            await db.SaveChangesAsync();
-            Logger.Info("Secrets saved to GlobalSettings.");
+
+            // Operational settings → Config table, through the shared write path, which refuses
+            // bootstrap-critical keys (BootstrapKeys) and duplicates. Its SaveChanges commits the
+            // secret edits above in the same transaction, so a refusal persists neither.
+            var rows = OperationalConfig.BuildEditableRows(
+                TxtSmtpHost.Text, TxtSmtpPort.Text, TxtAlertEmail.Text);
+            var result = await ConfigStore.UpsertAsync(db, rows, DateTime.UtcNow);
+
+            Logger.Info(
+                $"Configuration saved: Config {result.Inserted} inserted / {result.Updated} updated / " +
+                $"{result.Unchanged} unchanged; secrets written to GlobalSettings.");
 
             SetStatus("Configuration saved.", true);
             SaveButton.IsEnabled = false;  // back to clean until the next edit (WX-134)
@@ -211,6 +195,30 @@ public partial class ConfigureTab : UserControl
         {
             Logger.Error($"Failed to save configuration: {ex.Message}");
             SetStatus($"Save failed: {ex.Message}", false);
+            return;
+        }
+
+        // Post-save refresh — deliberately OUTSIDE the save's try/catch. The write has already
+        // committed by this point, so a failure here is NOT a failed save and must never be
+        // reported as one: telling the operator "Save failed" for a change that is already in the
+        // database invites them to re-enter it or abandon it.
+        try
+        {
+            // One-time, intentional refresh (WX-315): re-run every configuration provider so the
+            // values just written are live in THIS instance instead of waiting for a restart. Same
+            // mechanism the four services use after EnsureSchemaAsync. Deliberately NOT SQL change
+            // notification — a save from this tab is the only moment WxManager's own configuration
+            // changes underneath it, so a targeted reload is the whole requirement.
+            (App.Configuration as IConfigurationRoot)?.Reload();
+
+            // Re-read the fields from the refreshed configuration, so what is displayed is what is
+            // now in effect rather than what was typed — a wrong value shows up immediately.
+            await LoadCurrentValuesAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"Configuration saved, but refreshing the displayed values failed: {ex.Message}");
+            SetStatus("Configuration saved — restart WxManager to refresh the displayed values.", true);
         }
     }
 
@@ -301,8 +309,4 @@ public partial class ConfigureTab : UserControl
         });
     }
 
-    private static JsonNode? ParseDoubleOrNull(string text)
-        => double.TryParse(text.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var d)
-            ? JsonValue.Create(d)
-            : null;
 }

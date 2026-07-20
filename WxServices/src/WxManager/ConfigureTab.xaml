@@ -3,6 +3,24 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              Background="#1a1a1a" Foreground="#c8c8c8">
 
+    <UserControl.Resources>
+        <!-- WX-315: one style for every field this tab shows but cannot change, so "read-only"
+             looks the same everywhere and a future field gets it by applying the style rather than
+             by remembering separate attributes. Foreground is the same muted grey used for hint
+             text — on this dark panel a lighter grey would still read as editable.
+
+             Deliberately NOT Focusable="False": read-only must still mean selectable. These fields
+             exist to be READ, and some are longer than their box (the connection string in
+             particular), so without focus the tail would be unreachable — no horizontal scroll, no
+             select, no copy into SSMS or a note. IsReadOnly alone rejects edits while leaving the
+             caret, selection and Ctrl+C working, which is exactly the intent. -->
+        <Style x:Key="ReadOnlyValue" TargetType="TextBox">
+            <Setter Property="IsReadOnly" Value="True"/>
+            <Setter Property="Foreground" Value="#909090"/>
+            <Setter Property="IsReadOnlyCaretVisible" Value="True"/>
+        </Style>
+    </UserControl.Resources>
+
     <Grid Margin="16">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
@@ -14,7 +32,7 @@
         <StackPanel Grid.Row="0" Margin="0,0,0,8">
             <TextBlock Text="System Configuration"
                        FontSize="18" FontWeight="SemiBold" Foreground="#e0e0e0"/>
-            <TextBlock Text="Secrets are saved to the database and reach the services; other settings go to appsettings.local.json and apply to the desktop apps only — the containerized services read their own config."
+            <TextBlock Text="Settings on this tab are saved to the database and are read by all services and desktop apps. Greyed fields are set by the setup script (WxServices.Setup) and are shown here for reference only."
                        FontSize="11" Foreground="#909090" Margin="0,4,0,0" TextWrapping="Wrap"/>
         </StackPanel>
 
@@ -37,14 +55,13 @@
                              deploy (or via the WXSERVICES_INSTALL_ROOT env var), not from this tab. The
                              Conda Python / wgrib2 path fields were removed — those deps live in the containers. -->
                         <TextBlock Grid.Row="0" Grid.Column="0" Text="Install Root" VerticalAlignment="Center" Margin="0,4"/>
-                        <TextBox   Grid.Row="0" Grid.Column="1" x:Name="TxtInstallRoot" Margin="0,4"
-                                   IsReadOnly="True" Focusable="False"
+                        <TextBox   Grid.Row="0" Grid.Column="1" x:Name="TxtInstallRoot" Style="{StaticResource ReadOnlyValue}" Margin="0,4"
                                    ToolTip="Set in appsettings.shared.json before deploy (or the WXSERVICES_INSTALL_ROOT env var). Read-only here — it cannot be changed from this tab."/>
                     </Grid>
                 </GroupBox>
 
                 <!-- ── Location ──────────────────────────────────────────── -->
-                <GroupBox Header="Home Location and Fetch Region" Margin="0,4">
+                <GroupBox Header="Home Location and Fetch Region  (set by the setup script — re-run it to change)" Margin="0,4">
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="160"/>
@@ -62,35 +79,35 @@
                         </Grid.RowDefinitions>
 
                         <TextBlock Grid.Row="0" Grid.Column="0" Text="Home ICAO" VerticalAlignment="Center" Margin="0,4"/>
-                        <TextBox   Grid.Row="0" Grid.Column="1" x:Name="TxtHomeIcao" Margin="0,4" Width="100" HorizontalAlignment="Left"/>
+                        <TextBox   Grid.Row="0" Grid.Column="1" x:Name="TxtHomeIcao" Style="{StaticResource ReadOnlyValue}" Margin="0,4" Width="100" HorizontalAlignment="Left"/>
 
                         <TextBlock Grid.Row="1" Grid.Column="0" Text="Home Latitude" VerticalAlignment="Center" Margin="0,4"/>
-                        <TextBox   Grid.Row="1" Grid.Column="1" x:Name="TxtHomeLatitude" Margin="0,4" Width="120" HorizontalAlignment="Left"/>
+                        <TextBox   Grid.Row="1" Grid.Column="1" x:Name="TxtHomeLatitude" Style="{StaticResource ReadOnlyValue}" Margin="0,4" Width="120" HorizontalAlignment="Left"/>
 
                         <TextBlock Grid.Row="2" Grid.Column="0" Text="Home Longitude" VerticalAlignment="Center" Margin="0,4"/>
-                        <TextBox   Grid.Row="2" Grid.Column="1" x:Name="TxtHomeLongitude" Margin="0,4" Width="120" HorizontalAlignment="Left"/>
+                        <TextBox   Grid.Row="2" Grid.Column="1" x:Name="TxtHomeLongitude" Style="{StaticResource ReadOnlyValue}" Margin="0,4" Width="120" HorizontalAlignment="Left"/>
 
                         <TextBlock Grid.Row="3" Grid.Column="0" Text="Bounding Box (deg)" VerticalAlignment="Center" Margin="0,4"
                                    ToolTip="Fallback half-width when explicit region bounds are not set."/>
-                        <TextBox   Grid.Row="3" Grid.Column="1" x:Name="TxtBoundingBoxDeg" Margin="0,4" Width="80" HorizontalAlignment="Left"/>
+                        <TextBox   Grid.Row="3" Grid.Column="1" x:Name="TxtBoundingBoxDeg" Style="{StaticResource ReadOnlyValue}" Margin="0,4" Width="80" HorizontalAlignment="Left"/>
 
                         <TextBlock Grid.Row="4" Grid.Column="0" Text="Region South" VerticalAlignment="Center" Margin="0,4"/>
-                        <TextBox   Grid.Row="4" Grid.Column="1" x:Name="TxtRegionSouth" Margin="0,4" Width="120" HorizontalAlignment="Left"
+                        <TextBox   Grid.Row="4" Grid.Column="1" x:Name="TxtRegionSouth" Style="{StaticResource ReadOnlyValue}" Margin="0,4" Width="120" HorizontalAlignment="Left"
                                    ToolTip="Explicit southern latitude bound. Leave empty to derive from home lat/lon."/>
 
                         <TextBlock Grid.Row="5" Grid.Column="0" Text="Region North" VerticalAlignment="Center" Margin="0,4"/>
-                        <TextBox   Grid.Row="5" Grid.Column="1" x:Name="TxtRegionNorth" Margin="0,4" Width="120" HorizontalAlignment="Left"/>
+                        <TextBox   Grid.Row="5" Grid.Column="1" x:Name="TxtRegionNorth" Style="{StaticResource ReadOnlyValue}" Margin="0,4" Width="120" HorizontalAlignment="Left"/>
 
                         <TextBlock Grid.Row="6" Grid.Column="0" Text="Region West" VerticalAlignment="Center" Margin="0,4"/>
-                        <TextBox   Grid.Row="6" Grid.Column="1" x:Name="TxtRegionWest" Margin="0,4" Width="120" HorizontalAlignment="Left"/>
+                        <TextBox   Grid.Row="6" Grid.Column="1" x:Name="TxtRegionWest" Style="{StaticResource ReadOnlyValue}" Margin="0,4" Width="120" HorizontalAlignment="Left"/>
 
                         <TextBlock Grid.Row="7" Grid.Column="0" Text="Region East" VerticalAlignment="Center" Margin="0,4"/>
-                        <TextBox   Grid.Row="7" Grid.Column="1" x:Name="TxtRegionEast" Margin="0,4" Width="120" HorizontalAlignment="Left"/>
+                        <TextBox   Grid.Row="7" Grid.Column="1" x:Name="TxtRegionEast" Style="{StaticResource ReadOnlyValue}" Margin="0,4" Width="120" HorizontalAlignment="Left"/>
                     </Grid>
                 </GroupBox>
 
                 <!-- ── Database ─────────────────────────────────────────��── -->
-                <GroupBox Header="Database" Margin="0,4">
+                <GroupBox Header="Database  (native / management connection — the services use their own)" Margin="0,4">
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="160"/>
@@ -102,7 +119,7 @@
                         </Grid.RowDefinitions>
 
                         <TextBlock Grid.Row="0" Grid.Column="0" Text="Connection String" VerticalAlignment="Center" Margin="0,4"/>
-                        <TextBox   Grid.Row="0" Grid.Column="1" x:Name="TxtConnectionString" Margin="0,4"/>
+                        <TextBox   Grid.Row="0" Grid.Column="1" x:Name="TxtConnectionString" Style="{StaticResource ReadOnlyValue}" Margin="0,4"/>
                         <Button    Grid.Row="0" Grid.Column="2" Content="Test" Width="60" Margin="4,4,0,4"
                                    Click="TestDbButton_Click"/>
                     </Grid>
@@ -164,12 +181,12 @@
                                    Click="TestClaudeButton_Click"/>
 
                         <TextBlock Grid.Row="1" Grid.Column="0" Text="Model" VerticalAlignment="Center" Margin="0,4"/>
-                        <TextBox   Grid.Row="1" Grid.Column="1" x:Name="TxtClaudeModel" Margin="0,4"/>
+                        <TextBox   Grid.Row="1" Grid.Column="1" x:Name="TxtClaudeModel" Style="{StaticResource ReadOnlyValue}" Margin="0,4"/>
                     </Grid>
                 </GroupBox>
 
                 <!-- ── Map ───────────────────────────────────────────────── -->
-                <GroupBox Header="Map Rendering" Margin="0,4">
+                <GroupBox Header="Map Rendering  (set by the setup script)" Margin="0,4">
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="160"/>
@@ -180,7 +197,7 @@
                         </Grid.RowDefinitions>
 
                         <TextBlock Grid.Row="0" Grid.Column="0" Text="Map Extent" VerticalAlignment="Center" Margin="0,4"/>
-                        <TextBox   Grid.Row="0" Grid.Column="1" x:Name="TxtMapExtent" Margin="0,4"
+                        <TextBox   Grid.Row="0" Grid.Column="1" x:Name="TxtMapExtent" Style="{StaticResource ReadOnlyValue}" Margin="0,4"
                                    ToolTip="Preset name (conus, south_central) or W,E,S,N coordinates. Leave empty for auto-fit."/>
                     </Grid>
                 </GroupBox>
