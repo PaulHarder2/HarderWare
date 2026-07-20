@@ -14,12 +14,14 @@
       "src\\WxServices.Logging\\WxServices.Logging.csproj",
       "src\\WxReport.Tools.TranslationQa\\WxReport.Tools.TranslationQa.csproj",
       "src\\WxVis.Svc\\WxVis.Svc.csproj",
+      "src\\WxServices.Setup\\WxServices.Setup.csproj",
       "tests\\MetarParser.Tests\\MetarParser.Tests.csproj",
       "tests\\TafParser.Tests\\TafParser.Tests.csproj",
       "tests\\WxInterp.Tests\\WxInterp.Tests.csproj",
       "tests\\WxMonitor.Tests\\WxMonitor.Tests.csproj",
       "tests\\WxReport.Tests\\WxReport.Tests.csproj",
-      "tests\\WxServices.Common.Tests\\WxServices.Common.Tests.csproj"
+      "tests\\WxServices.Common.Tests\\WxServices.Common.Tests.csproj",
+      "tests\\WxServices.Setup.Tests\\WxServices.Setup.Tests.csproj"
     ]
   }
 }

@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>WxServices.Setup</RootNamespace>
+    <AssemblyName>WxServices.Setup</AssemblyName>
+  </PropertyGroup>
+
+  <!-- WX-314: first-time setup console. Pure generators are built test-first; the DB parts
+       (EnsureSchemaAsync + the Config seed) reuse MetarParser.Data rather than re-deriving the
+       schema or the bootstrap-key rule. -->
+
+  <ItemGroup>
+    <ProjectReference Include="..\MetarParser.Data\MetarParser.Data.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- SqlConnectionStringBuilder for safe connection-string assembly (quotes special-char
+         passwords) — and the provisioning connections in the green phase. -->
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="5.2.2" />
+  </ItemGroup>
+
+</Project>

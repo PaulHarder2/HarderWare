@@ -67,12 +67,13 @@ internal sealed class DbConfigurationProvider : ConfigurationProvider
             var data = NewData();
             foreach (var row in db.Config.AsNoTracking())
             {
-                // Bootstrap-critical keys stay file-sourced — never taken from the DB
-                // overlay (see IsBootstrapKey: BootstrapSectionPrefixes + ClaudeTimeoutKey).
-                // Skip them so a stray Config row cannot override config the process
-                // consumes BEFORE this load runs (or, for the connection string, the very
-                // value used to reach the DB).
-                if (IsBootstrapKey(row.Key))
+                // Bootstrap-critical keys stay file-sourced — never taken from the DB overlay
+                // (the rule, and why each key is on it, lives in BootstrapKeys). Skip them so a
+                // stray Config row cannot override config the process consumes BEFORE this load
+                // runs (or, for the connection string, the very value used to reach the DB).
+                // This read-side guard is the belt to the write-side suspenders in the setup
+                // console's ConfigSeeder and WX-315's Configure tab.
+                if (BootstrapKeys.IsBootstrapKey(row.Key))
                     continue;
 
                 data[row.Key] = row.Value;
@@ -104,32 +105,4 @@ internal sealed class DbConfigurationProvider : ConfigurationProvider
     private static Dictionary<string, string?> NewData() =>
         new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>
-    /// Config sections that stay file-sourced and are never overlaid from the DB — each is
-    /// consumed before the post-schema reload runs (or, for the connection string, is what the
-    /// provider needs to reach the DB at all), so a DB value would be read too late or be
-    /// circular. This read-side guard is the belt to the WX-315 write-side policy's suspenders.
-    /// Matched case-insensitively, by prefix:
-    /// <list type="bullet">
-    /// <item><c>ConnectionStrings:</c> — circular: the provider needs the connection string to reach the very DB it would read the override from.</item>
-    /// <item><c>Database:StartupRetry:</c> — governs reaching the DB; consumed before this load.</item>
-    /// <item><c>Telemetry:</c> — wired at host-build time (AddWxTelemetry), before the reload.</item>
-    /// </list>
-    /// The Claude HttpClient timeout (<see cref="ClaudeTimeoutKey"/>) is guarded separately by
-    /// EXACT equality — the rest of <c>Claude:</c> (Model, MaxTokens, …) is DB-configurable
-    /// (WX-307), so a prefix match would wrongly block a sibling like <c>Claude:TimeoutSecondsOverride</c>.
-    /// </summary>
-    private static readonly string[] BootstrapSectionPrefixes =
-    {
-        "ConnectionStrings:",
-        "Database:StartupRetry:",
-        "Telemetry:",
-    };
-
-    /// <summary>The one bootstrap key matched by exact equality (a prefix match would over-guard <c>Claude:</c> siblings).</summary>
-    private const string ClaudeTimeoutKey = "Claude:TimeoutSeconds";
-
-    private static bool IsBootstrapKey(string key) =>
-        key.Equals(ClaudeTimeoutKey, StringComparison.OrdinalIgnoreCase)
-        || BootstrapSectionPrefixes.Any(p => key.StartsWith(p, StringComparison.OrdinalIgnoreCase));
 }
