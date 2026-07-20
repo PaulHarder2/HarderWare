@@ -65,12 +65,18 @@ public class GlobalSettingsSecretsTests
     }
 
     /// <summary>
-    /// Guards the rule itself: every secret-shaped property on the entity is a column here. If a
-    /// future secret is added to the entity this passes; if one is added to a config file instead,
-    /// this test is the reminder that it belongs on the row.
+    /// Schema stability for the secret columns: each one exists on the entity, so removing or
+    /// renaming one is a deliberate, test-breaking act rather than a silent drop.
+    ///
+    /// <para>Deliberately NOT claimed: this cannot detect a <em>new</em> secret introduced in a
+    /// config file. It knows nothing about JSON, and asserting the presence of six names can only
+    /// fail when one is removed. An earlier version of this comment said it would catch that case,
+    /// which was untrue — the sort of over-claim that makes a green suite misleading. Enforcing the
+    /// rule against config files would mean scanning the JSON for secret-shaped key names, which is
+    /// a different test and is not written yet.</para>
     /// </summary>
     [Fact]
-    public void EverySecretIsAColumnOnTheRow()
+    public void SecretColumnsExistOnTheRow()
     {
         var names = typeof(GlobalSettings).GetProperties().Select(p => p.Name).ToArray();
 
