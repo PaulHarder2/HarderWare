@@ -1576,9 +1576,12 @@ public partial class RecipientsTab : UserControl
 
     /// <summary>
     /// Reads the What3Words API key from the <c>GlobalSettings</c> row at point of use (WX-322).
-    /// Returns empty on any failure — <see cref="AddressGeocoder"/> already reports an unconfigured
-    /// key as an actionable error, so a database hiccup degrades to the same clear message rather
-    /// than an exception out of an address lookup.
+    /// <para>
+    /// Returns the key, <c>""</c> when none is configured, or <see langword="null"/> when the read
+    /// itself <em>failed</em> — the caller reports those last two differently, because "no key is
+    /// set" sends the operator to enter one while a database outage sends them somewhere else
+    /// entirely. <see cref="_w3wReadFailed"/> carries the same distinction for the caller.
+    /// </para>
     /// </summary>
     private async Task<string?> LoadWhat3WordsKeyAsync()
     {

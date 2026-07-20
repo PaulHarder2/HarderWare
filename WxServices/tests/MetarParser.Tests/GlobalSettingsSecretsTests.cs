@@ -12,9 +12,14 @@ using Xunit;
 namespace MetarParser.Tests;
 
 /// <summary>
-/// WX-322: every secret lives on the <c>GlobalSettings</c> row — the connection string is the sole
-/// exception, since it cannot live in the store it unlocks. These pin the rule so a future secret
-/// added to a config file fails a test rather than reaching production.
+/// WX-322: the secret columns on the <c>GlobalSettings</c> row — round-trip, null handling, and
+/// schema stability.
+/// <para>
+/// These cover the <em>entity</em> only. They do NOT detect a secret introduced in a config file:
+/// nothing here reads JSON, so a new file-based credential would pass every assertion. The rule
+/// that secrets belong on this row is stated in <c>DESIGN.md</c> §4.7 and enforced by review, not
+/// by this suite.
+/// </para>
 /// </summary>
 public class GlobalSettingsSecretsTests
 {

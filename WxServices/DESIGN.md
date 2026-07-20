@@ -1150,9 +1150,9 @@ Each service loads configuration from up to two files, merged in order (later fi
 | File | Tracked by git | Purpose |
 |---|---|---|
 | `appsettings.shared.json` | Yes | All non-secret settings for every service and application |
-| `appsettings.local.json` | **No** | Per-machine overrides written by WxManager → Configure tab |
+| `appsettings.local.json` | **No** | Per-machine overrides. Since WX-315 the Configure tab does **not** write it — it is authored by the setup console (WX-314) and holds the connection string plus any per-machine values not yet in the `Config` table |
 
-Most secrets (SMTP credentials, the Claude API key, and the Gemini API key used by the translation-QA judge — WX-235) are stored in the `GlobalSettings` database row (Id = 1) and never appear in any configuration file. `What3Words:ApiKey` is currently the file-based exception (in `appsettings.local.json`). Use WxManager → Configure tab to set the database-stored secrets.
+**Secrets live only in the database** — the `GlobalSettings` row (Id = 1): SMTP credentials, the Claude API key, the Gemini API key used by the translation-QA judge (WX-235), and the What3Words API key (WX-322). **The single exception is the connection string**, which cannot live in the store it unlocks and therefore stays in `appsettings.local.json`. Set the database-stored secrets from WxManager → Configure. There is no longer a file-based secret exception beyond that one; see §4.7 for the rule and the incident that motivated it.
 
 ### Configuration layering — the provider stack
 
