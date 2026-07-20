@@ -25,10 +25,18 @@ public class LocalFilesWriterTests
         public void WriteAllText(string path, string content) => Files[path] = content;
     }
 
+    // Paths are composed with Path.Combine rather than written as Windows literals: the writer
+    // calls Path.GetDirectoryName, and on Linux (where CI runs) a backslash is an ordinary
+    // filename character, so "C:\svc\x\file.json" has no directory part at all and the
+    // create-directory assertions silently see nothing. The console itself only runs on Windows,
+    // but its tests must pass on both.
+    private static readonly string ServiceDir = Path.Combine("svcroot", "wxparser");
+    private static readonly string InstallRoot = "installroot";
+
     private static readonly LocalFile[] Planned =
     {
-        new(@"C:\svc\wxparser\appsettings.local.json", "{ \"a\": 1 }"),
-        new(@"C:\root\appsettings.local.json", "{ \"b\": 2 }"),
+        new(Path.Combine(ServiceDir, "appsettings.local.json"), "{ \"a\": 1 }"),
+        new(Path.Combine(InstallRoot, "appsettings.local.json"), "{ \"b\": 2 }"),
     };
 
     [Fact]
@@ -39,8 +47,8 @@ public class LocalFilesWriterTests
         var written = LocalFilesWriter.Flush(Planned, disk.CreateDirectory, disk.WriteAllText);
 
         Assert.Equal(2, disk.Files.Count);
-        Assert.Equal("{ \"a\": 1 }", disk.Files[@"C:\svc\wxparser\appsettings.local.json"]);
-        Assert.Equal("{ \"b\": 2 }", disk.Files[@"C:\root\appsettings.local.json"]);
+        Assert.Equal("{ \"a\": 1 }", disk.Files[Planned[0].Path]);
+        Assert.Equal("{ \"b\": 2 }", disk.Files[Planned[1].Path]);
         Assert.Equal(Planned.Select(f => f.Path), written);
     }
 
@@ -52,8 +60,8 @@ public class LocalFilesWriterTests
 
         LocalFilesWriter.Flush(Planned, disk.CreateDirectory, disk.WriteAllText);
 
-        Assert.Contains(@"C:\svc\wxparser", disk.Directories);
-        Assert.Contains(@"C:\root", disk.Directories);
+        Assert.Contains(ServiceDir, disk.Directories);
+        Assert.Contains(InstallRoot, disk.Directories);
     }
 
     /// <summary>Re-running setup overwrites rather than erroring (AC-4 idempotency, file side).</summary>
@@ -61,11 +69,11 @@ public class LocalFilesWriterTests
     public void Flush_OverwritesOnRerun()
     {
         var disk = new FakeDisk();
-        disk.WriteAllText(@"C:\root\appsettings.local.json", "stale");
+        disk.WriteAllText(Planned[1].Path, "stale");
 
         LocalFilesWriter.Flush(Planned, disk.CreateDirectory, disk.WriteAllText);
 
-        Assert.Equal("{ \"b\": 2 }", disk.Files[@"C:\root\appsettings.local.json"]);
+        Assert.Equal("{ \"b\": 2 }", disk.Files[Planned[1].Path]);
     }
 
     // ---- the missing-template guard ---------------------------------------
