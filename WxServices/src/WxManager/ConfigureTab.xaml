@@ -186,6 +186,24 @@
                 </GroupBox>
 
                 <!-- ── Map ───────────────────────────────────────────────── -->
+                <!-- Address Lookup (WX-322): the What3Words key moved out of
+                     appsettings.local.json into GlobalSettings, where every other secret lives. -->
+                <GroupBox Header="Address Lookup (What3Words)" Margin="0,4">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="160"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="What3Words API Key" VerticalAlignment="Center" Margin="0,4"/>
+                        <PasswordBox Grid.Row="0" Grid.Column="1" x:Name="TxtWhat3WordsApiKey" Margin="0,4"
+                                     ToolTip="Resolves ///word.word.word addresses on the Recipients tab. Stored in the GlobalSettings database row, not in a file (WX-322)."/>
+                    </Grid>
+                </GroupBox>
+
                 <GroupBox Header="Map Rendering  (set by the setup script)" Margin="0,4">
                     <Grid>
                         <Grid.ColumnDefinitions>

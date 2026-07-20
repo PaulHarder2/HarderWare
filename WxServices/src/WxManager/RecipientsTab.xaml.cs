@@ -404,7 +404,27 @@ public partial class RecipientsTab : UserControl
         {
             // ── Geocode ──────────────────────────────────────────────────────────
 
-            var geo = await AddressGeocoder.LookupAsync(address, _http, App.What3WordsApiKey);
+            // The What3Words key is read from GlobalSettings at point of use (WX-322), the same
+            // way AnnouncementTab reads its SMTP credentials — secrets live in the database, not
+            // in a file and not in a startup-captured static. Only a What3Words address needs it,
+            // so the read costs nothing on the other two address forms. The "is this a What3Words
+            // address?" question is asked of AddressGeocoder so the rule lives in one place.
+            var w3wKey = "";
+            if (AddressGeocoder.IsWhat3WordsAddress(address))
+            {
+                w3wKey = await LoadWhat3WordsKeyAsync() ?? "";
+                if (w3wKey.Length == 0 && _w3wReadFailed)
+                {
+                    // Distinguish "could not read the key" from "no key is set". Falling through
+                    // would report a database outage as a configuration mistake, sending the
+                    // operator to re-enter a key that was already correct.
+                    ShowMessage("Could not read the What3Words key from the database. "
+                                + "Check the database connection and try again.");
+                    return;
+                }
+            }
+
+            var geo = await AddressGeocoder.LookupAsync(address, _http, w3wKey);
             if (geo is null)
             {
                 ShowMessage("Address could not be resolved. Check the format and try again, " +
@@ -1549,5 +1569,35 @@ public partial class RecipientsTab : UserControl
                           + Math.Cos(lat1 * Math.PI / 180.0) * Math.Cos(lat2 * Math.PI / 180.0)
                           * Math.Sin(dLon / 2) * Math.Sin(dLon / 2);
         return R * 2.0 * Math.Atan2(Math.Sqrt(a), Math.Sqrt(1 - a));
+    }
+
+    /// <summary>True when the last key read threw, as opposed to finding no key configured.</summary>
+    private bool _w3wReadFailed;
+
+    /// <summary>
+    /// Reads the What3Words API key from the <c>GlobalSettings</c> row at point of use (WX-322).
+    /// <para>
+    /// Returns the key, <c>""</c> when none is configured, or <see langword="null"/> when the read
+    /// itself <em>failed</em> — the caller reports those last two differently, because "no key is
+    /// set" sends the operator to enter one while a database outage sends them somewhere else
+    /// entirely. <see cref="_w3wReadFailed"/> carries the same distinction for the caller.
+    /// </para>
+    /// </summary>
+    private async Task<string?> LoadWhat3WordsKeyAsync()
+    {
+        _w3wReadFailed = false;
+        try
+        {
+            await using var db = new WeatherDataContext(App.DbOptions);
+            var gs = await db.GlobalSettings.FirstOrDefaultAsync(x => x.Id == 1);
+            return gs?.What3WordsApiKey ?? "";
+        }
+        catch (Exception ex)
+        {
+            // A failed READ is not the same as an unset key — the caller reports them differently.
+            _w3wReadFailed = true;
+            Logger.Warn($"Could not read the What3Words key from GlobalSettings: {ex.Message}");
+            return null;
+        }
     }
 }

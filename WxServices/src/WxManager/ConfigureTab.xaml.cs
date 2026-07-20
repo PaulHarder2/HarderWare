@@ -40,6 +40,13 @@ public partial class ConfigureTab : UserControl
     /// </summary>
     private bool _suppressDirty;
 
+    /// <summary>
+    /// True when the last secrets query <em>threw</em> (as opposed to finding no row). The secret
+    /// boxes are then empty because nothing populated them, not because the secrets are empty — so
+    /// saving would write blanks over every stored credential. The save refuses while this is set.
+    /// </summary>
+    private bool _secretsLoadFailed;
+
     public ConfigureTab()
     {
         InitializeComponent();
@@ -50,7 +57,7 @@ public partial class ConfigureTab : UserControl
         // enable Save for a change the tab is unable to persist (WX-315).
         DirtyTracking.Attach(MarkDirty,
             TxtSmtpHost, TxtSmtpPort, TxtSmtpUsername, TxtSmtpPassword, TxtSmtpFromAddress,
-            TxtClaudeApiKey, TxtAlertEmail);
+            TxtClaudeApiKey, TxtWhat3WordsApiKey, TxtAlertEmail);
 
         Loaded += async (_, _) => await LoadCurrentValuesAsync();
     }
@@ -74,6 +81,7 @@ public partial class ConfigureTab : UserControl
         // keystrokes arriving during a cold secrets query, and the trailing
         // force-disable would then clobber a real edit (review finding).
         GlobalSettings? gs = null;
+        _secretsLoadFailed = false;
         try
         {
             await using var db = new WeatherDataContext(App.DbOptions);
@@ -81,6 +89,9 @@ public partial class ConfigureTab : UserControl
         }
         catch (Exception ex)
         {
+            // A missing ROW is fine (fresh install — the save creates it). A failed QUERY is not:
+            // the boxes stay empty and a subsequent save would blank every stored secret.
+            _secretsLoadFailed = true;
             Logger.Warn($"Could not load secrets from database: {ex.Message}");
         }
 
@@ -139,13 +150,31 @@ public partial class ConfigureTab : UserControl
             TxtSmtpPassword.Password = gs.SmtpPassword ?? "";
             TxtSmtpFromAddress.Text = gs.SmtpFromAddress ?? "";
             TxtClaudeApiKey.Password = gs.ClaudeApiKey ?? "";
+            TxtWhat3WordsApiKey.Password = gs.What3WordsApiKey ?? "";
         }
     }
 
     // ── Save ─��───────────────────────────────────────────────────────────────
 
+    /// <summary>Blank input means "not configured" — stored as NULL, not an empty string.</summary>
+    private static string? NullIfBlank(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value;
+
     private async void SaveButton_Click(object sender, RoutedEventArgs e)
     {
+        if (_secretsLoadFailed)
+        {
+            // Refuse rather than partially save: the secret boxes are blank only because the load
+            // failed, so writing them would destroy the stored credentials (all five of them) in
+            // one transaction. Operational settings can wait for a working connection.
+            const string msg = "Cannot save — the stored secrets could not be read when this tab "
+                + "opened, so saving would overwrite them. Fix the database connection and reopen "
+                + "the tab.";
+            Logger.Error("Save refused: secrets failed to load, so a save would blank them.");
+            SetStatus(msg, false);
+            return;
+        }
+
         try
         {
             // This tab no longer writes appsettings.local.json (WX-315). Everything editable here
@@ -175,6 +204,9 @@ public partial class ConfigureTab : UserControl
             gs.SmtpPassword = TxtSmtpPassword.Password;
             gs.SmtpFromAddress = TxtSmtpFromAddress.Text.Trim();
             gs.ClaudeApiKey = TxtClaudeApiKey.Password;
+            // Empty stays NULL, not "": "never configured" and "configured as blank" are different
+            // states, and the WX-322 procedure distinguishes them by reading LEN() on the column.
+            gs.What3WordsApiKey = NullIfBlank(TxtWhat3WordsApiKey.Password);
 
             // Operational settings → Config table, through the shared write path, which refuses
             // bootstrap-critical keys (BootstrapKeys) and duplicates. Its SaveChanges commits the

@@ -67,9 +67,6 @@ public partial class App : Application
     /// <summary>Maximum tokens for Claude responses from <c>Claude:MaxTokens</c>. Defaults to <c>2048</c>.</summary>
     public static int ClaudeMaxTokens { get; private set; } = 2048;
 
-    /// <summary>What3Words API key from <c>What3Words:ApiKey</c> in <c>appsettings.local.json</c>. Empty if not configured; <c>///</c>-prefixed addresses will fail to resolve.</summary>
-    public static string What3WordsApiKey { get; private set; } = "";
-
     /// <summary>Maximum candidate stations evaluated during nearby-station lookup, from <c>WxManager:MaxNearbyStationsInLookup</c>. Defaults to <c>40</c>.</summary>
     public static int MaxNearbyStationsInLookup { get; private set; } = 40;
 
@@ -188,7 +185,6 @@ public partial class App : Application
         ClaudeApiVersion = config["Claude:ApiVersion"] ?? ClaudeApiVersion;
         if (int.TryParse(config["Claude:MaxTokens"], out var maxTok) && maxTok > 0)
             ClaudeMaxTokens = maxTok;
-        What3WordsApiKey = config["What3Words:ApiKey"] ?? "";
         if (int.TryParse(config["WxManager:MaxNearbyStationsInLookup"], out var maxNearby) && maxNearby > 0)
             MaxNearbyStationsInLookup = maxNearby;
         if (TryParseDouble(config["WxManager:StationLookupRadiusKm"]) is { } radiusKm && radiusKm > 0)

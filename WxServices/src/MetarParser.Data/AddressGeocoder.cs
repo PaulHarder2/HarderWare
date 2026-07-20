@@ -26,6 +26,16 @@ public static class AddressGeocoder
         @"^/{3}[a-z]+\.[a-z]+\.[a-z]+$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+    /// <summary>
+    /// Whether <paramref name="address"/> is a What3Words address, by the same rule
+    /// <see cref="LookupAsync"/> dispatches on. Exposed (WX-322) so a caller that must fetch the
+    /// API key beforehand asks THIS question rather than re-implementing it — a caller-side
+    /// "starts with ///" check silently diverges the moment this pattern changes, and the symptom
+    /// would be "no API key set" for an address that has one.
+    /// </summary>
+    public static bool IsWhat3WordsAddress(string? address) =>
+        !string.IsNullOrWhiteSpace(address) && W3wPattern.IsMatch(address.Trim());
+
     // Two signed decimals separated by a comma — e.g. "30.07, -95.55"
     private static readonly Regex LatLonPattern = new(
         @"^\s*([-+]?\d+(?:\.\d+)?)\s*,\s*([-+]?\d+(?:\.\d+)?)\s*$",
@@ -38,7 +48,7 @@ public static class AddressGeocoder
     /// </summary>
     /// <param name="address">A street address, <c>///word.word.word</c> What3Words address, or <c>lat, lon</c> decimal-degree pair.</param>
     /// <param name="httpClient">HTTP client for outbound geocoder requests (must allow outbound HTTPS).</param>
-    /// <param name="w3wApiKey">What3Words API key (from <c>What3Words:ApiKey</c> in <c>appsettings.local.json</c>); may be null/empty if W3W input is not used.</param>
+    /// <param name="w3wApiKey">A What3Words API key. May be null/empty when the input is not a What3Words address; sourcing it is the caller's business (WxManager reads it from <c>GlobalSettings</c>).</param>
     /// <returns>
     /// A tuple of (Latitude, Longitude, LocalityName) if resolved successfully,
     /// or <see langword="null"/> if the address cannot be geocoded.
@@ -69,7 +79,13 @@ public static class AddressGeocoder
             Logger.Info($"AddressGeocoder: looking up '{trimmed}' via {path}.");
             if (string.IsNullOrWhiteSpace(w3wApiKey))
             {
-                Logger.Error($"AddressGeocoder: '{trimmed}' supplied but What3Words:ApiKey is not configured — returning null.");
+                // Name the place the key actually lives and how to set it. The message used to
+                // cite What3Words:ApiKey in appsettings.local.json, which since WX-322 is the wrong
+                // place to look — and a wrong pointer costs more than no pointer.
+                Logger.Error(
+                    $"AddressGeocoder: '{trimmed}' supplied but no What3Words API key is set. " +
+                    "The key lives in the GlobalSettings database row (column What3WordsApiKey); " +
+                    "set it in WxManager → Configure → Address Lookup (What3Words). Returning null.");
                 return null;
             }
             // The W3W SDK manages its own HttpClient; httpClient is only used by Nominatim.
