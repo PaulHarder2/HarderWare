@@ -128,9 +128,25 @@ async Task<int> RunAsync(SetupOptions opts)
     Console.WriteLine($"Mapping '{opts.SqlLogin}' into '{opts.Database}' with {string.Join(", ", SqlProvisioning.LeastPrivilegeRoles)}...");
     await SqlExecutor.ExecuteAsync(adminConnection, userStatements);
 
+    // Steps 7-8 are wrapped like steps 4-6: they are the last mutating steps, so a disk-full,
+    // permission, or DbUpdateException failure here lands at the worst possible moment — after the
+    // login, schema, and user are already provisioned — and must still report as a plain
+    // actionable message rather than a stack trace.
+
     // ---- 7. Flush the five per-environment files (AC-5) --------------------
     // Planned in step 3a; only the disk write happens here, after the database work succeeded.
-    var written = LocalFilesWriter.Flush(plan, path => Directory.CreateDirectory(path), File.WriteAllText);
+    IReadOnlyList<string> written;
+    try
+    {
+        written = LocalFilesWriter.Flush(plan, path => Directory.CreateDirectory(path), File.WriteAllText);
+    }
+    catch (Exception ex) when (ex is not SetupException)
+    {
+        throw new SetupException(
+            $"Writing the local configuration files failed: {ex.Message}{Environment.NewLine}" +
+            "The SQL login and schema were already provisioned — fix the cause and re-run; setup is idempotent.",
+            ex);
+    }
 
     Console.WriteLine();
     Console.WriteLine("Wrote:");
@@ -141,7 +157,21 @@ async Task<int> RunAsync(SetupOptions opts)
     await using (var db = new WeatherDataContext(dbOptions))
     {
         var rows = ConfigSeed.BuildFoundationalSeedRows(inputs);
-        var outcome = await ConfigSeeder.UpsertAsync(db, rows, DateTime.UtcNow);
+        SeedOutcome outcome;
+        try
+        {
+            // SetupException is already actionable (the bootstrap-key and duplicate-key guards) —
+            // re-wrapping it would bury its message inside a second one.
+            outcome = await ConfigSeeder.UpsertAsync(db, rows, DateTime.UtcNow);
+        }
+        catch (Exception ex) when (ex is not SetupException)
+        {
+            throw new SetupException(
+                $"Seeding the Config table failed: {ex.Message}{Environment.NewLine}" +
+                "The login, schema, and configuration files are already in place — fix the cause and re-run.",
+                ex);
+        }
+
         Console.WriteLine();
         Console.WriteLine(
             $"Config seed: {outcome.Inserted} inserted, {outcome.Updated} updated, {outcome.Unchanged} unchanged.");

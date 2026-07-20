@@ -22,7 +22,12 @@ public static class BootstrapKeys
     /// <item><c>Telemetry:</c> — wired at host-build time (AddWxTelemetry), before the reload.</item>
     /// </list>
     /// </summary>
-    public static readonly string[] SectionPrefixes =
+    /// <remarks>
+    /// Exposed as <see cref="IReadOnlyList{T}"/>, not <c>string[]</c>: a shared mutable array could
+    /// be rewritten in place by any consumer, changing the rule for every other one — the same
+    /// drift this class exists to prevent, arriving by mutation instead of duplication.
+    /// </remarks>
+    public static readonly IReadOnlyList<string> SectionPrefixes = new[]
     {
         "ConnectionStrings:",
         "Database:StartupRetry:",
