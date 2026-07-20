@@ -103,21 +103,31 @@ public partial class ConfigureTab : UserControl
         // appsettings.shared.json → default), the same value WxPaths hands the rest of the system.
         TxtInstallRoot.Text = WxPaths.ReadInstallRoot();
 
+        // Every field shows exactly what is configured, and nothing when a value is unset (WX-315).
+        //
+        // The old hardcoded fallbacks ("9", "smtp.gmail.com", "587", "claude-sonnet-4-6", a default
+        // connection string) were harmless while Save wrote them to a file — displaying one and
+        // saving made it true. They are not harmless now, in two different ways:
+        //   * on a READ-ONLY field the fallback asserts a configuration that does not exist and
+        //     that the operator can no longer set from this screen;
+        //   * on an EDITABLE field it would be written to Config by the next save even though the
+        //     operator never chose it, turning a shared default into an explicit override that
+        //     silently shadows appsettings.shared.json from then on.
+        // Blank means "not set here" — which is the truth, and is visible as such.
         TxtHomeIcao.Text = cfg["Fetch:HomeIcao"] ?? "";
         TxtHomeLatitude.Text = cfg["Fetch:HomeLatitude"] ?? "";
         TxtHomeLongitude.Text = cfg["Fetch:HomeLongitude"] ?? "";
-        TxtBoundingBoxDeg.Text = cfg["Fetch:BoundingBoxDegrees"] ?? "9";
+        TxtBoundingBoxDeg.Text = cfg["Fetch:BoundingBoxDegrees"] ?? "";
         TxtRegionSouth.Text = cfg["Fetch:RegionSouth"] ?? "";
         TxtRegionNorth.Text = cfg["Fetch:RegionNorth"] ?? "";
         TxtRegionWest.Text = cfg["Fetch:RegionWest"] ?? "";
         TxtRegionEast.Text = cfg["Fetch:RegionEast"] ?? "";
 
-        TxtConnectionString.Text = cfg["ConnectionStrings:WeatherData"]
-            ?? @"Server=.\SQLEXPRESS;Database=WeatherData;Trusted_Connection=True;TrustServerCertificate=True;";
+        TxtConnectionString.Text = cfg["ConnectionStrings:WeatherData"] ?? "";
 
-        TxtSmtpHost.Text = cfg["Smtp:Host"] ?? "smtp.gmail.com";
-        TxtSmtpPort.Text = cfg["Smtp:Port"] ?? "587";
-        TxtClaudeModel.Text = cfg["Claude:Model"] ?? "claude-sonnet-4-6";
+        TxtSmtpHost.Text = cfg["Smtp:Host"] ?? "";
+        TxtSmtpPort.Text = cfg["Smtp:Port"] ?? "";
+        TxtClaudeModel.Text = cfg["Claude:Model"] ?? "";
         TxtMapExtent.Text = cfg["WxVis:MapExtent"] ?? "";
         TxtAlertEmail.Text = cfg["Monitor:AlertEmail"] ?? "";
 
@@ -177,6 +187,23 @@ public partial class ConfigureTab : UserControl
                 $"Configuration saved: Config {result.Inserted} inserted / {result.Updated} updated / " +
                 $"{result.Unchanged} unchanged; secrets written to GlobalSettings.");
 
+            SetStatus("Configuration saved.", true);
+            SaveButton.IsEnabled = false;  // back to clean until the next edit (WX-134)
+            ConfigurationSaved?.Invoke();
+        }
+        catch (Exception ex)
+        {
+            Logger.Error($"Failed to save configuration: {ex.Message}");
+            SetStatus($"Save failed: {ex.Message}", false);
+            return;
+        }
+
+        // Post-save refresh — deliberately OUTSIDE the save's try/catch. The write has already
+        // committed by this point, so a failure here is NOT a failed save and must never be
+        // reported as one: telling the operator "Save failed" for a change that is already in the
+        // database invites them to re-enter it or abandon it.
+        try
+        {
             // One-time, intentional refresh (WX-315): re-run every configuration provider so the
             // values just written are live in THIS instance instead of waiting for a restart. Same
             // mechanism the four services use after EnsureSchemaAsync. Deliberately NOT SQL change
@@ -187,15 +214,11 @@ public partial class ConfigureTab : UserControl
             // Re-read the fields from the refreshed configuration, so what is displayed is what is
             // now in effect rather than what was typed — a wrong value shows up immediately.
             await LoadCurrentValuesAsync();
-
-            SetStatus("Configuration saved.", true);
-            SaveButton.IsEnabled = false;  // back to clean until the next edit (WX-134)
-            ConfigurationSaved?.Invoke();
         }
         catch (Exception ex)
         {
-            Logger.Error($"Failed to save configuration: {ex.Message}");
-            SetStatus($"Save failed: {ex.Message}", false);
+            Logger.Warn($"Configuration saved, but refreshing the displayed values failed: {ex.Message}");
+            SetStatus("Configuration saved — restart WxManager to refresh the displayed values.", true);
         }
     }
 

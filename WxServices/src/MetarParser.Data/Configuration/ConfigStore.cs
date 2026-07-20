@@ -1,3 +1,5 @@
+using System.Globalization;
+
 using MetarParser.Data.Entities;
 
 using Microsoft.EntityFrameworkCore;
@@ -18,25 +20,45 @@ public static class OperationalConfig
     public const string AlertEmailKey = "Monitor:AlertEmail";
 
     /// <summary>
-    /// The rows for the three freely-editable operational settings. Values are trimmed; the port
-    /// must be a valid TCP port. A bad port <em>throws</em> rather than silently substituting a
-    /// default (the pre-WX-315 tab quietly wrote 587 for any unparseable entry, so a typo looked
+    /// The rows for the freely-editable operational settings. Values are trimmed, and a non-empty
+    /// port must be a valid TCP port — a bad one <em>throws</em> rather than silently substituting
+    /// a default (the pre-WX-315 tab quietly wrote 587 for any unparseable entry, so a typo looked
     /// like it saved and changed nothing).
+    ///
+    /// <para>A blank field emits <b>no row</b>. Writing one would turn "unset, so the shared
+    /// default applies" into an explicit database override that shadows
+    /// <c>appsettings.shared.json</c> from then on — a value the operator never chose, and one that
+    /// would make a later change to the shared default silently ineffective.</para>
     /// </summary>
     public static IReadOnlyList<KeyValuePair<string, string?>> BuildEditableRows(
         string smtpHost, string smtpPort, string alertEmail)
     {
-        var port = (smtpPort ?? string.Empty).Trim();
-        if (!int.TryParse(port, out var parsed) || parsed < 1 || parsed > 65535)
-            throw new ConfigWriteException(
-                $"SMTP port '{smtpPort}' is not a valid port number (1-65535).");
+        var rows = new List<KeyValuePair<string, string?>>();
 
-        return new List<KeyValuePair<string, string?>>
+        Add(SmtpHostKey, smtpHost);
+
+        var port = (smtpPort ?? string.Empty).Trim();
+        if (port.Length > 0)
         {
-            new(SmtpHostKey, (smtpHost ?? string.Empty).Trim()),
-            new(SmtpPortKey, parsed.ToString(System.Globalization.CultureInfo.InvariantCulture)),
-            new(AlertEmailKey, (alertEmail ?? string.Empty).Trim()),
-        };
+            if (!int.TryParse(port, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
+                || parsed < 1 || parsed > 65535)
+            {
+                throw new ConfigWriteException(
+                    $"SMTP port '{smtpPort}' is not a valid port number (1-65535).");
+            }
+
+            rows.Add(new(SmtpPortKey, parsed.ToString(CultureInfo.InvariantCulture)));
+        }
+
+        Add(AlertEmailKey, alertEmail);
+        return rows;
+
+        void Add(string key, string? value)
+        {
+            var trimmed = (value ?? string.Empty).Trim();
+            if (trimmed.Length > 0)
+                rows.Add(new(key, trimmed));
+        }
     }
 }
 
