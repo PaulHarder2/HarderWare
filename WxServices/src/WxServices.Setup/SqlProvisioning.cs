@@ -37,9 +37,16 @@ public static class SqlProvisioning
         return $"[{name.Replace("]", "]]", StringComparison.Ordinal)}]";
     }
 
-    /// <summary>Quotes a Unicode string literal, doubling any <c>'</c> so it cannot terminate the string.</summary>
-    public static string QuoteLiteral(string value) =>
-        $"N'{(value ?? string.Empty).Replace("'", "''", StringComparison.Ordinal)}'";
+    /// <summary>
+    /// Quotes a Unicode string literal, doubling any <c>'</c> so it cannot terminate the string.
+    /// A null argument throws rather than silently becoming <c>N''</c> — for the password that
+    /// would bake an empty credential into <c>CREATE LOGIN</c> instead of failing.
+    /// </summary>
+    public static string QuoteLiteral(string value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        return $"N'{value.Replace("'", "''", StringComparison.Ordinal)}'";
+    }
 
     /// <summary>
     /// Server-level: create the login, or reset its password if it already exists. An existing login
@@ -84,8 +91,11 @@ public static class SqlProvisioning
 
         foreach (var role in roles)
         {
+            // The role name is escaped in both positions: QuoteLiteral inside IS_ROLEMEMBER and
+            // QuoteIdentifier in ALTER ROLE. This method is public and takes an arbitrary role
+            // list, so neither position may assume a well-behaved constant.
             statements.Add(Plain($"""
-                IF IS_ROLEMEMBER('{role}', {loginLiteral}) = 0
+                IF IS_ROLEMEMBER({QuoteLiteral(role)}, {loginLiteral}) = 0
                     ALTER ROLE {QuoteIdentifier(role)} ADD MEMBER {quotedLogin};
                 """));
         }

@@ -137,6 +137,31 @@ public class ConfigSeederTests
         Assert.Empty(await ctx.Config.ToListAsync());
     }
 
+    /// <summary>
+    /// A key repeated within one batch must fail up front: the existing-row snapshot is taken once,
+    /// so both copies would take the insert path and violate the primary key at SaveChanges — after
+    /// the login, schema, and files were already committed.
+    /// </summary>
+    [Fact]
+    public async Task Upsert_RejectsDuplicateKeysWithinOneBatch()
+    {
+        using var conn = new SqliteConnection("DataSource=:memory:");
+        var options = NewDb(conn);
+        using var ctx = new WeatherDataContext(options);
+
+        var ex = await Assert.ThrowsAsync<SetupException>(() => ConfigSeeder.UpsertAsync(
+            ctx,
+            new KeyValuePair<string, string?>[]
+            {
+                new("Fetch:HomeIcao", "KDFW"),
+                new("fetch:homeicao", "KOKC"),   // same key, different case
+            },
+            Seeded));
+
+        Assert.Contains("Duplicate", ex.Message, StringComparison.Ordinal);
+        Assert.Empty(await ctx.Config.ToListAsync());
+    }
+
     /// <summary>A sibling of the exact-matched Claude timeout key stays seedable (WX-313 precedent).</summary>
     [Fact]
     public async Task Upsert_AllowsClaudeSiblingsOfTheExactMatchedTimeoutKey()

@@ -67,12 +67,13 @@ internal sealed class DbConfigurationProvider : ConfigurationProvider
             var data = NewData();
             foreach (var row in db.Config.AsNoTracking())
             {
-                // Bootstrap-critical keys stay file-sourced — never taken from the DB
-                // overlay (see IsBootstrapKey: BootstrapSectionPrefixes + ClaudeTimeoutKey).
-                // Skip them so a stray Config row cannot override config the process
-                // consumes BEFORE this load runs (or, for the connection string, the very
-                // value used to reach the DB).
-                if (IsBootstrapKey(row.Key))
+                // Bootstrap-critical keys stay file-sourced — never taken from the DB overlay
+                // (the rule, and why each key is on it, lives in BootstrapKeys). Skip them so a
+                // stray Config row cannot override config the process consumes BEFORE this load
+                // runs (or, for the connection string, the very value used to reach the DB).
+                // This read-side guard is the belt to the write-side suspenders in the setup
+                // console's ConfigSeeder and WX-315's Configure tab.
+                if (BootstrapKeys.IsBootstrapKey(row.Key))
                     continue;
 
                 data[row.Key] = row.Value;
@@ -104,10 +105,4 @@ internal sealed class DbConfigurationProvider : ConfigurationProvider
     private static Dictionary<string, string?> NewData() =>
         new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>
-    /// Whether a key stays file-sourced and is never overlaid from the DB. The rule itself lives in
-    /// <see cref="BootstrapKeys"/> (extracted in WX-314) so this read-side guard — the belt — and the
-    /// write-side guards in the setup console and WX-315's Configure tab — the suspenders — cannot drift apart.
-    /// </summary>
-    private static bool IsBootstrapKey(string key) => BootstrapKeys.IsBootstrapKey(key);
 }

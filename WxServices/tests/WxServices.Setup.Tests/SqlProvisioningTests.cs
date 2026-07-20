@@ -81,8 +81,9 @@ public class SqlProvisioningTests
 
         foreach (var role in SqlProvisioning.LeastPrivilegeRoles)
         {
-            // IS_ROLEMEMBER keeps a re-run from erroring on an already-present member.
-            Assert.Contains($"IS_ROLEMEMBER('{role}'", sql, StringComparison.Ordinal);
+            // IS_ROLEMEMBER keeps a re-run from erroring on an already-present member; the role
+            // name is a quoted literal there, not raw interpolation.
+            Assert.Contains($"IS_ROLEMEMBER(N'{role}'", sql, StringComparison.Ordinal);
             Assert.Contains($"ALTER ROLE [{role}] ADD MEMBER [wxservicestest]", sql, StringComparison.Ordinal);
         }
     }

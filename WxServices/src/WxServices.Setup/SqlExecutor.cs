@@ -20,7 +20,20 @@ public static class SqlExecutor
         CancellationToken ct = default)
     {
         await using var connection = new SqlConnection(connectionString);
-        await connection.OpenAsync(ct);
+
+        // Opening is inside the guard too: the server can go away between the prerequisite gate and
+        // this call (the operator is typing answers in between), and an unwrapped SqlException here
+        // would escape Program.cs's SetupException handler as a raw stack trace.
+        try
+        {
+            await connection.OpenAsync(ct);
+        }
+        catch (SqlException ex)
+        {
+            throw new SetupException(
+                $"Could not connect to SQL Server to run the provisioning statements.{Environment.NewLine}" +
+                $"Server said: {ex.Message}", ex);
+        }
 
         foreach (var statement in statements)
         {

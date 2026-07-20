@@ -6,8 +6,9 @@
 // database work has succeeded, so a failed run does not leave configuration on disk pointing at a
 // login or database that was never created.
 //
-//   prerequisites -> prompt -> confirm -> CREATE LOGIN -> EnsureSchema -> CREATE USER + roles
-//                 -> write appsettings.local.json x5 -> seed Config
+//   prerequisites -> prompt -> confirm -> PLAN the 5 files (pure; validates the templates)
+//                 -> CREATE LOGIN -> EnsureSchema -> CREATE USER + roles
+//                 -> flush the 5 appsettings.local.json -> seed Config
 //
 // Nothing here elevates: host-level configuration that needs elevation (Mixed-Mode auth, TCP) is
 // detected by the prerequisite gate and reported, never performed.
@@ -21,7 +22,7 @@ using WxServices.Setup;
 
 var installRootDefault = Environment.GetEnvironmentVariable("WXSERVICES_INSTALL_ROOT") ?? @"C:\HarderWare";
 var servicesDirDefault = Environment.GetEnvironmentVariable("WXSERVICES_SERVICES_DIR")
-    ?? Path.Combine(Directory.GetCurrentDirectory(), "services");
+    ?? ResolveServicesDir();
 
 SetupOptions options;
 try
@@ -94,6 +95,14 @@ async Task<int> RunAsync(SetupOptions opts)
 
     Console.WriteLine();
 
+    // ---- 3a. Build the file plan BEFORE any mutation ----------------------
+    // Building the plan reads every committed .example template, so a missing or unreadable
+    // template fails here — while the instance is still untouched. Doing this after the DB work
+    // (as an earlier cut did) could leave a provisioned login and a fully migrated database with
+    // no config files at all: exactly the half-configured state the write-after-DB order exists to
+    // avoid. The plan is pure, so building early costs nothing and buys the guarantee.
+    var plan = LocalFilesPlan.Build(opts, password, LocalFilesWriter.FileSystemExampleReader);
+
     // ---- 4. Server-level login -------------------------------------------
     var masterConnection = ConnectionStrings.BuildWxManager(opts.Server, "master");
     Console.WriteLine($"Provisioning login '{opts.SqlLogin}'...");
@@ -119,8 +128,8 @@ async Task<int> RunAsync(SetupOptions opts)
     Console.WriteLine($"Mapping '{opts.SqlLogin}' into '{opts.Database}' with {string.Join(", ", SqlProvisioning.LeastPrivilegeRoles)}...");
     await SqlExecutor.ExecuteAsync(adminConnection, userStatements);
 
-    // ---- 7. The five per-environment files (AC-5) -------------------------
-    var plan = LocalFilesPlan.Build(opts, password, LocalFilesWriter.FileSystemExampleReader);
+    // ---- 7. Flush the five per-environment files (AC-5) --------------------
+    // Planned in step 3a; only the disk write happens here, after the database work succeeded.
     var written = LocalFilesWriter.Flush(plan, path => Directory.CreateDirectory(path), File.WriteAllText);
 
     Console.WriteLine();
@@ -141,6 +150,28 @@ async Task<int> RunAsync(SetupOptions opts)
     Console.WriteLine();
     Console.WriteLine("Setup complete.");
     return 0;
+}
+
+// services/ lives at the repository root, but this console is normally launched from the
+// WxServices project directory ("dotnet run --project src\WxServices.Setup" only resolves from
+// there), where cwd\services does not exist. Check the working directory first, then its parent,
+// so the obvious invocation works from either location; --services-dir still overrides both.
+string ResolveServicesDir()
+{
+    var cwd = Directory.GetCurrentDirectory();
+    var here = Path.Combine(cwd, "services");
+    if (Directory.Exists(here))
+        return here;
+
+    var parent = Directory.GetParent(cwd)?.FullName;
+    if (parent is not null)
+    {
+        var up = Path.Combine(parent, "services");
+        if (Directory.Exists(up))
+            return up;
+    }
+
+    return here;   // report the working-directory candidate in the gate's "not found" message
 }
 
 bool Confirm(string question)

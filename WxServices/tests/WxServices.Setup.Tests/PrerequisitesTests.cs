@@ -40,4 +40,27 @@ public class PrerequisitesTests
         Assert.Contains("[WARN] Docker — not on PATH", text);
         Assert.Contains("[FAIL] Mixed Mode — enable it", text);
     }
+
+    /// <summary>
+    /// The TCP probe must follow --server rather than assuming a default-port local instance,
+    /// otherwise a perfectly good remote or non-default-port server is reported as a hard failure.
+    /// </summary>
+    [Theory]
+    [InlineData(@".\SQLEXPRESS", "127.0.0.1", 1433)]
+    [InlineData("(local)", "127.0.0.1", 1433)]
+    [InlineData("localhost", "127.0.0.1", 1433)]
+    [InlineData("LOCALHOST", "127.0.0.1", 1433)]
+    [InlineData("", "127.0.0.1", 1433)]
+    [InlineData("SQLBOX01", "SQLBOX01", 1433)]
+    [InlineData(@"SQLBOX01\PROD", "SQLBOX01", 1433)]
+    [InlineData("SQLBOX01,14330", "SQLBOX01", 14330)]
+    [InlineData(@".\SQLEXPRESS,14330", "127.0.0.1", 14330)]
+    [InlineData("10.0.0.5,1433", "10.0.0.5", 1433)]
+    public void TcpProbeTarget_DerivesHostAndPortFromServer(string server, string host, int port)
+    {
+        var (actualHost, actualPort) = Prerequisites.TcpProbeTarget(server);
+
+        Assert.Equal(host, actualHost);
+        Assert.Equal(port, actualPort);
+    }
 }

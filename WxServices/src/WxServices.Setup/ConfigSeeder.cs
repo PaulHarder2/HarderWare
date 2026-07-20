@@ -40,6 +40,16 @@ public static class ConfigSeeder
                     "have no effect.");
         }
 
+        // The existing-row snapshot below is taken once, so a key repeated within one batch would
+        // take the insert path twice and fail on the primary key only at SaveChanges — after the
+        // login, schema, and files have already been committed. Reject it up front instead.
+        var duplicate = rows
+            .GroupBy(r => r.Key, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault(g => g.Count() > 1);
+        if (duplicate is not null)
+            throw new SetupException(
+                $"Duplicate configuration key '{duplicate.Key}' in the seed set — each key may appear once.");
+
         var keys = rows.Select(r => r.Key).ToArray();
         var existing = await db.Config
             .Where(c => keys.Contains(c.Key))

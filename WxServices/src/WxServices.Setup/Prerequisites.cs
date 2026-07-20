@@ -72,12 +72,21 @@ public static class Prerequisites
         {
             checks.Add(new PrereqCheck("SQL Server reachable (Trusted)", PrereqStatus.Fail,
                 $"could not connect to {options.Server}: {ex.GetBaseException().Message.TrimEnd('.')}"));
+
+            // Report the two checks we could not run rather than omitting them. Silently dropping
+            // them makes an unverified prerequisite indistinguishable from a passing one, and costs
+            // the operator an extra round trip (each fix here needs a SQL Server restart).
+            checks.Add(new PrereqCheck("Mixed-Mode authentication", PrereqStatus.Fail,
+                "not checked — SQL Server was unreachable; re-run once it is up"));
+            checks.Add(new PrereqCheck("Invoking user is SQL sysadmin", PrereqStatus.Fail,
+                "not checked — SQL Server was unreachable; re-run once it is up"));
         }
 
-        checks.Add(await TcpListeningAsync("127.0.0.1", 1433)
-            ? new PrereqCheck("SQL Server TCP/1433", PrereqStatus.Pass, "listening")
-            : new PrereqCheck("SQL Server TCP/1433", PrereqStatus.Fail,
-                "no TCP listener on 1433; enable TCP/IP in SQL Server Configuration Manager and restart (containers reach the host via host.docker.internal,1433)"));
+        var (tcpHost, tcpPort) = TcpProbeTarget(options.Server);
+        checks.Add(await TcpListeningAsync(tcpHost, tcpPort)
+            ? new PrereqCheck($"SQL Server TCP/{tcpPort}", PrereqStatus.Pass, $"listening on {tcpHost}")
+            : new PrereqCheck($"SQL Server TCP/{tcpPort}", PrereqStatus.Fail,
+                $"no TCP listener on {tcpHost}:{tcpPort}; enable TCP/IP in SQL Server Configuration Manager and restart (containers reach the host via host.docker.internal,1433)"));
 
         if (options.Mode == "full")
         {
@@ -105,14 +114,47 @@ public static class Prerequisites
         return result is null or DBNull ? -1 : Convert.ToInt32(result);
     }
 
+    /// <summary>
+    /// Resolves which endpoint to probe for a TCP listener from <paramref name="server"/> — the
+    /// probe must follow <c>--server</c>, not assume a default-port local instance. Handles the
+    /// forms we accept: <c>.\SQLEXPRESS</c> / <c>(local)</c> / <c>localhost</c> (all local),
+    /// <c>HOST\INSTANCE</c>, and an explicit <c>HOST,PORT</c>.
+    /// </summary>
+    public static (string Host, int Port) TcpProbeTarget(string server)
+    {
+        var value = (server ?? string.Empty).Trim();
+
+        // HOST,PORT wins — an explicit port is the only reliable one for a named instance, which
+        // otherwise negotiates a dynamic port via the SQL Browser.
+        var comma = value.LastIndexOf(',');
+        if (comma >= 0 && int.TryParse(value[(comma + 1)..].Trim(), out var explicitPort))
+            return (HostOnly(value[..comma]), explicitPort);
+
+        return (HostOnly(value), 1433);
+
+        // Strip any \INSTANCE suffix, then map the local aliases to a loopback address.
+        static string HostOnly(string s)
+        {
+            var backslash = s.IndexOf('\\');
+            var host = (backslash >= 0 ? s[..backslash] : s).Trim();
+            return host.Length == 0 || host is "." or "(local)" or "(localdb)"
+                || host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+                ? "127.0.0.1"
+                : host;
+        }
+    }
+
     private static async Task<bool> TcpListeningAsync(string host, int port)
     {
         try
         {
             using var client = new TcpClient();
-            var connect = client.ConnectAsync(host, port);
-            var finished = await Task.WhenAny(connect, Task.Delay(TimeSpan.FromSeconds(3)));
-            return finished == connect && client.Connected;
+            // Cancel the connect on timeout rather than abandoning it: leaving it in flight while
+            // the using block disposes the client produces an unobserved task exception and holds
+            // the socket handle until finalization.
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+            await client.ConnectAsync(host, port, timeout.Token);
+            return client.Connected;
         }
         catch
         {
