@@ -50,7 +50,7 @@ public partial class ConfigureTab : UserControl
         // enable Save for a change the tab is unable to persist (WX-315).
         DirtyTracking.Attach(MarkDirty,
             TxtSmtpHost, TxtSmtpPort, TxtSmtpUsername, TxtSmtpPassword, TxtSmtpFromAddress,
-            TxtClaudeApiKey, TxtAlertEmail);
+            TxtClaudeApiKey, TxtWhat3WordsApiKey, TxtAlertEmail);
 
         Loaded += async (_, _) => await LoadCurrentValuesAsync();
     }
@@ -139,6 +139,7 @@ public partial class ConfigureTab : UserControl
             TxtSmtpPassword.Password = gs.SmtpPassword ?? "";
             TxtSmtpFromAddress.Text = gs.SmtpFromAddress ?? "";
             TxtClaudeApiKey.Password = gs.ClaudeApiKey ?? "";
+            TxtWhat3WordsApiKey.Password = gs.What3WordsApiKey ?? "";
         }
     }
 
@@ -175,6 +176,7 @@ public partial class ConfigureTab : UserControl
             gs.SmtpPassword = TxtSmtpPassword.Password;
             gs.SmtpFromAddress = TxtSmtpFromAddress.Text.Trim();
             gs.ClaudeApiKey = TxtClaudeApiKey.Password;
+            gs.What3WordsApiKey = TxtWhat3WordsApiKey.Password;
 
             // Operational settings → Config table, through the shared write path, which refuses
             // bootstrap-critical keys (BootstrapKeys) and duplicates. Its SaveChanges commits the

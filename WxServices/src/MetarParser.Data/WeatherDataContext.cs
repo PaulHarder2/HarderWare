@@ -441,6 +441,9 @@ public sealed class WeatherDataContext : DbContext
             e.Property(x => x.SmtpUsername).HasMaxLength(200);
             e.Property(x => x.SmtpPassword).HasMaxLength(200);
             e.Property(x => x.SmtpFromAddress).HasMaxLength(200);
+            // What3Words keys are 8 characters today; sized like the other API keys
+            // so a future format change does not need a migration (WX-322).
+            e.Property(x => x.What3WordsApiKey).HasMaxLength(500);
         });
 
         // ── Config (WX-313) ──────────────────────────────────────────────────

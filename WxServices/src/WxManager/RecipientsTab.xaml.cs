@@ -404,7 +404,15 @@ public partial class RecipientsTab : UserControl
         {
             // ── Geocode ──────────────────────────────────────────────────────────
 
-            var geo = await AddressGeocoder.LookupAsync(address, _http, App.What3WordsApiKey);
+            // The What3Words key is read from GlobalSettings at point of use (WX-322), the same
+            // way AnnouncementTab reads its SMTP credentials — secrets live in the database, not
+            // in a file and not in a startup-captured static. Only a /// address needs it, so the
+            // read costs nothing on the other two address forms.
+            var w3wKey = address.StartsWith("///", StringComparison.Ordinal)
+                ? await LoadWhat3WordsKeyAsync()
+                : "";
+
+            var geo = await AddressGeocoder.LookupAsync(address, _http, w3wKey);
             if (geo is null)
             {
                 ShowMessage("Address could not be resolved. Check the format and try again, " +
@@ -1549,5 +1557,26 @@ public partial class RecipientsTab : UserControl
                           + Math.Cos(lat1 * Math.PI / 180.0) * Math.Cos(lat2 * Math.PI / 180.0)
                           * Math.Sin(dLon / 2) * Math.Sin(dLon / 2);
         return R * 2.0 * Math.Atan2(Math.Sqrt(a), Math.Sqrt(1 - a));
+    }
+
+    /// <summary>
+    /// Reads the What3Words API key from the <c>GlobalSettings</c> row at point of use (WX-322).
+    /// Returns empty on any failure — <see cref="AddressGeocoder"/> already reports an unconfigured
+    /// key as an actionable error, so a database hiccup degrades to the same clear message rather
+    /// than an exception out of an address lookup.
+    /// </summary>
+    private static async Task<string> LoadWhat3WordsKeyAsync()
+    {
+        try
+        {
+            await using var db = new WeatherDataContext(App.DbOptions);
+            var gs = await db.GlobalSettings.FirstOrDefaultAsync(x => x.Id == 1);
+            return gs?.What3WordsApiKey ?? "";
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"Could not read the What3Words key from GlobalSettings: {ex.Message}");
+            return "";
+        }
     }
 }
