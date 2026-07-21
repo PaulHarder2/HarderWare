@@ -15,9 +15,9 @@ public sealed class WxPaths
     /// <c>WXSERVICES_INSTALL_ROOT</c> environment variable when set — how a
     /// container deploy points the same binary at its Linux install root
     /// (see <c>services/wxmonitor/Dockerfile</c>); (2) <c>InstallRoot</c> from
-    /// <c>appsettings.shared.json</c> in the application's base directory — the
-    /// Windows-service default; (3) <see cref="DefaultInstallRoot"/> if neither
-    /// is present.
+    /// <c>appsettings.shared.json</c> in the application's base directory — how
+    /// the natively-run desktop applications (WxManager, WxViewer) resolve it;
+    /// (3) <see cref="DefaultInstallRoot"/> if neither is present.
     /// </summary>
     /// <remarks>
     /// Call this early in startup — before the configuration builder runs — so
@@ -27,8 +27,8 @@ public sealed class WxPaths
     public static string ReadInstallRoot()
     {
         // (1) Container deploys set WXSERVICES_INSTALL_ROOT; it wins so the same binary resolves a
-        // Linux install root without editing the shared config. Windows services leave it unset and
-        // fall through to appsettings.shared.json below.
+        // Linux install root without editing the shared config. The native desktop applications
+        // leave it unset and fall through to appsettings.shared.json below.
         var envOverride = Environment.GetEnvironmentVariable("WXSERVICES_INSTALL_ROOT");
         if (!string.IsNullOrWhiteSpace(envOverride)) return envOverride;
 
@@ -100,9 +100,6 @@ public sealed class WxPaths
     /// <summary>Directory containing the WxVis Python scripts.</summary>
     public string WxVisDir { get; }
 
-    /// <summary>Directory for published Windows service binaries.</summary>
-    public string ServicesDir { get; }
-
     /// <summary>Directory for the WxManager GUI application.</summary>
     public string WxManagerDir { get; }
 
@@ -140,7 +137,6 @@ public sealed class WxPaths
         PlotsDir = Path.Combine(InstallRoot, "plots");
         TempDir = Path.Combine(InstallRoot, "temp");
         WxVisDir = Path.Combine(InstallRoot, "WxVis");
-        ServicesDir = Path.Combine(InstallRoot, "services");
         WxManagerDir = Path.Combine(InstallRoot, "WxManager");
         WxViewerDir = Path.Combine(InstallRoot, "WxViewer");
         Log4NetConfigPath = Path.Combine(InstallRoot, "log4net.shared.config");

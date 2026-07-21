@@ -1,10 +1,13 @@
-// WxParser Windows Service
+// WxParser service (containerized)
 // Fetches METAR and TAF reports on a configurable interval and stores them in the database.
 //
-// Install:   sc.exe create WxParserSvc binPath= "<path>\WxParser.Svc.exe"
-// Uninstall: sc.exe delete WxParserSvc
-// Start:     sc.exe start WxParserSvc
-// Stop:      sc.exe stop WxParserSvc
+// Runs ONLY as a Docker container - see services/docker-compose.yml.
+//   Deploy: .\Deploy-WxService.ps1 WxParserSvc      (or `all`)
+//   Direct: docker compose up -d wxparser           (from services\)
+//
+// Running natively as a Windows service is no longer supported (WX-329): the
+// UseWindowsService host integration was removed, so registering this binary
+// with the SCM would fail to report started and time out with error 1053.
 
 using MetarParser.Data;
 using MetarParser.Data.Configuration;
@@ -27,10 +30,6 @@ Logger.Initialise(paths.ServiceLogFile(WxServiceToken.WxParser));
 Logger.Info(WxPaths.StartupBanner());
 
 var host = Host.CreateDefaultBuilder(args)
-    .UseWindowsService(options =>
-    {
-        options.ServiceName = "WxParserSvc";
-    })
     .ConfigureAppConfiguration((_, cfg) =>
     {
         cfg.SetBasePath(AppContext.BaseDirectory)

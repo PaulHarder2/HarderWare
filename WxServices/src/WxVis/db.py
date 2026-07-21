@@ -1,11 +1,11 @@
 """
 db.py — SQLAlchemy engine and query functions for WxVis.
 
-Authenticates by Windows Authentication (trusted connection) on a native Windows
-host, or by SQL login (UID/PWD) when a containerized deploy supplies one via the
-WXVIS_DB_USER / WXVIS_DB_PASSWORD environment variables — a Linux container has no
-Windows identity.  All query functions return pandas DataFrames suitable for direct
-use with MetPy / matplotlib.
+Authenticates by SQL login (UID/PWD) supplied via the WXVIS_DB_USER /
+WXVIS_DB_PASSWORD environment variables.  That is the only path any deploy uses:
+the services are container-only, and a Linux container has no Windows identity.
+All query functions return pandas DataFrames suitable for direct use with
+MetPy / matplotlib.
 
 Configuration is read from environment variables set by WxVis.Svc, with
 fallback to config.json for standalone / command-line use.
@@ -33,7 +33,9 @@ def _load_config() -> dict:
                 "server":   server,
                 "database": os.environ.get("WXVIS_DB_NAME", "WeatherData"),
                 "driver":   os.environ.get("WXVIS_DB_DRIVER", "ODBC Driver 17 for SQL Server"),
-                # SQL login for containerized deploys; absent on Windows hosts (Windows Auth).
+                # SQL login. WxVisConfig sets both or neither, so "neither" means the
+                # connection string carried no complete SQL login - which is fatal here, not a
+                # fallback: see _auth_parts.
                 "user":     os.environ.get("WXVIS_DB_USER"),
                 "password": os.environ.get("WXVIS_DB_PASSWORD"),
                 # Encryption posture, propagated from the .NET connection string so it stays the
@@ -42,11 +44,17 @@ def _load_config() -> dict:
                 "trust_cert": os.environ.get("WXVIS_DB_TRUST_CERT"),
             },
             "output_dir": os.environ.get("WXVIS_OUTPUT_DIR", r"C:\HarderWare\plots"),
+            # Environment-sourced config means WxVis.Svc launched us, i.e. we are inside the
+            # container. Recorded so the auth path can fail closed there (a Linux container
+            # cannot use Windows Authentication) while ad-hoc host runs keep the fallback.
+            "from_env": True,
         }
 
     config_path = Path(__file__).parent / "config.json"
     with open(config_path, encoding="utf-8") as f:
-        return json.load(f)
+        cfg = json.load(f)
+    cfg["from_env"] = False
+    return cfg
 
 
 def _odbc_brace(value: str) -> str:
@@ -65,9 +73,16 @@ def get_engine():
     """
     Build and return a SQLAlchemy engine for the WeatherData database.
 
-    Uses the ODBC connection string style.  When a SQL login is supplied (UID/PWD,
-    the containerized case) it authenticates with those; otherwise it uses Windows
-    Authentication (Trusted_Connection) and no username or password is required.
+    Uses the ODBC connection string style, and authenticates with the SQL login
+    (UID/PWD) that WxVis.Svc passes through - the only path a deploy uses, since the
+    services are container-only.
+
+    Raises RuntimeError rather than falling back when credentials are incomplete, or
+    absent in a containerized run: a Linux container has no Windows identity, so
+    emitting Trusted_Connection there would only produce a misleading ODBC login
+    error instead of naming the real cause (WX-329).  Windows Authentication remains
+    available for ad-hoc host runs configured from config.json.
+
     The engine is lightweight to create and can be kept alive for the duration of
     a script.
     """
@@ -86,8 +101,26 @@ def get_engine():
         # SQL authentication: a Linux container has no Windows identity, so a containerized
         # deploy supplies a SQL login (WX-65).
         odbc_parts += [f"UID={_odbc_brace(user)}", f"PWD={_odbc_brace(password)}"]
+    elif user or password:
+        # Exactly one half of a SQL login is never intentional, in any environment.
+        missing = "WXVIS_DB_PASSWORD" if user else "WXVIS_DB_USER"
+        raise RuntimeError(
+            f"Incomplete SQL credentials for WxVis: {missing} is missing. "
+            "Supply both the user and the password, or neither."
+        )
+    elif cfg.get("from_env"):
+        # Config came from the environment, so WxVis.Svc launched us and we are in the
+        # container - where Trusted_Connection cannot work, because a Linux process has no
+        # Windows identity. Fail closed with the actual cause rather than emitting a
+        # connection string that will produce a misleading ODBC login error (WX-329).
+        raise RuntimeError(
+            "No SQL credentials supplied to WxVis in a containerized run. The connection "
+            "string must carry a complete SQL login (User Id + Password); Windows "
+            "Authentication is not available to a Linux container."
+        )
     else:
-        # Windows Authentication: native Windows-service deploy on the host.
+        # Windows Authentication: not a deployment path (native services retired, WX-329).
+        # Reachable only for ad-hoc host runs configured from config.json.
         odbc_parts.append("Trusted_Connection=yes")
     # Encryption flags flow from the connection string (the single source of truth), normalized to
     # the ODBC yes/no spelling. When unset, the ODBC driver's default applies (Driver 17 => no

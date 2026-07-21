@@ -41,6 +41,22 @@ jobs:
       - name: Version consistency (props vs VERSIONS.md)
         run: bash tools/check-version-consistency.sh
 
+      # A .gitignore rule does NOT cover a file that is already tracked, so an
+      # ignored build/staging directory can quietly hold a tracked, drifting copy
+      # of a real source file. WX-329 found exactly that: release/WxVis/meteogram.py
+      # had been tracked under a gitignored directory and had fallen 60 lines behind
+      # src/WxVis/meteogram.py. Nothing would have caught it, so this makes the
+      # invariant permanent rather than a one-time cleanup.
+      - name: No tracked-but-ignored files
+        run: |
+          offenders=$(git ls-files -i -c --exclude-standard)
+          if [ -n "$offenders" ]; then
+            echo "::error::These files are tracked despite matching an ignore rule; they will drift unnoticed:"
+            echo "$offenders"
+            exit 1
+          fi
+          echo "No tracked-but-ignored files."
+
       - name: Setup .NET 8 SDK
         uses: actions/setup-dotnet@v4
         with:

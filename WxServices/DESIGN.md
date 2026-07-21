@@ -277,9 +277,6 @@ WxServices/
 ├── Directory.Build.props            ← single product version (e.g. 1.51.0) applied to all assemblies
 ├── appsettings.shared.json          ← single source of truth for all config (InstallRoot, DB, SMTP, Claude, WxVis, Monitor, etc.) — git-tracked
 ├── Deploy-WxService.ps1             ← PowerShell deploy script (run as Administrator)
-├── wgrib2/                          ← runtime-installed, not in repo; operator downloads NOAA native Windows build here
-│   ├── wgrib2.exe                   ← Cygwin-compiled NOAA build; path derived from InstallRoot via WxPaths.Wgrib2DefaultPath
-│   └── cygwin1.dll                  ← required alongside wgrib2.exe
 └── src/
     ├── MetarParser/                 ← METAR text parser library
     ├── TafParser/                   ← TAF text parser library
@@ -307,7 +304,7 @@ tests/
     └── WxMonitor.Tests/
 ```
 
-WxVis is a standalone Python project; it has no build-time dependency on the C# projects. It reads directly from the same SQL Server database using SQLAlchemy + pyodbc (Windows Authentication).
+WxVis is a standalone Python project; it has no build-time dependency on the C# projects. It reads directly from the same SQL Server database using SQLAlchemy + pyodbc, authenticating as the `wxservices` SQL login over TCP (a Linux container has no Windows identity).
 
 ### Project dependency graph
 
@@ -1235,7 +1232,7 @@ The Recipients tab's **Locality** control is a single editable ComboBox doing do
 | WxParser.Svc / WxReport.Svc | AWC Airport API | Resolve ICAO → coordinates; nearest station lookup | None (public) |
 | WxParser.Svc | [OurAirports](https://davidmegginson.github.io/ourairports-data/airports.csv) | Airport names, municipalities, coordinates for all ICAO airports | None (public) |
 | WxParser.Svc | [NOAA GFS / AWS Open Data](https://noaa-gfs-bdp-pds.s3.amazonaws.com) | Download GFS GRIB2 forecast files | None (public) |
-| WxParser.Svc | wgrib2 (bundled Linux binary in the container; native `wgrib2.exe` on a Windows host) | Extract sub-grid values from GRIB2 files | n/a (local binary) |
+| WxParser.Svc | wgrib2 (Linux binary bundled in the container at `/usr/local/bin/wgrib2`) | Extract sub-grid values from GRIB2 files | n/a (local binary) |
 | WxReport.Svc | [Nominatim](https://nominatim.openstreetmap.org/) | Geocode recipient address | None (User-Agent required) |
 | WxReport.Svc | Anthropic Claude API | Generate natural-language reports | API key |
 | WxReport.Svc / WxMonitor.Svc | Gmail SMTP | Send emails | App password |
@@ -1247,42 +1244,53 @@ The Recipients tab's **Locality** control is a single editable ComboBox doing do
 | `cartopy` | Map projections and geographic features (requires conda — C extensions) |
 | `matplotlib` | Figure rendering, contour lines |
 | `scipy` | Gaussian smoothing, local extrema detection |
-| `sqlalchemy` + `pyodbc` | SQL Server access via Windows Authentication |
+| `sqlalchemy` + `pyodbc` | SQL Server access from the WxVis container — over TCP to `host.docker.internal` as the `wxservices` SQL login (Mixed Mode), **not** Windows Authentication, which a Linux container cannot use |
 | `pandas` / `numpy` | Data manipulation and grid math |
 
 **NuGet packages:**
 | Package | Used by |
 |---|---|
 | `Microsoft.EntityFrameworkCore.SqlServer` | MetarParser.Data |
-| `Microsoft.Extensions.Hosting.WindowsServices` | All services |
+| `Microsoft.Extensions.Hosting` | The four headless services — referenced **explicitly** since WX-329. It had previously arrived transitively via `Microsoft.Extensions.Hosting.WindowsServices`, which that ticket removed along with native-service support; the removal broke the build precisely because the generic host was never declared. |
 | `MailKit` | WxServices.Common |
 | `log4net` | WxServices.Logging |
 
 **System prerequisites:**
+
 | Prerequisite | Notes |
 |---|---|
-| wgrib2 | The WxParser container bundles a Linux `wgrib2` binary (`services/wxparser`, from `tools/wgrib2-linux/`) at `/usr/local/bin/wgrib2`. The NOAA native Windows build at `{InstallRoot}\wgrib2\wgrib2.exe` (`WxPaths.Wgrib2DefaultPath`) is the reversible native-service fallback. Overrideable via `Gfs:Wgrib2Path`. |
+| wgrib2 | The WxParser container bundles a Linux `wgrib2` binary (`services/wxparser`, from `tools/wgrib2-linux/`) at `/usr/local/bin/wgrib2`. That is the only copy the running system uses. `WxPaths.Wgrib2DefaultPath` still *computes* `{InstallRoot}\wgrib2\wgrib2.exe` as the fallback when `Gfs:Wgrib2Path` is unset, but nothing is installed there any more — that host copy served only a natively-run WxParser and was deleted under WX-329. In the containers `Gfs:Wgrib2Path` is always set (injected read-only via compose), so the fallback is unreachable in practice; if it were ever reached it would resolve a Windows path that does not exist. |
 
 ---
 
 ## 9. Installation and Deployment
 
 ### Prerequisites
-- Windows 10/11 (64-bit) — WxManager/WxViewer run natively; the four headless services run as Docker containers (their binaries keep `UseWindowsService` only as a reversible fallback)
-- .NET 8 runtime
+
+- Windows 10/11 (64-bit) — WxManager/WxViewer run natively; the four headless services run as Docker containers **only**. Running them as native Windows services is no longer supported: the `UseWindowsService` host call and its `Microsoft.Extensions.Hosting.WindowsServices` package reference were removed from all four services under WX-329, along with the vestigial `<WindowsService>` MSBuild property. (Removing that package also exposed that it had been supplying `Microsoft.Extensions.Hosting` transitively; each service now references the generic host explicitly.)
+- .NET 8 **SDK** (not merely the runtime) — with no packaged installer, every install builds from source: the setup console runs via `dotnet run` and `Deploy-WxService.ps1` via `dotnet publish`
+- Git and access to the source repository — a prerequisite, since the container images are built from it
 - SQL Server Express (or higher); default instance name `SQLEXPRESS`
 - Gmail account with an App Password configured for SMTP
 - **Docker Desktop — required:** all four headless services (WxParser/WxVis/WxReport/WxMonitor) run as containers, and it also hosts the Prometheus + Grafana observability stack (see *Containerized deployment (WX-7)*)
-- NOAA native Windows `wgrib2.exe` (at `{InstallRoot}\wgrib2\wgrib2.exe`, Cygwin-based, ships `cygwin1.dll`) and Miniconda with the wxvis conda environment — needed **only** for the reversible native-service fallback; the containers bundle their own `wgrib2` and Python/matplotlib/cartopy stacks
+- **Not** required at runtime: a host Miniconda/conda environment or the NOAA native Windows `wgrib2.exe`. The containers bundle their own `wgrib2` (from `tools/wgrib2-linux/`) and their own Python/matplotlib/cartopy stack. The two host copies have different fates, and the distinction matters:
+  - `{InstallRoot}\wgrib2\` (the Cygwin `wgrib2.exe` + its DLLs) served only a natively-run WxParser. Nothing on the host reads it — the `Requires.Wgrib2` prerequisite check runs *inside* the WxParser container against `/usr/local/bin/wgrib2` — so it was **deleted under WX-329**.
+  - The **wxvis conda environment is retained**. It is not a runtime dependency, but it is the **render reference**: `src/WxVis/requirements.txt` is pinned against it, so it is what the container's package versions are chosen to match when they are bumped (see *Containerized deployment (WX-7)*). Deleting it would discard that reference.
 
-### Installer
+### Distribution: there is none (WX-329)
 
-`HarderWare_WxServices.iss` is an Inno Setup script that produces a single `HarderWare_WxServices_Setup.exe` installer.  To build it:
+**The product has no installer and no distributable package.**  Deployment is `Deploy-WxService.ps1` run against a source checkout; there is no intermediate artefact.  Two pieces of machinery were retired under WX-329 once the containerization made them incoherent:
 
-1. Run `.\Build-Release.ps1` to publish all components into the `release\` staging directory. The script reads the product version from `Directory.Build.props` and prints the ISCC command to run.
-2. Compile the `.iss` script with Inno Setup: `ISCC.exe /DAppVer=1.0.0 HarderWare_WxServices.iss` (use the version printed by the build script).
+- `HarderWare_WxServices.iss` — an Inno Setup script producing `HarderWare_WxServices_Setup.exe`, plus `PRE-INSTALL.txt`, its pre-install notice.  Its core work was `sc.exe create` for `WxParserSvc`/`WxReportSvc`/`WxMonitorSvc`/`WxVisSvc` and the matching stop/delete on uninstall.  Those services no longer exist, so the installer's central function had become a no-op registering services nothing used.  It had not been touched since 2026-04-12, was never wired into CI (compiling it required a manual `ISCC` invocation), and its `AppVersion` had drifted to 1.0.0 against a product at 1.58.x.  A built 44 MB `Setup.exe` was found on the development box during the retirement, hidden by an `installer_output/` line in `.gitignore` that outlived the script; both are gone.
+- `Build-Release.ps1` — staged every component into a `release\` directory for the installer to package.  With the installer gone it had **no consumer at all**: not CI, not `Deploy-WxService.ps1`, not the compose build (which uses `context: ..` against the source tree).  It was several minutes of `dotnet publish` per run producing output nothing read.
 
-The installer copies files to the chosen directory (default `C:\HarderWare`), registers no Windows services — all four headless services (WxParser/WxVis/WxReport/WxMonitor) run as Docker containers per *Containerized deployment (WX-7)*, updates `InstallRoot` in `appsettings.shared.json` to match the install path, creates Start Menu and optional desktop shortcuts, and launches WxManager for first-run configuration.  Docker Desktop is a prerequisite for all four containerized services; the containerized WxVis carries its own Python + matplotlib/cartopy stack, so a host Miniconda/conda install is **not** required to run the system (it remains the render reference used for version pinning — see *Containerized deployment (WX-7)*).  Uninstall stops and removes the four Docker containers (no Windows services are registered to remove).
+**How the system actually reaches a machine:** a source checkout, the setup console, then `Deploy-WxService.ps1`. The steps are **not restated here** — `INSTALL.md` §3 is the operator-facing sequence and `DEVELOPER-README.md` the full developer one, and a third copy in this file would be the copy that drifts. (It is worth being blunt about that: the two defects WX-329 had to repair in this very document — an install-root tree inherited from the installer, and a *Startup order* section contradicting `INSTALL.md` §5 — were both stale duplicates of text owned elsewhere.)
+
+What belongs here is the architectural consequence: the install root is **created by deployment**, not unpacked.  `appsettings.shared.json` and `log4net.shared.config` are linked into each application's build output rather than sitting at the install root, and the containers carry their copies inside the image.
+
+There is no source-free installation path, because the images are built from the repository and none is published.  `INSTALL.md`'s opening banner is the single canonical statement of that limitation; it is deliberately not restated here.
+
+Uninstall is `docker compose down` plus deleting the install directory; nothing is registered with Windows.
 
 ### Developer deploy script
 
@@ -1310,7 +1318,7 @@ Epic WX-7 moves the four headless services off Windows services and onto Linux *
 - **`services/wxmonitor/Dockerfile`** — a multi-stage build: a `dotnet/sdk:8.0` stage publishes `WxMonitor.Svc` (`linux-x64`, framework-dependent), and a `dotnet/runtime:8.0-bookworm-slim` stage copies the output and runs it as non-root UID 1000. The image is **region-agnostic** — no connection string, no secrets baked in; those are injected at run time.
 - **`services/docker-compose.yml`** — runs the container and injects its world: the DB and the OTel collector are reached through `host.docker.internal` (`extra_hosts: ["host.docker.internal:host-gateway"]`); `services/wxmonitor/appsettings.local.json` is bind-mounted read-only (secrets, the container connection string, and the `host.docker.internal:4318` telemetry endpoint that overrides the shared config's `localhost`); and `C:\HarderWare\Logs` is bind-mounted read-write so the containerized service's `wxmonitor-svc.log` and heartbeat land where WxManager (still native) already reads them. It joins Compose's default (project-scoped) network — a shared/named network is deferred to the OpRegion work, since the four services coordinate through the database rather than container-to-container. A repo-root `.dockerignore` keeps the build context lean and prevents a Windows-built `bin/obj` from poisoning the Linux build.
 - **The InstallRoot seam** — `WxPaths.ReadInstallRoot()` checks the `WXSERVICES_INSTALL_ROOT` env var first (set to `/opt/wxservices` in the Dockerfile), falling back to `appsettings.shared.json`'s `C:\HarderWare` for Windows deploys — the same binary serves both with no config fork.
-- **Deploy path** — `.\Deploy-WxService.ps1 WxMonitorSvc` (and `all`) deploys the container via `Invoke-ContainerDeploy` (the generic container deploy, `-ComposeService wxmonitor -DeployApp WxMonitorSvc`): `docker compose up -d --build`, then verifies the `Application started` banner in the container logs, and appends the same `deploy-history.log` line (`WxMonitorSvc`, version, git SHA) as the Windows path — so the verify scripts that grep that log are unaffected. At cutover the Windows `WxMonitorSvc` service is **disabled** (a reversible fallback), and `sc delete`d only once the container is proven stable.
+- **Deploy path** — `.\Deploy-WxService.ps1 WxMonitorSvc` (and `all`) deploys the container via `Invoke-ContainerDeploy` (the generic container deploy, `-ComposeService wxmonitor -DeployApp WxMonitorSvc`): `docker compose up -d --build`, then verifies the `Application started` banner in the container logs, and appends the same `deploy-history.log` line (`WxMonitorSvc`, version, git SHA) as the Windows path — so the verify scripts that grep that log are unaffected. At cutover the Windows `WxMonitorSvc` service was **disabled**, then deleted once the container proved stable. *(Historical: all four native services were deleted 2026-07-15, and WX-329 removed the `UseWindowsService` host integration outright — there is no native path to fall back to.)*
 
 Database connectivity from the container — the host SQL Server TCP/Mixed-Mode configuration and the least-privilege `wxservices` login — is covered in §10 under *Containerized deployment — database connectivity (WX-67)*.
 
@@ -1331,7 +1339,7 @@ The generic `Invoke-ContainerDeploy` in `Deploy-WxService.ps1` is shared by both
 - **A Python render stack in the runtime image.** On top of `dotnet/runtime:8.0-bookworm-slim`, `services/wxvis/Dockerfile` apt-installs `python3`, matplotlib's fonts (`fonts-dejavu`, `fonts-liberation`), and `msodbcsql17` (matching the shared config's `WxVis.DbDriver`), then `pip`-installs the pinned `requirements.txt` (`WxServices/src/WxVis/requirements.txt`) — cartopy/shapely ship manylinux wheels that bundle GEOS/PROJ, so no `-dev` libraries or compiler are needed. The versions are **pinned to the host `wxvis` conda env** so container renders match the host's. The Python scripts are copied to `/opt/wxservices/WxVis` (= `WxPaths.WxVisDir`).
 - **The plots mount is read-write.** WxVis is the *producer* of the synoptic/forecast/meteogram PNGs, so `wxvis` mounts `{InstallRoot}\plots` **read-write** (WxReport mounts the same host dir read-only to inline them). A dedicated writable `HOME` (`/var/cache/wxvis`, plus `MPLCONFIGDIR`) is set because the root-owned WORKDIR is read-only to UID 1000, and matplotlib/cartopy must write their font caches. cartopy's 50m Natural Earth data is **pre-baked into the image** at build time (cached above the app `COPY` so a code change doesn't re-fetch it), so the first render needs no runtime download and can't fail when the host is offline after a recreate.
 - **Two config seams.** `WxVis:CondaPythonExe` is overridden to `/usr/bin/python3` in the bind-mounted `appsettings.local.json` — without it `MapRenderer` would look for the host's Windows conda path and every render would fail. And `Program.cs` adds `AddInstallRoot` (the same fix WX-64 applied to WxReport/WxMonitor) so the three map workers resolve the script and plots dirs to `/opt/wxservices` instead of the shared-config `C:\HarderWare`.
-- **A second DB path — the Python side.** Unlike the other services, WxVis reaches SQL Server twice: the .NET `WeatherDataContext` *and* the Python scripts' own SQLAlchemy/pyodbc engine (`db.py`). The host uses Windows Authentication for both, but a Linux container has no Windows identity, so `db.py` and `WxVisConfig.BuildPythonEnv` gained SQL-login support: when the container connection string carries a `User Id`/`Password`, they flow to Python as `WXVIS_DB_USER`/`WXVIS_DB_PASSWORD` and `db.py` authenticates with `UID`/`PWD`; a Windows host has no such keys and keeps `Trusted_Connection`.
+- **A second DB path — the Python side.** Unlike the other services, WxVis reaches SQL Server twice: the .NET `WeatherDataContext` *and* the Python scripts' own SQLAlchemy/pyodbc engine (`db.py`). A native host deploy used Windows Authentication for both; a Linux container has no Windows identity, so `db.py` and `WxVisConfig.BuildPythonEnv` gained SQL-login support: when the container connection string carries a `User Id`/`Password`, they flow to Python as `WXVIS_DB_USER`/`WXVIS_DB_PASSWORD` and `db.py` authenticates with `UID`/`PWD`; a Windows host has no such keys and keeps `Trusted_Connection`.
 
 `WxVisSvc` routes through the shared `Invoke-ContainerDeploy` exactly as WxReport/WxMonitor do, and is absent from the Windows-service map. Its native `WxVisSvc` service is disabled at cutover.
 
@@ -1388,7 +1396,7 @@ The `dotnet-ef` CLI is pinned at the EF Core 8.0.0 version that matches the runt
 
 ##### Serializing concurrent migrations across services
 
-All four services start with Windows and race into `EnsureSchemaAsync` simultaneously.  EF Core 8 has no built-in migration lock (that arrived in EF Core 9), so two services applying the same pending migration concurrently would corrupt the schema on the loser side with errors like `2714 (object already exists)`.
+All four containers start together (`docker compose up -d`) and race into `EnsureSchemaAsync` simultaneously.  EF Core 8 has no built-in migration lock (that arrived in EF Core 9), so two services applying the same pending migration concurrently would corrupt the schema on the loser side with errors like `2714 (object already exists)`.
 
 `DatabaseSetup.EnsureSchemaCoreAsync` therefore wraps the baseline-marker work and the `MigrateAsync` call in a SQL Server `sp_getapplock` named lock:
 
@@ -1427,7 +1435,7 @@ These drifts are tolerated rather than fixed in this ticket — modifying the en
 
 #### Startup retry against a not-yet-ready SQL Server (WX-28)
 
-All four services start with Windows and, after a Windows-Update-driven reboot, race SQL Server's own service start.  `EnsureSchemaAsync` therefore wraps schema setup in a retry loop: each transient `SqlException` (error numbers –2, 20, 26, 40, 53, 64, 121, 233, 258, 1205, 1222, 10053, 10054, 10060, 10061, 11001) is logged at `WARN` and the service waits before the next attempt.  After `MaxAttempts` attempts have failed the method throws `DatabaseUnavailableException`; the service's outer `try/catch` logs `ERROR` and exits, leaving Windows SCM recovery actions to restart it.
+All four containers start when the Docker engine does and, after a Windows-Update-driven reboot, race SQL Server's own service start.  `EnsureSchemaAsync` therefore wraps schema setup in a retry loop: each transient `SqlException` (error numbers –2, 20, 26, 40, 53, 64, 121, 233, 258, 1205, 1222, 10053, 10054, 10060, 10061, 11001) is logged at `WARN` and the service waits before the next attempt.  After `MaxAttempts` attempts have failed the method throws `DatabaseUnavailableException`; the service's outer `try/catch` logs `ERROR` and exits — and the container's `restart: unless-stopped` policy (WX-68 Unit 1) brings it back to retry. *(This backstop was Windows SCM recovery actions while the services ran natively; with native hosting retired under WX-329 the restart policy is the whole mechanism — there is no service entry and no recovery tab.)*
 
 Defaults: 12 attempts with delays 5 s, 10 s, 20 s, 30 s, 30 s, 30 s, 30 s, 30 s, 30 s, 30 s, 30 s (≈ 5 minutes total).  Tunable via the `Database:StartupRetry` section of `appsettings.shared.json` or `appsettings.local.json`:
 
@@ -1442,7 +1450,7 @@ Defaults: 12 attempts with delays 5 s, 10 s, 20 s, 30 s, 30 s, 30 s, 30 s, 30 s,
 
 Permanent errors (login failures, permissions, schema conflicts) are *not* retried — they propagate on the first attempt so real bugs fail fast.  `MigrateAsync` — which creates the `WeatherData` database itself on first run if absent — is inside the retry loop, so new-developer installs against a cold SQL Server still bootstrap cleanly.
 
-The complementary pieces of WX-28 (declarative `DependOnService=MSSQL$SQLEXPRESS` in the installer, full Windows service-configuration audit, and moving `WxParser.Svc` off the personal Windows account it currently runs under) are tracked as follow-up PRs.
+The complementary pieces of WX-28 — a declarative `DependOnService=MSSQL$SQLEXPRESS`, a Windows service-configuration audit, and moving `WxParser.Svc` off Paul's personal Windows account — were **overtaken by containerization and closed unimplemented** (WX-29/30/34, closed 2026-07-21). None can be executed: there are no Windows services to configure, no installer to declare a dependency in, and there is no Windows principal to configure: the container process runs as a non-root Linux UID, and it authenticates to SQL Server as the `wxservices` **SQL login** — two separate identities, neither of them a Windows account. Container start ordering is handled by the services coordinating through the database (see *Startup order*).
 
 #### WX-47 schema cutover (reconciliation rearchitecture)
 
@@ -1455,7 +1463,7 @@ The WX-47 rearchitecture of the update-decision logic (see [§4.2](#42-wxreports
 - **Fail-forward only.** Deployment is fail-forward: there is no schema rollback. A bad deploy is corrected by rolling forward to a fixed build and a new migration, never by reverting the schema.
 
 ### Startup order
-Start `WxParserSvc` first and allow at least one fetch cycle to complete before starting `WxReportSvc`, so METAR data is available for station resolution. GFS data will begin accumulating on the first 60-minute GFS cycle; full temperature forecasts appear in reports once the first complete model run is ingested (up to ~4 hours after the run's nominal time).
+There is **no required startup order** — the services coordinate through the database rather than by calling each other, so `docker compose up -d` starting all four at once is correct. The operator-facing statement of this lives in `INSTALL.md` §5 and `DEVELOPER-README.md` → *Startup order*; what matters architecturally is the data dependency, not an ordering rule: `WxReport` produces nothing until `WxParser` has completed a fetch cycle and METAR data exists for station resolution. GFS data begins accumulating on the first 60-minute GFS cycle; full temperature forecasts appear in reports once the first complete model run is ingested (up to ~4 hours after the run's nominal time).
 
 ### Versioning
 
@@ -1465,7 +1473,6 @@ Where the version appears:
 - **WxManager / WxViewer title bars** — via a `Run` element in the custom WindowChrome title bar
 - **Email report footer** — `· WxServices <version>` appended to the station/GFS line
 - **Service startup log banner** — `WxReport.Svc <version> starting.` (as of WX-63 the git commit is no longer in the banner — it lives in `deploy-history.log`; the `WxManager`/`WxViewer` "About" screens still show it)
-- **Windows Apps list** — from the Inno Setup `AppVersion` (passed via `/DAppVer=` at compile time)
 
 ### Log files
 All logs are written to `{InstallRoot}\Logs\` (default `C:\HarderWare\Logs\`). Log files: `wxparser-svc.log`, `wxreport-svc.log`, `wxmonitor-svc.log`, `wxvis-svc.log`, `wxmanager.log`, `wxviewer.log`, `wxvis.log` (Python). All paths are derived from the `InstallRoot` setting in `appsettings.shared.json` via the `WxPaths` class.

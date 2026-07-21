@@ -1,11 +1,14 @@
-// WxMonitor Windows Service
+// WxMonitor service (containerized)
 // Watches log files and heartbeats for WxParser.Svc and WxReport.Svc;
 // sends alert emails when errors are detected or a service goes silent.
 //
-// Install:   sc.exe create WxMonitorSvc binPath= "<path>\WxMonitor.Svc.exe"
-// Uninstall: sc.exe delete WxMonitorSvc
-// Start:     sc.exe start WxMonitorSvc
-// Stop:      sc.exe stop WxMonitorSvc
+// Runs ONLY as a Docker container - see services/docker-compose.yml.
+//   Deploy: .\Deploy-WxService.ps1 WxMonitorSvc     (or `all`)
+//   Direct: docker compose up -d wxmonitor          (from services\)
+//
+// Running natively as a Windows service is no longer supported (WX-329): the
+// UseWindowsService host integration was removed, so registering this binary
+// with the SCM would fail to report started and time out with error 1053.
 
 using MetarParser.Data;
 using MetarParser.Data.Configuration;
@@ -28,10 +31,6 @@ Logger.Initialise(paths.ServiceLogFile(WxServiceToken.WxMonitor));
 Logger.Info(WxPaths.StartupBanner());
 
 var host = Host.CreateDefaultBuilder(args)
-    .UseWindowsService(options =>
-    {
-        options.ServiceName = "WxMonitorSvc";
-    })
     .ConfigureAppConfiguration((_, cfg) =>
     {
         cfg.SetBasePath(AppContext.BaseDirectory)

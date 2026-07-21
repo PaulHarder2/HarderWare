@@ -6,7 +6,11 @@
 **/.vs/
 **/*.user
 .git/
-release/
+# Nothing produces release/ any more - WX-329 deleted Build-Release.ps1 - but a machine that
+# ran it before then still has a WxServices\release\ tree of Windows-built publish output, and
+# the context is the repo root. Kept as **/release/ (the bare `release/` this replaces lacked
+# the prefix, so it only ever matched a repo-root release/ and never the one that existed).
+**/release/
 
 # Secrets / per-machine config must never enter the build context (COPY . . would otherwise sweep
 # them into the build cache): the container's DB-password config and observability's Grafana admin

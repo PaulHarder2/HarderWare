@@ -66,8 +66,9 @@ public sealed class MetarStalenessWatcher : IWatcher
         }
         sb.AppendLine($"  Staleness threshold:     {thresholdMinutes} minute(s)");
         sb.AppendLine();
-        sb.AppendLine("This may indicate WxParser.Svc is not running, or the AWC METAR API is unreachable.");
-        sb.AppendLine("Check the WxParser.Svc log and Windows Service Manager for details.");
+        sb.AppendLine("This may indicate WxParser is not running, or the AWC METAR API is unreachable.");
+        sb.AppendLine("Check the wxparser-svc.log, then the container: `docker compose ps` and");
+        sb.AppendLine("`docker compose logs wxparser` from the services directory.");
         sb.AppendLine();
         AlertBody.AppendFooter(sb, now);
         return sb.ToString();
