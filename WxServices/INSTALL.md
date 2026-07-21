@@ -15,8 +15,9 @@ renders weather maps, and emails personalised reports to subscribers.
 > The container images are **built from the source repository**.  There is
 > no published image to download, so the installer alone cannot give you a
 > running system: it places the desktop applications (WxManager, WxViewer),
-> the documentation, and support files, but starting the services requires a
-> source checkout and Docker.
+> the documentation, and support files — plus some leftovers from the
+> native-service era that nothing launches (see section 3) — but starting the
+> services requires a source checkout and Docker.
 >
 > **If you have only the installer and no source repository, the services
 > cannot be started yet.**  A self-contained, source-free installation is
@@ -104,7 +105,7 @@ optional extra.
    itself is running.
 
 Docker also powers the optional Prometheus and Grafana dashboards
-(section 8).
+(section 7).
 
 ## 3. Install the Product
 
@@ -212,8 +213,22 @@ continue to work normally.
 
 | Setting | Default | Description |
 |---|---|---|
-| `ConnectionStrings:WeatherData` | `Server=.\SQLEXPRESS;...` | Change if your SQL Server instance differs |
 | `Monitor:AlertEmail` | (empty) | Email address for service health alerts |
+
+**There are two different connection strings, and mixing them up is the most
+common setup failure.**  They are not interchangeable:
+
+| Which | Looks like | Used by |
+|---|---|---|
+| **Native / management** | `Server=.\SQLEXPRESS;…;Trusted_Connection=True` | WxManager and the setup console, running on the Windows host under your own Windows account |
+| **Container / service** | `Server=host.docker.internal,1433;…;User Id=wxservices;Password=…` | The four service containers |
+
+A Linux container has no Windows identity, so it cannot use
+`Trusted_Connection`, and `.\SQLEXPRESS` is a host-local instance name that
+means nothing inside a container. That is why SQL Server needs both Mixed Mode
+and TCP/IP (section 2.2). The setup console writes the container form into each
+service's own configuration file for you — you should not need to hand-edit
+either one.
 
 ## 5. Start the Services
 
@@ -239,7 +254,8 @@ Run these from the same `services` directory:
 
 | Task | Command |
 |---|---|
-| Start (or restart after a config change) | `docker compose up -d` |
+| Start the stack | `docker compose up -d` |
+| Apply an edited `appsettings.local.json` | `docker compose restart` (or `up -d --force-recreate`) |
 | Pause the stack, keeping the containers | `docker compose stop` |
 | Tear the stack down, removing the containers | `docker compose down` |
 | Check what is running | `docker compose ps` |
@@ -354,13 +370,14 @@ directory, and set `Telemetry:Enabled` back to `false`.
 | Check | How |
 |---|---|
 | Services running | `docker compose ps` from the `services` directory — all four should show as running and healthy |
-| Data being fetched | Open `C:\HarderWare\Logs\wxparser-svc.log` in Notepad — look for recent entries |
-| Reports sending | Open `C:\HarderWare\Logs\wxreport-svc.log` in Notepad — look for "report(s) sent" |
-| Maps rendering | Open `C:\HarderWare\plots\` in File Explorer — look for recent PNG files |
-| Monitoring active | Open `C:\HarderWare\Logs\wxmonitor-svc.log` in Notepad |
+| Data being fetched | Open `{InstallRoot}\Logs\wxparser-svc.log` in Notepad — look for recent entries |
+| Reports sending | Open `{InstallRoot}\Logs\wxreport-svc.log` in Notepad — look for "report(s) sent" |
+| Maps rendering | Open `{InstallRoot}\plots\` in File Explorer — look for recent PNG files |
+| Monitoring active | Open `{InstallRoot}\Logs\wxmonitor-svc.log` in Notepad |
 
-All log files use UTC timestamps.  The containers write them to the host
-directory through a bind mount, so you read them exactly as before.
+`{InstallRoot}` is `C:\HarderWare` unless you changed it (section 3).  All log
+files use UTC timestamps.  The containers write them to the host directory
+through a bind mount, so you read them exactly as before.
 
 ## 9. Troubleshooting
 

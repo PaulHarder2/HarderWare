@@ -20,7 +20,11 @@ REQUIRED:
 
   2. SQL Server Express (free)
      https://www.microsoft.com/sql-server/sql-server-downloads
-     Enable TCP/IP after installation.
+     Two settings are required, not optional - the services run in
+     containers and sign in over the network:
+       - Enable Mixed Mode authentication (during setup).
+       - Enable TCP/IP (after installation, in SQL Server
+         Configuration Manager).
 
   3. Docker Desktop
      https://www.docker.com/products/docker-desktop/
