@@ -304,7 +304,7 @@ tests/
     └── WxMonitor.Tests/
 ```
 
-WxVis is a standalone Python project; it has no build-time dependency on the C# projects. It reads directly from the same SQL Server database using SQLAlchemy + pyodbc (Windows Authentication).
+WxVis is a standalone Python project; it has no build-time dependency on the C# projects. It reads directly from the same SQL Server database using SQLAlchemy + pyodbc, authenticating as the `wxservices` SQL login over TCP (a Linux container has no Windows identity).
 
 ### Project dependency graph
 
@@ -1244,7 +1244,7 @@ The Recipients tab's **Locality** control is a single editable ComboBox doing do
 | `cartopy` | Map projections and geographic features (requires conda — C extensions) |
 | `matplotlib` | Figure rendering, contour lines |
 | `scipy` | Gaussian smoothing, local extrema detection |
-| `sqlalchemy` + `pyodbc` | SQL Server access via Windows Authentication |
+| `sqlalchemy` + `pyodbc` | SQL Server access from the WxVis container — over TCP to `host.docker.internal` as the `wxservices` SQL login (Mixed Mode), **not** Windows Authentication, which a Linux container cannot use |
 | `pandas` / `numpy` | Data manipulation and grid math |
 
 **NuGet packages:**
@@ -1339,7 +1339,7 @@ The generic `Invoke-ContainerDeploy` in `Deploy-WxService.ps1` is shared by both
 - **A Python render stack in the runtime image.** On top of `dotnet/runtime:8.0-bookworm-slim`, `services/wxvis/Dockerfile` apt-installs `python3`, matplotlib's fonts (`fonts-dejavu`, `fonts-liberation`), and `msodbcsql17` (matching the shared config's `WxVis.DbDriver`), then `pip`-installs the pinned `requirements.txt` (`WxServices/src/WxVis/requirements.txt`) — cartopy/shapely ship manylinux wheels that bundle GEOS/PROJ, so no `-dev` libraries or compiler are needed. The versions are **pinned to the host `wxvis` conda env** so container renders match the host's. The Python scripts are copied to `/opt/wxservices/WxVis` (= `WxPaths.WxVisDir`).
 - **The plots mount is read-write.** WxVis is the *producer* of the synoptic/forecast/meteogram PNGs, so `wxvis` mounts `{InstallRoot}\plots` **read-write** (WxReport mounts the same host dir read-only to inline them). A dedicated writable `HOME` (`/var/cache/wxvis`, plus `MPLCONFIGDIR`) is set because the root-owned WORKDIR is read-only to UID 1000, and matplotlib/cartopy must write their font caches. cartopy's 50m Natural Earth data is **pre-baked into the image** at build time (cached above the app `COPY` so a code change doesn't re-fetch it), so the first render needs no runtime download and can't fail when the host is offline after a recreate.
 - **Two config seams.** `WxVis:CondaPythonExe` is overridden to `/usr/bin/python3` in the bind-mounted `appsettings.local.json` — without it `MapRenderer` would look for the host's Windows conda path and every render would fail. And `Program.cs` adds `AddInstallRoot` (the same fix WX-64 applied to WxReport/WxMonitor) so the three map workers resolve the script and plots dirs to `/opt/wxservices` instead of the shared-config `C:\HarderWare`.
-- **A second DB path — the Python side.** Unlike the other services, WxVis reaches SQL Server twice: the .NET `WeatherDataContext` *and* the Python scripts' own SQLAlchemy/pyodbc engine (`db.py`). The host uses Windows Authentication for both, but a Linux container has no Windows identity, so `db.py` and `WxVisConfig.BuildPythonEnv` gained SQL-login support: when the container connection string carries a `User Id`/`Password`, they flow to Python as `WXVIS_DB_USER`/`WXVIS_DB_PASSWORD` and `db.py` authenticates with `UID`/`PWD`; a Windows host has no such keys and keeps `Trusted_Connection`.
+- **A second DB path — the Python side.** Unlike the other services, WxVis reaches SQL Server twice: the .NET `WeatherDataContext` *and* the Python scripts' own SQLAlchemy/pyodbc engine (`db.py`). A native host deploy used Windows Authentication for both; a Linux container has no Windows identity, so `db.py` and `WxVisConfig.BuildPythonEnv` gained SQL-login support: when the container connection string carries a `User Id`/`Password`, they flow to Python as `WXVIS_DB_USER`/`WXVIS_DB_PASSWORD` and `db.py` authenticates with `UID`/`PWD`; a Windows host has no such keys and keeps `Trusted_Connection`.
 
 `WxVisSvc` routes through the shared `Invoke-ContainerDeploy` exactly as WxReport/WxMonitor do, and is absent from the Windows-service map. Its native `WxVisSvc` service is disabled at cutover.
 

@@ -1,11 +1,11 @@
 """
 db.py — SQLAlchemy engine and query functions for WxVis.
 
-Authenticates by Windows Authentication (trusted connection) on a native Windows
-host, or by SQL login (UID/PWD) when a containerized deploy supplies one via the
-WXVIS_DB_USER / WXVIS_DB_PASSWORD environment variables — a Linux container has no
-Windows identity.  All query functions return pandas DataFrames suitable for direct
-use with MetPy / matplotlib.
+Authenticates by SQL login (UID/PWD) supplied via the WXVIS_DB_USER /
+WXVIS_DB_PASSWORD environment variables.  That is the only path any deploy uses:
+the services are container-only, and a Linux container has no Windows identity.
+All query functions return pandas DataFrames suitable for direct use with
+MetPy / matplotlib.
 
 Configuration is read from environment variables set by WxVis.Svc, with
 fallback to config.json for standalone / command-line use.
@@ -33,7 +33,8 @@ def _load_config() -> dict:
                 "server":   server,
                 "database": os.environ.get("WXVIS_DB_NAME", "WeatherData"),
                 "driver":   os.environ.get("WXVIS_DB_DRIVER", "ODBC Driver 17 for SQL Server"),
-                # SQL login for containerized deploys; absent on Windows hosts (Windows Auth).
+                # SQL login - how every deploy authenticates now that the services are
+                # container-only. Absent only for ad-hoc host use, which falls back below.
                 "user":     os.environ.get("WXVIS_DB_USER"),
                 "password": os.environ.get("WXVIS_DB_PASSWORD"),
                 # Encryption posture, propagated from the .NET connection string so it stays the
@@ -87,7 +88,8 @@ def get_engine():
         # deploy supplies a SQL login (WX-65).
         odbc_parts += [f"UID={_odbc_brace(user)}", f"PWD={_odbc_brace(password)}"]
     else:
-        # Windows Authentication: native Windows-service deploy on the host.
+        # Windows Authentication: no longer a deployment path (native services retired,
+        # WX-329) - reachable only when running these scripts by hand on the host.
         odbc_parts.append("Trusted_Connection=yes")
     # Encryption flags flow from the connection string (the single source of truth), normalized to
     # the ODBC yes/no spelling. When unset, the ODBC driver's default applies (Driver 17 => no
