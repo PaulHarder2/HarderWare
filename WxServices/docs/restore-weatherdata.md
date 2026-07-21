@@ -52,12 +52,22 @@ sqlcmd -S .\SQLEXPRESS -E -C -Q "DROP DATABASE [WeatherData_restoretest];"
 
 ## 3b. Restore OVER the live database (destructive — real recovery only)
 
-Only when `WeatherData` is actually lost/corrupt. **Stop the four Wx services first** so nothing
-holds a connection, then restore with `REPLACE`:
+Only when `WeatherData` is actually lost/corrupt. **Stop the four service containers first** so
+nothing holds a connection, then restore with `REPLACE`.
+
+> **The services are containers, not Windows services.** Earlier revisions of this runbook used
+> `Stop-Service WxParserSvc, … -ErrorAction SilentlyContinue`. That command now **silently succeeds
+> while doing nothing** — the native services were deleted at the containerization cutover and
+> WX-329 removed native-service support outright — and the suppressed errors hide it. The containers
+> would stay up, reconnect under `restart: unless-stopped` plus the startup-retry loop, and race the
+> `SET SINGLE_USER` below: the restore then fails with *"exclusive access could not be obtained"*, or
+> services write into a half-restored database. Also close **WxManager** and **WxViewer** — they run
+> natively and hold their own connections.
 
 ```powershell
-# 1. stop services
-Stop-Service WxParserSvc, WxReportSvc, WxVisSvc, WxMonitorSvc -ErrorAction SilentlyContinue
+# 1. stop the service containers (from the repo's services\ directory)
+docker compose stop
+docker compose ps          # confirm all four are stopped before continuing
 
 # 2. restore (single-user to force-close stray connections)
 sqlcmd -S .\SQLEXPRESS -E -C -b -Q @"
@@ -71,8 +81,9 @@ ALTER DATABASE [WeatherData] SET MULTI_USER;
 (If there is no differential, use `WITH REPLACE, RECOVERY` on the full and omit the `.dif` line.)
 
 ```powershell
-# 3. restart services
-Start-Service WxParserSvc, WxReportSvc, WxVisSvc, WxMonitorSvc
+# 3. restart the containers (from services\)
+docker compose start
+docker compose ps          # all four running; healthchecks go healthy within a few minutes
 ```
 
 ## 4. After a real restore

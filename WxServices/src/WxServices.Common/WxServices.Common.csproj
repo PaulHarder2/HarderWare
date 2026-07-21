@@ -12,6 +12,12 @@
     <!-- AddInMemoryCollection for WxConfigurationExtensions.AddInstallRoot (WX-64): projects the
          resolved install root into config so IConfiguration["InstallRoot"] == WxPaths.ReadInstallRoot(). -->
     <PackageReference Include="Microsoft.Extensions.Configuration" Version="8.0.0" />
+    <!-- Declared explicitly although OpenTelemetry.Extensions.Hosting also supplies it
+         transitively: WxTelemetry.AddWxTelemetry is an IServiceCollection extension, so this
+         is a direct dependency. WX-329 hit the same latent pattern the hard way — removing
+         Microsoft.Extensions.Hosting.WindowsServices from the four services broke the build
+         because it had been the undeclared supplier of Microsoft.Extensions.Hosting. -->
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.0.0" />
     <!-- OTel wiring lives here (WX-159): the AddWxTelemetry helper owns AddOpenTelemetry,
          the OTLP exporter, and the export-failure diagnostics listener for all four services. -->
     <PackageReference Include="OpenTelemetry" Version="1.15.3" />

@@ -198,11 +198,19 @@ function Invoke-ContainerDeploy {
         Pop-Location
     }
 
-    # Cutover: retire the native Windows service of the same name if one is still installed, so it
-    # can't run beside the container (dual writers to the same DB + Logs/plots, the collision seen
-    # when WxVis was first containerized). Done ONLY after the container is verified started, so a
-    # failed container deploy leaves the native service as a fallback. Idempotent - a missing or
-    # already-stopped/disabled service is a no-op. Requires elevation (#Requires -RunAsAdministrator).
+    # Legacy cutover: retire a native Windows service of the same name if one is somehow still
+    # installed, so it can't run beside the container (dual writers to the same DB + Logs/plots, the
+    # collision seen when WxVis was first containerized).
+    #
+    # Containers are the only supported runtime - WX-329 removed UseWindowsService from all four
+    # services, so a current binary cannot run under the SCM at all. This block therefore does
+    # nothing on a current machine; it is retained purely to disarm a service left behind on a box
+    # that predates the cutover (the 2026-08-17 PC migration is the case in point). It is NOT a
+    # fallback mechanism, and nothing here should be read as keeping the native path alive.
+    #
+    # Still ordered after the container is verified started: disabling a service is only safe once
+    # something is running to replace it. Idempotent - a missing or already-stopped/disabled service
+    # is a no-op. Requires elevation (#Requires -RunAsAdministrator).
     $cutoverOk = $true
     if ($started) {
         $native = Get-Service -Name $DeployApp -ErrorAction SilentlyContinue
@@ -220,7 +228,7 @@ function Invoke-ContainerDeploy {
                 }
             }
             if ($cutoverOk -and $native.StartType -ne 'Disabled') {
-                Write-Host "Disabling native $DeployApp service (containerized; reversible fallback)..."
+                Write-Host "Disabling leftover native $DeployApp service (containers are the only runtime)..."
                 Set-Service -Name $DeployApp -StartupType Disabled -ErrorAction SilentlyContinue
                 $native.Refresh()
                 if ($native.StartType -ne 'Disabled') {

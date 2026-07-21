@@ -1,10 +1,13 @@
-// WxReport Windows Service
+// WxReport service (containerized)
 // Periodically generates weather reports via Claude and emails them to configured recipients.
 //
-// Install:   sc.exe create WxReportSvc binPath= "<path>\WxReport.Svc.exe"
-// Uninstall: sc.exe delete WxReportSvc
-// Start:     sc.exe start WxReportSvc
-// Stop:      sc.exe stop WxReportSvc
+// Runs ONLY as a Docker container - see services/docker-compose.yml.
+//   Deploy: .\Deploy-WxService.ps1 WxReportSvc      (or `all`)
+//   Direct: docker compose up -d wxreport           (from services\)
+//
+// Running natively as a Windows service is no longer supported (WX-329): the
+// UseWindowsService host integration was removed, so registering this binary
+// with the SCM would fail to report started and time out with error 1053.
 
 using MetarParser.Data;
 using MetarParser.Data.Configuration;
@@ -28,10 +31,6 @@ Logger.Initialise(paths.ServiceLogFile(WxServiceToken.WxReport));
 Logger.Info(WxPaths.StartupBanner());
 
 var host = Host.CreateDefaultBuilder(args)
-    .UseWindowsService(options =>
-    {
-        options.ServiceName = "WxReportSvc";
-    })
     .ConfigureAppConfiguration((_, cfg) =>
     {
         cfg.SetBasePath(AppContext.BaseDirectory)

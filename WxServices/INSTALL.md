@@ -13,17 +13,15 @@ renders weather maps, and emails personalised reports to subscribers.
 > you to register `WxParserSvc` and friends with `sc.exe` are obsolete.
 >
 > The container images are **built from the source repository**.  There is
-> no published image to download, so the installer alone cannot give you a
-> running system: it places the desktop applications (WxManager, WxViewer),
-> the documentation, and support files — plus some leftovers from the
-> native-service era that nothing launches (see section 3) — but starting the
-> services requires a source checkout and Docker.
+> no published image to download, and **there is no packaged installer** —
+> the `Setup.exe` this guide once described was written for the native
+> services and was retired along with them.
 >
-> **If you have only the installer and no source repository, the services
-> cannot be started yet.**  A self-contained, source-free installation is
-> planned but does not exist today.  This guide is honest about that rather
-> than walking you into a dead end; the developer guide
-> (`DEVELOPER-README.md`) covers the source-based path in full.
+> **Installing therefore means: a source checkout, plus Docker.**  A
+> self-contained, source-free installation is planned but does not exist
+> today.  This guide is honest about that rather than walking you into a
+> dead end; the developer guide (`DEVELOPER-README.md`) covers the
+> source-based path in full.
 
 ## Before You Begin — Windows Tools You'll Need
 
@@ -48,15 +46,21 @@ set of instructions above.
 - 10 GB free disk space
 - Internet connection (for weather data feeds and the Claude API)
 - Docker Desktop (see below — the services run as containers)
+- Git, and access to the source repository — installing builds from source
+  (§3), so the repository is a prerequisite, not an optional extra
 
 ## 2. Install Prerequisites
 
-### 2.1 .NET 8 Runtime
+### 2.1 .NET 8 SDK
 
-Download and install the **.NET 8 Runtime** (not the SDK, unless you plan
-to develop):
+Download and install the **.NET 8 SDK** — the SDK, not just the Runtime:
 
 > https://dotnet.microsoft.com/download/dotnet/8.0
+
+The Runtime alone is not enough.  Because there is no packaged installer,
+every install builds from source (§3): the setup console runs via
+`dotnet run`, and `Deploy-WxService.ps1` runs `dotnet publish`.  Both are
+SDK commands, and neither exists in a Runtime-only installation.
 
 Verify: open a **Command Prompt** (see Before You Begin) and type
 `dotnet --info`, then press Enter.
@@ -109,40 +113,64 @@ Docker also powers the optional Prometheus and Grafana dashboards
 
 ## 3. Install the Product
 
-Extract the distribution archive into your chosen installation directory.
-The default is `C:\HarderWare`.  The directory structure should be:
+**There is no distribution archive and no installer.**  Installing means
+getting the source repository and letting its scripts build the product in
+place.  The full sequence — clone, git hooks, setup console, deploy — is in
+`DEVELOPER-README.md`; the short version is:
+
+1. Get the source repository onto the machine.
+2. Run the setup console once.  It creates the database and writes the
+   foundational settings (home location, connection string, install root).
+3. From the `WxServices` directory, in an **elevated** PowerShell:
+
+   ```powershell
+   .\Deploy-WxService.ps1 all
+   ```
+
+   This publishes WxManager and WxViewer natively into the install root and
+   builds and starts the four service containers.
+
+The install root — `C:\HarderWare` by default — is **created by that deploy**,
+not unpacked from an archive.  On a fresh machine it holds only what the deploy
+actually produces:
 
 ```
 C:\HarderWare\
-├── appsettings.shared.json
-├── log4net.shared.config
-├── Logs\
-├── plots\
-├── temp\
-├── WxManager\          ← management GUI (runs natively)
-├── WxViewer\           ← desktop viewer (runs natively)
-├── WxVis\              ← Python rendering scripts
-├── tools\              ← bundled support tools
-├── observability\      ← Prometheus/Grafana compose files
-└── services\           ← see note below
-    ├── WxParser.Svc\
-    ├── WxReport.Svc\
-    ├── WxMonitor.Svc\
-    └── WxVis.Svc\
+├── appsettings.local.json  ← written by the setup console (§4)
+├── Logs\                   ← created by the deploy; bind-mounted into the containers
+├── plots\                  ← created by Docker as a bind-mount source
+├── translation-qa\         ← created by Docker as a bind-mount source
+├── WxManager\              ← management GUI, published here (runs natively)
+└── WxViewer\               ← desktop viewer, published here (runs natively)
 ```
 
-> **About `services\`:** the installer still lays down the four service
-> executables here, left over from when they ran as native Windows services.
-> They are **not** what runs today — the services run as containers built from
-> the source repository — so nothing launches these and you can ignore them.
-> They are listed only so the directory does not look like an anomaly.
+A `temp\` directory appears later — WxManager creates it the first time you
+**save** on the Configure tab, not at deploy time and not merely by launching
+the application.
 
-If you use a directory other than `C:\HarderWare`, update the `InstallRoot`
-setting in `appsettings.shared.json` (see below).
+An **older machine may also carry `tools\`, `WxVis\`, `services\`, `wgrib2\` or
+`observability\`.**  Those were placed by the retired installer; nothing creates
+or reads them now — the Python rendering scripts and `wgrib2` live inside the
+container images, and the observability compose files stay in the source
+repository.  They are inert leftovers, safe to delete.
 
-`Logs\` and `plots\` are shared: the containers write into them through a
-bind mount, and the native desktop applications read the same files from
-the host, so both halves of the system agree on one location.
+`appsettings.shared.json` and `log4net.shared.config` are **not** at the top
+level: each application gets its own build-generated copy beside its binaries
+(`WxManager\appsettings.shared.json`, and so on), and the containers carry
+theirs inside the image.  Edit the canonical copy in the source repository and
+redeploy — never the generated copies.
+
+The Prometheus/Grafana compose files stay in the source repository under
+`observability\` (§7); nothing copies them into the install root.
+
+To install somewhere other than `C:\HarderWare`, set `InstallRoot` in the
+repository's `appsettings.shared.json` before deploying — the deploy script
+reads it to decide where to publish and where to point the container bind
+mounts.
+
+`Logs\`, `plots\` and `translation-qa\` are shared: the containers write into
+them through bind mounts and the native desktop applications read the same
+files from the host, so both halves of the system agree on one location.
 
 ## 4. Configure
 
@@ -407,13 +435,16 @@ Add `--rmi all` to that command if you also want to delete the built
 images.  Do the same from the `observability` directory if you started the
 dashboards.
 
-**If you used the Setup.exe installer:**
+**Next — only if this installation was made by the retired `Setup.exe`:**
+open **Windows Settings → Apps → Installed apps**, find **HarderWare
+WxServices**, and uninstall it there.  Do this **before** deleting anything
+by hand: the uninstaller lives inside the installation directory, so
+deleting the directory first destroys the only thing that can clear the
+Installed apps entry.  A current installation has no such entry and you can
+skip this step.
 
-1. Open **Windows Settings → Apps → Installed apps** (or **Add or Remove
-   Programs** on older Windows 10 builds).
-2. Find **HarderWare WxServices** in the list and click **Uninstall**.
-
-**If you installed manually:** delete the installation directory.
+**Finally, delete the installation directory.**  Nothing else is registered
+with Windows — there are no services to remove.
 
 The `WeatherData` database can be dropped via SQL Server Management Studio
 if no longer needed.  Note that it holds every secret you entered on the

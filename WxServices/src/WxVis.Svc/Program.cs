@@ -1,4 +1,4 @@
-// WxVis.Svc Windows Service
+// WxVis service (containerized)
 // Automatically renders synoptic analysis maps, GFS forecast maps, and meteograms.
 //
 // AnalysisMapWorker:  generates a synoptic analysis map at HH:10 UTC each hour,
@@ -10,10 +10,13 @@
 // MeteogramWorker:    renders a 24-hour and full-period meteogram for each
 //   recipient location after each complete GFS run, then writes a manifest JSON.
 //
-// Install:   sc.exe create WxVisSvc binPath= "<path>\WxVis.Svc.exe"
-// Uninstall: sc.exe delete WxVisSvc
-// Start:     sc.exe start WxVisSvc
-// Stop:      sc.exe stop WxVisSvc
+// Runs ONLY as a Docker container - see services/docker-compose.yml.
+//   Deploy: .\Deploy-WxService.ps1 WxVisSvc         (or `all`)
+//   Direct: docker compose up -d wxvis              (from services\)
+//
+// Running natively as a Windows service is no longer supported (WX-329): the
+// UseWindowsService host integration was removed, so registering this binary
+// with the SCM would fail to report started and time out with error 1053.
 
 using MetarParser.Data;
 using MetarParser.Data.Configuration;
@@ -35,10 +38,6 @@ Logger.Initialise(paths.ServiceLogFile(WxServiceToken.WxVis));
 Logger.Info(WxPaths.StartupBanner());
 
 var host = Host.CreateDefaultBuilder(args)
-    .UseWindowsService(options =>
-    {
-        options.ServiceName = "WxVisSvc";
-    })
     .ConfigureAppConfiguration((_, cfg) =>
     {
         cfg.SetBasePath(AppContext.BaseDirectory)

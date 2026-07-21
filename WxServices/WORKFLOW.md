@@ -321,11 +321,13 @@ If a schema change requires data movement that EF's generated `Up`/`Down` cannot
 
 **Added 2026-06-03** (WX-113).
 
-Step 6 above (auto-apply at startup) is fine for fast migrations, but a migration that **rewrites a large table** — a size-of-data change such as widening a column's type, adding a `NOT NULL` column with a default across millions of rows, or re-clustering — can take **longer than the Windows Service Control Manager's 30-second start-timeout**. Because `EnsureSchemaAsync` runs *before* `host.RunAsync()`, SCM never receives its "started" ack, kills the process mid-migration, and the transaction rolls back — for *every* service, repeatedly. (This is exactly what happened deploying WX-113's `GfsGrid` `int`→`bigint` widen — all four services failed to start with SCM event 7000/7009.)
+Step 6 above (auto-apply at startup) is fine for fast migrations, but a migration that **rewrites a large table** — a size-of-data change such as widening a column's type, adding a `NOT NULL` column with a default across millions of rows, or re-clustering — is still best applied out-of-band, because `EnsureSchemaAsync` runs *before* `host.RunAsync()` and **all four services race the same migration on start**: each opens its own attempt against a table the others are rewriting, and a container killed or restarted mid-migration rolls its transaction back.
+
+*Origin (historical):* this rule was written when the services were native Windows services, where the binding constraint was the **Service Control Manager's 30-second start-timeout** — SCM never received the "started" ack, killed the process mid-migration, and the transaction rolled back, repeatedly, for every service. That is exactly what happened deploying WX-113's `GfsGrid` `int`→`bigint` widen (SCM event 7000/7009). Containers have **no equivalent start timeout**, so that specific failure mode is gone (WX-329 removed native-service support entirely) — but the concurrency hazard and the long unavailability remain, so the procedure stands.
 
 For any migration that rewrites a large table, apply it **out-of-band** rather than relying on startup auto-migrate:
 
-1. **Stop** the WxServices Windows services.
+1. **Stop the four service containers** — `docker compose stop` from `services\`. (Use `stop`, not `down`: see the container-stack operations doc.)
 2. Generate the migration SQL (PowerShell):
 
    ```powershell
@@ -333,7 +335,7 @@ For any migration that rewrites a large table, apply it **out-of-band** rather t
    ```
 
    Run the output in SSMS against `WeatherData`. The EF script performs the DDL **and** inserts the `__EFMigrationsHistory` row in one transaction, so startup auto-migrate then treats it as already applied.
-3. **Start** the services. `EnsureSchemaAsync` sees the migration recorded → no-op → the service starts within the 30 s window.
+3. **Start them again** — `docker compose start` from `services\`. `EnsureSchemaAsync` sees the migration already recorded → no-op → each service starts normally.
 
 A uniform, tooling-based replacement for this manual step (a dedicated migrator off the startup path) is tracked in **WX-117**.
 
