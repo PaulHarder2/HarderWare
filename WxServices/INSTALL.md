@@ -134,7 +134,7 @@ The install root — `C:\HarderWare` by default — is **created by that deploy*
 not unpacked from an archive.  On a fresh machine it holds only what the deploy
 actually produces:
 
-```
+```text
 C:\HarderWare\
 ├── appsettings.local.json  ← written by the setup console (§4)
 ├── Logs\                   ← created by the deploy; bind-mounted into the containers

@@ -205,8 +205,11 @@ function Invoke-ContainerDeploy {
     # Containers are the only supported runtime - WX-329 removed UseWindowsService from all four
     # services, so a current binary cannot run under the SCM at all. This block therefore does
     # nothing on a current machine; it is retained purely to disarm a service left behind on a box
-    # that predates the cutover (the 2026-08-17 PC migration is the case in point). It is NOT a
-    # fallback mechanism, and nothing here should be read as keeping the native path alive.
+    # that predates the 2026-07-15 cutover. The case in view is the PC migration planned for
+    # 2026-08-17: the machine being migrated FROM was set up before the cutover, so it may still
+    # carry registered Wx*Svc entries. (The migration date is in the future; the machine's Windows
+    # services are the legacy part, not the date.) It is NOT a fallback mechanism, and nothing here
+    # should be read as keeping the native path alive.
     #
     # Still ordered after the container is verified started: disabling a service is only safe once
     # something is running to replace it. Idempotent - a missing or already-stopped/disabled service

@@ -63,11 +63,17 @@ nothing holds a connection, then restore with `REPLACE`.
 > `SET SINGLE_USER` below: the restore then fails with *"exclusive access could not be obtained"*, or
 > services write into a half-restored database. Also close **WxManager** and **WxViewer** — they run
 > natively and hold their own connections.
+>
+> **`--all` is load-bearing.** Plain `docker compose ps` lists only *running* containers, so an
+> empty result is ambiguous: it looks identical whether the containers really stopped, or you ran
+> the command from the wrong directory against a different Compose project. `--all` shows the four
+> by name in `Exited` state — a positive confirmation instead of an absence. Do not continue to the
+> restore until you have seen all four listed as exited.
 
 ```powershell
 # 1. stop the service containers (from the repo's services\ directory)
 docker compose stop
-docker compose ps          # confirm all four are stopped before continuing
+docker compose ps --all    # MUST be --all - see below
 
 # 2. restore (single-user to force-close stray connections)
 sqlcmd -S .\SQLEXPRESS -E -C -b -Q @"
@@ -88,7 +94,7 @@ docker compose ps          # all four running; healthchecks go healthy within a 
 
 ## 4. After a real restore
 
-- Confirm the services came up and a report cycle runs clean (`C:\HarderWare\Logs\wxreport-svc.log`).
+- Confirm the services came up and a report cycle runs clean — `{InstallRoot}\Logs\wxreport-svc.log`, where `{InstallRoot}` is the value in `appsettings.shared.json` (`C:\HarderWare` by default). A non-default install root would make a hardcoded path read as "no log, therefore broken" on a perfectly healthy system.
 - Curated vocabulary (`LanguageTemplates`) and `GlobalSettings` (API keys, SMTP) are the
   irreplaceable data this protects — spot-check they're present.
 

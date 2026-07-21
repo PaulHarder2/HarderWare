@@ -1232,7 +1232,7 @@ The Recipients tab's **Locality** control is a single editable ComboBox doing do
 | WxParser.Svc / WxReport.Svc | AWC Airport API | Resolve ICAO → coordinates; nearest station lookup | None (public) |
 | WxParser.Svc | [OurAirports](https://davidmegginson.github.io/ourairports-data/airports.csv) | Airport names, municipalities, coordinates for all ICAO airports | None (public) |
 | WxParser.Svc | [NOAA GFS / AWS Open Data](https://noaa-gfs-bdp-pds.s3.amazonaws.com) | Download GFS GRIB2 forecast files | None (public) |
-| WxParser.Svc | wgrib2 (bundled Linux binary in the container; native `wgrib2.exe` on a Windows host) | Extract sub-grid values from GRIB2 files | n/a (local binary) |
+| WxParser.Svc | wgrib2 (Linux binary bundled in the container at `/usr/local/bin/wgrib2`) | Extract sub-grid values from GRIB2 files | n/a (local binary) |
 | WxReport.Svc | [Nominatim](https://nominatim.openstreetmap.org/) | Geocode recipient address | None (User-Agent required) |
 | WxReport.Svc | Anthropic Claude API | Generate natural-language reports | API key |
 | WxReport.Svc / WxMonitor.Svc | Gmail SMTP | Send emails | App password |
@@ -1256,6 +1256,7 @@ The Recipients tab's **Locality** control is a single editable ComboBox doing do
 | `log4net` | WxServices.Logging |
 
 **System prerequisites:**
+
 | Prerequisite | Notes |
 |---|---|
 | wgrib2 | The WxParser container bundles a Linux `wgrib2` binary (`services/wxparser`, from `tools/wgrib2-linux/`) at `/usr/local/bin/wgrib2`. That is the only copy the running system uses. `WxPaths.Wgrib2DefaultPath` still *computes* `{InstallRoot}\wgrib2\wgrib2.exe` as the fallback when `Gfs:Wgrib2Path` is unset, but nothing is installed there any more — that host copy served only a natively-run WxParser and was deleted under WX-329. In the containers `Gfs:Wgrib2Path` is always set (injected read-only via compose), so the fallback is unreachable in practice; if it were ever reached it would resolve a Windows path that does not exist. |
@@ -1265,6 +1266,7 @@ The Recipients tab's **Locality** control is a single editable ComboBox doing do
 ## 9. Installation and Deployment
 
 ### Prerequisites
+
 - Windows 10/11 (64-bit) — WxManager/WxViewer run natively; the four headless services run as Docker containers **only**. Running them as native Windows services is no longer supported: the `UseWindowsService` host call and its `Microsoft.Extensions.Hosting.WindowsServices` package reference were removed from all four services under WX-329, along with the vestigial `<WindowsService>` MSBuild property. (Removing that package also exposed that it had been supplying `Microsoft.Extensions.Hosting` transitively; each service now references the generic host explicitly.)
 - .NET 8 **SDK** (not merely the runtime) — with no packaged installer, every install builds from source: the setup console runs via `dotnet run` and `Deploy-WxService.ps1` via `dotnet publish`
 - Git and access to the source repository — a prerequisite, since the container images are built from it
@@ -1448,7 +1450,7 @@ Defaults: 12 attempts with delays 5 s, 10 s, 20 s, 30 s, 30 s, 30 s, 30 s, 30 s,
 
 Permanent errors (login failures, permissions, schema conflicts) are *not* retried — they propagate on the first attempt so real bugs fail fast.  `MigrateAsync` — which creates the `WeatherData` database itself on first run if absent — is inside the retry loop, so new-developer installs against a cold SQL Server still bootstrap cleanly.
 
-The complementary pieces of WX-28 — a declarative `DependOnService=MSSQL$SQLEXPRESS`, a Windows service-configuration audit, and moving `WxParser.Svc` off Paul's personal Windows account — were **overtaken by containerization and closed unimplemented** (WX-29/30/34, closed 2026-07-21). None can be executed: there are no Windows services to configure, no installer to declare a dependency in, and container identity is the `wxservices` SQL login rather than a Windows principal. Container start ordering is handled by the services coordinating through the database (see *Startup order*).
+The complementary pieces of WX-28 — a declarative `DependOnService=MSSQL$SQLEXPRESS`, a Windows service-configuration audit, and moving `WxParser.Svc` off Paul's personal Windows account — were **overtaken by containerization and closed unimplemented** (WX-29/30/34, closed 2026-07-21). None can be executed: there are no Windows services to configure, no installer to declare a dependency in, and there is no Windows principal to configure: the container process runs as a non-root Linux UID, and it authenticates to SQL Server as the `wxservices` **SQL login** — two separate identities, neither of them a Windows account. Container start ordering is handled by the services coordinating through the database (see *Startup order*).
 
 #### WX-47 schema cutover (reconciliation rearchitecture)
 
