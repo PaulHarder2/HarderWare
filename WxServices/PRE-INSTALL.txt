@@ -4,27 +4,39 @@ Please ensure the following prerequisites are installed before running
 this installer.  Detailed instructions are in INSTALL.md (installed
 with the product and opened for you at the end of setup).
 
+IMPORTANT - PLEASE READ FIRST:
+  The four weather services now run as Docker containers, not as native
+  Windows services.  The container images are built from the source
+  repository, so this installer alone does NOT produce a running system:
+  it places the desktop applications, the documentation, and the support
+  files, but the services themselves must be started separately from a
+  source checkout.  INSTALL.md explains what does and does not work
+  today.  If you only have this installer and no source repository, stop
+  here - the runtime is not yet distributable on its own.
+
 REQUIRED:
   1. .NET 8 Runtime (64-bit)
      https://dotnet.microsoft.com/download/dotnet/8.0
 
   2. SQL Server Express (free)
      https://www.microsoft.com/sql-server/sql-server-downloads
-     Enable TCP/IP after installation.
+     Two settings are required, not optional - the services run in
+     containers and sign in over the network:
+       - Enable Mixed Mode authentication (during setup).
+       - Enable TCP/IP (after installation, in SQL Server
+         Configuration Manager).
 
-  3. WSL (Windows Subsystem for Linux) with wgrib2
-     Run "wsl --install" from an administrator PowerShell prompt.
-
-  4. Miniconda with the wxvis Python environment
-     https://docs.conda.io/en/latest/miniconda.html
-
-OPTIONAL:
-  5. Docker Desktop (only if you want Grafana/Prometheus dashboards)
+  3. Docker Desktop
      https://www.docker.com/products/docker-desktop/
+     Required - the four weather services run as containers.  This is
+     not optional, and is also what powers the optional Grafana and
+     Prometheus dashboards.
 
 AFTER INSTALLATION:
   - The installer will offer to open INSTALL.md for you.
   - Use WxManager (launched automatically) to configure the system.
   - Enter your SMTP credentials and Claude API key on the Configure tab.
+    They are stored in the database, never in a file on disk.
   - Add weather report recipients on the Recipients tab.
-  - Start the services using the Windows Services app (services.msc).
+  - Start the services with "docker compose up -d" from the services
+    directory of the source repository.  See INSTALL.md.

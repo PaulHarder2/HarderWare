@@ -3,6 +3,12 @@
 This guide covers everything a developer needs to clone, configure, build, and
 run the HarderWare WxServices system on a new machine.
 
+The four headless services (WxParser, WxReport, WxMonitor, WxVis) run as **Docker
+containers** built from this repository.  The two desktop applications (WxManager,
+WxViewer) run natively on Windows.  First-time configuration is done by a setup
+console that ships with the solution — you should not need to hand-write any
+configuration file.
+
 ## Prerequisites
 
 Install these before cloning:
@@ -10,22 +16,12 @@ Install these before cloning:
 | Prerequisite | Version | Notes |
 |---|---|---|
 | **.NET SDK** | 8.0+ | [Download](https://dotnet.microsoft.com/download/dotnet/8.0). Verify: `dotnet --version` |
-| **SQL Server Express** | 2019+ | [Download](https://www.microsoft.com/sql-server/sql-server-downloads). Default instance name `SQLEXPRESS`. Enable TCP/IP in SQL Server Configuration Manager. |
-| **WSL** | 2 | `wsl --install` from an elevated prompt. Ubuntu recommended. |
-| **wgrib2** | — | Inside WSL: `sudo apt install wgrib2` or build from source. Verify: `wsl wgrib2 --version` |
-| **Miniconda** | — | [Download](https://docs.conda.io/en/latest/miniconda.html). Create the wxvis environment (see below). |
-| **Docker Desktop** | — | [Download](https://www.docker.com/products/docker-desktop/). Required for the observability stack (Prometheus + Grafana). |
+| **SQL Server Express** | 2019+ | [Download](https://www.microsoft.com/sql-server/sql-server-downloads). Default instance name `SQLEXPRESS`. Enable **TCP/IP** in SQL Server Configuration Manager, and enable **Mixed Mode** authentication — the containers connect over TCP as a SQL login, which Windows-only auth cannot serve. |
+| **Docker Desktop** | — | [Download](https://www.docker.com/products/docker-desktop/). Required — the four services run as containers, and it also hosts the optional observability stack. |
 
-### Create the wxvis conda environment
-
-```bash
-conda create -n wxvis python=3.11 -y
-conda activate wxvis
-pip install -r WxServices\src\WxVis\requirements.txt
-```
-
-Note the full path to the environment's `python.exe` — you'll need it for
-configuration (e.g. `C:\Users\<you>\miniconda3\envs\wxvis\python.exe`).
+Native `wgrib2` and a Miniconda environment are **not** prerequisites.  The
+WxParser image bundles a Linux `wgrib2` build, and the WxVis image carries its
+own Python rendering stack, so neither tool needs to exist on the host.
 
 ## Clone and configure
 
@@ -49,70 +45,82 @@ the `<Version>` bump is forgotten (or vice-versa). CI runs the same check as a
 non-bypassable backstop, so the hook is a fast local fail, not the only gate. In
 a genuine emergency you can skip it with `git push --no-verify`.
 
-### Edit `appsettings.shared.json`
+### Run the setup console
 
-This is the single source of truth for all runtime configuration.  It is
-git-tracked, so keep secrets out of it — use `appsettings.local.json` for those
-(see below).
+First-time configuration is a script, not a checklist.  From the `WxServices`
+directory:
 
-Settings you **must** change for your machine:
-
-| Setting | Example | Notes |
-|---|---|---|
-| `InstallRoot` | `C:\HarderWare` | Where services, logs, plots, and scripts are deployed. Change if you want a different location. |
-| `Fetch:HomeIcao` | `KDWH` | ICAO code of your nearest METAR station |
-| `Fetch:HomeLatitude` | `30.07` | Decimal degrees |
-| `Fetch:HomeLongitude` | `-95.55` | Decimal degrees (negative = west) |
-| `WxVis:CondaPythonExe` | `C:\Users\<you>\miniconda3\envs\wxvis\python.exe` | Full path to the wxvis conda environment Python executable |
-
-Settings with sensible defaults you may want to review:
-
-| Setting | Default | Notes |
-|---|---|---|
-| `ConnectionStrings:WeatherData` | `Server=.\SQLEXPRESS;...` | Change if your SQL Server instance name differs |
-| `Fetch:BoundingBoxDegrees` | `9` | Radius in degrees around home location for METAR/GFS data |
-| `Gfs:Wgrib2WslPath` | `/usr/local/bin/wgrib2` | Path to wgrib2 inside WSL |
-| `WxVis:SynopticMapArgs` | `--extent south_central` | Map extent for synoptic analysis renders |
-
-### Create `appsettings.local.json` for secrets
-
-Create this file in the **solution root** (next to `appsettings.shared.json`).
-It is git-ignored and holds credentials:
-
-```json
-{
-  "Smtp": {
-    "Username": "your-email@gmail.com",
-    "Password": "your-gmail-app-password",
-    "FromAddress": "your-email@gmail.com"
-  },
-  "Claude": {
-    "ApiKey": "sk-ant-..."
-  },
-  "What3Words": {
-    "ApiKey": "your-w3w-api-key"
-  },
-  "Report": {
-    "Recipients": [
-      {
-        "Id": "dev",
-        "Email": "your-email@gmail.com",
-        "Name": "Your Name",
-        "Address": "123 Main St, City, State ZIP"
-      }
-    ]
-  }
-}
+```powershell
+dotnet run --project src\WxServices.Setup
 ```
 
-The deploy script copies this file into each service's publish directory
-automatically.
+The defaults suit a normal developer machine. To pass any of the flags below,
+put them **after a bare `--`** — everything before it belongs to the .NET CLI,
+everything after it is handed to the setup console:
 
-### Create the database
+```powershell
+dotnet run --project src\WxServices.Setup -- --mode full --server .\SQLEXPRESS
+```
 
-The database is created automatically on first service startup via
-`EnsureCreatedAsync`.  No manual SQL scripts are needed.  Just ensure SQL
-Server Express is running and the connection string is correct.
+Without that separator the CLI tries to interpret `--mode` as one of its own
+options and the run fails before the console starts.
+
+It runs in this order, and changes nothing until you confirm:
+
+1. **Prerequisite gate — detects, never fixes.**  It checks that SQL Server is
+   reachable with your Windows credentials, that Mixed Mode authentication is
+   enabled, that you are a SQL `sysadmin`, that SQL Server is listening on TCP,
+   and that the repository's `services` directory is present.  Any failure stops
+   the run with nothing changed.  Docker is checked too, but only warns — it is
+   needed to *run* the services, not to run this script.
+2. **Prompts for the foundational location values** — home airport ICAO code,
+   latitude, longitude, fetch bounding-box size, the region bounds, and the map
+   extent — validating each as you type.
+3. **Prompts for a password** for the SQL login the containers will use
+   (`wxservices` by default).  Input is not echoed.
+4. **Shows you the exact SQL it intends to run** and waits for a `yes`.
+5. **Provisions**: creates the login, creates the database and applies all
+   migrations, then maps the login into the database with least-privilege roles.
+6. **Writes five `appsettings.local.json` files** — one per service container,
+   generated from the committed `.example` templates, plus one machine-wide file
+   in your `InstallRoot`.
+7. **Seeds the foundational settings** into the database's `Config` table.
+
+The run is **idempotent**: if it fails partway, fix the cause and run it again.
+Nothing in it elevates — host-level changes that need administrator rights (such
+as enabling Mixed Mode or TCP) are reported for you to perform, never performed
+for you.
+
+Useful flags — every destination is an input, with no hardcoded targets (pass
+them after the `--` separator shown above):
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--mode` | `full` | `full` is the from-source developer path. `opregion` is recognised but its runtime-only mechanics are not implemented yet. |
+| `--install-root` | `C:\HarderWare` (or `WXSERVICES_INSTALL_ROOT`) | Where logs, plots, and the machine-wide config file go |
+| `--services-dir` | the repo's `services\` | Where the per-container config files are written |
+| `--database` | `WeatherData` | Database name |
+| `--sql-login` | `wxservices` | Login the containers authenticate as |
+| `--server` | `.\SQLEXPRESS` | Target SQL Server instance |
+
+### Secrets
+
+Do **not** put secrets in a configuration file.  The SMTP password, Claude API
+key, and What3Words key live in the database, and the way to enter them is
+**WxManager → Configure tab**.  They are never written to disk.
+
+The one unavoidable exception is the database connection string itself, which
+cannot live in the store it unlocks.
+
+### Changing a foundational setting afterwards
+
+The values the console prompts for — home ICAO, latitude, longitude,
+`Fetch:BoundingBoxDegrees`, the region bounds, and the map extent — are seeded
+into the database's `Config` table, not into a file you can edit. To change one
+later, either re-run the setup console (it is idempotent and will update the
+existing rows) or edit the `Config` row directly. They are deliberately absent
+from WxManager's Configure tab: the rest of the system derives from them, so
+they are not day-to-day settings.
 
 ## Build
 
@@ -163,7 +171,7 @@ and on every push to `master`. It also has a manual trigger
    surface only on a non-Windows host.
 
 **Solution filter scope.** CI uses `WxServices.CI.slnf`, which lists the
-sixteen cross-platform projects (`net8.0` TFM). The two WPF projects
+cross-platform projects (`net8.0` TFM). The two WPF projects
 (`WxManager`, `WxViewer`, both `net8.0-windows`) are intentionally
 excluded — they cannot build on a Linux runner without targeting-pack
 hacks, and there is no scenario in which a Linux-built WPF assembly is
@@ -211,22 +219,27 @@ after renaming the workflow or its job), update it there.
 ## Deploy
 
 The deploy script must be run from an **elevated** (Administrator) PowerShell
-prompt because it manages Windows services.
+prompt.
 
 ```powershell
 .\Deploy-WxService.ps1 all
 ```
 
 This:
-1. Copies WxVis Python scripts to `{InstallRoot}\WxVis\`
-2. Publishes and restarts all four Windows services, verifying each reaches
-   **Running** before moving on
+1. Builds and starts the four service containers via
+   `services/docker-compose.yml`, pointing their bind mounts at the resolved
+   host `InstallRoot` subdirectories, and verifies each container is running and
+   has logged its start-up banner before moving on
+2. Brings up the autoheal sidecar
 3. Publishes WxManager and WxViewer
-4. Runs a final check that all four services are Running, and exits non-zero
-   if any are down
+4. Exits non-zero if anything failed to come up
 
 The script reads `InstallRoot` from `appsettings.shared.json` and uses
 `$PSScriptRoot` as the solution root — no hardcoded paths to edit.
+
+Because the service binaries are baked into their images, deploying a service
+means rebuilding and recreating its container — there is no publish-to-folder
+step and no Windows service to stop and restart.
 
 ### Deploy-history log
 
@@ -239,38 +252,49 @@ reads alongside them:
 2026-06-03 19:50:00.000 INFO  [Deploy] WxReportSvc   1.12.0   75e04ca  OK
 ```
 
-Console/GUI/Python apps are logged once their push settles; a service is logged
-`OK` only after it verifies as **Running**, and `FAIL` if it starts but does not
-stay up (so a crash-on-init never reads as a successful deploy). Logging is
+Console/GUI apps are logged once their push settles; a containerized service is
+logged `OK` only after it verifies as running, and `FAIL` if it starts but does
+not stay up (so a crash-on-init never reads as a successful deploy). Logging is
 best-effort and never aborts a deploy.
 
 ### Individual targets
 
 ```powershell
-.\Deploy-WxService.ps1 WxParserSvc    # Single service
+.\Deploy-WxService.ps1 WxParserSvc    # Single service container
 .\Deploy-WxService.ps1 WxManager      # Management GUI only
 .\Deploy-WxService.ps1 WxViewer       # Desktop viewer only
-.\Deploy-WxService.ps1 WxVis          # Python scripts only
+.\Deploy-WxService.ps1 autoheal       # The autoheal sidecar only
 ```
 
 Valid names: `WxParserSvc`, `WxReportSvc`, `WxMonitorSvc`, `WxVisSvc`,
-`WxViewer`, `WxManager`, `WxVis`, `all`.
+`WxViewer`, `WxManager`, `autoheal`, `all`.
 
-## First-time service registration
+### Running the containers directly
 
-Before the first deploy, register the Windows services (elevated prompt):
+The deploy script is a convenience wrapper. You can drive Compose yourself from
+the repository's `services` directory:
 
-```powershell
-$ir = "C:\HarderWare"   # or your InstallRoot
-
-sc.exe create WxParserSvc  binPath= "$ir\BuildCache\WxServices\WxParser.Svc\bin\Release\net8.0\publish\WxParser.Svc.exe"
-sc.exe create WxReportSvc  binPath= "$ir\BuildCache\WxServices\WxReport.Svc\bin\Release\net8.0\publish\WxReport.Svc.exe"
-sc.exe create WxMonitorSvc binPath= "$ir\BuildCache\WxServices\WxMonitor.Svc\bin\Release\net8.0\publish\WxMonitor.Svc.exe"
-sc.exe create WxVisSvc     binPath= "$ir\BuildCache\WxServices\WxVis.Svc\bin\Release\net8.0\publish\WxVis.Svc.exe"
+```bash
+docker compose up -d          # start (build first if needed)
+docker compose up -d --build  # rebuild after a code change
+docker compose ps             # what is running
+docker compose logs -f wxreport
+docker compose stop           # stop the containers, keep them
+docker compose down           # stop AND remove the containers
 ```
 
-The deploy script updates the `binPath` on each subsequent deploy, so
-registration is a one-time step.
+`stop` and `down` are not interchangeable, and the difference matters after a
+reboot — see the runbook below before using either in anger.
+
+Each service reads its bind-mounted `appsettings.local.json` from
+`services/<service>/`, which the setup console generated. Those files are
+gitignored; only the `.example` templates are committed.
+
+**The full operational story lives in
+`docs/policies-and-procedures/container-stack-operations.md`** — restart
+policy, reboot recovery, the autoheal sidecar reconcile, and the
+hand-stopped-stays-stopped semantic. Treat that runbook as authoritative for
+day-to-day operation; the commands above are only enough to get you moving.
 
 ## Start the observability stack
 
@@ -281,7 +305,7 @@ Grafana admin password:
 echo "GRAFANA_ADMIN_PASSWORD=<value-from-RoboForm>" > observability/.env
 ```
 
-The file is gitignored (WX-91). Without it, `docker compose up` fails fast
+The file is gitignored. Without it, `docker compose up` fails fast
 with a named error rather than booting Grafana with a weak default. The
 source of truth for the password is the Grafana entry in RoboForm.
 
@@ -295,12 +319,29 @@ from `.env`). The WxParser dashboard is provisioned automatically.
 
 ## Configuration layering
 
-Configuration is loaded in this order (last wins):
+The **database is the runtime source of truth** for configuration. The JSON
+files still exist and still load, but the database `Config` table is applied
+last and wins:
 
-1. `appsettings.shared.json` — git-tracked, single source of truth
+1. `appsettings.shared.json` — git-tracked defaults
 2. `appsettings.json` — per-service settings (intervals, timeouts)
 3. `{InstallRoot}\appsettings.local.json` — machine-wide overrides
-4. `appsettings.local.json` — per-service overrides (copied from source by deploy script)
+4. `appsettings.local.json` — per-service overrides (bind-mounted into each container)
+5. **the `Config` table in the database** — last wins
+
+A small set of **bootstrap-critical** keys is deliberately excluded from the
+database layer and read only from files:
+
+| Key prefix | Why it must stay file-sourced |
+|---|---|
+| `ConnectionStrings:` | It is what opens the database — it cannot live inside it |
+| `Database:StartupRetry:` | Governs the retry loop that opens the database |
+| `Telemetry:` | Read during host construction, before configuration is available |
+| `Claude:TimeoutSeconds` | Applied when the HTTP client is constructed at start-up |
+
+The same list is enforced on the write side: the Configure tab and the setup
+console both refuse to write a bootstrap-critical key into the database, using
+one shared definition rather than a re-derived copy.
 
 All paths (logs, plots, temp, scripts) are derived from `InstallRoot` at
 runtime via the `WxPaths` class in `WxServices.Common`.
@@ -309,11 +350,12 @@ runtime via the `WxPaths` class in `WxServices.Common`.
 
 ```
 WxServices/
-├── appsettings.shared.json      ← single config file (git-tracked)
+├── appsettings.shared.json      ← git-tracked config defaults
 ├── log4net.shared.config        ← single log config (git-tracked)
 ├── Deploy-WxService.ps1         ← developer deploy script
 ├── DESIGN.md                    ← architecture documentation
 ├── DEVELOPER-README.md          ← this file
+├── tools/wgrib2-linux/          ← Linux wgrib2 binary baked into the WxParser image
 └── src/
     ├── MetarParser/             ← METAR text parser library
     ├── TafParser/               ← TAF text parser library
@@ -321,38 +363,40 @@ WxServices/
     ├── MetarParser.Data/        ← EF Core entities, fetchers, DB context
     ├── WxServices.Logging/      ← log4net wrapper (Logger class)
     ├── WxServices.Common/       ← shared utilities (WxPaths, SmtpSender)
+    ├── WxServices.Setup/        ← first-time setup console
     ├── WxInterp/                ← METAR+TAF+GFS → WeatherSnapshot
-    ├── WxParser.Svc/            ← Windows service: METAR/TAF + GFS fetch
-    ├── WxReport.Svc/            ← Windows service: Claude reports + email
-    ├── WxMonitor.Svc/           ← Windows service: log/heartbeat monitoring
-    ├── WxVis.Svc/               ← Windows service: map rendering
+    ├── WxParser.Svc/            ← containerized service: METAR/TAF + GFS fetch
+    ├── WxReport.Svc/            ← containerized service: Claude reports + email
+    ├── WxMonitor.Svc/           ← containerized service: log/heartbeat monitoring
+    ├── WxVis.Svc/               ← containerized service: map rendering
     ├── WxViewer/                ← WPF desktop app: weather map viewer
     ├── WxManager/               ← WPF management GUI
-    └── WxVis/                   ← Python visualisation scripts
+    └── WxVis/                   ← Python visualisation scripts (baked into the WxVis image)
 ```
+
+The container build definitions live at the repository root, outside this
+directory: `services/docker-compose.yml` plus one `Dockerfile` per service, and
+`observability/` for the metrics stack. Their build context is the repository
+root, so both trees are in scope when an image is built.
 
 ## Startup order
 
-Start `WxParserSvc` first and allow at least one fetch cycle (~10 minutes)
-before starting `WxReportSvc`, so METAR data is available for station
-resolution.  The deploy script handles this by deploying services in the
-correct order.
+The services coordinate through the database rather than by calling each other,
+so they can start in any order. WxReport simply produces nothing until WxParser
+has completed a fetch cycle — allow roughly 10 minutes after a cold start
+before expecting a report.
 
 ## Troubleshooting
 
 | Symptom | Check |
 |---|---|
-| No METAR data | Is `Fetch:HomeIcao` set? Is `Fetch:HomeLatitude`/`HomeLongitude` correct? Check `wxparser-svc.log`. |
-| No reports sent | Are SMTP credentials in `appsettings.local.json`? Is `Claude:ApiKey` set? Check `wxreport-svc.log`. |
-| Maps not rendering | Is `WxVis:CondaPythonExe` correct? Are Python scripts in `{InstallRoot}\WxVis\`? Check `wxvis-svc.log`. |
-| GFS fetch fails | Is WSL running? Is wgrib2 installed? Check `wxparser-svc.log` for GFS errors. |
-| Service won't start | Run `sc.exe query <ServiceName>` to check registration. Check logs in `{InstallRoot}\Logs\`. |
+| Containers won't start | Is Docker Desktop running? Have the images been built (`docker compose up -d --build`)? |
+| Container starts, then exits | `docker compose logs <service>` — a missing bind-mounted `appsettings.local.json` is the usual cause; re-run the setup console. |
+| Cannot reach the database from a container | Is SQL Server TCP/IP enabled and Mixed Mode on? Is the `wxservices` login's password correct in the bind-mounted config? |
+| No METAR data | Were the home location values seeded? Check the `Config` table. Check `wxparser-svc.log`. |
+| No reports sent | Are the SMTP credentials and Claude API key entered on WxManager's Configure tab? Check `wxreport-svc.log`. |
+| Maps not rendering | Check `wxvis-svc.log`. The Python stack is inside the image, so this is not a host Python problem. |
+| Logs empty or stale on the host | The log bind mount is stale — `docker compose up -d --force-recreate`. |
 
-All logs are in `{InstallRoot}\Logs\` with UTC timestamps.
-
-## Jira labels
-
-Issues in the Jira `WX` project carry an internal label taxonomy (component /
-work-character / source dimensions) used for the maintainer's board hygiene. It
-is Jira-workflow metadata, not part of the codebase or the build — so the
-taxonomy is maintained outside this repo and isn't reproduced here.
+All logs are in `{InstallRoot}\Logs\` with UTC timestamps — the containers write
+them to the host through a bind mount.
