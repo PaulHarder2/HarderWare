@@ -85,11 +85,12 @@ public class WxVisConfig
             ["WXVIS_LOG_DIR"] = logsDir,
         };
 
-        // SQL authentication for containerized deploys: a Linux container has no Windows
-        // identity, so when the connection string carries a SQL login, pass it through and
-        // db.py authenticates with UID/PWD. Windows-native deploys use Trusted_Connection and
-        // omit these keys, so db.py falls back to Windows Auth — the connection string is the
-        // single source of truth for the auth mode, mirroring the .NET side.
+        // SQL authentication: a Linux container has no Windows identity, so the connection
+        // string must carry a SQL login for db.py to authenticate with UID/PWD. Both keys are
+        // set together or not at all — the connection string stays the single source of truth
+        // for the auth mode, mirroring the .NET side. If it carries no complete login, these
+        // keys are omitted and db.py now FAILS CLOSED rather than falling back to
+        // Trusted_Connection, which cannot work from a container (WX-329).
         var user = Value("User Id", "Uid");
         var password = Value("Password", "Pwd");
         if (!string.IsNullOrEmpty(user) && !string.IsNullOrEmpty(password))
