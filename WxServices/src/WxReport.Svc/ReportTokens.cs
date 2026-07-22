@@ -178,7 +178,7 @@ public static class Tok
     private static readonly IReadOnlySet<string> _soft =
         new HashSet<string>(StringComparer.Ordinal) { Noon, Midnight, SpanThrough, SpanUntil };
 
-    /// <summary>Tokens exempt from the fail-closed suppression gates (WX-256): a language missing one still sends, degrading gracefully instead of suppressing — the time words (noon/midnight) fall back to the culture 12-hour form; the span words (span_through/span_until, WX-239) fall back to the LLM's free narrative rendering. Still seeded / parity-checked / top-up-generated like any token.</summary>
+    /// <summary>Tokens exempt from the fail-closed suppression gates (WX-256): a language missing one still sends because each degrades gracefully to its own fallback rather than suppressing the report — e.g. noon/midnight fall back to the culture 12-hour clock, the WX-239 span words to the LLM's free narrative rendering. Still seeded / parity-checked / top-up-generated like any token.</summary>
     public static IReadOnlySet<string> Soft => _soft;
 
     private static readonly IReadOnlySet<string> _required =
