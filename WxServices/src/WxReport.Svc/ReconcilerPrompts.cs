@@ -283,6 +283,17 @@ internal static class ReconcilerPrompts
             where idiom wants another (e.g. English "Friday afternoon" → German
             "Freitagnachmittag" compounded, Esperanto "vendrede posttagmeze" with the
             roots derived to adverbs) — then compose the sentence naturally around it.
+            An INCLUSIVE span — English "through [day]", meaning the whole of the
+            named day or period is covered — MUST take the target language's
+            inclusive form, never a bare up-to preposition a reader could take as
+            excluding the endpoint: German "bis einschließlich Samstag" (never
+            "bis Samstag"), Spanish "hasta el final del sábado" (never "hasta el
+            sábado"), Esperanto "inkluzive de". Apply this span_through wording
+            even though "through" reads as an ordinary preposition rather than a
+            weather term. A plain "until [day]" BOUNDARY is different — keep the
+            ordinary word (span_until: German "bis", Spanish "hasta"); English
+            "until" is itself ambiguous about its endpoint, so do not force an
+            inclusive reading there.
             The probability words collapse to two recipient tiers. "Possible" and
             "likely" read as the same register to most recipients, so render BOTH a
             "possible" and a "likely" precip expectation as "possible" (its approved

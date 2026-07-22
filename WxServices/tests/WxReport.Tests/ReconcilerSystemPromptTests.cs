@@ -64,6 +64,24 @@ public class ReconcilerSystemPromptTests
     }
 
     [Fact]
+    public void Guidance_LocksInclusiveSpanRule_AgainstSilentDrop()
+    {
+        // WX-239 (reinforce): the span_through/span_until glossary tokens were correct, but the free
+        // narrative kept emitting the bare ambiguous preposition (de "bis Samstag", es "hasta el
+        // viernes") — the Gemini QA judge caught it against v1.60.0. A direct imperative rule was added
+        // so the inclusive form is MANDATED for a "through [day]" span, while a plain "until [day]"
+        // boundary keeps the ordinary word (the deliberate through/until asymmetry). Lock both halves
+        // against a silent prompt edit. Whitespace-collapse so a phrase matches wherever it line-wraps.
+        var guidance = System.Text.RegularExpressions.Regex.Replace(
+            ReconcilerPrompts.ReconciliationGuidanceText, @"\s+", " ");
+        Assert.Contains("MUST take the target language's inclusive form", guidance);
+        Assert.Contains("bis einschließlich Samstag", guidance);              // de required inclusive form...
+        Assert.Contains("never \"bis Samstag\"", guidance);                   // ...and the banned bare form
+        Assert.Contains("span_through", guidance);
+        Assert.Contains("do not force an inclusive reading there", guidance); // "until" stays loose (asymmetry)
+    }
+
+    [Fact]
     public void SystemPrompt_CapeGuidance_GatesStormWordingOnSevereFlag_NotCapeMagnitude()
     {
         // WX-293: the CAPE guidance used to license non-severe storm wording ("low CAPE warrants at most
