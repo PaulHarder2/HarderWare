@@ -114,6 +114,7 @@ public class NarrativeGlossaryTests
         Assert.Contains("de: through → «bis einschließlich»", g);
         Assert.Contains("until → «bis»", g);             // second pair joins mid-line after "; ", no "de:" prefix
         Assert.Contains("en: through → «through»", g);   // identity anchor pins the en wording too
+        Assert.Contains("until → «until»", g);           // en until identity anchor too — guards its regression
     }
 
     [Fact]
@@ -123,10 +124,14 @@ public class NarrativeGlossaryTests
         // target contributes no span pair (its line is simply omitted — no throw), and the en
         // identity anchor still appears. This is the behavior live on the day the migration ships.
         var de = new Language { Id = 3, IsoCode = "de", DisplayName = "German" };
-        var rows = new List<LanguageTemplate> { Row(En, Tok.SpanThrough, "through") };   // no de row yet
+        var rows = new List<LanguageTemplate>
+        {
+            Row(En, Tok.SpanThrough, "through"),
+            Row(de, "rain", "Regen"),   // de is a LOADED language, just missing the span token (pre-top-up)
+        };
         var store = new LanguageTemplateStore(() => rows, () => [Tok.SpanThrough]);
         var g = NarrativeGlossary.Build(store, ["en", "de"]);
         Assert.Contains("en: through → «through»", g);   // en anchor present
-        Assert.DoesNotContain("de:", g);                 // de has no span phrase yet → omitted, no throw
+        Assert.DoesNotContain("de:", g);                 // de lacks the span phrase → omitted from the glossary, no throw
     }
 }

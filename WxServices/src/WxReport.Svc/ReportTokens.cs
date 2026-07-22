@@ -173,12 +173,12 @@ public static class Tok
     public static IReadOnlySet<string> All => _all;
 
     // WX-256: the soft-token allowlist — tokens whose absence must NOT suppress a report (a
-    // cosmetic time word must not fail-closed like a hazard token). Softness is an explicit
-    // opt-in: a new token is REQUIRED unless named here.
+    // cosmetic or best-effort token must not fail-closed like a hazard token). Softness is an
+    // explicit opt-in: a new token is REQUIRED unless named here.
     private static readonly IReadOnlySet<string> _soft =
         new HashSet<string>(StringComparer.Ordinal) { Noon, Midnight, SpanThrough, SpanUntil };
 
-    /// <summary>Cosmetic tokens exempt from the fail-closed suppression gates (WX-256): a language missing one still sends (the renderer degrades to the culture 12-hour form). Still seeded / parity-checked / top-up-generated like any token.</summary>
+    /// <summary>Tokens exempt from the fail-closed suppression gates (WX-256): a language missing one still sends, degrading gracefully instead of suppressing — the time words (noon/midnight) fall back to the culture 12-hour form; the span words (span_through/span_until, WX-239) fall back to the LLM's free narrative rendering. Still seeded / parity-checked / top-up-generated like any token.</summary>
     public static IReadOnlySet<string> Soft => _soft;
 
     private static readonly IReadOnlySet<string> _required =
