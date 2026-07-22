@@ -654,9 +654,10 @@ public sealed class ReportWorker : BackgroundService
                 var present = presentByLang.TryGetValue(l.Id, out var s) ? s : noTokens;
                 var missing = baselineByToken.Keys.Where(t => !present.Contains(t))
                     .OrderBy(t => t, StringComparer.Ordinal).ToList();
-                // WX-256: a formerly-READY language missing only SOFT tokens (noon/midnight) is still
-                // SENDING (the renderer degrades them) — only a HARD-token gap actively suppresses, so
-                // flag it to keep the top slot from being starved by cosmetic soft-token top-ups.
+                // WX-256: a formerly-READY language missing only SOFT tokens (e.g. noon/midnight, the
+                // WX-239 span words) is still SENDING (the renderer/narrative degrades them) — only a
+                // HARD-token gap actively suppresses, so flag it to keep the top slot from being starved
+                // by best-effort soft-token top-ups.
                 var missingHard = missing.Any(t => Tok.Required.Contains(t));
                 var subscribers = subscribersByLang.TryGetValue(l.Id, out var c) ? c : 0;
                 return (lang: l, iso, missing, missingHard, subscribers);
@@ -798,7 +799,7 @@ public sealed class ReportWorker : BackgroundService
         : state switch
         {
             // WX-256: a READY language now missing a HARD token is actively SUPPRESSING live reports (most
-            // urgent); missing ONLY soft tokens (noon/midnight) is still sending — the LEAST urgent work,
+            // urgent); missing ONLY soft tokens (e.g. noon/midnight, span words) is still sending — the LEAST urgent work,
             // below a fresh Pending enable and a prior Failed/Blocked retry.
             LanguageGenerationState.Ready => missingHard ? 0 : 3,
             LanguageGenerationState.Pending => 1, // fresh enable

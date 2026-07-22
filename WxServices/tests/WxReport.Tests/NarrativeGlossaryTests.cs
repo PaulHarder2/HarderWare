@@ -94,4 +94,45 @@ public class NarrativeGlossaryTests
         Assert.Contains("drizzle_freezing", store.GlossaryTokens);
         Assert.DoesNotContain("totally_not_a_real_token", store.GlossaryTokens);
     }
+
+    [Fact]
+    public void Build_AnchorsSpanTokens_SoTheTargetUsesTheInclusiveForm()
+    {
+        // WX-239: span_through / span_until are SOFT Hint glossary tokens. Once a target language has
+        // its top-up-generated phrase, the glossary anchors the inclusive/boundary rendering — de
+        // "through" → «bis einschließlich» (not the day-truncating bare «bis»), "until" → «bis».
+        var de = new Language { Id = 3, IsoCode = "de", DisplayName = "German" };
+        var rows = new List<LanguageTemplate>
+        {
+            Row(En, Tok.SpanThrough, "through"),
+            Row(En, Tok.SpanUntil, "until"),
+            Row(de, Tok.SpanThrough, "bis einschließlich"),
+            Row(de, Tok.SpanUntil, "bis"),
+        };
+        var store = new LanguageTemplateStore(() => rows, () => [Tok.SpanThrough, Tok.SpanUntil]);
+        var g = NarrativeGlossary.Build(store, ["en", "de"]);
+        // Assert each FULL per-language line, so every pair — including the mid-line `until` one that
+        // joins after "; " with no repeated language prefix — is qualified by its language. This guards
+        // the en identity anchors (through AND until) and the de target mappings against regression.
+        Assert.Contains("de: through → «bis einschließlich»; until → «bis»", g);
+        Assert.Contains("en: through → «through»; until → «until»", g);
+    }
+
+    [Fact]
+    public void Build_OmitsSpanToken_WhenTargetLacksThePhrase_ButKeepsEnglishAnchor()
+    {
+        // Deploy-day SOFT path: en is seeded but a target has not been top-up-generated yet. The
+        // target contributes no span pair (its line is simply omitted — no throw), and the en
+        // identity anchor still appears. This is the behavior live on the day the migration ships.
+        var de = new Language { Id = 3, IsoCode = "de", DisplayName = "German" };
+        var rows = new List<LanguageTemplate>
+        {
+            Row(En, Tok.SpanThrough, "through"),
+            Row(de, "rain", "Regen"),   // de is a LOADED language, just missing the span token (pre-top-up)
+        };
+        var store = new LanguageTemplateStore(() => rows, () => [Tok.SpanThrough]);
+        var g = NarrativeGlossary.Build(store, ["en", "de"]);
+        Assert.Contains("en: through → «through»", g);   // en anchor present
+        Assert.DoesNotContain("de:", g);                 // de lacks the span phrase → omitted from the glossary, no throw
+    }
 }

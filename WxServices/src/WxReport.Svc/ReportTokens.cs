@@ -153,6 +153,16 @@ public static class Tok
     public const string Noon = "noon";
     public const string Midnight = "midnight";
 
+    // WX-239: span-preposition vocabulary for the free-composed narrative. Like the WX-238 separated
+    // vocabulary above, these are NEVER rendered by the deterministic renderer — they exist only to
+    // anchor the reconciler prompt glossary so a target language renders an inclusive/boundary span
+    // idiomatically (German "through Saturday" → "bis einschließlich Samstag", not the day-truncating
+    // bare "bis Samstag"). SOFT: a language missing one degrades to the LLM's free rendering (today's
+    // behavior) rather than suppressing the report — and de/es/eo receive their phrases post-deploy via
+    // top-up generation, so they are legitimately absent for a window and must not fail-closed.
+    public const string SpanThrough = "span_through";
+    public const string SpanUntil = "span_until";
+
     private static readonly IReadOnlySet<string> _all =
         typeof(Tok).GetFields(BindingFlags.Public | BindingFlags.Static)
             .Where(f => f.IsLiteral && f.FieldType == typeof(string))
@@ -163,12 +173,12 @@ public static class Tok
     public static IReadOnlySet<string> All => _all;
 
     // WX-256: the soft-token allowlist — tokens whose absence must NOT suppress a report (a
-    // cosmetic time word must not fail-closed like a hazard token). Softness is an explicit
-    // opt-in: a new token is REQUIRED unless named here.
+    // cosmetic or best-effort token must not fail-closed like a hazard token). Softness is an
+    // explicit opt-in: a new token is REQUIRED unless named here.
     private static readonly IReadOnlySet<string> _soft =
-        new HashSet<string>(StringComparer.Ordinal) { Noon, Midnight };
+        new HashSet<string>(StringComparer.Ordinal) { Noon, Midnight, SpanThrough, SpanUntil };
 
-    /// <summary>Cosmetic tokens exempt from the fail-closed suppression gates (WX-256): a language missing one still sends (the renderer degrades to the culture 12-hour form). Still seeded / parity-checked / top-up-generated like any token.</summary>
+    /// <summary>Tokens exempt from the fail-closed suppression gates (WX-256): a language missing one still sends because each degrades gracefully to its own fallback rather than suppressing the report — e.g. noon/midnight fall back to the culture 12-hour clock, the WX-239 span words to the LLM's free narrative rendering. Still seeded / parity-checked / top-up-generated like any token.</summary>
     public static IReadOnlySet<string> Soft => _soft;
 
     private static readonly IReadOnlySet<string> _required =
