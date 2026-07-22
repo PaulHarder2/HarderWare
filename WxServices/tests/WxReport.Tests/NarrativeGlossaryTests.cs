@@ -94,4 +94,39 @@ public class NarrativeGlossaryTests
         Assert.Contains("drizzle_freezing", store.GlossaryTokens);
         Assert.DoesNotContain("totally_not_a_real_token", store.GlossaryTokens);
     }
+
+    [Fact]
+    public void Build_AnchorsSpanTokens_SoTheTargetUsesTheInclusiveForm()
+    {
+        // WX-239: span_through / span_until are SOFT Hint glossary tokens. Once a target language has
+        // its top-up-generated phrase, the glossary anchors the inclusive/boundary rendering — de
+        // "through" → «bis einschließlich» (not the day-truncating bare «bis»), "until" → «bis».
+        var de = new Language { Id = 3, IsoCode = "de", DisplayName = "German" };
+        var rows = new List<LanguageTemplate>
+        {
+            Row(En, Tok.SpanThrough, "through"),
+            Row(En, Tok.SpanUntil, "until"),
+            Row(de, Tok.SpanThrough, "bis einschließlich"),
+            Row(de, Tok.SpanUntil, "bis"),
+        };
+        var store = new LanguageTemplateStore(() => rows, () => [Tok.SpanThrough, Tok.SpanUntil]);
+        var g = NarrativeGlossary.Build(store, ["en", "de"]);
+        Assert.Contains("de: through → «bis einschließlich»", g);
+        Assert.Contains("until → «bis»", g);             // second pair joins mid-line after "; ", no "de:" prefix
+        Assert.Contains("en: through → «through»", g);   // identity anchor pins the en wording too
+    }
+
+    [Fact]
+    public void Build_OmitsSpanToken_WhenTargetLacksThePhrase_ButKeepsEnglishAnchor()
+    {
+        // Deploy-day SOFT path: en is seeded but a target has not been top-up-generated yet. The
+        // target contributes no span pair (its line is simply omitted — no throw), and the en
+        // identity anchor still appears. This is the behavior live on the day the migration ships.
+        var de = new Language { Id = 3, IsoCode = "de", DisplayName = "German" };
+        var rows = new List<LanguageTemplate> { Row(En, Tok.SpanThrough, "through") };   // no de row yet
+        var store = new LanguageTemplateStore(() => rows, () => [Tok.SpanThrough]);
+        var g = NarrativeGlossary.Build(store, ["en", "de"]);
+        Assert.Contains("en: through → «through»", g);   // en anchor present
+        Assert.DoesNotContain("de:", g);                 // de has no span phrase yet → omitted, no throw
+    }
 }
