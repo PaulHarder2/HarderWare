@@ -111,10 +111,11 @@ public class NarrativeGlossaryTests
         };
         var store = new LanguageTemplateStore(() => rows, () => [Tok.SpanThrough, Tok.SpanUntil]);
         var g = NarrativeGlossary.Build(store, ["en", "de"]);
-        Assert.Contains("de: through → «bis einschließlich»", g);
-        Assert.Contains("until → «bis»", g);             // second pair joins mid-line after "; ", no "de:" prefix
-        Assert.Contains("en: through → «through»", g);   // identity anchor pins the en wording too
-        Assert.Contains("until → «until»", g);           // en until identity anchor too — guards its regression
+        // Assert each FULL per-language line, so every pair — including the mid-line `until` one that
+        // joins after "; " with no repeated language prefix — is qualified by its language. This guards
+        // the en identity anchors (through AND until) and the de target mappings against regression.
+        Assert.Contains("de: through → «bis einschließlich»; until → «bis»", g);
+        Assert.Contains("en: through → «through»; until → «until»", g);
     }
 
     [Fact]
