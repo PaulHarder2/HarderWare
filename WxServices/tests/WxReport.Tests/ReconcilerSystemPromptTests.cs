@@ -77,6 +77,9 @@ public class ReconcilerSystemPromptTests
         Assert.Contains("MUST take the target language's inclusive form", guidance);
         Assert.Contains("bis einschließlich Samstag", guidance);              // de required inclusive form...
         Assert.Contains("never \"bis Samstag\"", guidance);                   // ...and the banned bare form
+        Assert.Contains("hasta el final del sábado", guidance);               // es required inclusive form...
+        Assert.Contains("never \"hasta el sábado\"", guidance);               // ...and its banned bare form
+        Assert.Contains("inkluzive de", guidance);                            // eo inclusive form
         Assert.Contains("span_through", guidance);
         Assert.Contains("do not force an inclusive reading there", guidance); // "until" stays loose (asymmetry)
     }
