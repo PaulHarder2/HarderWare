@@ -972,6 +972,7 @@ erDiagram
         string Phrase "localized atomic phrase / format string"
         string ContextInfo "translation aid (REQUIRED)"
         string ContextKind "Example | Hint"
+        string ValidatorUse "No | Yes; {q:time}<->day-part validator flag (WX-335)"
         string Note "null"
         bool Representable "false = BLOCKED-needs-code (WX-172)"
         string ReviewedBy "null (WX-173)"

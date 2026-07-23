@@ -14,6 +14,24 @@ public enum TemplateContextKind
 }
 
 /// <summary>
+/// Whether the deterministic prose validator keys on a template's <see cref="LanguageTemplate.Phrase"/>
+/// as one of its word-lists (WX-335). Orthogonal to rendering: the renderer always uses the phrase;
+/// this says whether the validator does too. Sub 3 (WX-336) builds the per-language validator lexicon
+/// (just <c>DayPartWords</c>, after the WX-331 pivot) from the <c>Yes</c> rows — the <c>DayPart1–4</c>
+/// day-part tokens a language marks validator-safe.
+/// </summary>
+public enum ValidatorUse
+{
+    /// <summary>Render-only: the validator ignores this phrase. The default for every render token.</summary>
+    No,
+
+    /// <summary>Dual-use: rendered AND used by the validator — a <c>DayPart1–4</c> day-part word the
+    /// language marks unambiguous. The only validator-relevant value after the WX-331 pivot, which moved
+    /// every free-prose word-bag check to the reconciler prompt, so no validator-ONLY words remain.</summary>
+    Yes,
+}
+
+/// <summary>
 /// One localized string the deterministic renderer substitutes into a report, keyed
 /// by a language-neutral <see cref="Token"/> (WX-167). Supersedes the hard-coded
 /// interim <c>ReportVocabulary</c>: the token set is the code-side contract, the
@@ -51,6 +69,15 @@ public class LanguageTemplate
 
     /// <summary>Whether <see cref="ContextInfo"/> is a translatable example or a read-only usage hint.</summary>
     public TemplateContextKind ContextKind { get; set; }
+
+    /// <summary>
+    /// Whether the deterministic <c>{q:time}</c>&#8596;day-part validator keys on this phrase (WX-335):
+    /// <c>No</c> = render-only (default); <c>Yes</c> = rendered AND validated — a <c>DayPart1–4</c>
+    /// day-part word the language marks unambiguous. Sub 3 (WX-336) builds <c>DayPartWords</c> from the
+    /// <c>Yes</c> rows. (No <c>Only</c> value: the WX-331 pivot moved every validator-only word-bag to
+    /// the reconciler prompt.)
+    /// </summary>
+    public ValidatorUse ValidatorUse { get; set; }
 
     /// <summary>
     /// Generator's caveat or, when not representable, the explanation of why a simple

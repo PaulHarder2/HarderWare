@@ -377,6 +377,10 @@ public sealed class WeatherDataContext : DbContext
              .HasConversion<string>()      // store the enum name ("Example"/"Hint"), not its ordinal
              .HasMaxLength(10)
              .IsRequired();
+            e.Property(x => x.ValidatorUse)
+             .HasConversion<string>()      // store the enum name ("No"/"Yes"), not its ordinal (WX-335)
+             .HasMaxLength(10)             // headroom to match the sibling ContextKind column; enum names are short
+             .IsRequired();
             e.Property(x => x.Note).HasMaxLength(1000);
             e.Property(x => x.Representable).IsRequired();
             e.Property(x => x.ReviewedBy).HasMaxLength(100);
