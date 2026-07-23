@@ -1000,6 +1000,59 @@ public class ForecastReconcilerTests
         Assert.Equal("Lluvia hoy.", success.StructuredReport.Narrative["es"].Closing);   // true claim over a wet block → passes
     }
 
+    [Fact]
+    public async Task SpanishSevereStorm_StormWordingAtNonConvectiveWindow_IsCaught_Degrades()
+    {
+        // WX-334 (Sub 1 of WX-331) — es parity for the severe-storm vocabulary check (WX-284/293), the one
+        // lexicon-driven validator with no prior es behavior test. StormVocabularySpanish ("Tormentas") is
+        // scoped to a resolvable es window ("hoy" → today via the es lexicon's TodayWords). The snapshot's
+        // today block is severe by WIND (severeFlag) but NOT convective (precipPhenomenon rain, not
+        // thunderstorm), so "severe storms today" is illegitimate — the window carries no severe CONVECTIVE
+        // block — and is caught, fails closed through the WX-189 retry, and degrades with the es-attributed
+        // reason. The block's wetness lets the closing precip-at-a-dry-time check (WX-152) pass, isolating
+        // the storm-convective gate. es-only: exercises the es storm path + es time resolution, not en's.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: SevereWindWithRainTodaySnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: EnEsReport(
+                enChange: "Gusty winds with some rain around today.",
+                enClosing: "Staying breezy into the evening.",
+                esChange: "Vientos fuertes y algo de lluvia hoy.",
+                esClosing: "Tormentas hoy."));
+
+        var result = await RunReconciler(
+            _ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(responseJson, Encoding.UTF8, "application/json") },
+            narrativeLanguages: new[] { "en", "es" });
+        var degraded = Assert.IsType<ReconcileResult.Degraded>(result);
+        Assert.Contains("narrative 'es'", degraded.Reason);   // the es severe-storm check fired, not en's
+        Assert.Contains("storm wording", degraded.Reason);
+    }
+
+    [Fact]
+    public async Task SpanishSevereStorm_StormWordingAtConvectiveWindow_IsLegal_Succeeds()
+    {
+        // WX-334 — the es no-false-reject companion to the reject case above (added from the WX-334
+        // /code-review): es storm wording ("Tormentas") over a window that DOES carry a severe CONVECTIVE
+        // block ("hoy" → today, a severe thunderstorm) is a true claim and must PASS. Guards the lexicon's
+        // core invariant — a broken/empty es time-resolution must never turn legitimate Spanish
+        // severe-storm prose into a false reject. Pairs with the reject test to pin BOTH sides of the gate.
+        var responseJson = BuildClaudeResponseJson(
+            finalSnapshotJson: SevereStormSnapshotJson,
+            reasoningTrace: "trace",
+            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            structuredReportJson: EnEsReport(
+                enChange: "Active weather this afternoon.",
+                enClosing: "Quieting down overnight.",
+                esChange: "Tiempo activo esta tarde.",
+                esClosing: "Tormentas hoy."));
+
+        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(
+            _ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(responseJson, Encoding.UTF8, "application/json") },
+            narrativeLanguages: new[] { "en", "es" }));
+        Assert.Equal("Tormentas hoy.", success.StructuredReport.Narrative["es"].Closing);   // true over a severe convective window → passes
+    }
+
     // ── WX-284 recipient precipitation vocabulary collapse ────────────────────
 
     // A severe (convective) block — the one case where storm wording is legitimate.
