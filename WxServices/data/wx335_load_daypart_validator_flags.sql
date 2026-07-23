@@ -15,6 +15,14 @@
 --   es: DayPart1 only (madrugada); DayPart2-4 (manana / tarde / noche) are ambiguous -> stay No,
 --       prompt-governed.
 --   de/eo/da: none yet -- vetted natively later (WX-338 for de).
+--
+-- Ordering. Run this AFTER each target language's DayPart1-4 rows exist. en's are always
+-- present (migration seed); es and every other live language get theirs from the WX-250 runtime
+-- top-up, so run this after a normal report cycle has generated them. The PRINT lines report
+-- affected-row counts: a count of 0 for a language means its DayPart rows were not present yet --
+-- re-run once they are (a not-yet-generated language correctly stays 'No' until curated). The
+-- WX-250 top-up is fill-only / never-clobber (ReportWorker.ApplyTopUpAsync), so a 'Yes' set here
+-- survives later top-up cycles -- it does not need to be re-applied on every deploy.
 
 -- en: all four DayPart tokens are validator-safe.
 UPDATE lt
@@ -22,6 +30,7 @@ UPDATE lt
   FROM LanguageTemplates lt
   JOIN Languages l ON l.Id = lt.LanguageId
  WHERE l.IsoCode = 'en'
+   AND l.IsEnabled = 1
    AND lt.Token IN ('DayPart1', 'DayPart2', 'DayPart3', 'DayPart4')
    AND lt.ValidatorUse <> 'Yes';
 PRINT CONCAT('en DayPart1-4 flagged Yes: ', @@ROWCOUNT, ' row(s) updated.');
@@ -33,6 +42,7 @@ UPDATE lt
   FROM LanguageTemplates lt
   JOIN Languages l ON l.Id = lt.LanguageId
  WHERE l.IsoCode = 'es'
+   AND l.IsEnabled = 1
    AND lt.Token = 'DayPart1'
    AND lt.ValidatorUse <> 'Yes';
 PRINT CONCAT('es DayPart1 flagged Yes: ', @@ROWCOUNT, ' row(s) updated.');
