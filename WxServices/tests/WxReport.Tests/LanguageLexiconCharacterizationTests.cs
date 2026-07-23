@@ -24,9 +24,10 @@ public class LanguageLexiconCharacterizationTests
         Assert.NotNull(lex);
         Assert.Equal("en", lex!.IsoCode);
 
-        // UNAMBIGUOUS day-part words only; "tonight"/"night" deliberately absent (ambiguous).
+        // UNAMBIGUOUS day-part words only; "tonight"/"night" and "overnight" deliberately absent (WX-335:
+        // "Monday overnight" = Tuesday's 00-06, a day-shift ambiguity that doesn't name the stated day's part).
         AssertSameDayParts(
-            new[] { ("overnight", 0), ("early hours", 0), ("morning", 1), ("afternoon", 2), ("evening", 3) },
+            new[] { ("early hours", 0), ("morning", 1), ("afternoon", 2), ("evening", 3) },
             lex.DayPartWords);
 
         AssertSameWords(

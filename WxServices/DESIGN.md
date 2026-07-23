@@ -972,6 +972,7 @@ erDiagram
         string Phrase "localized atomic phrase / format string"
         string ContextInfo "translation aid (REQUIRED)"
         string ContextKind "Example | Hint"
+        string ValidatorUse "No | Yes; Yes = unambiguous DayPart1-4 word for the {q:time}<->day-part validator; consumed by WX-336 (WX-335)"
         string Note "null"
         bool Representable "false = BLOCKED-needs-code (WX-172)"
         string ReviewedBy "null (WX-173)"
