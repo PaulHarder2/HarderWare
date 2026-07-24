@@ -342,9 +342,11 @@ public sealed class LanguageTemplateStore
             Logger.Info($"LanguageTemplateStore loaded {glossary.Count} prompt-glossary token(s).");
 
         // WX-336: freeze each language's validator-safe day-part words, part-ordered (0 pre-dawn … 3 evening).
+        // AsReadOnly (not a bare ToList) so a caller can't downcast the shared snapshot's list back to
+        // List<T> and mutate it in place — matching the LanguagePhrases.Phrases.AsReadOnly() pattern above.
         var dayPartsByIso = new Dictionary<string, IReadOnlyList<(string Word, int Part)>>(StringComparer.Ordinal);
         foreach (var (iso, list) in dayParts)
-            dayPartsByIso[iso] = list.OrderBy(w => w.Part).ToList();
+            dayPartsByIso[iso] = list.OrderBy(w => w.Part).ToList().AsReadOnly();
 
         return new Snapshot(byIso, cultures, glossary, dayPartsByIso);
     }
