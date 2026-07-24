@@ -896,63 +896,10 @@ public class ForecastReconcilerTests
 
     // ── WX-168 Spanish deterministic timing/claim validator parity ────────────
 
-    // One DRY block on the reference local day (06-09): "hoy" resolves to it, and it carries no precip.
-    private const string DryTodaySnapshotJson = """
-        {"schemaVersion":5,"blocks":[{"startUtc":"2026-06-09T18:00:00Z","skyState":"clear","obscuration":"none","temperatureCelsius":{"min":20,"max":28},"windKt":{"min":5,"max":12},"precipExpectation":"none","precipPhenomenon":null,"severeFlag":false}]}
-        """;
-
     // One WET block on the reference local day (06-09): "hoy" resolves to it, and it carries rain.
     private const string WetTodaySnapshotJson = """
         {"schemaVersion":5,"blocks":[{"startUtc":"2026-06-09T18:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":20,"max":28},"windKt":{"min":5,"max":12},"precipExpectation":"likely","precipPhenomenon":"rain","severeFlag":false}]}
         """;
-
-    [Fact]
-    public async Task SpanishClosing_PrecipAtADryTime_IsCaught_Degrades()
-    {
-        // WX-168: the es lexicon plugin gives the closing precip-at-a-dry-time check (WX-152) real
-        // deterministic coverage — "Lluvia hoy" (rain today) over a snapshot that is dry today is caught,
-        // fails closed through the WX-189 retry, and (the fixed fixture can't fix it) the report degrades
-        // with the es-attributed reason. Before this ticket the en-only validator matched no es word and
-        // never fired.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: DryTodaySnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: EnEsReport(
-                enChange: "A quiet day on tap.",
-                enClosing: "Calm conditions hold through the day.",
-                esChange: "Un día tranquilo por delante.",
-                esClosing: "Lluvia hoy."));
-
-        var result = await RunReconciler(
-            _ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(responseJson, Encoding.UTF8, "application/json") },
-            narrativeLanguages: new[] { "en", "es" });
-        var degraded = Assert.IsType<ReconcileResult.Degraded>(result);
-        Assert.Contains("narrative 'es'", degraded.Reason);   // the es closing check fired, not en's
-        Assert.Contains("dry", degraded.Reason);
-    }
-
-    [Fact]
-    public async Task SpanishClosing_AmbiguousManana_IsSkipped_Succeeds()
-    {
-        // WX-168 residual policy: es "mañana" = morning OR tomorrow — ambiguous, so it is NOT a
-        // deterministic time trigger (TomorrowWords is empty). "Lluvia mañana" over a dry snapshot must
-        // therefore be SKIPPED, never false-rejected — the es closing survives intact.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: DryTodaySnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: EnEsReport(
-                enChange: "A quiet day on tap.",
-                enClosing: "Calm conditions hold through the day.",
-                esChange: "Un día tranquilo por delante.",
-                esClosing: "Lluvia mañana."));
-
-        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(
-            _ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(responseJson, Encoding.UTF8, "application/json") },
-            narrativeLanguages: new[] { "en", "es" }));
-        Assert.Equal("Lluvia mañana.", success.StructuredReport.Narrative["es"].Closing);   // ambiguous time → skipped, not rejected
-    }
 
     [Fact]
     public async Task SpanishDayPart_MadrugadaContradictsToken_IsCaught_Degrades()
@@ -980,113 +927,12 @@ public class ForecastReconcilerTests
         Assert.Equal("Keep an umbrella handy.", success.StructuredReport.Narrative["en"].Closing);
     }
 
-    [Fact]
-    public async Task SpanishClosing_PrecipAtAWetTime_IsLegal_Succeeds()
-    {
-        // WX-168: "Lluvia hoy" over a snapshot that IS wet today is a true claim — it must pass.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: WetTodaySnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: EnEsReport(
-                enChange: "Rain around today.",
-                enClosing: "Keep an umbrella handy.",
-                esChange: "Lluvia por la zona hoy.",
-                esClosing: "Lluvia hoy."));
-
-        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(
-            _ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(responseJson, Encoding.UTF8, "application/json") },
-            narrativeLanguages: new[] { "en", "es" }));
-        Assert.Equal("Lluvia hoy.", success.StructuredReport.Narrative["es"].Closing);   // true claim over a wet block → passes
-    }
-
-    [Fact]
-    public async Task SpanishSevereStorm_StormWordingAtNonConvectiveWindow_IsCaught_Degrades()
-    {
-        // WX-334 (Sub 1 of WX-331) — es parity for the severe-storm vocabulary check (WX-284/293), the one
-        // lexicon-driven validator with no prior es behavior test. StormVocabularySpanish ("Tormentas") is
-        // scoped to a resolvable es window ("hoy" → today via the es lexicon's TodayWords). The snapshot's
-        // today block is severe by WIND (severeFlag) but NOT convective (precipPhenomenon rain, not
-        // thunderstorm), so "severe storms today" is illegitimate — the window carries no severe CONVECTIVE
-        // block — and is caught, fails closed through the WX-189 retry, and degrades with the es-attributed
-        // reason. The block's wetness lets the closing precip-at-a-dry-time check (WX-152) pass, isolating
-        // the storm-convective gate. es-only: exercises the es storm path + es time resolution, not en's.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: SevereWindWithRainTodaySnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: EnEsReport(
-                enChange: "Gusty winds with some rain around today.",
-                enClosing: "Staying breezy into the evening.",
-                esChange: "Vientos fuertes y algo de lluvia hoy.",
-                esClosing: "Tormentas hoy."));
-
-        var result = await RunReconciler(
-            _ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(responseJson, Encoding.UTF8, "application/json") },
-            narrativeLanguages: new[] { "en", "es" });
-        var degraded = Assert.IsType<ReconcileResult.Degraded>(result);
-        Assert.Contains("narrative 'es'", degraded.Reason);   // the es severe-storm check fired, not en's
-        Assert.Contains("storm wording", degraded.Reason);
-    }
-
-    [Fact]
-    public async Task SpanishSevereStorm_StormWordingAtConvectiveWindow_IsLegal_Succeeds()
-    {
-        // WX-334 — the es no-false-reject companion to the reject case above (added from the WX-334
-        // /code-review): es storm wording ("Tormentas") over a window that DOES carry a severe CONVECTIVE
-        // block ("hoy" → today, a severe thunderstorm) is a true claim and must PASS. Guards the lexicon's
-        // core invariant — a broken/empty es time-resolution must never turn legitimate Spanish
-        // severe-storm prose into a false reject. Pairs with the reject test to pin BOTH sides of the gate.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: SevereStormSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: EnEsReport(
-                enChange: "Active weather this afternoon.",
-                enClosing: "Quieting down overnight.",
-                esChange: "Tiempo activo esta tarde.",
-                esClosing: "Tormentas hoy."));
-
-        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(
-            _ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(responseJson, Encoding.UTF8, "application/json") },
-            narrativeLanguages: new[] { "en", "es" }));
-        Assert.Equal("Tormentas hoy.", success.StructuredReport.Narrative["es"].Closing);   // true over a severe convective window → passes
-    }
-
     // ── WX-284 recipient precipitation vocabulary collapse ────────────────────
-
-    // A severe (convective) block — the one case where storm wording is legitimate.
-    private const string SevereStormSnapshotJson = """
-        {"schemaVersion":5,"blocks":[{"startUtc":"2026-06-09T21:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":24,"max":31},"windKt":{"min":10,"max":30},"precipExpectation":"likely","precipPhenomenon":"thunderstorm","severeFlag":true}]}
-        """;
 
     // A non-severe SNOW block — frozen precip keeps its own words (snow showers, winter storm), which
     // the liquid-only vocabulary bans must NOT reject.
     private const string SnowBlockSnapshotJson = """
         {"schemaVersion":5,"blocks":[{"startUtc":"2026-01-09T21:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":-6,"max":-1},"windKt":{"min":6,"max":14},"precipExpectation":"likely","precipPhenomenon":"snow","severeFlag":false}]}
-        """;
-
-    // Two blocks straddling the local-day boundary (CDT): a SEVERE thunderstorm TODAY (2026-06-09) and
-    // non-severe rain TOMORROW (2026-06-10). refDate = the first block's local date (06-09), so "today"
-    // resolves to the severe window and "tomorrow" to the non-severe one — the WX-284 CR #3 case where
-    // storm wording is legitimate only for the window that actually carries the severe block.
-    private const string SevereTodayRainTomorrowSnapshotJson = """
-        {"schemaVersion":5,"blocks":[{"startUtc":"2026-06-09T18:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":24,"max":31},"windKt":{"min":12,"max":34},"precipExpectation":"possible","precipPhenomenon":"thunderstorm","severeFlag":true},{"startUtc":"2026-06-10T18:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":22,"max":29},"windKt":{"min":8,"max":16},"precipExpectation":"possible","precipPhenomenon":"rain","severeFlag":false}]}
-        """;
-
-    // A severe NON-convective block: SevereFlag set by high wind (>= threshold), no convection —
-    // precipPhenomenon null. WX-284 renders this as "severe weather", NOT "severe storms"; the validator
-    // must not let SevereFlag alone validate storm wording (WX-293 CR round 3).
-    private const string SevereWindNonConvectiveSnapshotJson = """
-        {"schemaVersion":5,"blocks":[{"startUtc":"2026-06-09T21:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":18,"max":25},"windKt":{"min":20,"max":42},"precipExpectation":"none","precipPhenomenon":null,"severeFlag":true}]}
-        """;
-
-    // A severe NON-convective WIND block that is also WET (precipPhenomenon rain), on the ref day. The
-    // wetness means the precip-at-a-dry-time check (CheckClosingSentence) passes, so a "severe storms
-    // today" closing isolates the WINDOW-SCOPED storm-convective gate (anySevereConvectiveInWindow):
-    // "today" resolves to this block, which is severe-by-wind but not convective (WX-293 CR round 4).
-    private const string SevereWindWithRainTodaySnapshotJson = """
-        {"schemaVersion":5,"blocks":[{"startUtc":"2026-06-09T18:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":18,"max":25},"windKt":{"min":20,"max":42},"precipExpectation":"possible","precipPhenomenon":"rain","severeFlag":true}]}
         """;
 
     [Fact]
@@ -1111,37 +957,6 @@ public class ForecastReconcilerTests
         var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
         Assert.Null(success.StructuredReport.Narrative["en"].ChangeSummary);
         Assert.Equal("A calmer stretch follows later this week.", success.StructuredReport.Narrative["en"].Closing);
-    }
-
-    [Fact]
-    public async Task SevereStormVocabulary_StormWithoutSevereBlock_DropsClosingOnly()
-    {
-        // WX-284: storm wording is reserved for a severe block; this snapshot carries none, so a
-        // "storm" in the closing is provably wrong (a non-severe thunderstorm reads as "rain"). The
-        // closing degrades to the fallback and the report still sends.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: RainBlockSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: ClosingOnlyReport("A stray storm cannot be ruled out."));
-
-        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
-        Assert.Equal("See the forecast above for the full outlook.", success.StructuredReport.Narrative["en"].Closing);
-    }
-
-    [Fact]
-    public async Task SevereStormVocabulary_SevereStormsWithSevereBlock_IsLegal_Succeeds()
-    {
-        // WX-284: with a severe block in the snapshot, "severe storms" wording is legitimate and must
-        // NOT be rejected — the severe escalation is exactly what earns storm language.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: SevereStormSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: ClosingOnlyReport("Severe storms are the main concern this period."));
-
-        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
-        Assert.Equal("Severe storms are the main concern this period.", success.StructuredReport.Narrative["en"].Closing);
     }
 
     [Fact]
@@ -1170,128 +985,6 @@ public class ForecastReconcilerTests
     }
 
     [Fact]
-    public async Task SevereStormVocabulary_StormAtNonSevereWindow_WithSevereElsewhere_DropsClosingOnly()
-    {
-        // WX-284 (CR #3): storm wording is scoped to the window the prose names. Severe is TODAY, but
-        // the closing places "severe storms" TOMORROW — a window the snapshot leaves non-severe (rain).
-        // The old snapshot-wide "any severe block" gate let this pass; the window-scoped check rejects it.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: SevereTodayRainTomorrowSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: ClosingOnlyReport("Severe storms move in tomorrow."));
-
-        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
-        Assert.Equal("See the forecast above for the full outlook.", success.StructuredReport.Narrative["en"].Closing);
-    }
-
-    [Fact]
-    public async Task SevereStormVocabulary_StormAtSevereWindow_IsLegal_Succeeds()
-    {
-        // WX-284 (CR #3): the mirror of the above — storm wording at the window that DOES carry the
-        // severe block ("today") is legitimate and must not be rejected.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: SevereTodayRainTomorrowSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: ClosingOnlyReport("Severe storms are the main concern today."));
-
-        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
-        Assert.Equal("Severe storms are the main concern today.", success.StructuredReport.Narrative["en"].Closing);
-    }
-
-    [Fact]
-    public async Task SevereStormVocabulary_SevereNonConvectiveWind_StormWording_DropsClosingOnly()
-    {
-        // WX-293 (CR round 3): SevereFlag can be set by a wind-only event (DeriveSevereFlag trips on
-        // wind >= threshold), which is "severe weather", not "severe storms" (WX-284). The validator now
-        // requires a severe CONVECTIVE window (SevereFlag + precipPhenomenon thunderstorm) to allow storm
-        // wording, so "severe storms" over a severe NON-convective (wind) block is rejected and the closing
-        // degrades — SevereFlag alone can no longer validate storm language. (The mirror case — a severe
-        // THUNDERSTORM block — stays legal via SevereStormsWithSevereBlock_IsLegal_Succeeds, so this is a
-        // new reject with no new false-reject.)
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: SevereWindNonConvectiveSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: ClosingOnlyReport("Severe storms are the main concern this period."));
-
-        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
-        Assert.Equal("See the forecast above for the full outlook.", success.StructuredReport.Narrative["en"].Closing);
-    }
-
-    [Fact]
-    public async Task SevereStormVocabulary_SevereNonConvectiveWindInWindow_StormWording_DropsClosingOnly()
-    {
-        // WX-293 (CR round 4): covers the WINDOW-SCOPED branch (anySevereConvectiveInWindow) — the round-3
-        // test hit only the unresolvable-time fallback (anySevereConvective). Here "today" resolves to a
-        // block that is severe by WIND (severeFlag, precipPhenomenon rain — non-convective) and WET, so the
-        // precip-at-a-dry-time check passes and this isolates the storm-convective gate. "severe storms
-        // today" over that window is rejected because the window carries no severe CONVECTIVE block.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: SevereWindWithRainTodaySnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: ClosingOnlyReport("Severe storms are the main concern today."));
-
-        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
-        Assert.Equal("See the forecast above for the full outlook.", success.StructuredReport.Narrative["en"].Closing);
-    }
-
-    [Fact]
-    public async Task SevereStormVocabulary_MultiWindowClosing_StormsInLaterNonSevereWindow_DropsClosingOnly()
-    {
-        // WX-293: the production repro — a multi-window Closing that opens with "rain" and then varies to
-        // "storms" for a later day-part of the same non-severe day ("rain ... through the morning, then
-        // storms ... through the afternoon and evening"). The snapshot carries no severe block, so "storms"
-        // is provably wrong. The sentence names several day-parts, so the time is unresolvable (multiple
-        // matches → null, ResolveClosingTime) and the check falls back to the snapshot-wide "any severe
-        // block" gate; with none severe the closing degrades to the fallback rather than shipping "storms".
-        // This pins the exact production case. The WX-293 fix is upstream (strengthened prompt + sharpened
-        // retry feedback that steer the model off this wording within the retry budget); the deterministic
-        // backstop asserted here is unchanged and still fails closed — its correctness is the invariant.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: RainBlockSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: ClosingOnlyReport(
-                "Rain looks possible through the morning, then storms possible through the afternoon and evening."));
-
-        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
-        Assert.Equal("See the forecast above for the full outlook.", success.StructuredReport.Narrative["en"].Closing);
-    }
-
-    [Fact]
-    public async Task SevereStormVocabulary_SevereRenderedAsExpected_DropsClosingOnly()
-    {
-        // WX-284 (CR follow-up): severe is ALWAYS "possible", never "expected"/"certain". Even with a
-        // severe block in the referenced window, "severe storms are expected" over-hedges — rejected.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: SevereTodayRainTomorrowSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: ClosingOnlyReport("Severe storms are expected today."));
-
-        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
-        Assert.Equal("See the forecast above for the full outlook.", success.StructuredReport.Narrative["en"].Closing);
-    }
-
-    [Fact]
-    public async Task SevereStormVocabulary_ExpectedToVerb_IsLegal_Succeeds()
-    {
-        // The over-hedge ban must NOT catch the trend construction "expected TO <verb>" — "severe storms
-        // expected to weaken" describes the trend, not the severe likelihood, and stays legal.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: SevereTodayRainTomorrowSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: ClosingOnlyReport("Severe storms are expected to weaken today."));
-
-        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
-        Assert.Equal("Severe storms are expected to weaken today.", success.StructuredReport.Narrative["en"].Closing);
-    }
-
-    [Fact]
     public async Task NonSeverePrecipRegister_SnowShowers_IsLegal_Succeeds()
     {
         // WX-284 frozen guard: the liquid "showers" ban must NOT catch "snow showers" — frozen precip
@@ -1312,21 +1005,6 @@ public class ForecastReconcilerTests
 
         var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
         Assert.Equal("Snow showers are possible through the afternoon.", success.StructuredReport.Narrative["en"].ChangeSummary);
-    }
-
-    [Fact]
-    public async Task SevereStormVocabulary_WinterStormWithoutSevereBlock_IsLegal_Succeeds()
-    {
-        // WX-284 frozen guard: "winter storm" is a legitimate frozen-precip term that does NOT set the
-        // convective severeFlag, so the storm-vocabulary ban must not reject it even with no severe block.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: SnowBlockSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: ClosingOnlyReport("A winter storm is shaping up for the region."));
-
-        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
-        Assert.Equal("A winter storm is shaping up for the region.", success.StructuredReport.Narrative["en"].Closing);
     }
 
     [Fact]
@@ -1375,28 +1053,6 @@ public class ForecastReconcilerTests
         }
         """;
 
-    // 4b: a window crossing local midnight named with the TAIL day only — a Mon-evening token
-    // (2026-07-06T23:00Z) reaches into a Tue-morning token, but the prose never names Monday.
-    private const string ProseCrossMidnightDropsStartDayReportJson = """
-        {
-          "schemaVersion": 5,
-          "narrative": {
-            "en": { "changeSummary": "Storms are likely Tuesday morning, {q:time:2026-07-07T11:00:00Z}, after developing from {q:time:2026-07-06T23:00:00Z}.", "closing": "Stay weather-aware." }
-          }
-        }
-        """;
-
-    // 4b acceptance: a cross-boundary window naming BOTH days is fine even with a day-only
-    // terminus (the day-part is optional) — "Tuesday evening into the early hours of Wednesday".
-    private const string ProseCrossMidnightNamesBothDaysReportJson = """
-        {
-          "schemaVersion": 5,
-          "narrative": {
-            "en": { "changeSummary": "Rain is possible Tuesday evening, {q:time:2026-07-07T23:00:00Z}, into the early hours of Wednesday, {q:time:2026-07-08T05:00:00Z}.", "closing": "Stay weather-aware." }
-          }
-        }
-        """;
-
     // A Mon-evening → Wed-early storm span backing the cross-boundary prose above.
     private const string StormMonWedSnapshotJson = """
         {"schemaVersion":5,"blocks":[
@@ -1419,36 +1075,6 @@ public class ForecastReconcilerTests
 
         var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
         Assert.Null(success.StructuredReport.Narrative["en"].ChangeSummary);
-    }
-
-    [Fact]
-    public async Task ProseCrossMidnight_NamesTailDayOnly_DropsChangeSummary()
-    {
-        // WX-264 4b: the span reaches from a Mon-evening token to a Tue-morning token, but the prose
-        // names only Tuesday — Monday is dropped, the original paul_en cross-midnight defect.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: StormMonWedSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: ProseCrossMidnightDropsStartDayReportJson);
-
-        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
-        Assert.Null(success.StructuredReport.Narrative["en"].ChangeSummary);
-    }
-
-    [Fact]
-    public async Task ProseCrossMidnight_NamesBothDays_DayOnlyTerminus_Succeeds()
-    {
-        // WX-264 4b acceptance: "Tuesday evening into the early hours of Wednesday" names both
-        // bounding days; the day-part is optional per terminus, so this must NOT be rejected.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: StormMonWedSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: ProseCrossMidnightNamesBothDaysReportJson);
-
-        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
-        Assert.NotNull(success.StructuredReport.Narrative["en"].ChangeSummary);
     }
 
     // 4a must NOT bind a day-part word across a RANGE connective to a far token of a different
@@ -1480,181 +1106,13 @@ public class ForecastReconcilerTests
         Assert.NotNull(success.StructuredReport.Narrative["en"].ChangeSummary);
     }
 
-    // 4b conservative skip: a cross-midnight window named only by relative-day cues (tonight /
-    // tomorrow) with no explicit day name is NOT rejected — the validator can't pin the days, so it
-    // leans on the prompt rather than risk a false reject into suppression.
-    private const string ProseCrossMidnightRelativeDaysReportJson = """
-        {
-          "schemaVersion": 5,
-          "narrative": {
-            "en": { "changeSummary": "Rain is possible tonight, {q:time:2026-07-06T23:00:00Z}, into tomorrow morning, {q:time:2026-07-07T11:00:00Z}.", "closing": "Stay weather-aware." }
-          }
-        }
-        """;
-
-    [Fact]
-    public async Task ProseCrossMidnight_RelativeDayWordsOnly_Skipped_Succeeds()
-    {
-        // Two local dates but named only by "tonight"/"tomorrow" — the relative-day escape skips the
-        // both-days check (conservative), so the section sends clean rather than degrading.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: StormMonWedSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: ProseCrossMidnightRelativeDaysReportJson);
-
-        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
-        Assert.NotNull(success.StructuredReport.Narrative["en"].ChangeSummary);
-    }
-
     // ── WX-152 closing-claim validation ──────────────────────────────────────
     // Snapshots: first block is 2026-06-09T17:00:00Z = Tue 12:00 CDT (afternoon), so
     // refDate = Tue 6/9; "tonight" = Tue 18:00 → Wed 06:00 local (the 23Z + 05Z blocks).
 
-    // Tue afternoon thunderstorm, then dry Tue-evening and Wed-overnight.
-    private const string ClosingStormAfternoonDrySnapshotJson = """
-        {"schemaVersion":5,"blocks":[
-          {"startUtc":"2026-06-09T17:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":24,"max":31},"windKt":{"min":8,"max":16},"precipExpectation":"possible","precipPhenomenon":"thunderstorm","severeFlag":false},
-          {"startUtc":"2026-06-09T23:00:00Z","skyState":"partly_cloudy","obscuration":"none","temperatureCelsius":{"min":20,"max":26},"windKt":{"min":5,"max":10},"precipExpectation":"none","precipPhenomenon":null,"severeFlag":false},
-          {"startUtc":"2026-06-10T05:00:00Z","skyState":"clear","obscuration":"none","temperatureCelsius":{"min":18,"max":22},"windKt":{"min":3,"max":8},"precipExpectation":"none","precipPhenomenon":null,"severeFlag":false}
-        ]}
-        """;
-
-    // WX-177 Defect A fixtures. Sat 2026-06-13 + Sun 2026-06-14 (both local in Cdt = -5).
-    private const string WeekendSatDrySunWetSnapshotJson = """
-        {"schemaVersion":5,"blocks":[
-          {"startUtc":"2026-06-13T18:00:00Z","skyState":"clear","obscuration":"none","temperatureCelsius":{"min":24,"max":32},"windKt":{"min":5,"max":10},"precipExpectation":"none","precipPhenomenon":null,"severeFlag":false},
-          {"startUtc":"2026-06-14T18:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":23,"max":29},"windKt":{"min":6,"max":12},"precipExpectation":"likely","precipPhenomenon":"thunderstorm","severeFlag":false}
-        ]}
-        """;
-    private const string WeekendAllDrySnapshotJson = """
-        {"schemaVersion":5,"blocks":[
-          {"startUtc":"2026-06-13T18:00:00Z","skyState":"clear","obscuration":"none","temperatureCelsius":{"min":24,"max":32},"windKt":{"min":5,"max":10},"precipExpectation":"none","precipPhenomenon":null,"severeFlag":false},
-          {"startUtc":"2026-06-14T18:00:00Z","skyState":"partly_cloudy","obscuration":"none","temperatureCelsius":{"min":23,"max":30},"windKt":{"min":6,"max":11},"precipExpectation":"none","precipPhenomenon":null,"severeFlag":false}
-        ]}
-        """;
-
-    [Fact]
-    public async Task AggregateDryClaim_WeekendDryOverStormySunday_DropsClosingOnly()
-    {
-        // WX-177 Defect A repro: "The weekend stays dry" while Sunday carries storms. The
-        // aggregate word "weekend" resolves to {Sat, Sun}; a wet weekend day contradicts the
-        // dry claim → closing dropped, rest sends (WX-189).
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: WeekendSatDrySunWetSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: ClosingOnlyReport("The weekend stays dry, with just a few clouds around."));
-
-        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
-        Assert.Equal("See the forecast above for the full outlook.", success.StructuredReport.Narrative["en"].Closing);
-    }
-
-    [Fact]
-    public async Task AggregateDryClaim_WeekendDryAllDry_Succeeds()
-    {
-        // Not a false reject: "the weekend stays dry" over a genuinely dry Sat AND Sun is a
-        // true claim and must survive intact.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: WeekendAllDrySnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: ClosingOnlyReport("The weekend stays dry, with just a few clouds around."));
-
-        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
-        Assert.Equal("The weekend stays dry, with just a few clouds around.", success.StructuredReport.Narrative["en"].Closing);
-    }
-
-    [Fact]
-    public async Task AggregateDryClaim_NegatedDryClaim_NotFlagged_Succeeds()
-    {
-        // The negation guard: "the weekend won't stay dry" ASSERTS wet, so a wet Sunday agrees
-        // with it — flagging it would be a false reject. Must survive intact.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: WeekendSatDrySunWetSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: ClosingOnlyReport("The weekend won't stay dry the whole way through."));
-
-        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
-        Assert.Equal("The weekend won't stay dry the whole way through.", success.StructuredReport.Narrative["en"].Closing);
-    }
-
-    [Fact]
-    public async Task AggregateDryClaim_UnrelatedNegationAfterDryClaim_StillDrops()
-    {
-        // CodeRabbit PR #183: an unrelated negation elsewhere in the sentence ("an unlikely storm")
-        // must NOT bypass the check — the negation is scoped to the dry expression, so "the weekend
-        // stays dry" over a wet Sunday is still caught even though "unlikely" appears later.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: WeekendSatDrySunWetSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: ClosingOnlyReport("The weekend stays dry, although an unlikely storm could develop Sunday."));
-
-        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
-        Assert.Equal("See the forecast above for the full outlook.", success.StructuredReport.Narrative["en"].Closing);
-    }
-
-    [Fact]
-    public async Task AggregateDryClaim_InChangeSummary_DropsChangeSummary()
-    {
-        // The check runs on the change band too (CheckProseClaims covers both sections): a
-        // weekend-dry claim in the changeSummary over a wet Sunday drops the changeSummary, closing sends.
-        const string report = """
-            {
-              "schemaVersion": 5,
-              "narrative": {
-                "en": { "changeSummary": "The weekend stays dry overall.", "closing": "Conditions settle down as the week goes on." }
-              }
-            }
-            """;
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: WeekendSatDrySunWetSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: report);
-
-        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
-        Assert.Null(success.StructuredReport.Narrative["en"].ChangeSummary);
-        Assert.Equal("Conditions settle down as the week goes on.", success.StructuredReport.Narrative["en"].Closing);
-    }
-
-    // Tue afternoon dry, but a Tue-evening (tonight) thunderstorm — backs a "tonight" claim.
-    private const string ClosingStormEveningSnapshotJson = """
-        {"schemaVersion":5,"blocks":[
-          {"startUtc":"2026-06-09T17:00:00Z","skyState":"partly_cloudy","obscuration":"none","temperatureCelsius":{"min":24,"max":31},"windKt":{"min":8,"max":16},"precipExpectation":"none","precipPhenomenon":null,"severeFlag":false},
-          {"startUtc":"2026-06-09T23:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":20,"max":26},"windKt":{"min":5,"max":10},"precipExpectation":"possible","precipPhenomenon":"thunderstorm","severeFlag":false},
-          {"startUtc":"2026-06-10T05:00:00Z","skyState":"clear","obscuration":"none","temperatureCelsius":{"min":18,"max":22},"windKt":{"min":3,"max":8},"precipExpectation":"none","precipPhenomenon":null,"severeFlag":false}
-        ]}
-        """;
-
-    // Only Tue afternoon — nothing for "tomorrow" (beyond-horizon guard).
-    private const string ClosingTodayOnlySnapshotJson = """
-        {"schemaVersion":5,"blocks":[
-          {"startUtc":"2026-06-09T17:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":24,"max":31},"windKt":{"min":8,"max":16},"precipExpectation":"possible","precipPhenomenon":"thunderstorm","severeFlag":false}
-        ]}
-        """;
-
     private static string ClosingOnlyReport(string closing) =>
         "{\"schemaVersion\":5,\"changes\":[],\"narrative\":{\"en\":{\"changeSummary\":null,\"closing\":"
         + JsonSerializer.Serialize(closing) + "}}}";
-
-    [Fact]
-    public async Task ClosingClaim_StormTonight_DryEveningOvernight_DropsClosingOnly()
-    {
-        // The send-1995 repro: closing asserts a storm "tonight" while the snapshot is dry
-        // every block from this evening on (the lone storm is this afternoon). WX-189: the
-        // closing is dropped to the fallback and the rest still sends.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: ClosingStormAfternoonDrySnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: ClosingOnlyReport("Tonight carries a modest chance of a storm before conditions settle, with the rest of the week looking calm."));
-
-        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
-        Assert.Equal("See the forecast above for the full outlook.", success.StructuredReport.Narrative["en"].Closing);
-    }
 
     [Fact]
     public async Task ClosingFault_WithValidChangeSummary_KeepsChangeSummary_DropsClosing()
@@ -1678,135 +1136,6 @@ public class ForecastReconcilerTests
         var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
         Assert.Equal("Conditions are trending more active.", success.StructuredReport.Narrative["en"].ChangeSummary);
         Assert.Equal("See the forecast above for the full outlook.", success.StructuredReport.Narrative["en"].Closing);
-    }
-
-    [Fact]
-    public async Task ClosingClaim_StaysDry_NotRejected_Succeeds()
-    {
-        // "stays mostly dry … no organized rain expected" — negated, must not be flagged.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: ClosingStormAfternoonDrySnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: ClosingOnlyReport("The week ahead stays mostly dry, with no organized rain expected through the weekend."));
-
-        Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
-    }
-
-    [Fact]
-    public async Task ClosingClaim_UntimedStorm_NotRejected_Succeeds()
-    {
-        // A storm named with no resolvable time can't be localized — residual, leans on
-        // the prompt, must not be rejected.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: ClosingStormAfternoonDrySnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: ClosingOnlyReport("Any storm that does develop this week could be lively, even if the odds of seeing one remain low."));
-
-        Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
-    }
-
-    [Fact]
-    public async Task ClosingClaim_PrecipAtCorrectTime_NotRejected_Succeeds()
-    {
-        // "a storm this afternoon" — the afternoon block carries a thunderstorm, so the
-        // claim is supported and must not be rejected.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: ClosingStormAfternoonDrySnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: ClosingOnlyReport("A storm is likely this afternoon before things quiet down."));
-
-        Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
-    }
-
-    [Fact]
-    public async Task ClosingClaim_StormTonight_EveningHasStorm_NotRejected_Succeeds()
-    {
-        // Same "storm tonight" prose, but here the snapshot's evening block backs it.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: ClosingStormEveningSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: ClosingOnlyReport("Tonight carries a modest chance of a storm before conditions settle, with the rest of the week looking calm."));
-
-        Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
-    }
-
-    [Fact]
-    public async Task ClosingClaim_BeyondHorizon_NotRejected_Succeeds()
-    {
-        // "rain tomorrow" but the snapshot has no Wednesday block — can't verify, so
-        // the check skips it (beyond-horizon guard) rather than false-rejecting.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: ClosingTodayOnlySnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: ClosingOnlyReport("Rain is possible tomorrow across the area as a wet pattern arrives."));
-
-        Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
-    }
-
-    [Fact]
-    public async Task ClosingClaim_CessationPhrasing_NotRejected_Succeeds()
-    {
-        // "Showers tapering off this evening" — the evening time word is a deadline by
-        // which precip ENDS, not where it occurs; the dry evening block is consistent,
-        // so it must NOT be rejected.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: ClosingStormAfternoonDrySnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: ClosingOnlyReport("Showers are tapering off this evening, leaving a calm and quiet night."));
-
-        Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
-    }
-
-    [Fact]
-    public async Task ClosingClaim_HedgedRainTonight_DryTonight_DropsClosingOnly()
-    {
-        // "A little rain tonight" is still an assertion — a dry-tonight snapshot
-        // contradicts it. (Guards that "little" was dropped from the skip cues.) WX-189:
-        // the closing is dropped to the fallback and the rest still sends.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: ClosingStormAfternoonDrySnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: ClosingOnlyReport("A little rain is likely tonight before drier air arrives."));
-
-        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
-        Assert.Equal("See the forecast above for the full outlook.", success.StructuredReport.Narrative["en"].Closing);
-    }
-
-    [Fact]
-    public async Task ClosingClaim_WeekdayPinned_NotRejected_Succeeds()
-    {
-        // "Saturday afternoon" is pinned to a specific weekday we don't localize — it
-        // must not be mis-resolved to TODAY's (dry) afternoon and rejected. (Snapshot's
-        // Tue afternoon is dry, so a mis-resolution would fire.)
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: ClosingStormEveningSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: ClosingOnlyReport("A storm is likely Saturday afternoon as the next system arrives."));
-
-        Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
-    }
-
-    [Fact]
-    public async Task ClosingClaim_MultipleTimeWords_Ambiguous_NotRejected_Succeeds()
-    {
-        // Two resolvable time words in one sentence is ambiguous (which one does the
-        // storm attach to?) — skip rather than risk a false reject. (Afternoon is dry
-        // here, so picking it would fire; the ambiguity guard prevents that.)
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: ClosingStormEveningSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: ClosingOnlyReport("A storm is possible this afternoon or this evening."));
-
-        Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
     }
 
     // ── WX-165: generation-side invention reduction ──────────────────────────
