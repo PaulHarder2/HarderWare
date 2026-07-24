@@ -26,10 +26,29 @@ namespace WxReport.Tests;
 
 public class ForecastReconcilerTests
 {
-    // One seed-backed template store for the whole harness — the reconciler only reads
-    // Tok.ClosingFallback from it, so rebuilding it (and re-parsing the migration) per test
-    // is wasted work (CodeRabbit).
-    private static readonly LanguageTemplateStore Templates = SeedTemplateStore.Build();
+    // One seed-backed template store for the whole harness — the reconciler reads Tok.ClosingFallback
+    // AND (WX-336) the per-language validator DayPartWords from it, so rebuilding it (and re-parsing the
+    // migration) per test is wasted work (CodeRabbit). The en seed marks DayPart1–4 ValidatorUse=Yes
+    // (SeedTemplateStore); we append es DayPart1=madrugada (Yes) so the es {q:time}↔day-part check
+    // (SpanishDayPart_MadrugadaContradictsToken) still has its one validator-safe word — mirroring the
+    // WX-335 prod flag, since the en-only seed carries no es row.
+    private static readonly LanguageTemplateStore Templates = BuildHarnessTemplates();
+
+    private static LanguageTemplateStore BuildHarnessTemplates()
+    {
+        var rows = SeedTemplateStore.SeedRows().ToList();
+        var es = new Language { Id = 2, IsoCode = "es", DisplayName = "Spanish", CultureName = "es-US" };
+        rows.Add(new LanguageTemplate
+        {
+            LanguageId = es.Id,
+            Language = es,
+            Token = Tok.DayPart1,
+            Phrase = "madrugada",
+            ValidatorUse = ValidatorUse.Yes,
+            Representable = true,
+        });
+        return new LanguageTemplateStore(() => rows);
+    }
 
     // A valid WX-128/130 structured_report whose 'en' narrative clears the
     // per-language degeneracy floor (MinVisibleNarrativeChars). The narrative

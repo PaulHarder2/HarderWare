@@ -836,7 +836,9 @@ public sealed class ForecastReconciler
     // path as every other contract check. Applied to BOTH narrative sections
     // (changeSummary and closing); a leak or a contradiction is just as wrong in
     // the closing wrap-up as in the change band.
-    private static void ValidateProseHygiene(StructuredReportBody report, TimeZoneInfo tz)
+    // Instance (WX-336): CheckProse now reads the language's validator day-part words from the
+    // injected _templates store, so this and CheckProse are no longer static.
+    private void ValidateProseHygiene(StructuredReportBody report, TimeZoneInfo tz)
     {
         foreach (var (lang, sections) in report.Narrative)
         {
@@ -966,7 +968,7 @@ public sealed class ForecastReconciler
         @"\b(?:lluvia|nieve|aguanieve|tormentas?|granizo)\b[^.!?;:,]{0,20}\bprobables?\b"
         + @"|\bprobables?\b[^.!?;:,]{0,20}\b(?:lluvia|nieve|aguanieve|tormentas?|granizo)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    private static void CheckProse(string lang, NarrativeSection section, string? prose, TimeZoneInfo tz)
+    private void CheckProse(string lang, NarrativeSection section, string? prose, TimeZoneInfo tz)
     {
         if (string.IsNullOrEmpty(prose))
             return;
@@ -1052,9 +1054,11 @@ public sealed class ForecastReconciler
                 + "\"[precip] possible\" (\"expected\" only for a certain non-severe block; a severe block "
                 + "is always \"possible\"). \"likely\" is retired for recipient-facing precipitation.");
 
-        // WX-168: the per-language lexicon plugin for the timing/day-name checks below (null for a
-        // language with no plugin → those checks no-op for it, the safe residual).
-        var lex = LanguageLexicons.For(lang);
+        // WX-336: the language's validator-safe day-part words, built from the DB templates
+        // (DayPart1–4 rows flagged ValidatorUse=Yes). An empty list — a language with none curated
+        // (de/eo/da/sq today) or unloaded — makes the day-part check below no-op for it, the safe
+        // residual (never a false reject). Replaces the retired per-language ILanguageLexicon plugin.
+        var dayPartWords = _templates.DayPartWords(lang);
 
         // (2) Prose time-of-day word must agree with its {q:time} token's LOCAL
         // rendering (defect 2, send 1927: "...develop Saturday afternoon,
@@ -1075,7 +1079,7 @@ public sealed class ForecastReconciler
                 DateTime.SpecifyKind(instantUtc, DateTimeKind.Utc), tz).Hour;
             int tokenPart = DayPartOfHour(localHour);
 
-            var (word, wordPart) = NearestDayPartWord(masked, m.Index, m.Index + m.Length, lex);
+            var (word, wordPart) = NearestDayPartWord(masked, m.Index, m.Index + m.Length, dayPartWords);
             if (word is not null && wordPart != tokenPart)
                 throw new NarrativeProseException(section,
                     $"structured_report narrative '{lang}' says \"{word}\" next to a {{q:time}} "
@@ -1113,16 +1117,17 @@ public sealed class ForecastReconciler
     // Returns (null, -1) when no such word is directly associated. The trade is
     // recall on the far side of a connector ("{q:time} in the afternoon") — that
     // residual leans on the prompt rule, consistent with the conservative design.
-    private static (string? Word, int Part) NearestDayPartWord(string prose, int tokenStart, int tokenEnd, ILanguageLexicon? lex)
+    private static (string? Word, int Part) NearestDayPartWord(
+        string prose, int tokenStart, int tokenEnd, IReadOnlyList<(string Word, int Part)> dayPartWords)
     {
-        if (lex is null)
-            return (null, -1);   // no plugin for this language → no deterministic day-part check (safe residual)
+        if (dayPartWords.Count == 0)
+            return (null, -1);   // no validator-safe day-part words for this language → no deterministic check (safe residual)
         int sentStart = SentenceStart(prose, tokenStart);
         int sentEnd = SentenceEnd(prose, tokenEnd);
 
         (string? Word, int Part) best = (null, -1);
         int bestDist = int.MaxValue;
-        foreach (var (word, part) in lex.DayPartWords)
+        foreach (var (word, part) in dayPartWords)
         {
             int from = sentStart;
             while (from < sentEnd)
