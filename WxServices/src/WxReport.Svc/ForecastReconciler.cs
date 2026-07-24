@@ -342,7 +342,6 @@ public sealed class ForecastReconciler
                 lastParsedReport = structuredReport;
                 ValidateNarrativeContract(structuredReport, narrativeLanguages);
                 ValidateProseHygiene(structuredReport, tz);
-                ValidateClosingClaims(structuredReport, finalSnapshot, tz);
 
                 // WX-189: compute the "What's changed" set deterministically from
                 // (prior, final_snapshot) and inject it — Claude authored only the
@@ -469,7 +468,6 @@ public sealed class ForecastReconciler
                         // intentionally reduces the narrative, and the closing is always non-blank
                         // (schema-required), so a thin-but-valid survivor must still send.
                         ValidateProseHygiene(cleaned, tz);
-                        ValidateClosingClaims(cleaned, lastParsedSnapshot, tz);
                         ValidateChangeSnapshotConsistency(cleaned, lastParsedSnapshot, priorBody, tz);
                     }
                     catch (Exception cleanEx) when (cleanEx is JsonException or InvalidOperationException)
@@ -852,9 +850,7 @@ public sealed class ForecastReconciler
     // fallback built from the computed changes), closing → a short, snapshot-safe
     // localized line (the schema requires a non-blank closing). Used by the
     // independent-section degrade so a fault in one section never takes the whole
-    // narrative down. All languages are cleaned uniformly: ValidateClosingClaims is
-    // English-only, so a non-English same-section fault is untested and is best treated
-    // the same conservative way.
+    // narrative down. All languages are cleaned uniformly.
     private StructuredReportBody DropProseSection(StructuredReportBody report, NarrativeSection section)
     {
         var narrative = new Dictionary<string, NarrativeSections>(report.Narrative.Count, StringComparer.Ordinal);
@@ -934,10 +930,11 @@ public sealed class ForecastReconciler
     // WX-284: the non-severe LIQUID precipitation REGISTER. Most recipients don't distinguish
     // "showers", "drizzle", a "downpour", or a "thundershower" from ordinary rain, so the report
     // confines non-severe liquid precip to plain "rain" — these convective-intensity / coverage words
-    // must never reach recipient prose (they collapse to "rain"). Storm/thunderstorm wording is
-    // handled separately by CheckSevereStormVocabulary, which gates it on a severe block (the snapshot
-    // the context-free CheckProse lacks). The prompt rule (ReconcilerPrompts) is the primary defense;
-    // this is the deterministic backstop, failing closed through the WX-189 retry. Unambiguous
+    // must never reach recipient prose (they collapse to "rain"). Storm/thunderstorm (severe-storms)
+    // wording is governed by the reconciler prompt's absolute severe-storm gate — WX-340 retired the
+    // deterministic CheckSevereStormVocabulary that formerly backed it, moving that class to the prompt
+    // for every language. The prompt rule (ReconcilerPrompts) is the primary defense; this register check
+    // is the deterministic backstop, failing closed through the WX-189 retry. Unambiguous
     // precip-register words ONLY, en/es (the enabled languages) — every other language leans on the
     // prompt rule, matching the SynopticMechanism policy above.
     //
@@ -952,20 +949,6 @@ public sealed class ForecastReconciler
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex NonSeverePrecipRegisterSpanish = new(
         @"\b(?:chubascos?|lloviznas?|lloviznando|aguaceros?)\b",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    // WX-284: storm / thunderstorm vocabulary — reserved for a SEVERE block (rain vs. severe-storms
-    // binary). Gated on snapshot severe state by CheckSevereStormVocabulary (not context-free like
-    // the register above), so these are only rejected when no severe block exists. en/es.
-    //
-    // FROZEN GUARD (as above): "winter storm", "snow storm", "ice storm", "snow squall" are legitimate
-    // frozen-precip terms that do NOT set the convective severeFlag, so a frozen qualifier before
-    // storm/squall is excluded via lookbehind. "thunderstorm" (bare) has no frozen compound and stays
-    // gated. (Spanish "tormenta de nieve" puts the qualifier after — leans on the prompt.)
-    private static readonly Regex StormVocabularyEnglish = new(
-        @"\b(?<!\b(?:winter|snow|ice|wintry)[ -])(?:thunder(?:storms?|y)?|storms?|stormy|squalls?)\b",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    private static readonly Regex StormVocabularySpanish = new(
-        @"\b(?:tormentas?|tormentoso|truenos?|turbonadas?)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     // WX-284 step 2 (CR #4a): "likely" is the RETIRED recipient precip-likelihood word — the hedge
     // collapsed to "possible" ("expected" only for a certain NON-severe block; a severe block is always
@@ -983,18 +966,6 @@ public sealed class ForecastReconciler
         @"\b(?:lluvia|nieve|aguanieve|tormentas?|granizo)\b[^.!?;:,]{0,20}\bprobables?\b"
         + @"|\bprobables?\b[^.!?;:,]{0,20}\b(?:lluvia|nieve|aguanieve|tormentas?|granizo)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    // WX-284 (CR follow-up): severe content is never rendered stronger than "possible" — the likelihood
-    // ban above catches "storms ... likely"; this catches the HIGH-CONFIDENCE register ("expected" /
-    // "certain") that is legitimate for a non-severe certain block but forbidden for severe. Guarded with
-    // a negative lookahead against the verb construction "expected/certain TO <verb>" ("storms expected to
-    // weaken / move out"), where the word describes the trend, not the severe likelihood. "will" /
-    // "definitely" / "guaranteed" are separately banned as guarantees by the prompt's hedged-certainty
-    // rule. en only; es "esperada"/"se espera" verbal forms are prompt-governed (like the es probable case).
-    private static readonly Regex SevereOverHedgeEnglish = new(
-        @"\b(?:storms?|thunderstorms?)\b[^.!?;:,]{0,20}\b(?:expected|certain)\b(?!\s+to\b)"
-        + @"|\b(?:expected|certain)\b(?!\s+to\b)[^.!?;:,]{0,20}\b(?:storms?|thunderstorms?)\b",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
-
     private static void CheckProse(string lang, NarrativeSection section, string? prose, TimeZoneInfo tz)
     {
         if (string.IsNullOrEmpty(prose))
@@ -1111,56 +1082,6 @@ public sealed class ForecastReconciler
                     + $"token that renders to the {DayPartName(tokenPart)} (local hour {localHour}); "
                     + "the prose time-of-day word contradicts the token's local rendering.");
         }
-
-        // (3) WX-264: an English window that CROSSES a local-day boundary must name BOTH its
-        // bounding local days ("Monday evening into the early hours of Tuesday"), never the tail
-        // day alone (the paul_en repro "the early hours of Tuesday" dropped the Monday-evening
-        // start). Per sentence, the LOCAL dates its {q:time} tokens fall on; when they span two or
-        // more distinct dates, the earliest and latest are the window's termini and each must
-        // appear by its English day name. The day-part at a terminus is OPTIONAL (a whole-day
-        // terminus reads "…into Wednesday", "Tuesday through…"); only the DAY is required.
-        // English-only, like ValidateClosingClaims — other languages lean on the prompt rule (their
-        // day names are pushed via day_name_reference). Conservative: a relative-day word
-        // (today/tonight/tomorrow/yesterday) may name a terminus we cannot pin, so its presence
-        // skips the sentence rather than risk a false reject into suppression.
-        if (!string.Equals(lang, "en", StringComparison.Ordinal))
-            return;
-        if (lex is null)
-            return;   // en always has a plugin; guard explicitly rather than lean on that invariant (CodeRabbit)
-
-        var datesBySentence = new Dictionary<int, (int End, SortedSet<DateOnly> Dates)>();
-        foreach (Match m in QTimeToken.Matches(prose))
-        {
-            if (!DateTime.TryParse(m.Groups[1].Value, CultureInfo.InvariantCulture,
-                    DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var instantUtc))
-                continue;
-            var localDate = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(
-                DateTime.SpecifyKind(instantUtc, DateTimeKind.Utc), tz));
-            int ss = SentenceStart(masked, m.Index);
-            if (!datesBySentence.TryGetValue(ss, out var entry))
-                entry = (SentenceEnd(masked, m.Index + m.Length), new SortedSet<DateOnly>());
-            entry.Dates.Add(localDate);
-            datesBySentence[ss] = entry;
-        }
-
-        foreach (var (ss, (se, dates)) in datesBySentence)
-        {
-            if (dates.Count < 2)
-                continue;   // the sentence's instants share one local day — no boundary crossed
-            var sentence = masked.Substring(ss, se - ss);
-            if (HasRelativeDayWord(sentence, lex))   // lex is non-null here (en-guarded + null-checked above)
-                continue;   // conservative — a relative-day word may name a terminus we can't verify
-            foreach (var date in new[] { dates.Min, dates.Max })
-            {
-                var dayName = EnCulture.DateTimeFormat.GetDayName(date.DayOfWeek);
-                if (!ContainsWholeWord(sentence, dayName))
-                    throw new NarrativeProseException(section,
-                        $"structured_report narrative 'en' {section} describes a window spanning "
-                        + $"{dates.Min:yyyy-MM-dd} to {dates.Max:yyyy-MM-dd} but never names {dayName}; "
-                        + "a window that crosses a local-day boundary must name BOTH bounding days "
-                        + "(e.g. \"Monday evening into the early hours of Tuesday\"), never the tail day alone.");
-            }
-        }
     }
 
     // Day-part buckets, mirroring StructuredReportRenderer.PartOf so the validator
@@ -1275,30 +1196,6 @@ public sealed class ForecastReconciler
         return only is not null && PointConnectors.Contains(only, StringComparer.OrdinalIgnoreCase);
     }
 
-    // WX-264: the English day names for the cross-boundary both-days check (4b). en-US and the
-    // invariant culture agree here; a fixed culture keeps the check independent of the host locale.
-    private static readonly CultureInfo EnCulture = CultureInfo.GetCultureInfo("en-US");
-
-    private static bool HasRelativeDayWord(string text, ILanguageLexicon lex) =>
-        lex.RelativeDayWords.Any(w => ContainsWholeWord(text, w));
-
-    // Whole-word, case-insensitive containment — a day name inside a longer word must not match.
-    private static bool ContainsWholeWord(string text, string word)
-    {
-        int from = 0;
-        while (from <= text.Length - word.Length)
-        {
-            int idx = text.IndexOf(word, from, StringComparison.OrdinalIgnoreCase);
-            if (idx < 0)
-                return false;
-            int after = idx + word.Length;
-            if ((idx == 0 || !char.IsLetter(text[idx - 1])) && (after >= text.Length || !char.IsLetter(text[after])))
-                return true;
-            from = idx + 1;
-        }
-        return false;
-    }
-
     private static int SentenceStart(string prose, int pos)
     {
         for (int i = pos - 1; i >= 0; i--)
@@ -1313,429 +1210,6 @@ public sealed class ForecastReconciler
             if (prose[i] is '.' or '!' or '?')
                 return i;
         return prose.Length;
-    }
-
-    // A day-part word immediately preceded by one of these is pinned to a SPECIFIC
-    // (often different) day than the change's window — "Friday evening", "tomorrow
-    // morning" — which we cannot compare to the window's local buckets without
-    // day-level parsing, so we conservatively skip it (never reject prose we can't
-    // prove wrong — the WX-149 policy). An unqualified "this evening" / "by evening"
-    // still refers to the change and is checked.
-    // True when the word ending at the letters before wordStart is a DayQualifier.
-    // Bounded by sentStart so the scan never crosses into a previous sentence — a
-    // "Friday." ending the prior sentence must not qualify a word in this one.
-    private static bool QualifiedByOtherDay(string prose, int sentStart, int wordStart, ILanguageLexicon lex)
-    {
-        int i = wordStart - 1;
-        while (i >= sentStart && !char.IsLetter(prose[i]))
-            i--;
-        if (i < sentStart)
-            return false;
-        int end = i + 1;
-        while (i >= sentStart && char.IsLetter(prose[i]))
-            i--;
-        var prev = prose.Substring(i + 1, end - (i + 1));
-        return lex.DayQualifiers.Contains(prev, StringComparer.OrdinalIgnoreCase);
-    }
-
-    // WX-152: the closing ("In summary:") is the one narrative section the other
-    // checks don't reconcile against the snapshot — ValidateChangeSnapshotConsistency
-    // works on changes[], and the {q:time} / {chN}-anchored prose checks cover only the
-    // changeSummary band. So the closing can assert a precipitation/storm EVENT the
-    // final_snapshot doesn't carry (send 1995: "a modest chance of a storm tonight" over
-    // a snapshot dry on every block from this evening on). This catches the clear case:
-    // a sentence that ASSERTS a precip phenomenon (not negated) at a resolvable local
-    // time the snapshot leaves entirely dry. Conservative by design — negated ("stays
-    // dry", "no rain expected"), un-timed ("any storm that develops"), and weekday-pinned
-    // references are skipped and lean on the prompt rule (the WX-149/151 residual policy).
-    // Precip-vs-dry only: a wrong-phenomenon claim (snow vs rain) at a wet time is not
-    // caught. Distinct from WX-139 (synoptic mechanisms/fronts the schema can't carry) —
-    // here the schema CAN represent the event and the blocks contradict it. Fail-closed
-    // via JsonException → retry → tier-aware degrade.
-    //
-    // ENGLISH-ONLY by design: the phenomenon/negation/time lexicons below are English,
-    // so a non-English (es) closing matches no precipitation word and is never
-    // evaluated — safe (no false reject) but unguarded, leaning on the language-agnostic
-    // prompt rule. Deterministic Spanish parity is harder ("mañana" = tomorrow OR
-    // morning, gendered "seco/seca", "esta noche/tarde") and is the standing
-    // WX-149/151/152 multi-language residual, deferred to that work.
-    private static void ValidateClosingClaims(StructuredReportBody report, ForecastSnapshotBody finalSnapshot, TimeZoneInfo tz)
-    {
-        if (finalSnapshot.Blocks.Count == 0)
-            return;
-        // Reference local day for relative words ("tonight"/"today"): the first block's
-        // local date (≈ the cycle's "now", no separate wall-clock dependency).
-        var firstUtc = finalSnapshot.Blocks.Min(b => b.StartUtc);
-        var refDate = DateOnly.FromDateTime(
-            TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(firstUtc, DateTimeKind.Utc), tz));
-
-        foreach (var (lang, sections) in report.Narrative)
-        {
-            // WX-189: check BOTH judgment sections. The closing was the original WX-152
-            // target; the changeSummary band — now that the structural changes[] are
-            // computed deterministically but the band PROSE is still Claude's — can
-            // likewise assert a precip event the snapshot leaves dry, so it gets the
-            // same precip-vs-dry guard (the residual prose-phantom surface Option C left).
-            CheckProseClaims(lang, NarrativeSection.ChangeSummary, sections.ChangeSummary, refDate, finalSnapshot, tz);
-            CheckProseClaims(lang, NarrativeSection.Closing, sections.Closing, refDate, finalSnapshot, tz);
-            // WX-284: storm wording is reserved for a severe block (rain vs. severe-storms binary).
-            CheckSevereStormVocabulary(lang, NarrativeSection.ChangeSummary, sections.ChangeSummary, refDate, finalSnapshot, tz);
-            CheckSevereStormVocabulary(lang, NarrativeSection.Closing, sections.Closing, refDate, finalSnapshot, tz);
-        }
-    }
-
-    // WX-284: storm / thunderstorm wording is reserved for a SEVERE block — a non-severe
-    // thunderstorm reads as ordinary "rain" to the recipient (the rain vs. severe-storms binary).
-    // So when the final_snapshot carries NO severe block, storm-family words in prose are provably
-    // wrong (there are no severe storms to describe) and must be "rain". When a severe block IS
-    // present the wording is legitimate and we do not try to prove WHICH window the prose describes
-    // — mapping a prose span to a block is exactly the sub-block precision the other checks avoid
-    // (the WX-149 "never reject what you can't prove wrong" policy). en/es only; other languages
-    // lean on the prompt rule. Fail-closed via NarrativeProseException → WX-189 retry/section degrade.
-    private static void CheckSevereStormVocabulary(
-        string lang, NarrativeSection section, string? prose, DateOnly refDate, ForecastSnapshotBody finalSnapshot, TimeZoneInfo tz)
-    {
-        if (string.IsNullOrEmpty(prose))
-            return;
-        var storm = lang switch
-        {
-            "en" => StormVocabularyEnglish,
-            "es" => StormVocabularySpanish,
-            _ => (Regex?)null,
-        };
-        if (storm is null)
-            return;
-        // WX-293 (CR round 3): "severe storms" requires a severe CONVECTIVE window — SevereFlag ALONE is
-        // not enough. DeriveSevereFlag trips on a wind-only event (wind >= threshold) as well as on
-        // (CAPE + wet), so a severe wind block carries SevereFlag without being convective; WX-284 renders
-        // that as "severe weather", not "severe storms". Gate the storm-word allowance on IsSevereConvective
-        // so a severe wind block can't validate storm wording, matching the reconciler prompt (the CAPE
-        // guidance + the recipient-vocabulary rule).
-        bool anySevereConvective = finalSnapshot.Blocks.Any(IsSevereConvective);
-        var masked = BraceToken.Replace(prose, m => new string(' ', m.Length));
-        // WX-284 (CR #3): storm wording is legitimate only for the WINDOW the prose names, not merely
-        // somewhere in the snapshot — otherwise "severe storms tonight" would pass over a calm tonight
-        // when an unrelated block tomorrow is severe. Scope sentence-by-sentence: a resolvable time must
-        // carry a severe block IN that window; an unresolvable time falls back to the snapshot-wide "any
-        // severe block" gate (a window past the horizon carries no block, so it can't be verified and is
-        // skipped — the conservative stance never false-rejects a real send).
-        var overHedge = lang == "en" ? SevereOverHedgeEnglish : null;
-        var lex = LanguageLexicons.For(lang);   // WX-168: time resolution for the window scope (null → unresolvable → fallback)
-        int from = 0;
-        while (from < masked.Length)
-        {
-            int end = SentenceEnd(masked, from);
-            // Match on the sentence substring so the frozen-compound lookbehind ("snow storm") still
-            // sees its qualifier even when the compound sits at the sentence start.
-            var sentence = masked.Substring(from, end - from);
-            var hit = storm.Match(sentence);
-            if (hit.Success)
-            {
-                // Severe content is never rendered stronger than "possible" (WX-284): a storm sentence
-                // carrying a high-confidence hedge ("expected"/"certain") is wrong regardless of severe
-                // backing — reject it before the window check.
-                var over = overHedge?.Match(sentence);
-                if (over is { Success: true })
-                {
-                    var offendingOver = string.Join(" ", prose.Substring(from, end - from)
-                        .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-                    throw new NarrativeProseException(section,
-                        $"structured_report narrative '{lang}' renders severe weather stronger than \"possible\" "
-                        + $"('{over.Value.Trim()}'), in this {section} sentence: \"{offendingOver}\". Severe storms are "
-                        + "ALWAYS \"possible\" (or not mentioned), never \"expected\"/\"certain\" — we warn that severe is "
-                        + "possible, we never promise it (WX-284).");
-                }
-                var window = ResolveClosingTime(masked, from, end, refDate, lex);
-                bool legitimate;
-                if (window is null)
-                    legitimate = anySevereConvective;  // unresolvable time — allow iff any severe CONVECTIVE block exists at all
-                else
-                {
-                    bool anyInWindow = false, anySevereConvectiveInWindow = false;
-                    foreach (var b in finalSnapshot.Blocks)
-                    {
-                        var local = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(b.StartUtc, DateTimeKind.Utc), tz);
-                        if (window(DateOnly.FromDateTime(local), local.Hour))
-                        {
-                            anyInWindow = true;
-                            if (IsSevereConvective(b)) anySevereConvectiveInWindow = true;
-                        }
-                    }
-                    legitimate = !anyInWindow || anySevereConvectiveInWindow;
-                }
-                if (!legitimate)
-                {
-                    var offending = string.Join(" ", prose.Substring(from, end - from)
-                        .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-                    throw new NarrativeProseException(section,
-                        $"structured_report narrative '{lang}' uses storm wording ('{hit.Value.Trim()}') for a time the "
-                        + $"final_snapshot carries no severe CONVECTIVE block, in this {section} sentence: \"{offending}\". A "
-                        + "non-severe thunderstorm reads as ordinary \"rain\" to the recipient (WX-284); say \"rain\", and "
-                        + "reserve \"severe storms\" for a window with a severe thunderstorm (a severe non-convective wind "
-                        + "event is \"severe weather\", not \"severe storms\"). In a multi-window sentence use the plain "
-                        + "phase word for EVERY non-severe window — do not vary \"rain\" to \"storms\" for stylistic "
-                        + "contrast across day-parts (WX-293).");
-                }
-            }
-            from = end + 1;
-        }
-    }
-
-    // WX-293 (CR round 3): "severe storms" recipient wording is reserved for a severe CONVECTIVE window.
-    // SevereFlag is set by DeriveSevereFlag on wind >= threshold OR (CAPE + wet), so a wind-only severe
-    // block carries SevereFlag WITHOUT being convective — WX-284 renders that as "severe weather", not
-    // "severe storms". This predicate is the storm-wording gate the deterministic validator applies,
-    // matching the reconciler prompt (the recipient-vocabulary rule + the CAPE guidance).
-    private static bool IsSevereConvective(ForecastSnapshotBlock b) =>
-        b.SevereFlag && b.PrecipPhenomenon == PrecipPhenomenon.Thunderstorm;
-
-    // Scans one prose section sentence-by-sentence for a precip/storm assertion at a
-    // local time the snapshot leaves entirely dry. Section-agnostic, so the WX-152
-    // closing check and the WX-189 changeSummary check share one body.
-    private static void CheckProseClaims(
-        string lang, NarrativeSection section, string? prose, DateOnly refDate, ForecastSnapshotBody finalSnapshot, TimeZoneInfo tz)
-    {
-        if (string.IsNullOrEmpty(prose))
-            return;
-        // WX-168: no plugin for this language → the deterministic closing/aggregate checks no-op for it
-        // (its prose leans on the language-agnostic prompt rules + the QA-judge path — the safe residual).
-        var lex = LanguageLexicons.For(lang);
-        if (lex is null)
-            return;
-        // Mask {...} tokens (a {q:time} instant is the WX-149 check's job, not this one's).
-        var masked = BraceToken.Replace(prose, m => new string(' ', m.Length));
-        int from = 0;
-        while (from < masked.Length)
-        {
-            int end = SentenceEnd(masked, from);
-            CheckClosingSentence(lang, section, prose, masked, from, end, refDate, finalSnapshot, tz, lex);
-            CheckAggregateDryClaim(lang, section, prose, masked, from, end, refDate, finalSnapshot, tz, lex);
-            from = end + 1;
-        }
-    }
-
-    private static void CheckClosingSentence(
-        string lang, NarrativeSection section, string prose, string masked, int start, int end, DateOnly refDate, ForecastSnapshotBody finalSnapshot, TimeZoneInfo tz, ILanguageLexicon lex)
-    {
-        // Must assert a precipitation/storm phenomenon...
-        if (!ContainsAnyWord(masked, start, end, lex.ClosingPrecipWords))
-            return;
-        // ...not in a negated / "stays dry" context, nor a CESSATION one where the
-        // time word is a deadline by which precip ENDS rather than where it occurs
-        // ("rain tapers off by evening", "showers ending tonight"). Both are
-        // conservative skips — a few missed catches beats a false reject of a real send.
-        if (ContainsAnyWord(masked, start, end, lex.ClosingNegationCues)
-            || ContainsAnyWord(masked, start, end, lex.ClosingCessationCues)
-            || masked.IndexOf("n't", start, end - start, StringComparison.OrdinalIgnoreCase) >= 0)
-            return;
-        // ...at exactly one resolvable local time reference.
-        var window = ResolveClosingTime(masked, start, end, refDate, lex);
-        if (window is null)
-            return;
-
-        // Reject only when the snapshot HAS blocks in that window and they are ALL dry
-        // (a window past the horizon matches no blocks → can't verify → skip).
-        bool any = false, anyWet = false;
-        foreach (var b in finalSnapshot.Blocks)
-        {
-            var local = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(b.StartUtc, DateTimeKind.Utc), tz);
-            if (window(DateOnly.FromDateTime(local), local.Hour))
-            {
-                any = true;
-                if (b.PrecipExpectation != PrecipExpectation.None)
-                    anyWet = true;
-            }
-        }
-        if (any && !anyWet)
-        {
-            // WX-206: name the exact offending sentence (whitespace-collapsed) so the retry feedback
-            // pins the one sentence to re-word rather than a generic "a local time", which converges
-            // the retry instead of resampling. Cut from the ORIGINAL prose (CodeRabbit) — masked has
-            // brace tokens blanked, but it is the same length as prose (equal-length replacement), so
-            // start/end index identically — so Claude sees its real sentence, tokens intact.
-            var offending = string.Join(" ", prose.Substring(start, end - start)
-                .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-            throw new NarrativeProseException(section,
-                $"structured_report narrative '{lang}' asserts precipitation/storm activity at a local time the "
-                + $"final_snapshot leaves entirely dry, in this {section} sentence: \"{offending}\". Re-word that exact "
-                + "sentence to match the snapshot (it is dry at that time); the prose summarizes the conditions, "
-                + "day-grid, and changes and must not introduce a forecast the snapshot does not carry.");
-        }
-    }
-
-    // WX-177 Defect A: a closing that calls an AGGREGATE period dry while a day WITHIN it
-    // carries precip is self-contradictory the moment it then places a storm inside the same
-    // period (repro: "The weekend stays dry." then "thunderstorms are likely Sunday afternoon").
-    // CheckClosingSentence can't catch this — "weekend" is not a precip word and the claim is a
-    // NEGATED (dry) one, both of which it skips. This is the inverse guard: a DRY claim about the
-    // one aggregate period we can resolve deterministically — the weekend — contradicted by precip
-    // on a weekend day in the snapshot. Only "weekend" is resolved (Sat + Sun are unambiguous);
-    // broader aggregates ("this week", "the next few days") lean on the prompt rule, as does the
-    // whole check for non-English (the lexicon is English) — same conservative stance as
-    // CheckClosingSentence (a missed catch beats a false reject of a real send). Fail-closed via
-    // NarrativeProseException → retry-with-feedback → WX-189 section degrade.
-    private static void CheckAggregateDryClaim(
-        string lang, NarrativeSection section, string prose, string masked, int start, int end, DateOnly refDate, ForecastSnapshotBody finalSnapshot, TimeZoneInfo tz, ILanguageLexicon lex)
-    {
-        if (!string.Equals(lang, "en", StringComparison.Ordinal))
-            return;   // WX-177's "weekend" resolution is en-specific; es "fin de semana" is a WX-168 follow-up
-        if (!HasWord(masked, start, end, "weekend"))
-            return;
-        // Require an UN-NEGATED dry assertion: a dry word with no negation cue in its immediate
-        // neighborhood. Scoping the negation to the dry EXPRESSION (a small window each side), not
-        // the whole sentence, means an unrelated negation elsewhere ("...stays dry, although an
-        // unlikely storm Sunday") no longer disqualifies a real claim (CodeRabbit), while "won't
-        // stay dry" / "unlikely to remain dry" (negation touching the dry word) are still skipped.
-        bool hasUnnegatedDry = false;
-        foreach (var dry in lex.AggregateDryWords)
-        {
-            for (int idx = IndexOfWord(masked, start, end, dry); idx >= 0 && !hasUnnegatedDry;
-                 idx = IndexOfWord(masked, idx + dry.Length, end, dry))
-            {
-                int lo = Math.Max(start, idx - 24);
-                int hi = Math.Min(end, idx + dry.Length + 16);
-                bool negated = ContainsAnyWord(masked, lo, hi, lex.AggregateNegationCues)
-                    || masked.IndexOf("n't", lo, hi - lo, StringComparison.OrdinalIgnoreCase) >= 0;
-                if (!negated)
-                    hasUnnegatedDry = true;
-            }
-            if (hasUnnegatedDry)
-                break;
-        }
-        if (!hasUnnegatedDry)
-            return;
-
-        // Scope to the NEAREST weekend (Sat + Sun) from refDate, not every Sat/Sun in the horizon
-        // — a horizon spanning two weekends could otherwise let a far weekend's precip false-reject
-        // a claim about the near one. On a Sunday, "the weekend" is that Saturday (just past) + today.
-        DateOnly sat, sun;
-        if (refDate.DayOfWeek == DayOfWeek.Sunday)
-        {
-            sun = refDate;
-            sat = refDate.AddDays(-1);
-        }
-        else
-        {
-            sat = refDate.AddDays(((int)DayOfWeek.Saturday - (int)refDate.DayOfWeek + 7) % 7);
-            sun = sat.AddDays(1);
-        }
-
-        // Reject only when a block on that weekend is present AND carries precip (a weekend
-        // entirely outside the horizon can't be verified → skip, never reject blind).
-        bool sawWeekendDay = false, wetWeekendDay = false;
-        foreach (var b in finalSnapshot.Blocks)
-        {
-            var localDate = DateOnly.FromDateTime(
-                TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(b.StartUtc, DateTimeKind.Utc), tz));
-            if (localDate != sat && localDate != sun)
-                continue;
-            sawWeekendDay = true;
-            if (b.PrecipExpectation != PrecipExpectation.None)
-                wetWeekendDay = true;
-        }
-        if (sawWeekendDay && wetWeekendDay)
-        {
-            var offending = string.Join(" ", prose.Substring(start, end - start)
-                .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-            throw new NarrativeProseException(section,
-                $"structured_report narrative '{lang}' calls the weekend dry while a weekend day carries precipitation in the "
-                + $"final_snapshot, in this {section} sentence: \"{offending}\". An aggregate period is not dry when a day within "
-                + "it is wet — name the specific dry day (e.g. \"Saturday stays dry\") and describe the wet weekend day separately.");
-        }
-    }
-
-    // WX-177 Defect A: unambiguous dry-state assertions about an aggregate period. Kept tight
-    // (a false reject suppresses the closing) — "clear"/"quiet" are excluded as too ambiguous
-    // ("clears" is a cessation; a "quiet weekend" can tolerate light rain); the prompt rule
-    // carries the broader cases.
-    // Resolves the sentence's local time reference to a (localDate, localHour) block
-    // predicate, or null when there is none, more than one (ambiguous), or it is pinned
-    // to a specific weekday/other day (residual — lean on the prompt). refDate is "today".
-    // The hour ranges match StructuredReportRenderer.PartOf and the predicate buckets a
-    // block by its LOCAL START hour — deliberately, so the closing is checked against the
-    // very day-part the reader's grid places the block in (a block whose start hour lands
-    // in "afternoon" is the grid's afternoon even if it spills an hour into "evening").
-    private static Func<DateOnly, int, bool>? ResolveClosingTime(string masked, int start, int end, DateOnly refDate, ILanguageLexicon? lex)
-    {
-        if (lex is null)
-            return null;   // no plugin for this language → no time resolution → the closing check skips (safe residual)
-        var next = refDate.AddDays(1);
-        Func<DateOnly, int, bool>? found = null;
-        int matches = 0;
-        void Take(Func<DateOnly, int, bool> p)
-        {
-            found = p;
-            matches++;
-        }
-
-        foreach (var w in lex.TonightWords)
-            if (HasWord(masked, start, end, w))
-                Take((d, h) => (d == refDate && h >= 18) || (d == next && h < 6));
-        foreach (var w in lex.TodayWords)
-            if (HasWord(masked, start, end, w))
-                Take((d, _) => d == refDate);
-        foreach (var w in lex.TomorrowWords)
-            if (HasWord(masked, start, end, w))
-                Take((d, _) => d == next);
-        // Day-part words → their universal local-hour bucket. The words are per-language; the hours are
-        // not. Only parts 1–3 resolve; pre-dawn (part 0) has no closing-time bucket, matching the
-        // pre-WX-168 morning/afternoon/evening-only behaviour.
-        foreach (var (word, part) in lex.DayPartWords)
-            if (PartHourRange(part) is (int lo, int hi))
-                TakeDayPart(masked, start, end, word, refDate, lo, hi, Take, lex);
-
-        return matches == 1 ? found : null;
-    }
-
-    // Universal local-hour bucket for a resolvable day part (matches StructuredReportRenderer.PartOf).
-    // Pre-dawn (part 0) returns null — it has no closing-time bucket, matching the pre-WX-168 behaviour.
-    private static (int Lo, int Hi)? PartHourRange(int part) => part switch
-    {
-        1 => (6, 12),
-        2 => (12, 18),
-        3 => (18, 24),
-        _ => null,
-    };
-
-    // A bare day-part word maps to TODAY's bucket — unless it is pinned to a weekday or
-    // another relative day ("Saturday afternoon", "tomorrow morning"), which we can't
-    // localize confidently, so we skip it (residual).
-    private static void TakeDayPart(
-        string masked, int start, int end, string word, DateOnly refDate, int loHour, int hiHour, Action<Func<DateOnly, int, bool>> take, ILanguageLexicon lex)
-    {
-        int idx = IndexOfWord(masked, start, end, word);
-        if (idx < 0 || QualifiedByOtherDay(masked, start, idx, lex))
-            return;
-        take((d, h) => d == refDate && h >= loHour && h < hiHour);
-    }
-
-    private static bool HasWord(string s, int start, int end, string word) => IndexOfWord(s, start, end, word) >= 0;
-
-    private static bool ContainsAnyWord(string s, int start, int end, IReadOnlyList<string> words)
-    {
-        foreach (var w in words)
-            if (IndexOfWord(s, start, end, w) >= 0)
-                return true;
-        return false;
-    }
-
-    // First whole-word, case-insensitive occurrence of word in [start, end), or -1.
-    private static int IndexOfWord(string s, int start, int end, string word)
-    {
-        int from = start;
-        while (from < end)
-        {
-            int idx = s.IndexOf(word, from, end - from, StringComparison.OrdinalIgnoreCase);
-            if (idx < 0)
-                return -1;
-            int after = idx + word.Length;
-            bool wholeWord = (idx == 0 || !char.IsLetter(s[idx - 1]))
-                && (after >= s.Length || !char.IsLetter(s[after]));
-            if (wholeWord)
-                return idx;
-            from = after;
-        }
-        return -1;
     }
 
     // A change window endpoint must land on a snapshot block boundary. Blocks are

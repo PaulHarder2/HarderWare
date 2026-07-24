@@ -294,6 +294,16 @@ internal static class ReconcilerPrompts
             ordinary word (span_until: German "bis", Spanish "hasta"); English
             "until" is itself ambiguous about its endpoint, so do not force an
             inclusive reading there.
+            The same inclusive form applies when the span ENDS on a DAY-PART of a
+            day — English "through [day] evening/afternoon/morning" is inclusive to
+            the END of that day-part (the grid's bound for it), so it too takes the
+            inclusive form, never a bare up-to preposition a reader could take as
+            stopping at the day-part's START: German "bis einschließlich
+            Donnerstagabend", or the enumerated "Donnerstagnachmittag und -abend",
+            never a bare "bis Donnerstagabend" (readable as ending around 18:00,
+            cutting the evening short); Spanish "hasta el final del jueves por la
+            tarde". The endpoint's own day-part word must still match the {q:time}
+            token's local rendering (the day-part agreement rule below).
             The probability words collapse to two recipient tiers. "Possible" and
             "likely" read as the same register to most recipients, so render BOTH a
             "possible" and a "likely" precip expectation as "possible" (its approved

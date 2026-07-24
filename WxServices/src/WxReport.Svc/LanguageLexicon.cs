@@ -1,12 +1,21 @@
 namespace WxReport.Svc;
 
 /// <summary>
-/// WX-168: a per-language plugin supplying the word-lists the reconciler's deterministic TIMING/CLAIM
-/// prose validators key on — the <c>{q:time}</c>&#8596;day-part check (WX-149), the <c>{chN}</c>-anchored
-/// timing check (WX-151), and the closing/aggregate precip-at-a-dry-time checks (WX-152 / WX-177). The
-/// validators' <em>logic</em> is language-agnostic (sentence splitting, time resolution, proximity, the
-/// residual policy); only these lexicons are per-language, so adding a language is one new
-/// <see cref="ILanguageLexicon"/> registered in <see cref="LanguageLexicons"/> — no validator changes.
+/// WX-168: a per-language plugin supplying the word-list the reconciler's one surviving deterministic
+/// prose validator keys on — the <c>{q:time}</c>&#8596;day-part agreement check (WX-149). The validator's
+/// <em>logic</em> is language-agnostic (sentence splitting, proximity, the residual policy); only this
+/// lexicon is per-language, so adding a language is one new <see cref="ILanguageLexicon"/> registered in
+/// <see cref="LanguageLexicons"/> — no validator changes.
+///
+/// <para>
+/// WX-340 reduced the contract to <see cref="IsoCode"/> + <see cref="DayPartWords"/>: the free-prose
+/// word-bag validators (closing/aggregate precip-at-a-dry-time WX-152/177, the severe-storm vocabulary
+/// gate WX-284/293) and the English-only cross-midnight both-days check (WX-264) were dropped and their
+/// coverage moved into the reconciler generation prompt uniformly for every language (WX-331: nothing
+/// privileged about English). The ten word-lists those checks consumed — day qualifiers, relative-day
+/// cues, closing/aggregate precip/negation/cessation words, today/tonight/tomorrow triggers — went with
+/// them.
+/// </para>
 ///
 /// <para>
 /// The residual policy is part of the contract: expose <b>only UNAMBIGUOUS words</b>. A word whose local
@@ -14,7 +23,7 @@ namespace WxReport.Svc;
 /// es "tarde" = afternoon|evening) is <b>omitted</b>, so the validator skips rather than false-rejects —
 /// a wrong entry would reject legitimate prose, which is strictly worse than the safe no-op a missing
 /// language already gives. A language with no plugin resolves to <c>null</c> (<see cref="LanguageLexicons.For"/>)
-/// and every validator no-ops for it, exactly as before this ticket.
+/// and the validator no-ops for it, exactly as before this ticket.
 /// </para>
 /// </summary>
 internal interface ILanguageLexicon
@@ -23,50 +32,14 @@ internal interface ILanguageLexicon
     string IsoCode { get; }
 
     /// <summary>UNAMBIGUOUS day-part words → part (0 pre-dawn, 1 morning, 2 afternoon, 3 evening). Consumed
-    /// by the <c>{q:time}</c>&#8596;day-part agreement check (WX-149); the parts 1–3 words also drive the
-    /// time resolver's day-part buckets (the hour ranges are universal, only the words are per-language).</summary>
+    /// by the <c>{q:time}</c>&#8596;day-part agreement check (WX-149).</summary>
     IReadOnlyList<(string Word, int Part)> DayPartWords { get; }
-
-    /// <summary>Day-qualifier words — WEEKDAY names plus the core relative-day words (today / tonight /
-    /// tomorrow / yesterday) — whose presence just before a day-part word pins it to a specific day, so
-    /// the resolver skips it (can't localize "Friday afternoon" against the window). Weekday names are
-    /// per-language (WX-151 / the time resolver's QualifiedByOtherDay).</summary>
-    IReadOnlyList<string> DayQualifiers { get; }
-
-    /// <summary>Relative-day cues (today / tonight / tomorrow / yesterday / next / following / later) that
-    /// may stand in for a calendar day the validator can't pin — their presence makes the cross-midnight
-    /// both-days check skip the sentence (WX-264, conservative). No weekday names here.</summary>
-    IReadOnlyList<string> RelativeDayWords { get; }
-
-    /// <summary>Precipitation/storm phenomenon words a closing sentence could assert (WX-152).</summary>
-    IReadOnlyList<string> ClosingPrecipWords { get; }
-
-    /// <summary>Cues that make a sentence a non-assertion (negation / "dry" statement) → skip (WX-152).</summary>
-    IReadOnlyList<string> ClosingNegationCues { get; }
-
-    /// <summary>Cessation cues (precip ENDING) → the named time is a deadline, not where precip lives; skip (WX-152).</summary>
-    IReadOnlyList<string> ClosingCessationCues { get; }
-
-    /// <summary>Aggregate-period dry-claim words ("dry" / "rain-free") (WX-177 CheckAggregateDryClaim).</summary>
-    IReadOnlyList<string> AggregateDryWords { get; }
-
-    /// <summary>Cues that NEGATE a dry claim ("won't" / "unlikely") → the sentence asserts wet; skip (WX-177).</summary>
-    IReadOnlyList<string> AggregateNegationCues { get; }
-
-    /// <summary>Words resolving to "today" (the reference local day) in the time resolver.</summary>
-    IReadOnlyList<string> TodayWords { get; }
-
-    /// <summary>Words resolving to "tonight" (reference-day evening OR next-day pre-dawn) in the time resolver.</summary>
-    IReadOnlyList<string> TonightWords { get; }
-
-    /// <summary>Words resolving to "tomorrow" (the next local day) in the time resolver.</summary>
-    IReadOnlyList<string> TomorrowWords { get; }
 }
 
 /// <summary>
 /// WX-168: the plugin registry. Every enabled language that can be authored/validated safely registers a
 /// single <see cref="ILanguageLexicon"/> here; <see cref="For"/> resolves it by ISO code, returning
-/// <c>null</c> for any language without a plugin — the deterministic timing/claim validators then no-op
+/// <c>null</c> for any language without a plugin — the <c>{q:time}</c>&#8596;day-part check then no-ops
 /// for that language (its prose leans on the language-agnostic prompt rules and the QA-judge path).
 /// </summary>
 internal static class LanguageLexicons
