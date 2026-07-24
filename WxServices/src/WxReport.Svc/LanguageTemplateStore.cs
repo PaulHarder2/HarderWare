@@ -33,6 +33,18 @@ public sealed class LanguageTemplateStore
 {
     private static readonly ILog Logger = LogManager.GetLogger(typeof(LanguageTemplateStore));
 
+    // WX-336: the four day-part render tokens the {q:time}<->day-part validator keys on, mapped to
+    // their part index (DayPart1 pre-dawn = 0 … DayPart4 evening = 3). A DayPart row a language flags
+    // ValidatorUse = Yes contributes its rendered phrase as that part's validator-safe day-part word.
+    private static readonly IReadOnlyDictionary<string, int> DayPartPartByToken =
+        new Dictionary<string, int>(StringComparer.Ordinal)
+        {
+            [Tok.DayPart1] = 0,
+            [Tok.DayPart2] = 1,
+            [Tok.DayPart3] = 2,
+            [Tok.DayPart4] = 3,
+        };
+
     /// <summary>The per-language phrases for one ISO code: representable token→phrase, plus the blocked tokens.</summary>
     public sealed class LanguagePhrases
     {
@@ -49,7 +61,8 @@ public sealed class LanguageTemplateStore
     private sealed record Snapshot(
         IReadOnlyDictionary<string, LanguagePhrases> ByIso,
         IReadOnlyDictionary<string, string> CultureByIso,
-        IReadOnlySet<string> GlossaryTokens);
+        IReadOnlySet<string> GlossaryTokens,
+        IReadOnlyDictionary<string, IReadOnlyList<(string Word, int Part)>> DayPartWordsByIso);
 
     private readonly Func<IReadOnlyList<LanguageTemplate>> _load;
     // WX-238: the language-neutral concept tokens whose approved phrase is injected into the
@@ -156,6 +169,20 @@ public sealed class LanguageTemplateStore
     }
 
     /// <summary>
+    /// The language's validator-safe day-part words for the <c>{q:time}</c>&#8596;day-part agreement
+    /// check (WX-149): the rendered phrase of each <c>DayPart1–4</c> template flagged
+    /// <see cref="LanguageTemplate.ValidatorUse"/> = <c>Yes</c>, paired with its part index (0 pre-dawn
+    /// … 3 evening), part-ordered. Empty when the language is not loaded or has curated none
+    /// (de/eo/da/sq today) — the check then no-ops for it, the safe residual (never a false reject).
+    /// Replaces the retired per-language <c>ILanguageLexicon</c> plugins (WX-336): the one surviving
+    /// deterministic prose validator now reads its per-language input straight from the templates.
+    /// </summary>
+    public IReadOnlyList<(string Word, int Part)> DayPartWords(string isoCode) =>
+        !string.IsNullOrEmpty(isoCode) && Current().DayPartWordsByIso.TryGetValue(CanonicalIso(isoCode), out var words)
+            ? words
+            : Array.Empty<(string Word, int Part)>();
+
+    /// <summary>
     /// The <see cref="CultureInfo"/> for <paramref name="isoCode"/> — built from the
     /// language's <see cref="Language.CultureName"/> (e.g. <c>"es-US"</c>), used by the
     /// renderer for date/weekday names and number formatting. Falls back to
@@ -234,6 +261,8 @@ public sealed class LanguageTemplateStore
         var phrases = new Dictionary<string, Dictionary<string, string>>(StringComparer.Ordinal);
         var blocked = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
         var cultures = new Dictionary<string, string>(StringComparer.Ordinal);
+        // WX-336: per-language validator-safe day-part words, collected from the ValidatorUse=Yes DayPart rows.
+        var dayParts = new Dictionary<string, List<(string Word, int Part)>>(StringComparer.Ordinal);
         int loaded = 0, skipped = 0;
 
         foreach (var row in rows)
@@ -263,6 +292,21 @@ public sealed class LanguageTemplateStore
                 p[row.Token] = row.Phrase;   // unique (LanguageId, Token) index => no real collisions
             else
                 blocked[iso].Add(row.Token);
+
+            // WX-336: a representable DayPart1–4 row flagged ValidatorUse=Yes is this language's
+            // validator-safe day-part word for that part; render-only rows (the default) and
+            // non-DayPart tokens contribute nothing to the day-part validator input. The phrase must
+            // be non-blank — an empty word would make NearestDayPartWord's IndexOf("") match at every
+            // position without advancing (a hang), and could false-bind to a {q:time} token; the
+            // retired hard-coded lexicons guaranteed non-empty words, the DB source does not.
+            if (row.Representable && row.ValidatorUse == ValidatorUse.Yes
+                && !string.IsNullOrWhiteSpace(row.Phrase)
+                && DayPartPartByToken.TryGetValue(row.Token, out var part))
+            {
+                if (!dayParts.TryGetValue(iso, out var dp))
+                    dayParts[iso] = dp = new List<(string Word, int Part)>();
+                dp.Add((row.Phrase, part));
+            }
             loaded++;
         }
 
@@ -297,7 +341,12 @@ public sealed class LanguageTemplateStore
         if (glossary.Count > 0)
             Logger.Info($"LanguageTemplateStore loaded {glossary.Count} prompt-glossary token(s).");
 
-        return new Snapshot(byIso, cultures, glossary);
+        // WX-336: freeze each language's validator-safe day-part words, part-ordered (0 pre-dawn … 3 evening).
+        var dayPartsByIso = new Dictionary<string, IReadOnlyList<(string Word, int Part)>>(StringComparer.Ordinal);
+        foreach (var (iso, list) in dayParts)
+            dayPartsByIso[iso] = list.OrderBy(w => w.Part).ToList();
+
+        return new Snapshot(byIso, cultures, glossary, dayPartsByIso);
     }
 }
 

@@ -60,6 +60,14 @@ public static class SeedTemplateStore
         // Token-key renames (WX-265) apply after all rows are collected, since a rename migration
         // renames rows seeded by an earlier migration; in migration order so any chain resolves.
         ApplyRenames(rows, renames);
+        // WX-336: the WX-335 run-once prod load marks en DayPart1–4 ValidatorUse=Yes (the validator-safe
+        // day-part words); the migration InsertData tuples predate that column, so the row regex above
+        // can't capture it and every parsed row defaults to No. Mirror the prod load here — after the
+        // renames, so it keys on the current DayPart* token names — so the DB-derived DayPartWords builder
+        // yields en's four words and the WX-334 golden stays byte-identical. en-only, matching the en-only seed.
+        foreach (var row in rows)
+            if (row.LanguageId == En.Id && row.Token is Tok.DayPart1 or Tok.DayPart2 or Tok.DayPart3 or Tok.DayPart4)
+                row.ValidatorUse = ValidatorUse.Yes;
         if (rows.Count == 0)
             throw new InvalidOperationException(
                 "SeedTemplateStore parsed no LanguageTemplates seed rows — a seed migration was moved, " +
