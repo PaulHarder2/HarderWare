@@ -165,6 +165,7 @@ public partial class VocabularyTab : UserControl
                             Token = t.Token,
                             ContextInfo = t.ContextInfo,
                             Representable = t.Representable,
+                            UsedByValidators = t.ValidatorUse == ValidatorUse.Yes,
                             OriginalPhrase = t.Phrase,
                             OriginalNote = t.Note ?? "",
                             Phrase = t.Phrase,
@@ -374,6 +375,11 @@ public partial class VocabularyTab : UserControl
         public string Token { get; init; } = "";
         public string ContextInfo { get; init; } = "";
         public bool Representable { get; init; }
+
+        // WX-339: display-only mirror of LanguageTemplate.ValidatorUse (Yes = true) — whether the surviving
+        // deterministic {q:time}↔day-part check keys on this phrase (only DayPart1–4 rows are ever Yes).
+        // Read-only in the tab: the flag is seeded (en) / auto-vetted (WX-338), not hand-edited here.
+        public bool UsedByValidators { get; init; }
 
         public string OriginalPhrase { get; set; } = "";
         public string OriginalNote { get; set; } = "";

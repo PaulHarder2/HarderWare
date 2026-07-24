@@ -18,9 +18,9 @@
         </Border>
 
         <TextBlock DockPanel.Dock="Bottom" Foreground="#6b8fa8" FontSize="11" FontStyle="Italic" Margin="12,4"
-                   Text="Edit English, Selected Language, and Note. Token, Context, and Representable are read-only (cross-language — change via migration). An edit that drops a {n} placeholder is blocked on save; an English edit writes the shared source, so it must keep its placeholders."/>
+                   Text="Edit English, Selected Language, and Note. Token, Context, and Representable are read-only (cross-language — change via migration); Validator is read-only too (whether the day-part check uses this word — set by seeding and automated vetting). An edit that drops a {n} placeholder is blocked on save; an English edit writes the shared source, so it must keep its placeholders."/>
 
-        <!-- Editable: English, Selected Language (target phrase), Note. Read-only: Token, Context, Representable. -->
+        <!-- Editable: English, Selected Language (target phrase), Note. Read-only: Token, Context, Representable, Validator. -->
         <DataGrid x:Name="VocabGrid" AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False"
                   SelectionMode="Single" GridLinesVisibility="Horizontal" HeadersVisibility="Column"
                   RowHeaderWidth="0" BorderThickness="0" Margin="10,0,0,0"
@@ -75,6 +75,9 @@
                 <DataGridTextColumn Header="Note"            Binding="{Binding Note}"          Width="*"/>
                 <DataGridTextColumn Header="Context"         Binding="{Binding ContextInfo}"   IsReadOnly="True" Width="*"/>
                 <DataGridCheckBoxColumn Header="Repr."       Binding="{Binding Representable}"  IsReadOnly="True" Width="56"/>
+                <!-- WX-339: read-only mirror of ValidatorUse (Yes = checked) — whether the {q:time}↔day-part
+                     check keys on this word. Display-only; set by seed (en) / WX-338 auto-vet, not edited here. -->
+                <DataGridCheckBoxColumn Header="Validator"   Binding="{Binding UsedByValidators}" IsReadOnly="True" Width="88"/>
             </DataGrid.Columns>
         </DataGrid>
     </DockPanel>
