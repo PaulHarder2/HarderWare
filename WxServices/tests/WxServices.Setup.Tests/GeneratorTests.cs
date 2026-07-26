@@ -98,18 +98,73 @@ public class LocalJsonGeneratorTests
         Assert.True(root.GetProperty("ConnectionStrings").TryGetProperty("_README", out _));  // docs preserved
     }
 
-    [Fact]
-    public void BuildWxManagerLocalJson_HasOnlyConnectionString_NoFoundationalFields()
-    {
-        var cs = @"Server=.\SQLEXPRESS;Database=WeatherData;Trusted_Connection=True;TrustServerCertificate=True;";
+    private const string WxManagerCs =
+        @"Server=.\SQLEXPRESS;Database=WeatherData;Trusted_Connection=True;TrustServerCertificate=True;";
 
-        var json = LocalJsonGenerator.BuildWxManagerLocalJson(cs);
+    [Fact]
+    public void BuildWxManagerLocalJson_NoExistingFile_HasOnlyConnectionString_NoFoundationalFields()
+    {
+        var json = LocalJsonGenerator.BuildWxManagerLocalJson(null, WxManagerCs);
 
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
-        Assert.Equal(cs, root.GetProperty("ConnectionStrings").GetProperty("WeatherData").GetString());
+        Assert.Equal(WxManagerCs, root.GetProperty("ConnectionStrings").GetProperty("WeatherData").GetString());
         Assert.False(root.TryGetProperty("Fetch", out _));    // foundational fields are DB-seeded now, not file
         Assert.False(root.TryGetProperty("WxVis", out _));
+    }
+
+    [Fact]
+    public void BuildWxManagerLocalJson_ExistingFile_UpdatesConnectionString_PreservesEveryOtherKey()
+    {
+        // WX-326: the operator's own file — no committed .example — so unknown keys must survive a
+        // re-run. Deliberately includes a key setup has never heard of.
+        const string existing = """
+            {
+              "ConnectionStrings": { "WeatherData": "Server=OLD;", "Other": "keep-me" },
+              "Fetch": { "HomeIcao": "KAUS" },
+              "SomethingSetupHasNeverHeardOf": { "Nested": [1, 2] }
+            }
+            """;
+
+        var json = LocalJsonGenerator.BuildWxManagerLocalJson(existing, WxManagerCs);
+
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        var connections = root.GetProperty("ConnectionStrings");
+        Assert.Equal(WxManagerCs, connections.GetProperty("WeatherData").GetString());
+        Assert.Equal("keep-me", connections.GetProperty("Other").GetString());     // sibling survives
+        Assert.Equal("KAUS", root.GetProperty("Fetch").GetProperty("HomeIcao").GetString());
+        Assert.Equal(2, root.GetProperty("SomethingSetupHasNeverHeardOf").GetProperty("Nested").GetArrayLength());
+    }
+
+    [Fact]
+    public void BuildWxManagerLocalJson_ExistingFileWithoutConnectionStrings_AddsIt()
+    {
+        var json = LocalJsonGenerator.BuildWxManagerLocalJson("""{ "Fetch": { "HomeIcao": "KAUS" } }""", WxManagerCs);
+
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        Assert.Equal(WxManagerCs, root.GetProperty("ConnectionStrings").GetProperty("WeatherData").GetString());
+        Assert.Equal("KAUS", root.GetProperty("Fetch").GetProperty("HomeIcao").GetString());
+    }
+
+    [Fact]
+    public void BuildWxManagerLocalJson_MalformedExistingFile_Throws_RatherThanOverwriting()
+    {
+        // ThrowsAny, not Throws: System.Text.Json raises the JsonReaderException subclass, and the
+        // contract here is "a JsonException escapes", not which flavour.
+        Assert.ThrowsAny<JsonException>(
+            () => LocalJsonGenerator.BuildWxManagerLocalJson("{ this is not json", WxManagerCs));
+    }
+
+    [Theory]
+    [InlineData("[1, 2, 3]")]
+    [InlineData("\"a bare string\"")]
+    [InlineData("""{ "ConnectionStrings": "not-an-object" }""")]
+    public void BuildWxManagerLocalJson_ExistingFileOfTheWrongShape_Throws(string existing)
+    {
+        Assert.Throws<ArgumentException>(
+            () => LocalJsonGenerator.BuildWxManagerLocalJson(existing, WxManagerCs));
     }
 }
 

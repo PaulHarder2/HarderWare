@@ -76,7 +76,7 @@ Without this, each ticket's own history hides that it never got a dedicated PR, 
 
 ## 4. Commit
 
-Write a full detailed multi-line commit message explaining the *why*, not just the *what*. Include a `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>` trailer so attribution is consistent across the history.
+Write a full detailed multi-line commit message explaining the *why*, not just the *what*. Include a `Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>` trailer so attribution is consistent across the history. (The trailer names the model actually in the chair; update it when the session model changes rather than letting the history claim a model that did not write the commit.)
 
 Small unrelated tweaks (typo fixes, log-message cleanups, doc edits) may be bundled alongside the main ticket work rather than split into separate PRs. Use judgment: if the tweak would confuse a bisect or complicate a revert, split it.
 
