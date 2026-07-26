@@ -96,12 +96,15 @@ async Task<int> RunAsync(SetupOptions opts)
     Console.WriteLine();
 
     // ---- 3a. Build the file plan BEFORE any mutation ----------------------
-    // Building the plan reads every committed .example template, so a missing or unreadable
-    // template fails here — while the instance is still untouched. Doing this after the DB work
-    // (as an earlier cut did) could leave a provisioned login and a fully migrated database with
-    // no config files at all: exactly the half-configured state the write-after-DB order exists to
-    // avoid. The plan is pure, so building early costs nothing and buys the guarantee.
-    var plan = LocalFilesPlan.Build(opts, password, LocalFilesWriter.FileSystemExampleReader);
+    // Building the plan reads every committed .example template — and the operator's existing
+    // WxManager appsettings.local.json, which is merged into rather than rebuilt (WX-326) — so a
+    // missing template or an unparseable existing file fails here, while the instance is still
+    // untouched. Doing this after the DB work (as an earlier cut did) could leave a provisioned
+    // login and a fully migrated database with no config files at all: exactly the half-configured
+    // state the write-after-DB order exists to avoid. Building early costs nothing and buys the
+    // guarantee.
+    var plan = LocalFilesPlan.Build(
+        opts, password, LocalFilesWriter.FileSystemExampleReader, LocalFilesWriter.FileSystemOptionalReader);
 
     // ---- 4. Server-level login -------------------------------------------
     var masterConnection = ConnectionStrings.BuildWxManager(opts.Server, "master");
@@ -138,7 +141,14 @@ async Task<int> RunAsync(SetupOptions opts)
     IReadOnlyList<string> written;
     try
     {
-        written = LocalFilesWriter.Flush(plan, path => Directory.CreateDirectory(path), File.WriteAllText);
+        // Two write strategies, chosen per file — see LocalFile.AtomicReplace. The container files must
+        // be truncated in place to keep the inode their single-file Docker bind mounts are bound to;
+        // the WxManager file must be replaced atomically because it is now the only copy of its keys.
+        written = LocalFilesWriter.Flush(
+            plan,
+            path => Directory.CreateDirectory(path),
+            writeInPlace: File.WriteAllText,
+            writeAtomic: LocalFilesWriter.WriteAtomic);
     }
     catch (Exception ex) when (ex is not SetupException)
     {
