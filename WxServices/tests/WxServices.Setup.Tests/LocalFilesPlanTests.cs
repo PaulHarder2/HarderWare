@@ -233,6 +233,11 @@ public class LocalFilesPlanTests
     {
         // The reader throwing (locked file, permission denied) must not escape unwrapped — an
         // operator staring at a generic IO failure has no idea which file it was.
+        //
+        // What this does NOT show, though a deleted duplicate of it claimed to: that the failure
+        // happens before anything is mutated. Build is pure, so all this witnesses is the throw. The
+        // fail-before-mutation guarantee comes from Program.cs calling Build at step 3a, ahead of the
+        // login and schema work — a property of the call ORDER, not of this function.
         var ex = Assert.Throws<SetupException>(
             () => LocalFilesPlan.Build(
                 Options(), "pw", _ => ContainerExample,
@@ -304,23 +309,4 @@ public class LocalFilesPlanTests
             f => Assert.False(f.AtomicReplace, $"{f.Path} is a bind-mount target and must not be replaced"));
     }
 
-
-
-
-
-
-
-
-    [Fact]
-    public void Build_UnreadableExistingFile_StillFailsBeforeAnyMutation()
-    {
-        // Plan time is different from refresh time: here nothing has been provisioned yet, so an
-        // unreadable file SHOULD stop the run rather than fall back.
-        var ex = Assert.Throws<SetupException>(
-            () => LocalFilesPlan.Build(
-                Options(), "pw", _ => ContainerExample,
-                _ => throw new UnauthorizedAccessException("Access to the path is denied.")));
-
-        Assert.Contains(WxManagerPath, ex.Message);
-    }
 }

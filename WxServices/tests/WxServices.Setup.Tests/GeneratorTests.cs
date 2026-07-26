@@ -157,6 +157,22 @@ public class LocalJsonGeneratorTests
             () => LocalJsonGenerator.BuildWxManagerLocalJson("{ this is not json", WxManagerCs));
     }
 
+    [Fact]
+    public void BuildWxManagerLocalJson_ExplicitNullConnectionStrings_IsReplaced_NotRejected()
+    {
+        // The configuration provider loads {"ConnectionStrings": null} happily, so this is an ABSENT
+        // member, not a malformed file — rejecting it would tell the operator their working file is
+        // broken. The theory below covers only the reject side, so without this the null branch could
+        // collapse into wrong-shape unnoticed. (CodeRabbit, PR #219.)
+        var json = LocalJsonGenerator.BuildWxManagerLocalJson(
+            """{ "ConnectionStrings": null, "Fetch": { "HomeIcao": "KAUS" } }""", WxManagerCs);
+
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        Assert.Equal(WxManagerCs, root.GetProperty("ConnectionStrings").GetProperty("WeatherData").GetString());
+        Assert.Equal("KAUS", root.GetProperty("Fetch").GetProperty("HomeIcao").GetString());
+    }
+
     [Theory]
     [InlineData("[1, 2, 3]")]
     [InlineData("\"a bare string\"")]
