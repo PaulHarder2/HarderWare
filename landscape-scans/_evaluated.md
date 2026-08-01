@@ -63,7 +63,7 @@ entry**, or a correction has to be made twice and the second copy is the one tha
 
 ---
 
-# Decisions by scan
+## Decisions by scan
 
 Newest first. **One row per finding, including findings that produced no disposition
 entry** — *"already done"* and *"we didn't believe it"* are decisions too, and the
@@ -77,7 +77,7 @@ finding with no row has not been dispositioned, and a scan with no sub-section h
 not been worked at all. That makes this register its own completeness check — the
 property a tool-indexed list cannot have.
 
-## 2026-08
+### 2026-08
 
 Report: [`2026-08.md`](2026-08.md) · scanned 2026-08-01 · 4 findings + 1 note.
 **Two of the four were already done before the scan ran.** Of the remaining two, one was
@@ -92,7 +92,7 @@ error classes that let the scan report finished work as open are being fixed in 
 | 4. .NET 8.0.29 patch | **Already satisfied** — 8.0.25 *and* 8.0.29 both installed, target framework `net8.0` confirmed. The scan's own check (`dotnet --version`) reports the **SDK** and cannot answer the question it was posed against; `dotnet --list-runtimes` can. **Do not re-raise without running the discriminating check first** | — |
 | Note: `claude-opus-4-1` retirement (Aug 5) | **Confirmed clear** — no source or config file references it: `grep -rn "claude-opus-4-1" WxServices/ --exclude='*.md' --exclude-dir=bin --exclude-dir=obj` returns zero. ⚠️ **EXCLUDE documentation; do not allowlist extensions.** Unscoped, the grep matches our own prose about the retirement — a self-falsifying check. But an allowlist (`--include=*.cs --include=*.json`) silently misses `*.config`, `*.props` and anything we adopt later. Excluding docs covers every file type, now and in future | — |
 
-## 2026-07
+### 2026-07
 
 Report: [`2026-07.md`](2026-07.md) · scanned 2026-07-01 · 2 findings + 1 note.
 Dispositioned retroactively on 2026-08-01, when its Sonnet 5 finding was settled
@@ -104,7 +104,7 @@ together with the 2026-08 repeat.
 | 2. Deprecation check | **Confirmed clear** | — |
 | Note: Claude Code default → Sonnet 5, and the June recommendation to move to Opus 4.8 *"still applies"* | **Opus tier retained** for long-horizon multi-file work — Sonnet 5 not taken as the Claude Code default. The outstanding June→Opus-4.8 recommendation this note carried was **overtaken** by the move to Opus 5 | [Claude Code on Claude Opus 5](#opus-5-claude-code) |
 
-## Scans before 2026-07
+### Scans before 2026-07
 
 **Not retro-filled, deliberately.** The register starts where the practice starts;
 reconstructing verdicts from memory would manufacture decisions nobody took.
@@ -113,7 +113,7 @@ and the two 2026-05 entries under **Declined** below carry their own dates and r
 
 ---
 
-# Standing dispositions
+## Standing dispositions
 
 Indexed by tool. Every entry states what was decided, why, and what would make us
 revisit — an entry with no re-evaluate trigger is a decision nobody can reopen on
@@ -138,14 +138,14 @@ triggers cover only changes to *that* item, a newer product that supersedes it c
 raised at all — and the guard then suppresses precisely the kind of finding that created
 the entry. Every Adopted entry needs a "something supersedes this" trigger.
 
-## Adopted
+### Adopted
 
 Already in the stack. The scan must not recommend adopting these again, though a
 *change* to one may be reportable.
 
 <a id="opus-5-claude-code"></a>
 
-### Claude Code on Claude Opus 5 — in place as of 2026-08-01
+#### Claude Code on Claude Opus 5 — in place as of 2026-08-01
 
 **Raised by:** [2026-08](#2026-08) finding 1; [2026-07](#2026-07) note.
 
@@ -171,13 +171,13 @@ older model. This entry exists partly to stop that repeating.
 - A later Opus release **changes** the price or context window for this tier.
 - Anthropic **announces** deprecation of `claude-opus-5`.
 
-## Deferred
+### Deferred
 
 Examined and consciously postponed. **Do not resurface before the named trigger fires.**
 
 <a id="sonnet-5-runtime"></a>
 
-### Claude Sonnet 5 for the WxServices runtime — deferred 2026-08-01
+#### Claude Sonnet 5 for the WxServices runtime — deferred 2026-08-01
 
 **Raised by:** [2026-07](#2026-07) finding 1; [2026-08](#2026-08) finding 2.
 
@@ -242,13 +242,13 @@ figure and it can come back.)*
 **Do not re-raise this as a cost saving before a trigger fires.** The saving was examined
 and found to invert after 2026-08-31.
 
-## Declined
+### Declined
 
 Evaluated and rejected. **Do not resurface before the named trigger fires.**
 
 <a id="coderabbit-post-merge-actions"></a>
 
-### CodeRabbit Post-Merge Actions — declined 2026-08-01
+#### CodeRabbit Post-Merge Actions — declined 2026-08-01
 
 **Raised by:** [2026-08](#2026-08) finding 3.
 
@@ -323,7 +323,7 @@ behind a disposition that bars the scan from mentioning it.
 
 <a id="sentry-seer"></a>
 
-### Sentry + Seer Agent observability — declined 2026-05-27 (per WX-89)
+#### Sentry + Seer Agent observability — declined 2026-05-27 (per WX-89)
 
 **Raised by:** 2026-05 scan.
 
@@ -352,7 +352,7 @@ the broader audit of existing-stack vs. modern-tooling alternatives is tracked i
 
 <a id="rovo-dev"></a>
 
-### Atlassian Rovo Dev code review — declined 2026-05-26
+#### Atlassian Rovo Dev code review — declined 2026-05-26
 
 **Raised by:** 2026-05 scan.
 
