@@ -12,12 +12,20 @@
 # below; any key not set here falls through to the CodeRabbit default.
 
 reviews:
-  # Skip CodeRabbit review on landscape-scans/ -- these are agent-generated
-  # monthly digests delivered primarily by email. The PR exists only to
-  # satisfy master branch protection; CR comments on these files would be
-  # friction we explicitly designed the routine to avoid.
+  # Skip CodeRabbit review on the GENERATED monthly digests only. These are
+  # agent-authored and delivered primarily by email; the PR exists only to
+  # satisfy master branch protection, so CR comments on them would be friction
+  # we explicitly designed the routine to avoid.
+  #
+  # WX-389: narrowed from "!landscape-scans/**" to the dated reports. That
+  # blanket pattern also silenced landscape-scans/_evaluated.md, which is NOT
+  # agent-generated and is not emailed -- it is where WE record what we decided
+  # about each scan, so it is the most decision-dense file in the directory and
+  # the one most worth an independent reviewer. It had never been reviewed by
+  # anyone. The rationale above was written when this directory held only
+  # generated reports plus a seed file; it stopped being true and nobody noticed.
   path_filters:
-    - "!landscape-scans/**"
+    - "!landscape-scans/20*.md"
     # WX-196: skip review of VERSIONS.md. The WORKFLOW §10 hash-fill is a mandatory
     # extra push that changes only this file's commit-hash column (a one-character
     # diff); reviewing it spends review-frequency quota for no value. Excluding the
