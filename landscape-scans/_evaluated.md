@@ -31,20 +31,33 @@ error code and figure it rests on — lives in exactly one place: the dispositio
 scan row gives a short verdict and a pointer. **A row must never restate a fact from the
 entry**, or a correction has to be made twice and the second copy is the one that rots.
 
-> ### ⚠️ Scope — this file is PUBLIC
+> ## ⚠️ Scope — this file is PUBLIC
 >
-> `PaulHarder2/HarderWare` is a public repository, and `landscape-scans/**` is excluded
-> from CodeRabbit review via `.coderabbit.yaml` `path_filters` — so **nothing reviews
-> these files but us**, which is exactly the class where errors concentrate.
+> `PaulHarder2/HarderWare` is a **public** repository. The generated monthly reports
+> (`landscape-scans/20*.md`) are excluded from CodeRabbit review via `.coderabbit.yaml`
+> `path_filters` and have **no reviewer but us**. **This file is reviewed**, as of
+> WX-389 — but CodeRabbit reviews *changes*, so any line carried forward untouched has
+> still never been read by anything but us. **Assume standing content is unreviewed.**
 >
-> Record **tool and vendor dispositions and technical verdicts only.** No personal,
-> financial, employment, or health content. No credentials, API keys, endpoints,
-> internal hostnames, or **internal resource identifiers** (routine/trigger IDs, account
-> UUIDs, connector IDs). Those go in the Jira ticket, which is private — and the reason
-> is not that they are exploitable, but that a public file is the wrong default home for
-> anything naming our internal plumbing.
+> **NEVER here — put it in the Jira ticket, which is private:** credentials, API keys or
+> tokens of any kind; private hostnames and internal IP addresses; **internal resource
+> identifiers** (routine/trigger ids, environment ids, account or connector UUIDs);
+> third-party pricing given in confidence; and anything about Paul's personal life,
+> finances, employment or health.
 >
-> No third-party pricing given in confidence.
+> **Explicitly FINE here, and deliberately so:** Paul's name and his quoted decisions.
+> He owns this repository, every commit carries his name, and he publishes under it — so
+> there is nothing to protect. More to the point, **an attributed decision is a stronger
+> record than an anonymous one**: "Paul's decision, 2026-08-01" plus his reasoning is
+> what makes an entry a decision rather than somebody's opinion, and it tells a future
+> reader whose call it is to reverse. Well-known default endpoints (`localhost:4318`,
+> the OpenTelemetry default) are fine for the same reason — they are documentation, not
+> disclosure.
+>
+> *(An earlier version banned "personal content" and "endpoints" flatly. CodeRabbit read
+> it exactly as written and asked for the attribution and the OTel default port to be
+> stripped — a fair reading of a rule that said more than it meant. The rule was the
+> defect, not the content.)*
 >
 > When in doubt, put it in the Jira ticket instead — **Jira is private, this is not.**
 
@@ -77,7 +90,7 @@ error classes that let the scan report finished work as open are being fixed in 
 | 2. Sonnet 5 + sampling-temperature removal | **Deferred** — see the entry | [Claude Sonnet 5 for the WxServices runtime](#sonnet-5-runtime) |
 | 3. CodeRabbit Post-Merge Actions | **Declined** — see the entry | [CodeRabbit Post-Merge Actions](#coderabbit-post-merge-actions) |
 | 4. .NET 8.0.29 patch | **Already satisfied** — 8.0.25 *and* 8.0.29 both installed, target framework `net8.0` confirmed. The scan's own check (`dotnet --version`) reports the **SDK** and cannot answer the question it was posed against; `dotnet --list-runtimes` can. **Do not re-raise without running the discriminating check first** | — |
-| Note: `claude-opus-4-1` retirement (Aug 5) | **Confirmed clear** — no source or config file references it: `grep -rn "claude-opus-4-1" WxServices/ --include=*.cs --include=*.json` returns zero. ⚠️ **Scope the grep.** Unscoped it now matches our own prose about the retirement, including the WX-389 test procedure — a self-falsifying check | — |
+| Note: `claude-opus-4-1` retirement (Aug 5) | **Confirmed clear** — no source or config file references it: `grep -rn "claude-opus-4-1" WxServices/ --exclude='*.md' --exclude-dir=bin --exclude-dir=obj` returns zero. ⚠️ **EXCLUDE documentation; do not allowlist extensions.** Unscoped, the grep matches our own prose about the retirement — a self-falsifying check. But an allowlist (`--include=*.cs --include=*.json`) silently misses `*.config`, `*.props` and anything we adopt later. Excluding docs covers every file type, now and in future | — |
 
 ## 2026-07
 
