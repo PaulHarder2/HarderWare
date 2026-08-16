@@ -37,7 +37,7 @@ public static class TafFetcher
         WxServices.Common.FetchRegion region,
         DbContextOptions<WeatherDataContext> dbOptions,
         HttpClient httpClient)
-        => FetchUrlAndInsertAsync($"{TafApiBase}?bbox={region.ToAwcBbox()}&hours=24&format=raw", dbOptions, httpClient);
+        => FetchUrlAndInsertAsync($"{TafApiBase}?bbox={region.ToAwcBbox()}&format=raw", dbOptions, httpClient);
 
     /// <summary>
     /// Fetches the current TAF for a single station by ICAO identifier (WX-140:
@@ -53,7 +53,7 @@ public static class TafFetcher
         string stationIcao,
         DbContextOptions<WeatherDataContext> dbOptions,
         HttpClient httpClient)
-        => FetchUrlAndInsertAsync($"{TafApiBase}?ids={stationIcao}&hours=24&format=raw", dbOptions, httpClient);
+        => FetchUrlAndInsertAsync($"{TafApiBase}?ids={stationIcao}&format=raw", dbOptions, httpClient);
 
     /// <summary>
     /// Fetches current TAFs for a batch of stations in chunked <c>ids=</c>
@@ -71,7 +71,7 @@ public static class TafFetcher
     {
         const int chunkSize = 20;
         foreach (var chunk in stationIcaos.Chunk(chunkSize))
-            await FetchUrlAndInsertAsync($"{TafApiBase}?ids={string.Join(',', chunk)}&hours=24&format=raw", dbOptions, httpClient);
+            await FetchUrlAndInsertAsync($"{TafApiBase}?ids={string.Join(',', chunk)}&format=raw", dbOptions, httpClient);
     }
 
     // ── shared fetch/parse/insert logic ──────────────────────────────────────
