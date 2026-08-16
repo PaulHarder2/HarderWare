@@ -63,6 +63,7 @@ services:
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD must be set in observability/.env}
       - GF_USERS_ALLOW_SIGN_UP=false
       - GF_USERS_DEFAULT_TIMEZONE=utc
+      - GF_FEATURE_TOGGLES_ENABLE=pinNavItems
 
 volumes:
   prometheus-data:
