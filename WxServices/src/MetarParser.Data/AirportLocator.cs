@@ -201,7 +201,7 @@ public static class AirportLocator
         foreach (var deg in new[] { 2.0, 5.0 })
         {
             var bbox = $"{lat - deg},{lon - deg},{lat + deg},{lon + deg}";
-            var url = $"https://aviationweather.gov/api/data/taf?bbox={bbox}&hours=24&format=json";
+            var url = $"https://aviationweather.gov/api/data/taf?bbox={bbox}&format=json";
 
             TafStationDto[]? stations;
             try
