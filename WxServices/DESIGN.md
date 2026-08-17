@@ -156,13 +156,13 @@ flowchart TD
     KNOWN -->|Yes| SKIP([Skip])
     KNOWN -->|No| RESUME
 
-    RESUME --> LOOP["For each forecast hour 0–120"]
+    RESUME --> LOOP["For each forecast hour 0..MaxForecastHours"]
     LOOP --> STORED{Hour already stored?}
     STORED -->|Yes| LOOP
     STORED -->|No| IDX["Fetch .idx inventory file"]
     IDX --> NOTFOUND{404?}
     NOTFOUND -->|Yes| STOP([Stop — run not yet complete])
-    NOTFOUND -->|No| RANGES["Parse byte ranges for 7 target variables"]
+    NOTFOUND -->|No| RANGES["Parse byte ranges for 8 target variables"]
     RANGES --> DOWNLOAD["Download byte ranges → temp GRIB2"]
     DOWNLOAD --> TEMP
     TEMP --> WGRIB2
@@ -175,7 +175,7 @@ flowchart TD
     CLEANUP --> LOOP
 
     LOOP -->|All hours stored| MARK["Mark run IsComplete = true in GfsModelRuns"]
-    MARK --> PURGE["Purge old runs (retain 2)"]
+    MARK --> PURGE["Purge old runs (retain Gfs:RetainModelRuns, deployed 1)"]
 ```
 
 ---
@@ -359,7 +359,7 @@ graph TD
 
 **GFS cycle (default: every 60 minutes):**
 1. Check for any incomplete model run registered in `GfsModelRuns`. If one exists, resume it; otherwise compute the most recent GFS cycle (00Z/06Z/12Z/18Z) that should be available on NOMADS.
-2. For each forecast hour 0–120 not yet stored, fetch the `.idx` inventory file for that hour. A 404 means the run is still being computed — stop and resume next cycle.
+2. For each forecast hour in `0..MaxForecastHours` not yet stored, fetch the `.idx` inventory file for that hour. A 404 means the run is still being computed — stop and resume next cycle.
 3. Download byte-range HTTP requests for the 8 target variables (TMP, SPFH, UGRD, VGRD, PRATE, TCDC, CAPE, PRMSL) and concatenate them into a temporary GRIB2 file.
 4. Invoke `wgrib2.exe` (NOAA native Windows build) to crop to the configured fetch region and emit a CSV of grid values.
 5. Assemble `GfsGridPoint` entities (applying unit conversions) and insert into `GfsGrid`.
