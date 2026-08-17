@@ -351,7 +351,7 @@ public static class GfsFetcher
         // that make WX-451's defect reachable: the run would report a tidy "61/61 hours stored"
         // while silently holding 60 orphaned hours from the larger bound. Empty in normal
         // operation, so it costs nothing until something has actually changed underneath us.
-        var outOfRange = storedHours.Count(h => h < 0 || h > maxForecastHours);
+        var outOfRange = CountOutOfRangeHours(storedHours, maxForecastHours);
         var outOfRangeNote = outOfRange > 0
             ? $"; {outOfRange} stored hour(s) outside 0..{maxForecastHours}"
             : string.Empty;
@@ -394,6 +394,23 @@ public static class GfsFetcher
             .Range(0, maxForecastHours + 1)
             .Where(fh => !storedHours.Contains(fh))
             .ToList();
+
+    /// <summary>
+    /// Counts stored hours lying <em>outside</em> <c>0..maxForecastHours</c> — surplus rather
+    /// than missing. Pure.
+    /// </summary>
+    /// <remarks>
+    /// Extracted so the arithmetic behind the log's out-of-range note is pinned by a test. It
+    /// previously sat inline, where the only test touching that scenario asserted just the
+    /// completeness verdict — so deleting the note entirely left the suite green, and the sole
+    /// production signal for a horizon REDUCTION (one of the two routes that make WX-451's
+    /// defect reachable) was exercised by nothing.
+    /// </remarks>
+    /// <param name="storedHours">Distinct forecast hours currently stored for the run.</param>
+    /// <param name="maxForecastHours">Highest expected forecast hour, inclusive.</param>
+    /// <returns>How many stored hours fall outside the expected range; 0 in normal operation.</returns>
+    internal static int CountOutOfRangeHours(ISet<int> storedHours, int maxForecastHours)
+        => storedHours.Count(h => h < 0 || h > maxForecastHours);
 
     /// <summary>
     /// Renders missing forecast hours as compact ranges — e.g. <c>f113-f114, f117</c> —

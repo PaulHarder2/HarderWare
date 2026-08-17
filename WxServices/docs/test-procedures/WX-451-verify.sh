@@ -37,6 +37,10 @@
 # Usage:  ./WX-451-verify.sh [--since 'YYYY-MM-DD HH:MM:SS'] [--log PATH] [--deploy-log PATH]
 #         ./WX-451-verify.sh -h
 
+set -uo pipefail                                    # verify-lib.sh:37 states the caller owns this;
+                                                    # it relies on it so an unset config var fails
+                                                    # loudly rather than silently widening a window.
+
 SELF="${BASH_SOURCE[0]}"
 TICKET='WX-451'                                     # self-identification + header
 VERSION='1.61.3'                                    # the release VERSION under test -- the pin
@@ -62,34 +66,81 @@ exercised=$(    printf '%s\n' "$POST" | cnt 'hours complete - missing ')
 [ "$exercised" -eq 0 ] && exercised=$(printf '%s\n' "$POST" | cnt 'hours complete — missing ')
 
 # CONTEXT: runs actually marked complete since the deploy (not a discriminator - see header).
-marked=$(printf '%s\n' "$POST" | cnt 'marked complete')
+# ⚠️ THE TRAILING " (" IS LOAD-BEARING. FetchAndInsertAsync's early return logs
+#   "is already marked complete - skipping."
+# which also contains "marked complete" -- and it is emitted precisely on the cycles where
+# EvaluateRunCompletenessAsync NEVER RUNS. Measured on the live log, a bare 'marked complete'
+# matched 348 lines of which 294 were the skip line. Counting those would invert the meaning of
+# this row: it would rise fastest when the code under test did nothing. The real line reads
+#   "marked complete (121/121 hours stored)"
+# so anchoring on the opening parenthesis selects it and excludes the skip.
+# ⚠️ THE BACKSLASH IS REQUIRED. cnt is `grep -cE "$1" || true` -- EXTENDED regex, where a bare
+#   "(" is an unmatched group and grep aborts with "Unmatched ( or \(". The `|| true` then
+#   swallows that into an EMPTY count rather than an error, so the row silently prints nothing.
+#   Measured on the live log: escaped 54, skip line 295, unescaped a swallowed grep failure.
+marked=$(printf '%s\n' "$POST" | cnt 'marked complete \(')
 
 # REGRESSION (log side): the negative-bound guard should NEVER fire in normal operation.
 # It is logged once per process, so 1 is already a standing misconfiguration, not a blip.
 badconfig=$(printf '%s\n' "$POST" | cnt 'MaxForecastHours is')
 
 # REGRESSION (DB side): fully-stored but unmarked -- the silent-freeze symptom.
-stuck='?'
-# TWO path forms, deliberately, and they are NOT interchangeable: bash tests existence
-# through the WSL mount, PowerShell resolves only the Windows form. Passing the /mnt/c
-# path to PowerShell fails with "not recognized as the name of a cmdlet" -- which this
-# block would then swallow into a graceful '?' that reads as "no sqlcmd here" rather
-# than "the call was malformed". Caught by the WORKFLOW §7a smoke run; `bash -n` and a
-# clean exit both passed while the check was silently doing nothing.
+# ---- the DB-side regression check --------------------------------------------
+# This is the ONLY detector for the silent-freeze FAIL signature the ticket exists to
+# prevent, so whether it RAN is a precondition of any verdict -- see vl_verdict below.
+stuck='?'          # '?' means NOT MEASURED, never "measured zero"
+stuck_why=''       # why it was not measured; distinguishes absent-tooling from a failed call
+db_ran=0           # 1 only when a number was actually obtained
+
+# THE BOUND COMES FROM CONFIG, NEVER A LITERAL. Hardcoding 0..120 / =121 would make this
+# check UNFAILABLE the moment WX-452 extends the horizon: a fully-stored run would then hold
+# more than 121 in-range hours, the subquery could never equal the literal, and `stuck` would
+# print [ok] forever while measuring nothing -- in exactly the configuration change the ticket
+# names as making WX-451's defect reachable. Read the same single home the fetcher reads.
+# ⚠️ WX-313's provider can overlay config from the DB Config table; measured 2026-08-17 that
+#   table holds no Gfs keys, so appsettings is authoritative today. If that changes, this must
+#   follow -- and when WX-447's DatasetExpectation table lands, the bound moves there.
+CONF="$(cd "$(dirname "$SELF")/../.." && pwd)/appsettings.shared.json"
+MAX_FH=''
+if command -v jq >/dev/null 2>&1 && [ -f "$CONF" ]; then
+    MAX_FH=$(jq -r '.Gfs.MaxForecastHours // empty' "$CONF" 2>/dev/null)
+fi
+case "$MAX_FH" in (''|*[!0-9]*) MAX_FH=''; esac
+
+# TWO path forms, deliberately, and NOT interchangeable: bash tests existence through the WSL
+# mount, PowerShell resolves only the Windows form. Passing the /mnt/c path to PowerShell fails
+# with "not recognized as the name of a cmdlet". Caught by the WORKFLOW §7a smoke run, where
+# `bash -n` passed and the script exited 0 while this check silently did nothing.
 SQLCMD_WSL='/mnt/c/Program Files/Microsoft SQL Server/Client SDK/ODBC/170/Tools/Binn/SQLCMD.EXE'
 SQLCMD_WIN='C:\Program Files\Microsoft SQL Server\Client SDK\ODBC\170\Tools\Binn\SQLCMD.EXE'
-if command -v powershell.exe >/dev/null 2>&1 && [ -f "$SQLCMD_WSL" ]; then
+
+if [ -z "$MAX_FH" ]; then
+    stuck_why='could not read Gfs:MaxForecastHours from appsettings.shared.json (jq present?)'
+elif ! command -v powershell.exe >/dev/null 2>&1 || [ ! -f "$SQLCMD_WSL" ]; then
+    stuck_why='powershell.exe or SQLCMD.EXE not reachable from here'
+else
+    expected=$(( MAX_FH + 1 ))
     q="SET NOCOUNT ON; SELECT COUNT(*) FROM GfsModelRuns r WHERE r.IsComplete = 0 AND ("
     q="$q SELECT COUNT(DISTINCT g.ForecastHour) FROM GfsGrid g WHERE g.ModelRunUtc = r.ModelRunUtc"
-    q="$q AND g.ForecastHour BETWEEN 0 AND 120 ) = 121;"
-    stuck=$(powershell.exe -NoProfile -Command \
-        "& '$SQLCMD_WIN' -S '.\\SQLEXPRESS' -d WeatherData -E -C -h -1 -W -t 60 -Q \"$q\"" 2>/dev/null \
-        | tr -d '\r' | grep -E '^[0-9]+$' | head -1)
-    [ -n "$stuck" ] || stuck='?'
+    q="$q AND g.ForecastHour BETWEEN 0 AND $MAX_FH ) = $expected;"
+    # stderr is CAPTURED, not discarded: a login failure, a -t timeout or a stopped SQL Server
+    # all produce empty stdout, and silently folding those into "no sqlcmd here" would report a
+    # wrong diagnosis for a check that DID have its tooling. That swallow was left behind when
+    # the path form was fixed; this is the class fix rather than the instance fix.
+    db_out=$(powershell.exe -NoProfile -Command \
+        "& '$SQLCMD_WIN' -S '.\\SQLEXPRESS' -d WeatherData -E -C -h -1 -W -t 60 -Q \"$q\"" 2>&1 \
+        | tr -d '\r')
+    stuck=$(printf '%s\n' "$db_out" | grep -E '^[0-9]+$' | head -1)
+    if [ -n "$stuck" ]; then
+        db_ran=1
+    else
+        stuck='?'
+        stuck_why="query FAILED though both binaries were found: $(printf '%s' "$db_out" | head -1 | cut -c1-90)"
+    fi
 fi
 
 regressions=$badconfig
-[ "$stuck" != '?' ] && regressions=$(( regressions + stuck ))
+[ "$db_ran" -eq 1 ] && regressions=$(( regressions + stuck ))
 
 # Background health: new ERRORs the deploy introduced vs the equal-length pre-window.
 read err_before err_after err_new < <(vl_health_delta ' ERROR ')
@@ -103,13 +154,19 @@ printf  '   %-54s %s\n' 'runs marked complete (context, NOT a discriminator):' "
 echo
 echo    " Regression signatures"
 printf  '   %-54s %s\n' 'negative MaxForecastHours ERROR (want 0):' "$badconfig   $([ "$badconfig" -eq 0 ] && echo '[ok]' || echo '[MISCONFIGURED - correct Gfs:MaxForecastHours]')"
-printf  '   %-54s %s\n' 'runs fully stored but NOT marked complete (want 0):' "$stuck   $([ "$stuck" = '0' ] && echo '[ok]' || { [ "$stuck" = '?' ] && echo '[NOT MEASURED - no sqlcmd/powershell from here]' || echo '[FROZEN? re-run to rule out a same-cycle transient]'; })"
+printf  '   %-54s %s\n' 'expected-hour bound, read from config (not literal):' "${MAX_FH:-UNRESOLVED}   $([ -n "$MAX_FH" ] && echo "[0..$MAX_FH, so $(( MAX_FH + 1 )) expected]" || echo '[see below]')"
+printf  '   %-54s %s\n' 'runs fully stored but NOT marked complete (want 0):' "$stuck   $([ "$db_ran" -eq 1 ] && { [ "$stuck" = '0' ] && echo '[ok]' || echo '[FROZEN? re-run to rule out a same-cycle transient]'; } || echo '[NOT MEASURED]')"
+[ "$db_ran" -eq 0 ] && printf '   %-54s %s\n' '  why not measured:' "$stuck_why"
 echo
 echo    " Background health (new ERRORs the deploy introduced, vs the equal pre-window)"
 printf  '   %-54s %s\n' 'ERROR lines  (before / after / new):' "$err_before / $err_after / $err_new"
 echo
-[ "$stuck" = '?' ] && echo " ⚠️  The DB-side regression check did not run, so a PASS below attests the log"
-[ "$stuck" = '?' ] && echo "    signal ONLY. Re-run where sqlcmd is reachable before treating it as complete."
+# THE DB CHECK IS A PRECONDITION, NOT A FOOTNOTE. It is the only detector for the silent-freeze
+# signature, so a PASS without it would certify the one thing this ticket exists to catch as
+# unexamined -- and vl_verdict would even print a Jira paste string saying so. An advisory
+# warning above the verdict does not gate anything; this does (precond <= 0 => WAIT).
 vl_verdict "$regressions" "$exercised" \
   "" \
-  "set-membership completeness is live; the missing-hours clause proves 1.61.3+ evaluated a run against the real database. If 'fully stored but not marked' is non-zero on two consecutive runs, that is the silent-freeze symptom -- treat as FAIL and read WX-451.md section 3."
+  "set-membership completeness is live; the missing-hours clause proves 1.61.3+ evaluated a run against the real database. If 'fully stored but not marked' is non-zero on two consecutive runs, that is the silent-freeze symptom -- treat as FAIL and read WX-451.md section 3." \
+  "$db_ran" \
+  "the database regression check to run (it is the only detector for the silent-freeze signature; see 'why not measured' above)"

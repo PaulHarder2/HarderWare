@@ -94,6 +94,31 @@ public class GfsRunCompletenessTests
         Assert.Empty(GfsFetcher.ComputeMissingHours(stored, 120));
     }
 
+    // ── CountOutOfRangeHours (pure) ──────────────────────────────────────────
+
+    [Fact]
+    public void CountOutOfRangeHours_NormalOperation_IsZero()
+        => Assert.Equal(0, GfsFetcher.CountOutOfRangeHours(Enumerable.Range(0, 121).ToHashSet(), 120));
+
+    /// <summary>
+    /// The horizon-REDUCTION case, and the reason this helper exists. A run fetched at 120 and
+    /// then judged against a bound of 60 holds 60 surplus hours; without this count the log
+    /// reports a tidy "61/61 hours stored" and the orphaned data is invisible — in exactly the
+    /// scenario the ticket names as making the defect reachable.
+    /// </summary>
+    [Fact]
+    public void CountOutOfRangeHours_AfterAHorizonReduction_CountsTheSurplus()
+        => Assert.Equal(60, GfsFetcher.CountOutOfRangeHours(Enumerable.Range(0, 121).ToHashSet(), 60));
+
+    [Fact]
+    public void CountOutOfRangeHours_IgnoresMissingHours_CountsOnlySurplus()
+    {
+        // Short of f005 AND holding f200: missing and surplus are different questions.
+        var stored = Enumerable.Range(0, 121).Where(h => h != 5).Append(200).ToHashSet();
+        Assert.Equal(1, GfsFetcher.CountOutOfRangeHours(stored, 120));
+        Assert.Equal([5], GfsFetcher.ComputeMissingHours(stored, 120));
+    }
+
     // ── DescribeMissingHours (pure) ──────────────────────────────────────────
 
     [Fact]
