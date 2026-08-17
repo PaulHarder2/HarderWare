@@ -156,13 +156,15 @@ flowchart TD
     KNOWN -->|Yes| SKIP([Skip])
     KNOWN -->|No| RESUME
 
-    RESUME --> LOOP["For each forecast hour 0–120"]
+    RESUME --> BOUND{"Gfs:MaxForecastHours negative?"}
+    BOUND -->|"Yes"| BADCFG([ERROR logged once per onset — no run marked complete])
+    BOUND -->|"No — NOTE: upper bound is NOT validated"| LOOP["For each forecast hour 0..MaxForecastHours, 1-hour steps — upstream is hourly only to f120"]
     LOOP --> STORED{Hour already stored?}
     STORED -->|Yes| LOOP
     STORED -->|No| IDX["Fetch .idx inventory file"]
     IDX --> NOTFOUND{404?}
     NOTFOUND -->|Yes| STOP([Stop — run not yet complete])
-    NOTFOUND -->|No| RANGES["Parse byte ranges for 7 target variables"]
+    NOTFOUND -->|No| RANGES["Parse byte ranges for 8 target variables"]
     RANGES --> DOWNLOAD["Download byte ranges → temp GRIB2"]
     DOWNLOAD --> TEMP
     TEMP --> WGRIB2
@@ -174,8 +176,8 @@ flowchart TD
     DB --> CLEANUP["Delete temp files"]
     CLEANUP --> LOOP
 
-    LOOP -->|All hours stored| MARK["Mark run IsComplete = true in GfsModelRuns"]
-    MARK --> PURGE["Purge old runs (retain 2)"]
+    LOOP -->|"Every hour in 0..MaxForecastHours present (set membership)"| MARK["Mark run IsComplete = true in GfsModelRuns"]
+    MARK --> PURGE["Purge old runs (retain Gfs:RetainModelRuns, deployed 1)"]
 ```
 
 ---
@@ -359,11 +361,14 @@ graph TD
 
 **GFS cycle (default: every 60 minutes):**
 1. Check for any incomplete model run registered in `GfsModelRuns`. If one exists, resume it; otherwise compute the most recent GFS cycle (00Z/06Z/12Z/18Z) that should be available on NOMADS.
-2. For each forecast hour 0–120 not yet stored, fetch the `.idx` inventory file for that hour. A 404 means the run is still being computed — stop and resume next cycle.
+2. For each forecast hour in `0..MaxForecastHours` not yet stored, fetch the `.idx` inventory file for that hour. A 404 means the run is still being computed — stop and resume next cycle.
+
+   🔴 **THE FETCH LOOP STEPS BY ONE HOUR, UPSTREAM ONLY SUPPORTS THAT THROUGH f120, AND NOTHING VALIDATES IT.** NOAA's GFS 0.25° pgrb2 files exist at 1-hour steps f000–f120, then **3-hour** steps from f123 — f121 and f122 do not exist. `EvaluateRunCompletenessAsync` guards only `maxForecastHours < 0`, so a bound above 120 is **accepted**: the loop requests a file that is not there, reads the 404 as *"run still computing"*, stops, and **the run silently never completes** — no ERROR, because from the code's point of view nothing is wrong. So `Gfs:MaxForecastHours` **must not exceed 120** until the loop learns 3-hour stepping; `GfsConfig.MaxForecastHours` carries the same warning beside the setting. `0..MaxForecastHours` parameterises the *completeness set*, not the set of bounds an operator may choose. **Extending the horizon, and validating the upper bound, is WX-452.**
+
 3. Download byte-range HTTP requests for the 8 target variables (TMP, SPFH, UGRD, VGRD, PRATE, TCDC, CAPE, PRMSL) and concatenate them into a temporary GRIB2 file.
 4. Invoke `wgrib2.exe` (NOAA native Windows build) to crop to the configured fetch region and emit a CSV of grid values.
 5. Assemble `GfsGridPoint` entities (applying unit conversions) and insert into `GfsGrid`.
-6. When all 121 hours are stored, mark the run `IsComplete = true` and purge old runs (retaining the 2 most recent).
+6. When every forecast hour in `0..MaxForecastHours` is present for the run, mark it `IsComplete = true` and purge old runs (retaining the most recent `Gfs:RetainModelRuns`, deployed as 1). Completeness is decided by **set membership** over `0..MaxForecastHours`, never by a count of distinct hours (WX-451): a count is satisfied one-for-one by any hour stored outside the expected range. Scoping to a single run is a separate concern, handled by the `ModelRunUtc` filter on the read. A negative `Gfs:MaxForecastHours` is **refused**: completeness is not evaluated, an `ERROR` is logged once per onset, and no run is marked complete until the setting is corrected. The purge deletes only runs **strictly older** than the latest complete one (`r < latestComplete`), so the latest complete run always survives — it is not older than itself. That is what keeps a complete run available for consumers while the next one is still downloading, and at a retention of 1 it is the *only* thing that does.
 7. Write the current UTC timestamp to `wxparser-gfs-heartbeat.txt` (the GfsFetchWorker's per-worker heartbeat, WX-68 — it beats on every loop iteration, not only when a run completes).
 
 **Airport metadata refresh cycle (once per week, and on first startup):**
@@ -418,7 +423,7 @@ flowchart TD
     G2 --> H{Pre-filter: input identity advanced?\nor scheduled / first?}
     H -->|No| C
     H -->|Yes| W[Persist provisional ForecastSnapshot\nper-locality audit anchor]
-    W --> SG{WX-114 significance gate: derived forecast unchanged\nsince last sent? (unscheduled only)}
+    W --> SG{"WX-114 significance gate: derived forecast unchanged\nsince last sent? (unscheduled only)"}
     SG -->|Yes, Enforce - skip Claude| C
     SG -->|No / first / scheduled / Shadow| J[ForecastReconciler → Claude\nonce per locality]
     J --> I{submit or skip?}
