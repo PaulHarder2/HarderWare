@@ -156,7 +156,9 @@ flowchart TD
     KNOWN -->|Yes| SKIP([Skip])
     KNOWN -->|No| RESUME
 
-    RESUME --> LOOP["For each forecast hour 0..MaxForecastHours"]
+    RESUME --> BOUND{"Gfs:MaxForecastHours valid (not negative)?"}
+    BOUND -->|"No"| BADCFG([ERROR logged once per onset — no run marked complete])
+    BOUND -->|"Yes"| LOOP["For each forecast hour 0..MaxForecastHours, 1-hour steps"]
     LOOP --> STORED{Hour already stored?}
     STORED -->|Yes| LOOP
     STORED -->|No| IDX["Fetch .idx inventory file"]
@@ -174,7 +176,7 @@ flowchart TD
     DB --> CLEANUP["Delete temp files"]
     CLEANUP --> LOOP
 
-    LOOP -->|All hours stored| MARK["Mark run IsComplete = true in GfsModelRuns"]
+    LOOP -->|"Every hour in 0..MaxForecastHours present (set membership)"| MARK["Mark run IsComplete = true in GfsModelRuns"]
     MARK --> PURGE["Purge old runs (retain Gfs:RetainModelRuns, deployed 1)"]
 ```
 
@@ -360,6 +362,10 @@ graph TD
 **GFS cycle (default: every 60 minutes):**
 1. Check for any incomplete model run registered in `GfsModelRuns`. If one exists, resume it; otherwise compute the most recent GFS cycle (00Z/06Z/12Z/18Z) that should be available on NOMADS.
 2. For each forecast hour in `0..MaxForecastHours` not yet stored, fetch the `.idx` inventory file for that hour. A 404 means the run is still being computed — stop and resume next cycle.
+
+   🔴 **THE FETCH LOOP STEPS BY ONE HOUR, AND UPSTREAM ONLY SUPPORTS THAT THROUGH f120.** NOAA's GFS 0.25° pgrb2 files exist at 1-hour steps f000–f120, then **3-hour** steps from f123 — **f121 and f122 do not exist** (measured against the S3 bucket listing 2026-08-17: 209 files per run, the hourly band ending exactly at f120, max f384). So `Gfs:MaxForecastHours` **must not be set above 120** until the loop learns 3-hour stepping: it would request a file that is not there, read the 404 as *"run still computing"*, stop, and **the run would never complete**. `GfsConfig.MaxForecastHours` carries the same warning beside the setting. **Extending the horizon is WX-452**, which must land after WX-451.
+
+   ⚠️ *`0..MaxForecastHours` parameterises the **completeness set**, not the set of bounds an operator may choose. An earlier revision of this section replaced a literal `0–120` with the parameter and thereby dropped a true constraint — the literal was correct about what the fetcher can actually do. (CodeRabbit, PR #227, rated Major.)*
 3. Download byte-range HTTP requests for the 8 target variables (TMP, SPFH, UGRD, VGRD, PRATE, TCDC, CAPE, PRMSL) and concatenate them into a temporary GRIB2 file.
 4. Invoke `wgrib2.exe` (NOAA native Windows build) to crop to the configured fetch region and emit a CSV of grid values.
 5. Assemble `GfsGridPoint` entities (applying unit conversions) and insert into `GfsGrid`.
