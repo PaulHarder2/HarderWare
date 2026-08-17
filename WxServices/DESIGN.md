@@ -156,9 +156,9 @@ flowchart TD
     KNOWN -->|Yes| SKIP([Skip])
     KNOWN -->|No| RESUME
 
-    RESUME --> BOUND{"Gfs:MaxForecastHours valid (not negative)?"}
-    BOUND -->|"No"| BADCFG([ERROR logged once per onset — no run marked complete])
-    BOUND -->|"Yes"| LOOP["For each forecast hour 0..MaxForecastHours, 1-hour steps"]
+    RESUME --> BOUND{"Gfs:MaxForecastHours negative?"}
+    BOUND -->|"Yes"| BADCFG([ERROR logged once per onset — no run marked complete])
+    BOUND -->|"No — NOTE: upper bound is NOT validated"| LOOP["For each forecast hour 0..MaxForecastHours, 1-hour steps — upstream is hourly only to f120"]
     LOOP --> STORED{Hour already stored?}
     STORED -->|Yes| LOOP
     STORED -->|No| IDX["Fetch .idx inventory file"]
@@ -364,6 +364,8 @@ graph TD
 2. For each forecast hour in `0..MaxForecastHours` not yet stored, fetch the `.idx` inventory file for that hour. A 404 means the run is still being computed — stop and resume next cycle.
 
    🔴 **THE FETCH LOOP STEPS BY ONE HOUR, AND UPSTREAM ONLY SUPPORTS THAT THROUGH f120.** NOAA's GFS 0.25° pgrb2 files exist at 1-hour steps f000–f120, then **3-hour** steps from f123 — **f121 and f122 do not exist** (measured against the S3 bucket listing 2026-08-17: 209 files per run, the hourly band ending exactly at f120, max f384). So `Gfs:MaxForecastHours` **must not be set above 120** until the loop learns 3-hour stepping: it would request a file that is not there, read the 404 as *"run still computing"*, stop, and **the run would never complete**. `GfsConfig.MaxForecastHours` carries the same warning beside the setting. **Extending the horizon is WX-452**, which must land after WX-451.
+
+   🔴 **AND THE UPPER BOUND IS NOT VALIDATED AT RUNTIME — only the negative case is.** `EvaluateRunCompletenessAsync` guards `maxForecastHours < 0` and nothing else, so `Gfs:MaxForecastHours = 121` is accepted, the hourly loop requests a file that does not exist, the 404 is read as *"run still computing"*, and **the run silently never completes** — with no ERROR, because from the code's point of view nothing is wrong. The completeness logic is correct here; it is the **fetch** that cannot reach hours upstream does not publish hourly. **Adding an upper-bound guard is a behaviour change and belongs with WX-452**, which changes what a valid bound *is*. Until then this constraint is enforced by documentation only. *(CodeRabbit, PR #227, rated Major.)*
 
    ⚠️ *`0..MaxForecastHours` parameterises the **completeness set**, not the set of bounds an operator may choose. An earlier revision of this section replaced a literal `0–120` with the parameter and thereby dropped a true constraint — the literal was correct about what the fetcher can actually do. (CodeRabbit, PR #227, rated Major.)*
 3. Download byte-range HTTP requests for the 8 target variables (TMP, SPFH, UGRD, VGRD, PRATE, TCDC, CAPE, PRMSL) and concatenate them into a temporary GRIB2 file.
