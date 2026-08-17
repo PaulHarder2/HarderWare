@@ -108,6 +108,17 @@ public class GfsRunCompletenessTests
     public void DescribeMissingHours_Empty_ReturnsNone()
         => Assert.Equal("none", GfsFetcher.DescribeMissingHours([]));
 
+    /// <summary>
+    /// The docstring promises the input "need not be sorted or distinct". Sorted was already
+    /// tested; distinct was not — the contract claimed something nothing checked. ClaudePx
+    /// predicted duplicates would render degenerately as "f113, f113-f114"; that is refuted
+    /// (the method calls <c>Distinct()</c>), but the untested-clause half of her point stands,
+    /// and this closes it.
+    /// </summary>
+    [Fact]
+    public void DescribeMissingHours_DuplicateInput_CollapsesRatherThanRepeating()
+        => Assert.Equal("f113-f114", GfsFetcher.DescribeMissingHours([113, 113, 114, 114, 113]));
+
     [Fact]
     public void DescribeMissingHours_CapsOutput_SoAnUnfetchedRunCannotFloodTheLog()
     {

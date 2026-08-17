@@ -687,11 +687,10 @@ public static class GfsFetcher
     /// The retention count applies to all tracked runs regardless of completion
     /// status, so an in-progress run counts toward the total.
     /// <para>
-    /// <b>The deployed value is <c>Gfs:RetainModelRuns = 1</c>, and at that value the
-    /// "older than the latest complete run" filter below is load-bearing rather than
-    /// belt-and-braces.</b>  With one run retained, the moment a new run is registered the
-    /// count check passes through and <c>Skip(retainCount)</c> selects the previous — complete —
-    /// run.  Only the <c>r &lt; latestComplete</c> test saves it, because that run *is* the
+    /// <b>At <c>retainCount</c> 1 the "older than the latest complete run" filter below is
+    /// load-bearing rather than belt-and-braces.</b>  With one run retained, the moment a new
+    /// run is registered the count check passes through and <c>Skip(retainCount)</c> selects
+    /// the previous — complete — run.  Only the <c>r &lt; latestComplete</c> test saves it, because that run *is* the
     /// latest complete one and is therefore not older than itself.  Remove or weaken that
     /// filter and the sole complete run is deleted as soon as a download begins, leaving
     /// consumers — which are told to read the newest run whose <c>IsComplete</c> is true —
