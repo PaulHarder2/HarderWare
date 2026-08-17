@@ -424,7 +424,7 @@ flowchart TD
     G2 --> H{Pre-filter: input identity advanced?\nor scheduled / first?}
     H -->|No| C
     H -->|Yes| W[Persist provisional ForecastSnapshot\nper-locality audit anchor]
-    W --> SG{WX-114 significance gate: derived forecast unchanged\nsince last sent? (unscheduled only)}
+    W --> SG{"WX-114 significance gate: derived forecast unchanged\nsince last sent? (unscheduled only)"}
     SG -->|Yes, Enforce - skip Claude| C
     SG -->|No / first / scheduled / Shadow| J[ForecastReconciler → Claude\nonce per locality]
     J --> I{submit or skip?}
