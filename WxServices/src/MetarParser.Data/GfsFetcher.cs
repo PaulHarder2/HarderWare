@@ -254,41 +254,152 @@ public static class GfsFetcher
 
         Logger.Info($"GfsFetcher: run {modelRun:yyyy-MM-dd HH}Z fetch done — {totalInserted} records inserted.");
 
-        // ── Mark run complete if every forecast hour 0..maxForecastHours is stored ──
-        using (var ctx = new WeatherDataContext(dbOptions))
-        {
-            // Count distinct forecast hours in GfsGrid for this run.
-            // Expected: maxForecastHours + 1 (hours 0 through maxForecastHours inclusive).
-            var storedHourCount = await ctx.GfsGrid
-                .Where(g => g.ModelRunUtc == modelRun)
-                .Select(g => g.ForecastHour)
-                .Distinct()
-                .CountAsync(ct);
-
-            var expectedHours = maxForecastHours + 1;
-
-            if (storedHourCount >= expectedHours)
-            {
-                var runRecord = await ctx.GfsModelRuns
-                    .FirstOrDefaultAsync(r => r.ModelRunUtc == modelRun, ct);
-
-                if (runRecord is not null && !runRecord.IsComplete)
-                {
-                    runRecord.IsComplete = true;
-                    await ctx.SaveChangesAsync(ct);
-                    Logger.Info($"GfsFetcher: run {modelRun:yyyy-MM-dd HH}Z marked complete ({storedHourCount}/{expectedHours} hours stored).");
-                }
-            }
-            else
-            {
-                Logger.Info($"GfsFetcher: run {modelRun:yyyy-MM-dd HH}Z is {storedHourCount}/{expectedHours} hours complete — will resume next cycle.");
-            }
-        }
+        // ── Mark run complete only if EVERY forecast hour 0..maxForecastHours is stored ──
+        await EvaluateRunCompletenessAsync(dbOptions, modelRun, maxForecastHours, ct);
 
         await PurgeOldRunsAsync(dbOptions, retainModelRuns, ct);
     }
 
     // ── private helpers ───────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Decides whether <paramref name="modelRun"/> is completely stored, marking it
+    /// <see cref="GfsModelRun.IsComplete"/> when it is and logging <em>which</em> hours are
+    /// absent when it is not.
+    /// </summary>
+    /// <remarks>
+    /// Completeness is <b>set membership</b> over <c>0..maxForecastHours</c>, never a count of
+    /// distinct hours.  A count is not a completeness test: the previous
+    /// <c>storedHourCount &gt;= expectedHours</c> meant any hour stored <em>outside</em> the
+    /// expected range substituted one-for-one for a missing hour inside it, so a run could be
+    /// marked complete with hours genuinely absent (WX-451).
+    /// <para>
+    /// The stored set is re-read here rather than carried from the pre-fetch resume scan, which
+    /// is stale by this point — and because the database is the artifact, while our own
+    /// bookkeeping is only a marker.
+    /// </para>
+    /// </remarks>
+    /// <param name="dbOptions">EF Core options.</param>
+    /// <param name="modelRun">The run to evaluate.</param>
+    /// <param name="maxForecastHours">Highest expected forecast hour, inclusive.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>
+    /// The missing forecast hours — empty when the run is complete — or <see langword="null"/>
+    /// when <paramref name="maxForecastHours"/> is negative and completeness cannot be evaluated.
+    /// </returns>
+    /// <sideeffects>May set <c>IsComplete</c> on the run's <c>GfsModelRuns</c> row.</sideeffects>
+    internal static async Task<IReadOnlyList<int>?> EvaluateRunCompletenessAsync(
+        DbContextOptions<WeatherDataContext> dbOptions,
+        DateTime modelRun,
+        int maxForecastHours,
+        CancellationToken ct)
+    {
+        if (maxForecastHours < 0)
+        {
+            // ERROR rather than WARN, deliberately: WxMonitor's LogScanner alerts at ERROR and
+            // above and its email body carries the matched line, so this misconfiguration reaches
+            // an operator instead of sitting in a log nobody reads.  It must be corrected — while
+            // it holds, no run can ever be marked complete.
+            Logger.Error(
+                $"GfsFetcher: Gfs:MaxForecastHours is {maxForecastHours}, which is invalid. " +
+                $"Completeness cannot be evaluated for run {modelRun:yyyy-MM-dd HH}Z, and no run " +
+                "will be marked complete until this setting is corrected.");
+            return null;
+        }
+
+        using var ctx = new WeatherDataContext(dbOptions);
+
+        var storedHours = (await ctx.GfsGrid
+            .Where(g => g.ModelRunUtc == modelRun)
+            .Select(g => g.ForecastHour)
+            .Distinct()
+            .ToListAsync(ct))
+            .ToHashSet();
+
+        var missingHours = ComputeMissingHours(storedHours, maxForecastHours);
+        var expectedHours = maxForecastHours + 1;
+
+        if (missingHours.Count == 0)
+        {
+            var runRecord = await ctx.GfsModelRuns
+                .FirstOrDefaultAsync(r => r.ModelRunUtc == modelRun, ct);
+
+            if (runRecord is not null && !runRecord.IsComplete)
+            {
+                runRecord.IsComplete = true;
+                await ctx.SaveChangesAsync(ct);
+                Logger.Info($"GfsFetcher: run {modelRun:yyyy-MM-dd HH}Z marked complete ({expectedHours}/{expectedHours} hours stored).");
+            }
+        }
+        else
+        {
+            Logger.Info(
+                $"GfsFetcher: run {modelRun:yyyy-MM-dd HH}Z is {expectedHours - missingHours.Count}/{expectedHours} hours complete — " +
+                $"missing {DescribeMissingHours(missingHours)} — will resume next cycle.");
+        }
+
+        return missingHours;
+    }
+
+    /// <summary>
+    /// Returns the forecast hours in <c>0..maxForecastHours</c> absent from
+    /// <paramref name="storedHours"/>, ascending.  Pure; the caller guards a negative bound.
+    /// </summary>
+    /// <remarks>
+    /// Hours present in <paramref name="storedHours"/> but outside the expected range are
+    /// <em>ignored</em> rather than counted — which is the whole point of WX-451.
+    /// </remarks>
+    /// <param name="storedHours">Distinct forecast hours currently stored for the run.</param>
+    /// <param name="maxForecastHours">Highest expected forecast hour, inclusive.</param>
+    /// <returns>The absent hours; empty when every expected hour is present.</returns>
+    internal static IReadOnlyList<int> ComputeMissingHours(ISet<int> storedHours, int maxForecastHours)
+        => Enumerable
+            .Range(0, maxForecastHours + 1)
+            .Where(fh => !storedHours.Contains(fh))
+            .ToList();
+
+    /// <summary>
+    /// Renders missing forecast hours as compact ranges — e.g. <c>f113-f114, f117</c> —
+    /// so an incomplete run says <em>which</em> hours are absent rather than only how many.
+    /// </summary>
+    /// <remarks>
+    /// Output is capped at <paramref name="maxRanges"/> ranges because a wholly-unfetched
+    /// run would otherwise emit an unbounded log line; the remainder is summarised.
+    /// </remarks>
+    /// <param name="missing">Missing forecast hours. Need not be sorted or distinct.</param>
+    /// <param name="maxRanges">Maximum ranges to render before summarising the remainder.</param>
+    /// <returns>A human-readable description. Never empty; returns "none" for an empty input.</returns>
+    internal static string DescribeMissingHours(IReadOnlyList<int> missing, int maxRanges = 8)
+    {
+        if (missing.Count == 0) return "none";
+
+        var sorted = missing.Distinct().OrderBy(h => h).ToList();
+        var ranges = new List<(int Start, int End)>();
+
+        var start = sorted[0];
+        var prev = start;
+
+        for (int i = 1; i < sorted.Count; i++)
+        {
+            if (sorted[i] == prev + 1)
+            {
+                prev = sorted[i];
+                continue;
+            }
+
+            ranges.Add((start, prev));
+            start = prev = sorted[i];
+        }
+
+        ranges.Add((start, prev));
+
+        var shown = string.Join(", ", ranges
+            .Take(maxRanges)
+            .Select(r => r.Start == r.End ? $"f{r.Start:D3}" : $"f{r.Start:D3}-f{r.End:D3}"));
+
+        var hidden = ranges.Count - maxRanges;
+        return hidden > 0 ? $"{shown}, +{hidden} more range(s)" : shown;
+    }
 
     /// <summary>
     /// Deletes any GFS temporary files left in <paramref name="tempDir"/> by a
@@ -537,9 +648,22 @@ public static class GfsFetcher
     /// </summary>
     /// <remarks>
     /// The retention count applies to all tracked runs regardless of completion
-    /// status, so an in-progress run counts toward the total.  With the default
-    /// of 2, the previous complete run is retained alongside the in-progress run;
-    /// only once a third run appears does the oldest get deleted.
+    /// status, so an in-progress run counts toward the total.
+    /// <para>
+    /// <b>The deployed value is <c>Gfs:RetainModelRuns = 1</c>, and at that value the
+    /// "older than the latest complete run" filter below is load-bearing rather than
+    /// belt-and-braces.</b>  With one run retained, the moment a new run is registered the
+    /// count check passes through and <c>Skip(retainCount)</c> selects the previous — complete —
+    /// run.  Only the <c>r &lt; latestComplete</c> test saves it, because that run *is* the
+    /// latest complete one and is therefore not older than itself.  Remove or weaken that
+    /// filter and the sole complete run is deleted as soon as a download begins, leaving
+    /// consumers — which are told to read the newest run whose <c>IsComplete</c> is true —
+    /// with no model data at all for the duration of every fetch.
+    /// </para>
+    /// <para>
+    /// When <c>latestComplete</c> is null (no complete run exists yet) the filter empties the
+    /// delete list entirely, so nothing is purged.  Fails safe in both directions.
+    /// </para>
     /// </remarks>
     /// <param name="dbOptions">EF Core options.</param>
     /// <param name="retainCount">Number of most-recent model runs to keep.</param>

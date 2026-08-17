@@ -184,21 +184,10 @@ public class MetarFetcherDedupTests
 
     // ── ApplyPlan / InsertPerRow (SQLite-backed, EF mechanics) ───────────────
 
+    // Body moved to SqliteTestDb.New when WX-451 became its second consumer; kept as a
+    // forwarder so no call site in this file moves. The "(max)" workaround is documented there.
     private static DbContextOptions<WeatherDataContext> NewDb(SqliteConnection conn)
-    {
-        conn.Open();
-        var options = new DbContextOptionsBuilder<WeatherDataContext>().UseSqlite(conn).Options;
-        using var ctx = new WeatherDataContext(options);
-
-        // The production model pins some columns to nvarchar(max) (SQL Server);
-        // SQLite's DDL parser rejects the "(max)" length, so EnsureCreated() throws.
-        // Build the schema from the generated script with those columns remapped to
-        // SQLite's TEXT affinity — the unique index and FK cascades (what these
-        // tests exercise) are preserved.
-        var script = ctx.Database.GenerateCreateScript().Replace("nvarchar(max)", "TEXT");
-        ctx.Database.ExecuteSqlRaw(script);
-        return options;
-    }
+        => SqliteTestDb.New(conn);
 
     [Fact]
     public void ApplyPlan_IncomingCor_OverwritesInPlace_PreservesPk_ReplacesChildren()
