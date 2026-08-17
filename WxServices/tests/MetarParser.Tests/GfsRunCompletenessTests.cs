@@ -339,8 +339,28 @@ public class GfsRunCompletenessTests
         Assert.True(await IsCompleteAsync(options));
     }
 
+    /// <summary>
+    /// A run already flagged complete is re-evaluated as complete, with no missing hours.
+    /// </summary>
+    /// <remarks>
+    /// ⚠️ NAMED FOR WHAT IT ASSERTS, AND NOT FOR MORE. Its previous name was
+    /// <c>Evaluate_AlreadyComplete_IsNotRewritten</c>, which promised a guarantee it never tested:
+    /// both assertions are already true <em>before</em> the call, so deleting
+    /// <c>&amp;&amp; !runRecord.IsComplete</c> from the guard in <c>EvaluateRunCompletenessAsync</c>
+    /// leaves this green — EF's change tracker sees no modification when the same value is
+    /// reassigned (review round 2, finding 10).
+    /// <para>
+    /// 🔴 THAT MUTATION IS STILL UNPINNED, and saying so is the point: its only observable effect is
+    /// that the complete-branch log line fires on <em>every</em> cycle for an already-complete run,
+    /// inflating <c>WX-451-verify.sh</c>'s <c>marked</c> row. There is no facility to catch it here —
+    /// <c>MetarParser.Tests</c> has no log capture, and <c>GfsModelRun</c> carries only
+    /// <c>ModelRunUtc</c> and <c>IsComplete</c>, so nothing in the row moves on a redundant write.
+    /// Closing it needs a log-capture appender, which is not worth building for one assertion.
+    /// Verified 2026-08-17.
+    /// </para>
+    /// </remarks>
     [Fact]
-    public async Task Evaluate_AlreadyComplete_IsNotRewritten()
+    public async Task Evaluate_AlreadyComplete_StaysCompleteWithNoMissingHours()
     {
         using var conn = new SqliteConnection("DataSource=:memory:");
         var options = SqliteTestDb.New(conn);
@@ -356,5 +376,67 @@ public class GfsRunCompletenessTests
 
         Assert.Empty(missing!);
         Assert.True(await IsCompleteAsync(options));
+    }
+
+    // ── log wiring ────────────────────────────────────────────────────────────────
+    // 🔴 THESE PIN THE PRODUCTION SIGNAL THE FUNCTIONAL TEST KEYS ON. Before them the suite had
+    // ZERO log assertions, so deleting the missing-hours clause from the logger call left all 22
+    // tests green while turning WX-451-verify.sh into a permanent WAIT that can never PASS — a
+    // green suite certifying a functional test that could no longer fire (round 2, finding 2).
+
+    /// <summary>
+    /// The incomplete-branch line carries the exact literal <c>WX-451-verify.sh</c> greps for.
+    /// </summary>
+    /// <remarks>
+    /// The em-dash is U+2014. The script matches it byte-for-byte (<c>e2 80 94</c>), so a change to
+    /// a hyphen here silently disarms the functional test rather than failing it.
+    /// </remarks>
+    [Fact]
+    public void FormatIncompleteLog_CarriesTheDiscriminatorTheVerifyScriptGrepsFor()
+    {
+        var line = GfsFetcher.FormatIncompleteLog(Run, 121, new[] { 113, 114 }, string.Empty);
+
+        // The verify script's literal, character for character.
+        Assert.Contains("hours complete — missing ", line);
+        Assert.Contains("missing f113-f114", line);
+        Assert.DoesNotContain("hours complete - missing", line);   // negative control: not a hyphen
+    }
+
+    /// <summary>
+    /// The complete-branch line is deliberately NOT usable as a version discriminator.
+    /// </summary>
+    /// <remarks>
+    /// It is byte-identical between 1.61.2 and 1.61.3 for a healthy run, which is exactly why
+    /// <c>WX-451.md</c> tells the operator not to key on it. Pinned so that stays true: if this
+    /// ever grows a 1.61.3-only marker, the procedure's reasoning needs revisiting.
+    /// </remarks>
+    [Fact]
+    public void FormatCompleteLog_DoesNotCarryTheDiscriminator()
+    {
+        var line = GfsFetcher.FormatCompleteLog(Run, 121, string.Empty);
+
+        Assert.Contains("marked complete (121/121 hours stored)", line);
+        Assert.DoesNotContain("missing", line);
+    }
+
+    /// <summary>
+    /// The out-of-range note reaches the log text, not merely the arithmetic.
+    /// </summary>
+    /// <remarks>
+    /// Extracting <c>CountOutOfRangeHours</c> pinned the count and left the MESSAGE unpinned, so
+    /// deleting the note still left the suite green (round 2, finding 3). Both branches append it,
+    /// so both are asserted.
+    /// </remarks>
+    [Fact]
+    public void FormatOutOfRangeNote_AppearsInBothBranches_AndIsEmptyWhenNothingIsSurplus()
+    {
+        var note = GfsFetcher.FormatOutOfRangeNote(60, 60);
+        Assert.Equal("; 60 stored hour(s) outside 0..60", note);
+
+        Assert.Contains(note, GfsFetcher.FormatCompleteLog(Run, 61, note));
+        Assert.Contains(note, GfsFetcher.FormatIncompleteLog(Run, 61, new[] { 5 }, note));
+
+        // Negative control: silent in normal operation, so it costs nothing until something moved.
+        Assert.Equal(string.Empty, GfsFetcher.FormatOutOfRangeNote(0, 120));
     }
 }

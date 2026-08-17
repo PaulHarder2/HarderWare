@@ -333,6 +333,21 @@ public static class GfsFetcher
             return null;
         }
 
+        // RESET ON THE VALID PATH, so a SECOND onset is reported (WX-451 review round 2, finding 4).
+        // The flag is a rate limit on a STANDING condition, not a once-per-process latch: the bound
+        // genuinely changes within one process, because GfsFetchWorker.ExecuteAsync calls LoadConfig()
+        // inside its cycle loop and IConfiguration is built with reloadOnChange:true over the JSON
+        // layers plus the WX-313 DB Config overlay.  Without this line the sequence
+        //   bad -> ERROR (correct) -> operator corrects it -> bad again
+        // logs NOTHING the second time, while no run can be marked complete, WxMonitor raises nothing
+        // and WX-451-verify.sh's badconfig row reads 0 [ok] — the alarm for the exact silent freeze
+        // this ticket exists to prevent, suppressed by its own rate limiter.
+        //
+        // Preserves the WX-453 rationale intact: still ONE ERROR PER ONSET rather than one per cycle,
+        // so a standing misconfiguration cannot hold WxMonitor's cooldown open and discard every other
+        // WxParser.Svc error.
+        Interlocked.Exchange(ref _negativeBoundReported, 0);
+
         using var ctx = new WeatherDataContext(dbOptions);
 
         var storedHours = (await ctx.GfsGrid
@@ -352,9 +367,7 @@ public static class GfsFetcher
         // while silently holding 60 orphaned hours from the larger bound. Empty in normal
         // operation, so it costs nothing until something has actually changed underneath us.
         var outOfRange = CountOutOfRangeHours(storedHours, maxForecastHours);
-        var outOfRangeNote = outOfRange > 0
-            ? $"; {outOfRange} stored hour(s) outside 0..{maxForecastHours}"
-            : string.Empty;
+        var outOfRangeNote = FormatOutOfRangeNote(outOfRange, maxForecastHours);
 
         if (missingHours.Count == 0)
         {
@@ -365,14 +378,12 @@ public static class GfsFetcher
             {
                 runRecord.IsComplete = true;
                 await ctx.SaveChangesAsync(ct);
-                Logger.Info($"GfsFetcher: run {modelRun:yyyy-MM-dd HH}Z marked complete ({expectedHours}/{expectedHours} hours stored{outOfRangeNote}).");
+                Logger.Info(FormatCompleteLog(modelRun, expectedHours, outOfRangeNote));
             }
         }
         else
         {
-            Logger.Info(
-                $"GfsFetcher: run {modelRun:yyyy-MM-dd HH}Z is {expectedHours - missingHours.Count}/{expectedHours} hours complete — " +
-                $"missing {DescribeMissingHours(missingHours)}{outOfRangeNote} — will resume next cycle.");
+            Logger.Info(FormatIncompleteLog(modelRun, expectedHours, missingHours, outOfRangeNote));
         }
 
         return missingHours;
@@ -405,12 +416,73 @@ public static class GfsFetcher
     /// completeness verdict — so deleting the note entirely left the suite green, and the sole
     /// production signal for a horizon REDUCTION (one of the two routes that make WX-451's
     /// defect reachable) was exercised by nothing.
+    /// <para>
+    /// ⚠️ Extracting the arithmetic closed only half of that. Until the log <em>text</em> was also
+    /// extracted (<see cref="FormatOutOfRangeNote"/> and the two Format*Log helpers below) deleting
+    /// the note from the message still left the suite green, because nothing asserted what the
+    /// message said — an earlier revision of this remark claimed the coverage the extraction had
+    /// not yet achieved (review round 2, finding 3).
+    /// </para>
     /// </remarks>
     /// <param name="storedHours">Distinct forecast hours currently stored for the run.</param>
     /// <param name="maxForecastHours">Highest expected forecast hour, inclusive.</param>
     /// <returns>How many stored hours fall outside the expected range; 0 in normal operation.</returns>
     internal static int CountOutOfRangeHours(ISet<int> storedHours, int maxForecastHours)
         => storedHours.Count(h => h < 0 || h > maxForecastHours);
+
+    /// <summary>
+    /// Renders the surplus-hours suffix appended to both completeness log lines, or the empty
+    /// string when nothing is out of range. Pure.
+    /// </summary>
+    /// <param name="outOfRange">Count from <see cref="CountOutOfRangeHours"/>.</param>
+    /// <param name="maxForecastHours">Highest expected forecast hour, inclusive.</param>
+    /// <returns>A leading-semicolon clause, or <see cref="string.Empty"/>.</returns>
+    internal static string FormatOutOfRangeNote(int outOfRange, int maxForecastHours)
+        => outOfRange > 0
+            ? $"; {outOfRange} stored hour(s) outside 0..{maxForecastHours}"
+            : string.Empty;
+
+    /// <summary>
+    /// Renders the run-marked-complete log line. Pure.
+    /// </summary>
+    /// <param name="modelRun">The run being reported.</param>
+    /// <param name="expectedHours">Count of expected hours, i.e. <c>maxForecastHours + 1</c>.</param>
+    /// <param name="outOfRangeNote">Suffix from <see cref="FormatOutOfRangeNote"/>.</param>
+    /// <returns>The message passed to the logger.</returns>
+    internal static string FormatCompleteLog(DateTime modelRun, int expectedHours, string outOfRangeNote)
+        => $"GfsFetcher: run {modelRun:yyyy-MM-dd HH}Z marked complete " +
+           $"({expectedHours}/{expectedHours} hours stored{outOfRangeNote}).";
+
+    /// <summary>
+    /// Renders the run-incomplete log line — the one carrying <em>which</em> hours are absent. Pure.
+    /// </summary>
+    /// <remarks>
+    /// 🔴 THIS STRING IS THE FUNCTIONAL TEST'S ONLY DISCRIMINATOR, which is why it is extracted and
+    /// asserted rather than left inline in the logger call.  <c>docs/test-procedures/WX-451-verify.sh</c>
+    /// greps for the literal <c>"hours complete — missing "</c> to tell a 1.61.3+ binary from the old
+    /// one: the replaced code emitted no missing-hours list at all, so this phrase cannot come from it.
+    /// The complete-branch line is NOT usable for that — it is byte-identical across both versions for
+    /// a healthy run.
+    /// <para>
+    /// So a refactor that drops, reorders or re-punctuates this phrase would silently turn the
+    /// functional test into a permanent WAIT that can never PASS, with nothing going red. Before this
+    /// extraction the 22 unit tests contained zero log assertions and all stayed green with the
+    /// missing-hours clause deleted entirely (review round 2, finding 2).  The em-dash is U+2014 and
+    /// the verify script matches it byte-for-byte; changing it to a hyphen breaks the test.
+    /// </para>
+    /// </remarks>
+    /// <param name="modelRun">The run being reported.</param>
+    /// <param name="expectedHours">Count of expected hours, i.e. <c>maxForecastHours + 1</c>.</param>
+    /// <param name="missingHours">The absent hours; must be non-empty for this branch.</param>
+    /// <param name="outOfRangeNote">Suffix from <see cref="FormatOutOfRangeNote"/>.</param>
+    /// <returns>The message passed to the logger.</returns>
+    internal static string FormatIncompleteLog(
+        DateTime modelRun,
+        int expectedHours,
+        IReadOnlyList<int> missingHours,
+        string outOfRangeNote)
+        => $"GfsFetcher: run {modelRun:yyyy-MM-dd HH}Z is {expectedHours - missingHours.Count}/{expectedHours} hours complete — " +
+           $"missing {DescribeMissingHours(missingHours)}{outOfRangeNote} — will resume next cycle.";
 
     /// <summary>
     /// Renders missing forecast hours as compact ranges — e.g. <c>f113-f114, f117</c> —
