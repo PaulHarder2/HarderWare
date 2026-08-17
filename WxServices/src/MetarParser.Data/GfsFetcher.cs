@@ -264,7 +264,8 @@ public static class GfsFetcher
 
     /// <summary>
     /// Set once the invalid-<c>MaxForecastHours</c> misconfiguration has been reported, so it is
-    /// logged at most once per process instead of on every fetch cycle.  See the guard in
+    /// logged once per ONSET rather than on every fetch cycle.  Cleared on the valid path, so a
+    /// second onset after the setting is corrected is reported again.  See the guard in
     /// <see cref="EvaluateRunCompletenessAsync"/> for why the rate limit exists (WX-453).
     /// </summary>
     /// <remarks>
