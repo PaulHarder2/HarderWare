@@ -36,8 +36,15 @@ public class GfsRunCompletenessTests
 {
     private static readonly DateTime Run = new(2026, 8, 17, 12, 0, 0, DateTimeKind.Utc);
 
-    private static GfsGridPoint Point(int forecastHour, float lat = 30.0f, float lon = -95.0f)
-        => new() { ModelRunUtc = Run, ForecastHour = forecastHour, Lat = lat, Lon = lon };
+    /// <summary>
+    /// A second, earlier run. <c>Gfs:RetainModelRuns = 1</c> plus <c>PurgeOldRunsAsync</c>'s
+    /// "never delete a run newer than the latest complete run" filter means GfsGrid routinely
+    /// holds two runs at once, so this is the production shape rather than a contrivance.
+    /// </summary>
+    private static readonly DateTime OtherRun = new(2026, 8, 17, 6, 0, 0, DateTimeKind.Utc);
+
+    private static GfsGridPoint Point(int forecastHour, DateTime? run = null, float lat = 30.0f, float lon = -95.0f)
+        => new() { ModelRunUtc = run ?? Run, ForecastHour = forecastHour, Lat = lat, Lon = lon };
 
     // ── ComputeMissingHours (pure) ───────────────────────────────────────────
 
@@ -114,13 +121,17 @@ public class GfsRunCompletenessTests
 
     // ── EvaluateRunCompletenessAsync (SQLite-backed — the WIRING) ────────────
 
-    private static async Task SeedAsync(DbContextOptions<WeatherDataContext> options, IEnumerable<int> hours)
+    private static async Task SeedRunAsync(
+        DbContextOptions<WeatherDataContext> options, DateTime run, IEnumerable<int> hours, bool complete = false)
     {
         using var ctx = new WeatherDataContext(options);
-        ctx.GfsModelRuns.Add(new GfsModelRun { ModelRunUtc = Run, IsComplete = false });
-        ctx.GfsGrid.AddRange(hours.Select(h => Point(h)));
+        ctx.GfsModelRuns.Add(new GfsModelRun { ModelRunUtc = run, IsComplete = complete });
+        ctx.GfsGrid.AddRange(hours.Select(h => Point(h, run)));
         await ctx.SaveChangesAsync();
     }
+
+    private static Task SeedAsync(DbContextOptions<WeatherDataContext> options, IEnumerable<int> hours)
+        => SeedRunAsync(options, Run, hours);
 
     private static async Task<bool> IsCompleteAsync(DbContextOptions<WeatherDataContext> options)
     {
@@ -162,6 +173,51 @@ public class GfsRunCompletenessTests
         Assert.False(await IsCompleteAsync(options));
     }
 
+    /// <summary>
+    /// THE RUN DIMENSION. Every other SQLite test seeds exactly one run, so the
+    /// <c>ModelRunUtc</c> filter in the completeness read is a no-op in all of them and
+    /// deleting it survives the whole suite — found by ClaudePx in sibling review and
+    /// confirmed by mutation.
+    /// <para>
+    /// Here the run under test has stored <em>nothing</em>, while a different, complete run
+    /// holds all 121 hours. Without the filter those hours are counted as this run's and a
+    /// freshly registered run is marked complete with zero data — WX-451's own defect one
+    /// level up, and worse than the bug being fixed. Not contrived: <c>RetainModelRuns = 1</c>
+    /// plus the purge's latest-complete guard means two runs' grid rows routinely coexist.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task Evaluate_HoursBelongToADifferentRun_DoesNotMarkComplete()
+    {
+        using var conn = new SqliteConnection("DataSource=:memory:");
+        var options = SqliteTestDb.New(conn);
+        await SeedRunAsync(options, OtherRun, Enumerable.Range(0, 121), complete: true);
+        await SeedRunAsync(options, Run, []);
+
+        var missing = await GfsFetcher.EvaluateRunCompletenessAsync(options, Run, 120, CancellationToken.None);
+
+        Assert.Equal(121, missing!.Count);
+        Assert.False(await IsCompleteAsync(options));
+    }
+
+    /// <summary>
+    /// The same lens as the f200 test, applied to the run axis: this run is short exactly
+    /// f113, and the neighbouring run supplies one. Set membership must be scoped to the run.
+    /// </summary>
+    [Fact]
+    public async Task Evaluate_MissingHourSuppliedByANeighbouringRun_DoesNotMarkComplete()
+    {
+        using var conn = new SqliteConnection("DataSource=:memory:");
+        var options = SqliteTestDb.New(conn);
+        await SeedRunAsync(options, OtherRun, [113], complete: true);
+        await SeedRunAsync(options, Run, Enumerable.Range(0, 121).Where(h => h != 113));
+
+        var missing = await GfsFetcher.EvaluateRunCompletenessAsync(options, Run, 120, CancellationToken.None);
+
+        Assert.Equal([113], missing);
+        Assert.False(await IsCompleteAsync(options));
+    }
+
     [Fact]
     public async Task Evaluate_HourMissing_LeavesRunIncomplete()
     {
@@ -191,6 +247,60 @@ public class GfsRunCompletenessTests
 
         Assert.Null(missing);
         Assert.False(await IsCompleteAsync(options));
+    }
+
+    /// <summary>
+    /// The negative-bound ERROR is logged once per process, because a log line repeating every
+    /// fetch cycle holds WxMonitor's per-service cooldown open and its suppressed findings are
+    /// discarded rather than deferred (WX-453) — so a permanently-lit ERROR masks every other
+    /// error from that service.
+    /// <para>
+    /// This pins that only the LOGGING was rate-limited and not the GUARD: the condition must be
+    /// re-checked, and still refused, on every call. That is the part with consequences — a guard
+    /// that quietly stopped refusing after the first call would mark runs complete with no data.
+    /// </para>
+    /// <para>
+    /// ⚠️ It deliberately does NOT assert that the log was written exactly once. `Logger` is
+    /// static with no capture seam, so no test can observe that; the once-per-process behaviour
+    /// is a source literal documented at the call site. See the disposition recorded on WX-451.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task Evaluate_NegativeMaxForecastHours_RefusesOnEveryCall_NotOnlyTheFirst()
+    {
+        using var conn = new SqliteConnection("DataSource=:memory:");
+        var options = SqliteTestDb.New(conn);
+        await SeedAsync(options, []);
+
+        var first = await GfsFetcher.EvaluateRunCompletenessAsync(options, Run, -1, CancellationToken.None);
+        var second = await GfsFetcher.EvaluateRunCompletenessAsync(options, Run, -1, CancellationToken.None);
+        var third = await GfsFetcher.EvaluateRunCompletenessAsync(options, Run, -5, CancellationToken.None);
+
+        Assert.Null(first);
+        Assert.Null(second);
+        Assert.Null(third);
+        Assert.False(await IsCompleteAsync(options));
+    }
+
+    /// <summary>
+    /// The out-of-range note exists so a horizon REDUCTION is visible in the log: both branches
+    /// report in-range coverage, which can never exceed the expected total, so without it the
+    /// presence of orphaned hours could not appear at all. Here the run is complete under a
+    /// reduced bound while holding hours above it — and must still be marked complete, since
+    /// out-of-range hours are surplus, not missing.
+    /// </summary>
+    [Fact]
+    public async Task Evaluate_CompleteUnderAReducedBound_StillMarksComplete_WithSurplusHoursPresent()
+    {
+        using var conn = new SqliteConnection("DataSource=:memory:");
+        var options = SqliteTestDb.New(conn);
+        await SeedAsync(options, Enumerable.Range(0, 121));
+
+        // Bound reduced to 60; hours 61..120 are now surplus rather than expected.
+        var missing = await GfsFetcher.EvaluateRunCompletenessAsync(options, Run, 60, CancellationToken.None);
+
+        Assert.Empty(missing!);
+        Assert.True(await IsCompleteAsync(options));
     }
 
     [Fact]

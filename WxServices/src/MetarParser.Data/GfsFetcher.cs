@@ -263,6 +263,18 @@ public static class GfsFetcher
     // ── private helpers ───────────────────────────────────────────────────────
 
     /// <summary>
+    /// Set once the invalid-<c>MaxForecastHours</c> misconfiguration has been reported, so it is
+    /// logged at most once per process instead of on every fetch cycle.  See the guard in
+    /// <see cref="EvaluateRunCompletenessAsync"/> for why the rate limit exists (WX-453).
+    /// </summary>
+    /// <remarks>
+    /// An <see cref="int"/> rather than a <see cref="bool"/> so the test-and-set is a single
+    /// <see cref="Interlocked.Exchange(ref int, int)"/>, which is correct even if two fetch
+    /// cycles ever overlap.
+    /// </remarks>
+    private static int _negativeBoundReported;
+
+    /// <summary>
     /// Decides whether <paramref name="modelRun"/> is completely stored, marking it
     /// <see cref="GfsModelRun.IsComplete"/> when it is and logging <em>which</em> hours are
     /// absent when it is not.
@@ -300,10 +312,24 @@ public static class GfsFetcher
             // above and its email body carries the matched line, so this misconfiguration reaches
             // an operator instead of sitting in a log nobody reads.  It must be corrected — while
             // it holds, no run can ever be marked complete.
-            Logger.Error(
-                $"GfsFetcher: Gfs:MaxForecastHours is {maxForecastHours}, which is invalid. " +
-                $"Completeness cannot be evaluated for run {modelRun:yyyy-MM-dd HH}Z, and no run " +
-                "will be marked complete until this setting is corrected.");
+            //
+            // Logged ONCE PER PROCESS, not once per cycle.  The guard's BEHAVIOUR is unaffected —
+            // it refuses on every call — but the log line is rate-limited on purpose: WxMonitor
+            // coalesces every ERROR from a service into a single finding whose cooldown DISCARDS
+            // what it suppresses rather than deferring it (WX-453), so an ERROR repeating every
+            // cycle holds that cooldown open indefinitely and destroys every other WxParser.Svc
+            // error landing in the gaps.  This is a configuration fault — constant for the life of
+            // the process — so repeats carry no new information, and WxMonitor already caps
+            // delivery at one email per service per cooldown window regardless.
+            if (Interlocked.Exchange(ref _negativeBoundReported, 1) == 0)
+            {
+                Logger.Error(
+                    $"GfsFetcher: Gfs:MaxForecastHours is {maxForecastHours}, which is invalid. " +
+                    $"Completeness cannot be evaluated for run {modelRun:yyyy-MM-dd HH}Z, and no run " +
+                    "will be marked complete until this setting is corrected. This is reported once " +
+                    "per process; the condition is re-checked, and still refused, on every cycle.");
+            }
+
             return null;
         }
 
@@ -319,6 +345,17 @@ public static class GfsFetcher
         var missingHours = ComputeMissingHours(storedHours, maxForecastHours);
         var expectedHours = maxForecastHours + 1;
 
+        // Both lines below report IN-RANGE coverage, which can never exceed expectedHours — so
+        // without this the fact that out-of-range hours exist could not appear in the log at all.
+        // That matters precisely under a horizon REDUCTION, which is one of the two conditions
+        // that make WX-451's defect reachable: the run would report a tidy "61/61 hours stored"
+        // while silently holding 60 orphaned hours from the larger bound. Empty in normal
+        // operation, so it costs nothing until something has actually changed underneath us.
+        var outOfRange = storedHours.Count(h => h < 0 || h > maxForecastHours);
+        var outOfRangeNote = outOfRange > 0
+            ? $"; {outOfRange} stored hour(s) outside 0..{maxForecastHours}"
+            : string.Empty;
+
         if (missingHours.Count == 0)
         {
             var runRecord = await ctx.GfsModelRuns
@@ -328,14 +365,14 @@ public static class GfsFetcher
             {
                 runRecord.IsComplete = true;
                 await ctx.SaveChangesAsync(ct);
-                Logger.Info($"GfsFetcher: run {modelRun:yyyy-MM-dd HH}Z marked complete ({expectedHours}/{expectedHours} hours stored).");
+                Logger.Info($"GfsFetcher: run {modelRun:yyyy-MM-dd HH}Z marked complete ({expectedHours}/{expectedHours} hours stored{outOfRangeNote}).");
             }
         }
         else
         {
             Logger.Info(
                 $"GfsFetcher: run {modelRun:yyyy-MM-dd HH}Z is {expectedHours - missingHours.Count}/{expectedHours} hours complete — " +
-                $"missing {DescribeMissingHours(missingHours)} — will resume next cycle.");
+                $"missing {DescribeMissingHours(missingHours)}{outOfRangeNote} — will resume next cycle.");
         }
 
         return missingHours;
