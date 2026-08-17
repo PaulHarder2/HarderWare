@@ -269,8 +269,15 @@ public static class GfsFetcher
     /// </summary>
     /// <remarks>
     /// An <see cref="int"/> rather than a <see cref="bool"/> so the test-and-set is a single
-    /// <see cref="Interlocked.Exchange(ref int, int)"/>, which is correct even if two fetch
-    /// cycles ever overlap.
+    /// <see cref="Interlocked.Exchange(ref int, int)"/> and no read-modify-write can be torn.
+    /// <para>
+    /// ⚠️ NARROWED. This claimed correctness "even if two fetch cycles ever overlap", which held
+    /// while the flag was a one-way LATCH and stopped holding when the valid path began clearing
+    /// it: set and clear are now two independent operations, so overlapping cycles could report one
+    /// onset twice or suppress a later one. The once-per-onset property therefore rests on
+    /// <c>GfsFetchWorker.ExecuteAsync</c>'s single sequential cycle loop, not on the interlock.
+    /// Correct as deployed; do not rely on the wider guarantee. (CodeRabbit, PR #227.)
+    /// </para>
     /// </remarks>
     private static int _negativeBoundReported;
 
