@@ -210,11 +210,19 @@ Only after this pass — not the poller's verdict — is CodeRabbit "clear." *Re
 
 ## 10. Hash-fill commit
 
-When CodeRabbit is clean, add a **separate commit** whose sole change is filling in the v1.N.N commit hash in `VERSIONS.md` (replacing `_pending_`). The hash to record is the SHA of the commit that introduced the `Directory.Build.props` version bump — equivalently, the feature branch's HEAD at the moment *before* this hash-fill commit is added. It is never the hash-fill commit itself, and never the merge commit.
+When CodeRabbit is clean, add a **separate commit** whose sole change is filling in the v1.N.N commit hash in `VERSIONS.md` (replacing `_pending_`). **Record the final commit on the branch before this hash-fill commit — the branch HEAD at that moment — regardless of whether it is the version-bump commit, and even when it is unrelated to what satisfied the ticket.** *(Paul's ruling, 2026-06-09: it is the one rule that is always unambiguous and always points at the actual shipping tip.)* It is never the hash-fill commit itself, and never the merge commit.
 
-This hash-fill commit does **not** gate on a fresh CodeRabbit review. It is a deterministic `_pending_`→hash substitution, and the substantive change has by now cleared both Claude's `/code-review` (§7d) and CodeRabbit. Merge it as soon as **CI** is green; CodeRabbit still posts its quick check on the commit, but we do not wait on a re-review. *Added 2026-05-29 — supersedes the earlier "wait for CR even on the hash-fill" practice, which added latency with no payoff on a mechanical edit.*
+⚠️ **It is NOT necessarily the commit that bumped `Directory.Build.props`.** The two coincide only when nothing follows the bump; review rounds after it make them different commits, and the bump commit's source is then not what shipped. **The error is silent — a wrong hash still resolves to a real commit and reads as correct.**
+
+🔴 **RE-VERIFY AT MERGE. If ANY commit lands after the hash-fill — a further review round, a revert, an amend or a rebase — RE-FILL.** The recorded hash is a claim about the branch tip, and anything appended to the branch falsifies it with nothing failing. *(WX-451: a source change landed eleven minutes after the fill; the hash was re-filled to match.)*
+
+⚠️ **A branch that bumps the version twice needs one fill per row**, and nothing detects a leftover `_pending_` — `check-version-consistency.sh` compares version *numbers* against the top row only.
+
+This hash-fill commit does **not** gate on a fresh CodeRabbit review. It is a deterministic `_pending_`→hash substitution, and the substantive change has by now cleared both Claude's `/code-review` (§7d) and CodeRabbit. Merge it as soon as **CI** is green. ⚠️ **CodeRabbit posts NOTHING on a hash-fill-only push** — WX-196 (2026-06-16) added `!WxServices/VERSIONS.md` to `.coderabbit.yaml`, so a push whose only changed file is `VERSIONS.md` is excluded from review and spends no review-frequency quota. **Do not poll `check-cr.sh` for a verdict that will never arrive.** *Added 2026-05-29 — supersedes the earlier "wait for CR even on the hash-fill" practice, which added latency with no payoff on a mechanical edit.*
 
 Skip this step for pure-tooling / pure-docs PRs that did not bump the version (see §5).
+
+⚠️ **Rows recorded before 2026-08-18 follow the earlier convention** — e.g. `1.61.2 = 6333674`, which is the version-bump commit with six commits after it. **Do not retro-edit them** to match this rule.
 
 ## 11. Merge — always "Create a merge commit"
 
