@@ -214,9 +214,15 @@ When CodeRabbit is clean, add a **separate commit** whose sole change is filling
 
 ⚠️ **It is NOT necessarily the commit that bumped `Directory.Build.props`.** The two coincide only when nothing follows the bump; review rounds after it make them different commits, and the bump commit's source is then not what shipped. **The error is silent — a wrong hash still resolves to a real commit and reads as correct.**
 
-🔴 **RE-VERIFY AT MERGE. If ANY commit lands after the hash-fill — a further review round, a revert, an amend or a rebase — RE-FILL.** The recorded hash is a claim about the branch tip, and anything appended to the branch falsifies it with nothing failing. *(WX-451: a source change landed eleven minutes after the fill; the hash was re-filled to match.)*
+🔴 **RE-VERIFY AT MERGE — for the row you are filling on this branch. If ANY commit lands after the hash-fill — a further review round, a revert, an amend or a rebase — RE-FILL.** The recorded hash is a claim about the branch tip, and anything appended to the branch falsifies it with nothing failing. **This applies only to the row being filled now; rows already on `master` are history and are covered by the note below.** *(WX-451: a source change landed eleven minutes after the fill; the hash was re-filled to match.)*
 
-⚠️ **A branch that bumps the version twice needs one fill per row**, and nothing detects a leftover `_pending_` — `check-version-consistency.sh` compares version *numbers* against the top row only.
+⚠️ **ONE BRANCH, ONE VERSION BUMP** — which is what practice already is: every one of the last twenty bumps is a single version on a single branch. **If a change genuinely needs two, split it into two PRs.** The rule above assumes exactly one `_pending_` row: filling a second row in a second commit would record *the first hash-fill commit* as the branch tip, which this section forbids.
+
+⚠️ **Nothing automatic detects a leftover `_pending_`** — `check-version-consistency.sh` compares version *numbers* against the top row only, and no CI step or hook greps for it. **Before merging, check by hand:**
+
+```bash
+grep -n '_pending_' WxServices/VERSIONS.md    # expect no output
+```
 
 This hash-fill commit does **not** gate on a fresh CodeRabbit review. It is a deterministic `_pending_`→hash substitution, and the substantive change has by now cleared both Claude's `/code-review` (§7d) and CodeRabbit. Merge it as soon as **CI** is green. ⚠️ **CodeRabbit posts NOTHING on a hash-fill-only push** — WX-196 (2026-06-16) added `!WxServices/VERSIONS.md` to `.coderabbit.yaml`, so a push whose only changed file is `VERSIONS.md` is excluded from review and spends no review-frequency quota. **Do not poll `check-cr.sh` for a verdict that will never arrive.** *Added 2026-05-29 — supersedes the earlier "wait for CR even on the hash-fill" practice, which added latency with no payoff on a mechanical edit.*
 
