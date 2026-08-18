@@ -11,47 +11,45 @@
 """
 import re, sys, tempfile, os
 
-def lines(p): return open(p, encoding='utf-8-sig').read().splitlines()
+import importlib.util as _il, os as _os
+_spec = _il.spec_from_file_location('_ac1', _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), 'comment-trim-ac1.py'))
+_ac1 = _il.module_from_spec(_spec); _spec.loader.exec_module(_ac1)
 
-# A comment line is any line CONTAINING a comment, not only one starting with it:
-# a trailing `x = 1; // note` was invisible to every guard in the first version.
-def _comment_text(line):
-    """The comment part of a line, or None. Respects string literals."""
-    i, n, st = 0, len(line), 'N'
-    while i < n:
-        c = line[i]; d = line[i+1] if i+1 < n else ''
-        if st == 'N':
-            if c == '/' and d == '/': return re.sub(r'^/+\s?', '', line[i:]).strip()
-            if c == '"': st = 'S'; i += 1; continue
-            if c == "'": st = 'C'; i += 1; continue
-            i += 1; continue
-        if st == 'S':
-            if c == '\\': i += 2; continue
-            if c == '"': st = 'N'
-            i += 1; continue
-        if st == 'C':
-            if c == '\\': i += 2; continue
-            if c == "'": st = 'N'
-            i += 1; continue
-    return None
+class Doc:
+    """A file plus its comment map, built by the SHARED whole-file tokenizer.
 
-def _is_c(l): return _comment_text(l) is not None
-def _txt(l):  return _comment_text(l) or ''
+    🔴 THIS DELIBERATELY DOES NOT HAVE ITS OWN COMMENT PARSER. It used to, and that
+       parser reset state per line and knew only "..." and '...' - so a // inside a
+       multi-line raw or verbatim string read as a comment, the exact blind spot the
+       AC-1 stripper had been hardened against. One tokenizer was fixed and the other
+       shipped. Two parsers cannot stay equal; one imported parser cannot drift.
+    """
+    def __init__(self, path):
+        src = open(path, encoding='utf-8-sig').read()
+        self.raw = src.splitlines()
+        self.cmap = dict(_ac1.comment_map(src))     # 1-based line -> comment text
+    def is_c(self, i):   return (i + 1) in self.cmap
+    def txt(self, i):    return self.cmap.get(i + 1, '')
+    def own_line(self, i):
+        return i < len(self.raw) and self.raw[i].strip().startswith('//')
+    def __len__(self):   return len(self.raw)
+
+def lines(p): return Doc(p)
 
 def g1_lowercase_block_openers(L):
     """A comment block whose first WORDED line starts lowercase - the signature of a
     stripped `WX-nnn: ` stamp. A bare `//` separator is not a leader and must not hide
     the paragraph after it."""
     out = []
-    for i, l in enumerate(L):
-        if not _is_c(l): continue
-        if not l.strip().startswith('//'): continue   # trailing annotation, not a block
-        t = _txt(l)
+    for i in range(len(L)):
+        if not L.is_c(i): continue
+        if not L.own_line(i): continue   # trailing annotation, not a block
+        t = L.txt(i)
         if not t: continue                      # bare `//` - transparent, not a leader
         # leader = first worded comment line of the run
         j = i - 1
-        while j >= 0 and _is_c(L[j]) and not _txt(L[j]): j -= 1
-        if j >= 0 and _is_c(L[j]) and _txt(L[j]): continue
+        while j >= 0 and L.is_c(j) and not L.txt(j): j -= 1
+        if j >= 0 and L.is_c(j) and L.txt(j): continue
         w = t.split()[0]
         if re.match(r'^[a-z]', w) and not re.match(r'^(https?|www)', w) \
            and '(' not in w and w not in ('e.g.', 'i.e.', 'cf.'):
@@ -61,27 +59,27 @@ def g1_lowercase_block_openers(L):
 _SENT_END = re.compile(r'[.!?:;]$')
 def g2_doubled_words(L):
     out = []
-    for i, l in enumerate(L):
-        if not _is_c(l): continue
-        m = re.search(r'\b(\w+)\s+\1\b', _txt(l), re.I)
+    for i in range(len(L)):
+        if not L.is_c(i): continue
+        m = re.search(r'\b(\w+)\s+\1\b', L.txt(i), re.I)
         if m: out.append((i + 1, m.group(0)))
     for i in range(len(L) - 1):
-        if not (_is_c(L[i]) and _is_c(L[i + 1])): continue
-        a, b = _txt(L[i]).split(), _txt(L[i + 1]).split()
+        if not (L.is_c(i) and L.is_c(i + 1)): continue
+        a, b = L.txt(i).split(), L.txt(i + 1).split()
         if not (a and b): continue
         # Same word across a join. Require SAME CASE and no sentence break: "...the" /
         # "The next..." is a legitimate new sentence, not a doubling.
         if a[-1] == b[0] and a[-1].isalpha() and not _SENT_END.search(a[-1]) \
-           and not _SENT_END.search(_txt(L[i])):
+           and not _SENT_END.search(L.txt(i)):
             out.append((i + 1, f"{a[-1]} / {b[0]} (across join)"))
     return out
 
 def g3_dangling_punctuation(L):
     out = []
-    for i, l in enumerate(L):
-        if not _is_c(l): continue
-        if i + 1 < len(L) and _is_c(L[i + 1]) and _txt(L[i + 1]): continue
-        t = re.sub(r'(</\w+>|/>)$', '', _txt(l).rstrip()).rstrip()
+    for i in range(len(L)):
+        if not L.is_c(i): continue
+        if i + 1 < len(L) and L.is_c(i + 1) and L.txt(i + 1): continue
+        t = re.sub(r'(</\w+>|/>)$', '', L.txt(i).rstrip()).rstrip()
         if t.endswith(('—', '–', ':', '(', ',')):
             out.append((i + 1, t[-60:]))
     return out
@@ -91,9 +89,14 @@ GUARDS = [("lowercase block openers", g1_lowercase_block_openers),
           ("dangling punctuation",    g3_dangling_punctuation)]
 
 def doc_delta(after, before):
-    da = [_txt(l) for l in after if l.strip().startswith('///')]
-    db = [_txt(l) for l in before if l.strip().startswith('///')]
-    return sum(1 for x, y in zip(db, da) if x != y), len(db), len(da)
+    # zip_longest, not zip: zip stops at the shorter input, so /// lines APPENDED or
+    # REMOVED at the end of a file were invisible - a delta of exactly the kind this
+    # guard exists to report.
+    from itertools import zip_longest
+    da = [after.txt(i) for i in range(len(after)) if after.raw[i].strip().startswith('///')]
+    db = [before.txt(i) for i in range(len(before)) if before.raw[i].strip().startswith('///')]
+    ch = sum(1 for x, y in zip_longest(db, da, fillvalue=None) if x != y)
+    return ch, len(db), len(da)
 
 def findings(path):
     """Guard findings as TEXT, so before/after can be compared across shifted lines."""
@@ -154,6 +157,35 @@ def selftest():
             det = bool(fn(lines(f)))
             print(f"  {'ok  ' if det else 'FAIL'}  {name} [extra {k}]: detected={det}")
             ok &= det
+    # 🔴 STRING-LITERAL controls. These are the reason this file no longer owns a
+    #    parser: each was invisible to the previous per-line comment finder.
+    Q = chr(34) * 3          # the raw-string delimiter, built rather than written
+    lit = {
+      "// inside a multi-line verbatim string":
+        ['class C {', '  string s = @"line one // not a comment',
+         'line two /* nor this */";', '  int x = 1;', '}'],
+      "// inside a raw string literal":
+        ['class C {', '  string s = ' + repr(Q + 'a // b ' + Q) + ';', '  int x = 1;', '}'],
+    }
+    for label, src in lit.items():
+        f = os.path.join(d, 'lit.cs'); open(f, 'w', encoding='utf-8').write(chr(10).join(src))
+        doc = lines(f)
+        leaked = [t for t in doc.cmap.values()
+                  if 'not a comment' in t or 'nor this' in t or 'a // b' in t]
+        print(f"  {'ok  ' if not leaked else 'FAIL'}  literal control, {label}: leaked={leaked}")
+        ok &= not leaked
+
+    # doc_delta must see /// lines APPENDED or REMOVED at the end, which zip() hid.
+    b_ = os.path.join(d, 'db.cs'); a_ = os.path.join(d, 'da.cs')
+    open(b_, 'w', encoding='utf-8').write('/// one' + chr(10) + 'int x=1;' + chr(10))
+    open(a_, 'w', encoding='utf-8').write('/// one' + chr(10) + '/// two appended' + chr(10) + 'int x=1;' + chr(10))
+    ch, nb, na = doc_delta(lines(a_), lines(b_))
+    print(f"  {'ok  ' if ch == 1 else 'FAIL'}  doc_delta sees an APPENDED /// line: changed={ch} ({nb}->{na})")
+    ok &= (ch == 1)
+    ch, nb, na = doc_delta(lines(b_), lines(a_))
+    print(f"  {'ok  ' if ch == 1 else 'FAIL'}  doc_delta sees a REMOVED /// line: changed={ch} ({nb}->{na})")
+    ok &= (ch == 1)
+
     # FALSE-POSITIVE controls: legitimate text that must NOT trip a guard.
     fp = {"legit new sentence across a join": ["// A line ending in the", "// The next sentence starts.", "int y=1;"],
           "trailing comment, proper case":    ["int y = 1;  // Fine here.", "int z = 2;"]}

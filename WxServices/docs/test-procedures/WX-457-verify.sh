@@ -24,11 +24,14 @@ REPO="$(cd "$HERE/../../.." && pwd)"
 FILE="WxServices/src/WxReport.Svc/ForecastReconciler.cs"
 BASE="origin/master"; HEAD_REV="HEAD"; SELFTEST=0
 
+need() { [ "$#" -ge 2 ] || { echo "$1 requires a value" >&2; exit 2; }; }
 while [ $# -gt 0 ]; do
   case "$1" in
-    --file) FILE="$2"; shift 2 ;;
-    --base) BASE="$2"; shift 2 ;;
-    --head) HEAD_REV="$2"; shift 2 ;;
+    # `need` guards $2 before `set -u` turns a missing value into an unbound-variable
+    # crash, which would bypass the documented exit-2 usage status.
+    --file) need "$@"; FILE="$2"; shift 2 ;;
+    --base) need "$@"; BASE="$2"; shift 2 ;;
+    --head) need "$@"; HEAD_REV="$2"; shift 2 ;;
     --selftest) SELFTEST=1; shift ;;
     -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;

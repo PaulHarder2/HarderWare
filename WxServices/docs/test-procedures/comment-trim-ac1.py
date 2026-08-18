@@ -106,6 +106,65 @@ def suspicious(src, consumed):
             bad.append((ln, t[:70]))
     return bad
 
+def comment_map(src):
+    """[(line_no, comment_text)] using the WHOLE-FILE state machine.
+
+    🔴 THE SHARED PRIMITIVE, AND THE REASON IT IS SHARED. comment-hygiene.py had its own
+       per-line comment finder that knew only "..." and '...'. It therefore had the exact
+       blind spot this file was hardened against - a // inside a multi-line raw or
+       verbatim string read as a comment. One tokenizer, imported, cannot drift from
+       itself; two cannot stay equal. Fixing one of two copies is not fixing it.
+    """
+    out = []; i = 0; n = len(src); st = NORMAL
+    line = 1; raw_len = 0; buf = None
+    while i < n:
+        c = src[i]; d = src[i+1] if i+1 < n else ''
+        if st == NORMAL:
+            m = re.match(r'[$@]{0,2}"{3,}', src[i:])
+            if m and '"""' in m.group(0):
+                tok = m.group(0); raw_len = len(tok) - tok.index('"')
+                i += len(tok); st = RAW; continue
+            if c == '/' and d == '/':
+                j = src.find('\n', i)
+                if j < 0: j = n
+                out.append((line, re.sub(r'^/+\s?', '', src[i:j]).strip()))
+                i = j; continue
+            if c == '/' and d == '*': st = BLOCK; i += 2; continue
+            m = re.match(r'(?:@\$|\$@|@)"', src[i:])
+            if m: i += len(m.group(0)); st = VERB; continue
+            m = re.match(r'\$"', src[i:])
+            if m: i += 2; st = STR; continue
+            if c == '"': i += 1; st = STR; continue
+            if c == "'": i += 1; st = CHAR; continue
+            if c == '\n': line += 1
+            i += 1; continue
+        if st == BLOCK:
+            if c == '*' and d == '/': st = NORMAL; i += 2; continue
+            if c == '\n': line += 1
+            i += 1; continue
+        if st == RAW:
+            m = re.match('"{%d,}' % raw_len, src[i:])
+            if m: i += len(m.group(0)); st = NORMAL; continue
+            if c == '\n': line += 1
+            i += 1; continue
+        if st == STR:
+            if c == '\\' and i + 1 < n: i += 2; continue
+            if c == '"': st = NORMAL
+            if c == '\n': line += 1; st = NORMAL
+            i += 1; continue
+        if st == VERB:
+            if c == '"':
+                if d == '"': i += 2; continue
+                st = NORMAL
+            if c == '\n': line += 1
+            i += 1; continue
+        if st == CHAR:
+            if c == '\\' and i + 1 < n: i += 2; continue
+            if c == "'": st = NORMAL
+            if c == '\n': line += 1
+            i += 1; continue
+    return out
+
 def code_only(path):
     src = open(path, encoding='utf-8-sig').read()
     stripped, consumed = strip_comments(src)
