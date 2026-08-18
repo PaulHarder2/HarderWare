@@ -17,8 +17,8 @@ namespace WxReport.Svc;
 /// carries the three artifacts Claude returned (parsed final snapshot,
 /// unit-neutral structured report, plain-English reasoning trace) plus
 /// token-usage metadata.  The HTML email body is no longer a Claude artifact:
-/// the WX-129 <see cref="StructuredReportRenderer"/> builds each recipient's
-/// body deterministically from the structured report + final snapshot (WX-130),
+/// the <see cref="StructuredReportRenderer"/> builds each recipient's
+/// body deterministically from the structured report + final snapshot,
 /// so the expensive reasoning runs once per locality and fans out per recipient
 /// for free.  A <see cref="Failure"/> carries a short reason string; the
 /// caller is expected to log it, skip the SMTP send, and leave any
@@ -30,7 +30,7 @@ public abstract record ReconcileResult
 
     /// <summary>Reconciliation succeeded; the three artifacts parsed cleanly.</summary>
     /// <param name="FinalSnapshot">Refined <see cref="ForecastSnapshotBody"/> after Claude reconciled provisional + TAF + observation + prior.</param>
-    /// <param name="StructuredReport">Unit-neutral structured report (WX-128): language-free changes plus the language-keyed tokenized narrative the WX-129 renderer consumes.  The live rendering source as of WX-130 — its validation is fatal (a retry, then a skip/Failure), not best-effort.</param>
+    /// <param name="StructuredReport">Unit-neutral structured report: language-free changes plus the language-keyed tokenized narrative the renderer consumes.  The live rendering source since the renderer took over — its validation is fatal (a retry, then a skip/Failure), not best-effort.</param>
     /// <param name="ReasoningTrace">Brief plain-English audit log of what changed at each of the three reconciliation steps.</param>
     /// <param name="Tokens">Token-usage metadata extracted from the Anthropic API response.</param>
     public sealed record Success(
@@ -40,7 +40,7 @@ public abstract record ReconcileResult
         TokenUsage Tokens) : ReconcileResult;
 
     /// <summary>
-    /// The WX-80 invalidation gate fired: Claude judged the cycle's evidence
+    /// The invalidation gate fired: Claude judged the cycle's evidence
     /// not news worth sending and called <c>skip_send</c> instead of
     /// <c>submit_reconciled_report</c>.  No email is sent and the committed
     /// forecast is left unchanged; the caller persists
@@ -62,7 +62,7 @@ public abstract record ReconcileResult
 
     /// <summary>
     /// Reconciliation exhausted its retries on a contract/consistency violation,
-    /// but Claude's <c>final_snapshot</c> itself parsed cleanly (WX-148): the
+    /// but Claude's <c>final_snapshot</c> itself parsed cleanly: the
     /// blocks are usable, only the change narrative could not be made
     /// self-consistent. Distinct from <see cref="Failure"/> (where even the
     /// snapshot is unusable) so the caller can degrade gracefully — on a
@@ -78,8 +78,8 @@ public abstract record ReconcileResult
 }
 
 /// <summary>
-/// Orchestrates the WX-79 forecast reconciliation pass, once per locality
-/// (WX-130): builds Claude's reconciliation system prompt and user message from
+/// Orchestrates the forecast reconciliation pass, once per locality:
+/// builds Claude's reconciliation system prompt and user message from
 /// the locality's <see cref="WeatherSnapshot"/>, the GFS-derived provisional
 /// <see cref="ForecastSnapshotBody"/>, and the prior committed snapshot if
 /// any; calls <see cref="ClaudeClient.InvokeReconciliationAsync"/>;
@@ -94,7 +94,7 @@ public abstract record ReconcileResult
 /// language, and locale afterwards with no further LLM call.
 ///
 /// <para>
-/// Malformed-output policy (WX-79, retry added WX-110): a schema-violation,
+/// Malformed-output policy: a schema-violation,
 /// missing field, or non-JSON tool input is retried up to a small bounded number
 /// of attempts within the cycle (the fault is usually transient — the Anthropic
 /// API treats a tool schema's <c>required</c> list as advisory, so a complete
@@ -113,7 +113,7 @@ public sealed class ForecastReconciler
 
     /// <summary>Initializes a new instance backed by the supplied <see cref="ClaudeClient"/>.</summary>
     /// <param name="claude">Anthropic Messages API wrapper used for the tool-use call.</param>
-    /// <param name="templates">The DB-backed template store, read only for the per-language <see cref="Tok.ClosingFallback"/> when the independent-section degrade replaces an unusable closing (WX-171).</param>
+    /// <param name="templates">The DB-backed template store. Supplies the approved-vocabulary glossary for the narrative, <c>CultureFor</c> for localized day names, the per-language validator-safe day-part words, and the <see cref="Tok.ClosingFallback"/> used when the independent-section degrade replaces an unusable closing.</param>
     public ForecastReconciler(ClaudeClient claude, LanguageTemplateStore templates)
     {
         _claude = claude;
@@ -136,12 +136,12 @@ public sealed class ForecastReconciler
     /// <param name="tafIssuanceUtc">UTC time the active TAF was issued, or <see langword="null"/> when no TAF is available.  Required for reconciliation step 1.</param>
     /// <param name="tafValidToUtc">UTC end of the TAF's validity window, or <see langword="null"/> when no TAF is available.  Helps Claude scope step 1 to in-window blocks.</param>
     /// <param name="prior">Most recently committed <see cref="ForecastSnapshot"/> for this locality's station, or <see langword="null"/> on a first send.  Drives the news judgment in reconciliation step 3.</param>
-    /// <param name="narrativeLanguages">ISO 639-1 codes the structured report's narrative must carry (WX-128) — the distinct set of languages across the locality's recipients.  A returned narrative missing any of these (or carrying an extra one) fails closed.</param>
+    /// <param name="narrativeLanguages">ISO 639-1 codes the structured report's narrative must carry — the distinct set of languages across the locality's recipients.  A returned narrative missing any of these (or carrying an extra one) fails closed.</param>
     /// <param name="tz">Locality timezone, used by <see cref="SnapshotDescriber"/> when emitting the structured observation/forecast text and by Claude when reasoning about local time.</param>
     /// <param name="reportKind">The kind of send (scheduled, unscheduled, or diagnostic) — drives the unscheduled-update change-summary instruction; the recipient-facing label is the renderer's concern.</param>
     /// <param name="allowSkip">When <see langword="true"/> (unscheduled, arrival-triggered cycles), Claude may decline to send via the <c>skip_send</c> tool, yielding a <see cref="ReconcileResult.NotNews"/>.  When <see langword="false"/> (scheduled / first / startup), the send is guaranteed and skipping is not offered.</param>
-    /// <param name="changedSinceLastSend">Which inputs (METAR/TAF/GFS) are newer than they were at the last report actually delivered for this locality (WX-108).  Surfaced to Claude as <c>changed_since_last_sent_report</c> so the anti-reversal rule can bind on observation-only cycles.  Empty list means nothing advanced since the last send; treated as a first send when no prior send exists.</param>
-    /// <param name="significanceCfg">Significance thresholds shared with the WX-114/160 gate; supplies the freeze/heat/wind-advisory and per-tier magnitude lines the WX-189 <see cref="DeterministicChangeDetector"/> applies to temperature and wind.</param>
+    /// <param name="changedSinceLastSend">Which inputs (METAR/TAF/GFS) are newer than they were at the last report actually delivered for this locality.  Surfaced to Claude as <c>changed_since_last_sent_report</c> so the anti-reversal rule can bind on observation-only cycles.  Empty list means nothing advanced since the last send; treated as a first send when no prior send exists.</param>
+    /// <param name="significanceCfg">Significance thresholds shared with the significance gate; supplies the freeze/heat/wind-advisory and per-tier magnitude lines the <see cref="DeterministicChangeDetector"/> applies to temperature and wind.</param>
     /// <param name="nowUtc">Cycle timestamp; the change detector measures horizon tiers from here, matching the gate.</param>
     /// <param name="ct">Cancellation token propagated to the underlying HTTP call.</param>
     /// <returns>A <see cref="ReconcileResult.Success"/> on a clean three-artifact return; a <see cref="ReconcileResult.NotNews"/> when Claude skips an arrival-triggered send; a <see cref="ReconcileResult.Failure"/> otherwise.</returns>
@@ -162,69 +162,65 @@ public sealed class ForecastReconciler
         DateTime nowUtc,
         CancellationToken ct = default)
     {
-        // WX-155: a prior snapshot from before the local-day-part rebucketing
-        // (schema < current) has UTC-aligned block boundaries that don't line up
-        // with the new local-aligned blocks, so a block-by-block comparison would
-        // read the whole forecast as changed and could fire a spurious "everything
-        // changed" blast on the deploy cycle. Drop such a prior — treat this cycle
-        // as a clean baseline (first-send semantics) for both the prompt and the
-        // deterministic prior-aware checks.
+        // A prior from before the local-day-part rebucketing has UTC-aligned block
+        // boundaries that don't line up with local-aligned ones, so a block-by-block
+        // comparison reads the whole forecast as changed — a spurious "everything
+        // changed" blast on the deploy cycle. Drop it and treat this cycle as a clean
+        // baseline, for both the prompt and the deterministic prior-aware checks.
         if (prior is not null && prior.SchemaVersion != ForecastSnapshotBody.SchemaVersionCurrent)
         {
             Logger.Info($"Prior snapshot is schema v{prior.SchemaVersion} (current v{ForecastSnapshotBody.SchemaVersionCurrent}); treating this cycle as a baseline reset (WX-155 local-day-part rebucketing).");
             prior = null;
         }
 
-        // WX-238: approved-vocabulary glossary for the free-composed narrative, anchoring it on the
-        // curated LanguageTemplates terms (incl. English) instead of free-generating a synonym.
+        // Approved-vocabulary glossary for the free-composed narrative: anchors it on the curated
+        // LanguageTemplates terms (incl. English) instead of free-generating a synonym.
         var vocabularyGlossary = NarrativeGlossary.Build(_templates, narrativeLanguages);
         var systemPrompt = BuildReconcilerSystemPrompt(
             narrativeLanguages, reportKind, allowSkip, vocabularyGlossary);
 
-        // WX-246: the correct localized day name for each forecast date, so the free narrative binds
-        // dates to days deterministically (from CultureInfo) instead of mis-deriving them (the sq
-        // "Tuesday→Wednesday" class). Computed per report (dates change every send), so it rides the
-        // uncached user message, not the cached system prompt.
+        // Localized day name per forecast date, so the narrative binds dates to days from
+        // CultureInfo instead of mis-deriving them (the sq "Tuesday→Wednesday" class). Computed
+        // per report — dates change every send — so it rides the uncached user message, not the
+        // cached system prompt.
         var dayNameReference = DayNameReference.Build(provisional, narrativeLanguages, _templates.CultureFor, tz);
 
         var userMessage = BuildUserMessage(
             snapshot, provisional, gfsModelRunUtc, tafIssuanceUtc, tafValidToUtc, prior, tz,
             nowUtc, changedSinceLastSend, dayNameReference);
 
-        // WX-110: Claude intermittently returns a complete (untruncated) tool_use
-        // that omits a required field or whose final_snapshot fails schema
-        // validation — the Anthropic API treats a tool schema's `required` list as
-        // advisory, so a field can simply be absent. The fault is transient (WX-109
-        // raised the cap and added max_tokens detection, yet the missing-field
-        // failures continued on the fixed binary with stop_reason != max_tokens), so
-        // an immediate re-call almost always succeeds. Retry up to maxAttempts within
-        // the cycle rather than leaving the recipient to self-heal on the next tick.
-        // NOT retried: a max_tokens truncation (re-calling at the same cap would just
-        // re-truncate — left to self-heal) and a guaranteed-send skip_send (a contract
-        // violation, not a transient fault). The prompts are built once above and are
-        // identical across attempts (so the cached system-prompt prefix keeps retries
-        // cheap).
+        // Claude intermittently returns a complete (untruncated) tool_use that omits a required
+        // field or whose final_snapshot fails schema validation: the Anthropic API treats a tool
+        // schema's `required` list as advisory, so a field can simply be absent. The fault is
+        // transient — an immediate re-call almost always succeeds — so retry within the cycle
+        // rather than leaving the recipient to self-heal on the next tick.
+        // This is NOT the truncation detected two blocks up: raising the output cap and adding
+        // max_tokens detection did not stop the missing-field failures, which continued on the
+        // fixed binary with stop_reason != max_tokens. Two separate faults.
+        // NOT retried, deliberately: a max_tokens truncation (re-calling at the same cap would
+        // re-truncate) and a guaranteed-send skip_send (a contract violation, not a transient
+        // fault). Prompts are built once above and identical across attempts, so the cached
+        // system-prompt prefix keeps retries cheap.
         const int maxAttempts = 3;
         int accIn = 0, accOut = 0, accCacheRead = 0, accCacheWrite = 0;
-        // WX-148: rejected attempts replayed on the next call as tool_use + tool_result,
-        // so a validation retry tells Claude what was wrong instead of blindly resampling.
+        // Rejected attempts are replayed on the next call as tool_use + tool_result, so a
+        // validation retry tells Claude what was wrong instead of blindly resampling.
         var corrections = new List<ReconciliationCorrection>();
-        // WX-148: the last attempt whose final_snapshot parsed cleanly. If retries
-        // exhaust on a consistency/contract violation (snapshot good, narrative not),
-        // this lets the caller degrade to a narrative-less hazard report rather than
-        // a bare Failure. Stays null when even the snapshot never parsed.
+        // The last attempt whose final_snapshot parsed cleanly. If retries exhaust on a
+        // consistency/contract violation (snapshot good, narrative not), this lets the caller
+        // degrade to a narrative-less hazard report rather than a bare Failure. Stays null when
+        // even the snapshot never parsed.
         ForecastSnapshotBody? lastParsedSnapshot = null;
-        // WX-189: the last attempt's parsed structured report (Claude's narrative, before
-        // change injection) + its reasoning trace, for the independent-section degrade —
-        // if retries exhaust on a PROSE fault, the caller drops ONLY the offending section
-        // and sends the rest from these, rather than degrading the whole narrative.
+        // The last attempt's parsed structured report (Claude's narrative, before change
+        // injection) plus its reasoning trace, for the independent-section degrade: if retries
+        // exhaust on a PROSE fault, the caller drops ONLY the offending section and sends the
+        // rest from these, rather than degrading the whole narrative.
         StructuredReportBody? lastParsedReport = null;
         string? lastReasoningTrace = null;
-        // WX-151: parse the prior committed snapshot once for prior-aware change
-        // verification. Version-lenient (old persisted priors must still load). A
-        // malformed prior is non-fatal — log and skip the prior comparison rather
-        // than fail a cycle over an old row; the check then falls back to WX-148's
-        // new-only backing. Null prior is a first send (nothing to compare against).
+        // Parse the prior committed snapshot once, for prior-aware change verification.
+        // Version-lenient: old persisted priors must still load. A malformed prior is
+        // deliberately non-fatal — log and skip the comparison rather than fail a cycle over an
+        // old row; the check then falls back to new-only backing. Null prior is a first send.
         ForecastSnapshotBody? priorBody = null;
         if (prior is not null)
         {
@@ -246,14 +242,13 @@ public sealed class ForecastReconciler
                     "Claude API call failed or returned no submit_reconciled_report or skip_send tool_use block.");
             }
 
-            // WX-109: a "max_tokens" stop_reason means generation was cut at the
-            // output-token cap, so the tool_use input is a truncated partial object —
-            // a trailing required field (often email_body) is dropped. Detect that
-            // here, before reading any field, so the operator sees a truthful
-            // "response truncated" failure instead of WX-104's accurate-but-misleading
-            // "missing required field 'email_body'". Not retried (see above): a re-call
-            // at the same cap would re-truncate; the caller leaves the provisional
-            // CommittedSend in place and the next cycle reconciles a fresh one.
+            // A "max_tokens" stop_reason means generation was cut at the output-token cap, so
+            // the tool_use input is a truncated partial object and a trailing required field
+            // (often email_body) is dropped. Detect it HERE, before reading any field, so the
+            // operator sees a truthful "response truncated" failure rather than an accurate but
+            // misleading "missing required field 'email_body'". Not retried: a re-call at the
+            // same cap would re-truncate; the provisional CommittedSend stays and the next cycle
+            // reconciles a fresh one.
             if (apiResult.StopReason == "max_tokens")
             {
                 Logger.Error(
@@ -264,11 +259,10 @@ public sealed class ForecastReconciler
                     + "(stop_reason=max_tokens) before the tool_use input was complete.");
             }
 
-            // WX-110: accumulate token usage across attempts so a retried-then-
-            // succeeded cycle reports its full billed cost — a failed malformed
-            // attempt is still real API spend, and the new cost dashboards would
-            // otherwise undercount it. On a single-attempt cycle this equals that
-            // attempt's tokens (unchanged behaviour).
+            // Accumulate across attempts so a retried-then-succeeded cycle reports its full
+            // billed cost: a failed malformed attempt is still real API spend, and the cost
+            // dashboards would otherwise undercount it. On a single-attempt cycle this equals
+            // that attempt's tokens.
             accIn += apiResult.Tokens.InputTokens;
             accOut += apiResult.Tokens.OutputTokens;
             accCacheRead += apiResult.Tokens.CacheReadInputTokens;
@@ -307,12 +301,12 @@ public sealed class ForecastReconciler
                 // freshness pin lives here: Claude copying the older version
                 // digit it saw in prior_snapshot fails closed through the retry
                 // rather than persisting a row whose column says v4 while its
-                // body JSON says v3 (WX-128 review finding).
+                // body JSON says v3.
                 if (finalSnapshot.SchemaVersion != ForecastSnapshotBody.SchemaVersionCurrent)
                     throw new JsonException(
                         $"final_snapshot.schemaVersion {finalSnapshot.SchemaVersion} is not the current version {ForecastSnapshotBody.SchemaVersionCurrent}.");
 
-                // WX-148: record the snapshot as degrade-usable only AFTER the version
+                // Record the snapshot as degrade-usable only AFTER the version
                 // pin — a stale-version body must stay a hard Failure, never degrade
                 // (degrading would persist the very column-says-v4 / body-says-v3
                 // mismatch the pin exists to prevent).
@@ -321,14 +315,23 @@ public sealed class ForecastReconciler
                 var reasoningTrace = RequireString(input, "reasoning_trace");
                 lastReasoningTrace = reasoningTrace;
 
-                // WX-130: the structured report is now the LIVE rendering source —
+                // The structured report is now the LIVE rendering source —
                 // the StructuredReportRenderer builds every recipient's email from it,
-                // so its validation is fatal again (it was best-effort during the
-                // WX-144 additive transition, when email_body was the sent artifact).
-                // A missing field, schema/token violation, or a requested language
-                // absent/extra all throw and route through the retry → skip/Failure
-                // path, exactly like a final_snapshot schema violation.
-                // WX-180: windKt must be sustained-only — CLAMP a folded gust out of
+                // so its validation is fatal again (it was best-effort during the additive
+                // transition, when email_body was the sent artifact).
+                // A missing field, schema/token violation, or a requested language absent/extra
+                // all throw and enter the SAME retry branch as a final_snapshot schema violation
+                // — MissingToolUseFieldException and JsonException included.
+                // ⚠️ Exhausting the retries does NOT mean skip/Failure. Four outcomes are
+                // reachable after the last attempt, and which one depends on the fault class:
+                //   Failure   the snapshot itself never parsed, or the field message stands
+                //   Degraded  the snapshot parsed but the narrative could not be made
+                //             self-consistent — a hazard report goes out without prose
+                //   Success   a PROSE fault confined to one section: DropProseSection removes
+                //             it, the survivor re-validates, and the rest is sent
+                //   NotNews   a content-less narrative on a SKIPPABLE cycle — no degrade is
+                //             involved; the same fault on a guaranteed send returns Failure
+                // windKt must be sustained-only — CLAMP a folded gust out of
                 // windKt.max (rather than reject → retry → degrade, which on a gusty
                 // forecast never converged and degraded every cycle: the ~$45/day cost
                 // incident) before it corrupts the baseline the significance gate compares
@@ -343,19 +346,19 @@ public sealed class ForecastReconciler
                 ValidateNarrativeContract(structuredReport, narrativeLanguages);
                 ValidateProseHygiene(structuredReport, tz);
 
-                // WX-189: compute the "What's changed" set deterministically from
+                // Compute the "What's changed" set deterministically from
                 // (prior, final_snapshot) and inject it — Claude authored only the
                 // narrative prose this cycle, so a structural phantom is impossible by
                 // construction. ValidateChangeSnapshotConsistency then runs as cheap
                 // defense-in-depth on the COMPUTED set: it is tautologically green
                 // unless the detector itself has a bug (the validator stays the safety
-                // net the WX-148/151 work built). ValidateAnchoredProseTiming retires
+                // net the change-consistency checks built). ValidateAnchoredProseTiming retires
                 // with the {chN} anchoring it depended on.
                 var computedChanges = DeterministicChangeDetector.Detect(priorBody, finalSnapshot, significanceCfg, nowUtc, tz);
                 structuredReport = structuredReport with { Changes = computedChanges };
                 ValidateChangeSnapshotConsistency(structuredReport, finalSnapshot, priorBody, tz);
 
-                // WX-120 fall-safe, carried forward to the structured-report world:
+                // The fall-safe, carried forward to the structured-report world:
                 // a present-but-near-blank narrative — e.g. Claude submitted a report
                 // when its own reasoning concluded skip_send, leaving an empty closing
                 // — passes the schema (Closing is merely non-blank) but must never
@@ -370,14 +373,14 @@ public sealed class ForecastReconciler
             }
             catch (Exception ex) when (ex is MissingToolUseFieldException or JsonException or InvalidOperationException or DegenerateNarrativeException)
             {
-                // WX-205: a ChangeConsistencyException comes from ValidateChangeSnapshotConsistency on
-                // the COMPUTED change set (WX-189 computes changes[] deterministically AFTER this call),
+                // A ChangeConsistencyException comes from ValidateChangeSnapshotConsistency on
+                // the COMPUTED change set (the detector computes changes[] deterministically AFTER this call),
                 // so it is a change-detector/validator disagreement — NOT something Claude authored or
                 // can fix. Retrying just re-calls Claude, which resubmits the same final_snapshot; the
                 // detector recomputes the same change and the validator rejects it identically (3 wasted
                 // calls in prod). Skip the futile retries: degrade immediately to the cleanly-parsed
                 // snapshot. Per-cycle cost drops from 3 Claude calls to 1, and the loud ERROR keeps the
-                // underlying detector bug visible (WX-204) rather than silently burning calls.
+                // underlying detector bug visible rather than silently burning calls.
                 if (ex is ChangeConsistencyException && lastParsedSnapshot is not null)
                 {
                     Logger.Error($"Reconciliation rejected a COMPUTED change ({ex.Message}); this is a deterministic "
@@ -395,10 +398,10 @@ public sealed class ForecastReconciler
                         MissingToolUseFieldException => $"is {ex.Message}",
                         _ => $"failed validation: {ex.Message}",
                     };
-                    // WX-148: replay this rejected attempt to Claude on the next call with
+                    // Replay this rejected attempt to Claude on the next call with
                     // the reason, so the retry corrects the specific fault rather than
                     // blindly resampling (a no-op for the semantic faults this catches).
-                    // WX-189: structural change rejections are gone — the change set is
+                    // structural change rejections are gone — the change set is
                     // computed deterministically, not authored by Claude — so the only
                     // contract faults left for a retry are PROSE faults. A NarrativeProse
                     // rejection pins the snapshot: tell Claude to keep final_snapshot byte-
@@ -419,10 +422,11 @@ public sealed class ForecastReconciler
                     continue;
                 }
 
-                // Exhausted. Report exactly as the pre-WX-110 single-shot path did —
-                // WX-104's precise by-name field message, or the schema-validation
-                // message — so the operator-facing failure is unchanged but for the
-                // attempt count. The caller leaves the provisional CommittedSend in
+                // Exhausted, and this is the FAILURE arm specifically — the other three
+                // exhaustion outcomes are handled above. Report exactly as the pre-retry
+                // single-shot path did — the precise by-name field message, or the
+                // schema-validation message — so the operator-facing failure is unchanged but
+                // for the attempt count. The caller leaves the provisional CommittedSend in
                 // place as a failed-attempt audit row (SentAtUtc stays null, so it
                 // never becomes a prior snapshot); the next cycle reconciles a fresh
                 // provisional, which is how the system self-heals.
@@ -445,7 +449,7 @@ public sealed class ForecastReconciler
                     Logger.Error($"Reconciliation tool_use input is {ex.Message} (after {maxAttempts} attempts).");
                     return new ReconcileResult.Failure($"Reconciliation response {ex.Message} (after {maxAttempts} attempts).");
                 }
-                // WX-189 independent-section degrade: a PROSE fault that won't converge
+                // The independent-section degrade: a PROSE fault that won't converge
                 // across the retries drops ONLY the offending section and sends the rest.
                 // The deterministic change band, the per-day grid, and the current
                 // conditions are unaffected, so a closing-only fault no longer takes the
@@ -463,7 +467,7 @@ public sealed class ForecastReconciler
                         // fault short-circuited the validators, so the section we KEPT may never
                         // have been checked, and the success-path consistency check was skipped.
                         // If the surviving section is also faulty (a double-section fault), fall
-                        // through to a wholesale degrade rather than ship it. The WX-120
+                        // through to a wholesale degrade rather than ship it. The
                         // degeneracy floor is deliberately NOT applied here — a section degrade
                         // intentionally reduces the narrative, and the closing is always non-blank
                         // (schema-required), so a thin-but-valid survivor must still send.
@@ -479,7 +483,7 @@ public sealed class ForecastReconciler
                     return new ReconcileResult.Success(lastParsedSnapshot, cleaned, lastReasoningTrace ?? string.Empty, tokens);
                 }
 
-                // WX-148: if the snapshot itself parsed cleanly and only the narrative
+                // If the snapshot itself parsed cleanly and only the narrative
                 // could not be made self-consistent, degrade rather than fail outright —
                 // the caller can still send a narrative-less hazard report from the
                 // snapshot on a safety-critical forecast.
@@ -494,7 +498,7 @@ public sealed class ForecastReconciler
         }
     }
 
-    // ── tool_use field accessors (WX-104) ─────────────────────────────────────
+    // ── tool_use field accessors ─────────────────────────────────────
 
     // Reads a required property from Claude's tool_use input, naming the field when
     // absent. JsonElement.GetProperty throws a bare KeyNotFoundException on a missing
@@ -513,14 +517,14 @@ public sealed class ForecastReconciler
             : throw new MissingToolUseFieldException(field);
 
     // Signals that Claude's tool_use input lacked a usable value for a required field.
-    // The message names the field so the operator-facing failure is precise (WX-104).
+    // The message names the field so the operator-facing failure is precise.
     private sealed class MissingToolUseFieldException : Exception
     {
         public MissingToolUseFieldException(string field)
             : base($"missing required field '{field}'") { }
     }
 
-    // WX-165: a change-consistency / change-anchored-prose rejection — the report
+    // A change-consistency / change-anchored-prose rejection — the report
     // asserted a "What's changed" item (a changes[] entry) the snapshot data does not
     // support, or narrated one against the wrong window. Distinct from a bare
     // JsonException so the retry feedback can NAME the offending change and tell Claude
@@ -536,7 +540,7 @@ public sealed class ForecastReconciler
         public string SummaryToken { get; }
     }
 
-    // WX-189: a narrative-PROSE rejection (a leak, jargon, a time-word contradiction,
+    // A narrative-PROSE rejection (a leak, jargon, a time-word contradiction,
     // or a closing/changeSummary precip claim the snapshot leaves dry) — a fault in the
     // words Claude wrote, NOT in final_snapshot. Distinct from a bare JsonException so
     // the retry feedback can tell Claude to keep its final_snapshot EXACTLY as
@@ -544,7 +548,7 @@ public sealed class ForecastReconciler
     // tightened toward an enforceable pin now that the snapshot is the structural
     // source of truth. Still a JsonException, so it routes through the identical
     // retry-then-degrade path; only the feedback differs.
-    // Which narrative prose section a fault came from, so the WX-189 independent-section
+    // Which narrative prose section a fault came from, so the independent-section
     // degrade can drop ONLY that section on exhaustion (rather than the whole narrative).
     private enum NarrativeSection { ChangeSummary, Closing }
 
@@ -555,21 +559,21 @@ public sealed class ForecastReconciler
         public NarrativeSection Section { get; }
     }
 
-    // WX-128/WX-130: per-call contract checks the body's intrinsic Validate()
+    // Per-call contract checks the body's intrinsic Validate()
     // cannot perform because they depend on what THIS cycle requested — the exact
     // set of languages the locality's recipients need. Every requested language
     // must be present, and no extra. Throws JsonException so failures route
     // through the existing retryable-malformed path (retry → skip/Failure),
     // exactly like a final_snapshot schema violation. (The degeneracy floor lives
     // separately in IsDegenerateNarrative: a too-thin-but-well-formed narrative
-    // is the WX-120 fall-safe case, which must skip-with-trace, not hard-fail.)
+    // is the fall-safe case, which must skip-with-trace, not hard-fail.)
     private static void ValidateNarrativeContract(
         StructuredReportBody report, IReadOnlyList<string> requestedLanguages)
     {
         // Exact-set match, both directions: a missing requested language is an
         // unrenderable report for someone; an EXTRA unrequested language is
         // unvalidated content persisting for no recipient — and a trap for a
-        // renderer that iterates narrative keys (WX-128 review finding).
+        // renderer that iterates narrative keys.
         foreach (var lang in report.Narrative.Keys)
             if (!requestedLanguages.Contains(lang, StringComparer.Ordinal))
                 throw new JsonException($"structured_report.narrative contains unrequested language '{lang}'.");
@@ -579,29 +583,26 @@ public sealed class ForecastReconciler
                 throw new JsonException($"structured_report.narrative is missing requested language '{lang}'.");
     }
 
-    // WX-148: cross-artifact consistency between the change narrative and the
-    // final_snapshot. The "What's changed" prose is driven by changes[].window,
-    // while the deterministic day-grid is built from the snapshot blocks; nothing
-    // else reconciles the two, so they can disagree (the 6/9 "afternoon" narrative
-    // over a forecast whose only rain sat in the block the grid calls "morning").
-    // The rules below all fail closed via JsonException so they route through the
-    // same retry-then-fail path as the other contract checks:
-    //   1. Every change window aligns to a snapshot block boundary (a local day-part
-    //      boundary, WX-155). This forbids sub-block precision — a block-aligned window cannot claim timing
-    //      the blocks don't support, which is exactly what the 6/9 17-21Z window did.
-    //   2. (WX-151, generalizing the original WX-148 new-only backing) Every precip
-    //      (or standalone Severe) change must be a REAL difference versus the PRIOR
-    //      snapshot in its window: APPEARING/STRENGTHENING requires the in-window
-    //      expectation to exceed the prior's (or this phenomenon's severeFlag to rise),
-    //      WEAKENING/CLEARING requires it to fall (or severe to drop) — and only when
-    //      the prior actually covered the window (else there's nothing to weaken from).
-    //      A change identical in prior and new is a phantom (send 1977). Non-precip
-    //      phenomena (wind/windshift/fog/temperature) have no clean snapshot-comparable
-    //      semantics and stay prompt-governed. WX-149 adds the tier/raw-UTC/prose
-    //      assertions on top of this scaffold.
-    // Internal (not private) so the WX-189 detector tests can assert the keystone
-    // invariant directly: every change DeterministicChangeDetector emits passes this,
-    // its inverse — the defense-in-depth net stays tautologically green.
+    // Cross-artifact consistency between the change narrative and the final_snapshot. The
+    // "What's changed" prose is driven by changes[].window while the deterministic day-grid is
+    // built from the snapshot blocks; nothing else reconciles the two, so they can disagree —
+    // the 6/9 "afternoon" narrative over a forecast whose only rain sat in the block the grid
+    // calls "morning". The rules below all fail closed via JsonException, so they route through
+    // the same retry-then-fail path as the other contract checks. ⚠️ THE LIST IS NOT EXHAUSTIVE:
+    // the Safety-tier over-escalation check further down is a third, independent rule with its
+    // own throw. Do not read these two as the whole contract:
+    //   1. Every change window aligns to a snapshot block boundary (a local day-part boundary).
+    //      This forbids sub-block precision: a window cannot claim timing the blocks don't
+    //      support, which is exactly what the 6/9 17-21Z window did.
+    //   2. Every precip (or standalone Severe) change is a REAL difference against the PRIOR
+    //      snapshot in its window — WHERE THE PRIOR COVERS IT. Weakening/clearing over a window
+    //      the prior never reached is accepted unchecked, deliberately. Verified inline below,
+    //      where the direction semantics live.
+    //      Non-precip phenomena (wind/windshift/fog/temperature) have no clean
+    //      snapshot-comparable semantics and stay prompt-governed.
+    // Internal rather than private so the detector tests can assert the keystone invariant
+    // directly: every change DeterministicChangeDetector emits passes this, and its inverse — so
+    // the defense-in-depth net stays tautologically green unless the detector itself has a bug.
     internal static void ValidateChangeSnapshotConsistency(
         StructuredReportBody report, ForecastSnapshotBody finalSnapshot, ForecastSnapshotBody? prior, TimeZoneInfo tz)
     {
@@ -614,32 +615,22 @@ public sealed class ForecastReconciler
                     + "aligned to a snapshot block boundary (a local 00/06/12/18 day-part boundary); change windows must "
                     + "coincide with block boundaries so the narrative cannot claim timing finer than the blocks support.");
 
-            // WX-151: prior-aware change verification. A change must correspond to a
-            // REAL prior->new difference of its claimed direction within its window,
-            // or it is a phantom — the reader is told something happened that did not
-            // (send 1977: a storm "downgrade" + rain "appearing" over a cycle whose
-            // only movement was sky-cover wobble; prior == new on every precip block).
-            // This GENERALIZES WX-148's new-only backing: appearing/strengthening now
-            // also requires the prior LACKED it (a change identical in prior and new
-            // is not news), and weakening/clearing — which WX-148 exempted outright —
-            // requires the prior actually carried it. The strength axis is
-            // precipExpectation (None<Possible<Likely<Certain) OR the block severeFlag,
-            // so a thunderstorm whose expectation is flat but whose severeFlag rises
-            // false->true still counts as strengthening (the WX-148 worked example).
-            // Null prior is a first send: priorE is None and there is no prior severe,
-            // so the check degenerates to WX-148's new-only backing (appearing/
-            // strengthening must be carried by the new snapshot; weakening/clearing
-            // has nothing to have weakened from and is rejected). Covers precipitation
-            // phenomena and the standalone Severe phenomenon (WX-151 scope decision);
-            // wind/windshift/temperature/fog have no clean snapshot-comparable
-            // appearing semantics and stay prompt-governed (the documented residual).
-            // Weakening/clearing is only verifiable when the prior actually covered
-            // this window — otherwise there is nothing to have weakened from (a first
-            // send with a null prior, or a far-horizon window past the prior's reach).
-            // Without coverage the validator can't disprove the change, so it doesn't
-            // reject it (the WX-149 "never reject what you can't prove wrong" policy);
-            // appearing/strengthening still get new-snapshot backing via newE/newSevere,
-            // preserving WX-148's behaviour on a first send.
+            // Prior-aware change verification (rule 2 above). A change must correspond to a real
+            // prior->new difference of its CLAIMED DIRECTION within its window, or it is a
+            // phantom and the reader is told something happened that did not — send 1977: a
+            // storm "downgrade" plus rain "appearing" over a cycle whose only movement was
+            // sky-cover wobble, prior == new on every precip block.
+            //
+            // Strength axis is precipExpectation (None<Possible<Likely<Certain) OR the block
+            // severeFlag, so a thunderstorm whose expectation is flat but whose severeFlag rises
+            // false->true still counts as strengthening.
+            //
+            // Weakening/clearing is only verifiable when the prior actually COVERED this window;
+            // otherwise there is nothing to have weakened from (a first send, or a far-horizon
+            // window past the prior's reach). Without coverage the validator cannot disprove the
+            // change, so it deliberately does not reject it — never reject what you cannot prove
+            // wrong. Appearing/strengthening still get new-snapshot backing via newE/newSevere,
+            // so a first send behaves as new-only backing.
             bool priorCoversWindow = prior is not null && PriorFullyCoversWindow(prior, w);
 
             if (TryMapPrecip(change.Phenomenon, out var precip))
@@ -652,20 +643,19 @@ public sealed class ForecastReconciler
                 // phenomenon's change (a phantom "snow strengthening").
                 bool newSevere = SevereForPhenomenon(finalSnapshot, precip, w);
                 bool priorSevere = prior is not null && SevereForPhenomenon(prior, precip, w);
-                // WX-204: back the change PER BLOCK, not by the window aggregate. The detector
-                // classifies each block vs its prior-by-StartUtc counterpart and groups consecutive
+                // Back the change PER BLOCK, not by the window aggregate. The detector classifies
+                // each block against its prior-by-StartUtc counterpart and groups consecutive
                 // same-direction blocks into one window, so a window is a REAL strengthening when an
-                // INTERIOR block rose (e.g. a 17Z block going severe) even if another block was already
-                // at the max — leaving the window-aggregate (MaxExpect/SevereForPhenomenon) flat. The
-                // old window-max comparison masked those interior rises and false-rejected real changes
-                // (prod phantom-"Strengthening" degrades). "Any in-window block moved the claimed way"
-                // accepts exactly what the detector emits (tautological again) while still rejecting a
-                // true phantom — a change with NO block carrying it (the WX-151 intent).
+                // INTERIOR block rose — a 17Z block going severe — even if another was already at the
+                // max, which leaves the window aggregate flat. A window-max comparison masks those
+                // interior rises and false-rejects real changes. "Any in-window block moved the
+                // claimed way" accepts exactly what the detector emits while still rejecting a true
+                // phantom: a change with NO block carrying it.
                 bool real = change.Direction switch
                 {
                     ChangeDirection.Appearing or ChangeDirection.Strengthening => AnyPrecipBlockRises(finalSnapshot, prior, precip, w),
                     ChangeDirection.Weakening or ChangeDirection.Clearing => !priorCoversWindow || AnyPrecipBlockFalls(finalSnapshot, prior, precip, w),
-                    _ => true,  // Shifting (WX-111 wind vector) is not a precip-intensity change; prompt-governed
+                    _ => true,  // Shifting (wind vector) is not a precip-intensity change; prompt-governed
                 };
                 if (!real)
                     throw new ChangeConsistencyException(change.SummaryToken,
@@ -681,7 +671,7 @@ public sealed class ForecastReconciler
                 // not tied to a precip phenomenon.
                 bool newSevere = AnySevereInWindow(finalSnapshot, w);
                 bool priorSevere = prior is not null && AnySevereInWindow(prior, w);
-                // WX-204: per-block backing (see the precip arm) — an interior block whose severe rose
+                // Per-block backing (see the precip arm) — an interior block whose severe rose
                 // is a real change even when another in-window block was already severe (window
                 // aggregate flat). Mirrors the detector's per-block grouping; still rejects a true
                 // phantom (no block's severe moved the claimed way).
@@ -699,25 +689,21 @@ public sealed class ForecastReconciler
                         + "The narrative would announce a severe change that did not occur.");
             }
 
-            // WX-149 (b): tier over-escalation. A Safety-tier change must be backed
-            // by a block in its window that actually carries a safety-grade signal —
-            // the snapshot's severeFlag (severe convection or wind >= 50 kt, per
-            // GfsSnapshotBuilder.DeriveSevereFlag), freezing precip or snow, or
-            // sustained wind >= 34 kt (tropical-storm force, the significance
-            // hierarchy's bright line for non-thunderstorm wind). This catches
-            // defect 4 (send 1938): "possible rain" emitted at the safety tier with
-            // no severe block to back it. severeFlag is deliberately NOT the sole
-            // criterion: it is narrow (it never encodes dense fog, freezing precip,
-            // or 34-49 kt winds the hierarchy still calls safety-critical), so a bare
-            // "safety => severeFlag" rule would reject legitimate ice/wind safety
-            // sends. Phenomena the snapshot cannot encode a safety signal for at all
-            // — fog/haze/smoke/dust (Obscuration is reserved, always None today) and
-            // temperature (no safety threshold) — are exempt and lean on the prompt
-            // rule (WX-149 documented residual). Gated on APPEARING/STRENGTHENING
-            // exactly as the precip-backing check above: a safety hazard WEAKENING
-            // or CLEARING is legitimate safety-tier news (the significance hierarchy
-            // counts a "newly removed hazard" as news at any horizon), and the new
-            // snapshot correctly no longer carries the signal — checking those would
+            // Tier over-escalation. A Safety-tier change must be backed by a block in its window
+            // carrying a safety-grade signal: severeFlag (severe convection or wind >= 50 kt, per
+            // GfsSnapshotBuilder.DeriveSevereFlag), freezing precip or snow, or sustained wind
+            // >= 34 kt — tropical-storm force, the significance hierarchy's bright line for
+            // non-thunderstorm wind. Catches send 1938: "possible rain" at the safety tier with no
+            // severe block to back it.
+            //
+            // severeFlag is deliberately NOT the sole criterion. It is narrow — it never encodes
+            // dense fog, freezing precip, or 34-49 kt winds the hierarchy still calls
+            // safety-critical — so a bare "safety => severeFlag" rule would reject legitimate
+            // ice/wind safety sends.
+            //
+            // Gated on APPEARING/STRENGTHENING, exactly as the precip-backing check above: a
+            // hazard WEAKENING or CLEARING is legitimate safety-tier news at any horizon, and the
+            // new snapshot correctly no longer carries the signal — checking those would
             // false-reject a real "the ice threat has lifted" send.
             if (change.Tier == ChangeTier.Safety
                 && change.Direction is ChangeDirection.Appearing or ChangeDirection.Strengthening
@@ -738,44 +724,43 @@ public sealed class ForecastReconciler
         }
     }
 
-    // True when the final_snapshot can deterministically carry a safety-grade
-    // signal for this phenomenon, so a Safety-tier claim is checkable against the
-    // blocks. Fog/haze/smoke/dust have no block field (Obscuration is reserved,
-    // always None today) and temperature has no safety threshold, so a Safety-tier
-    // change naming one of those is exempt from the backing check and governed by
-    // the prompt rule alone (WX-149 documented residual). Severe, the precip
-    // phenomena, and wind/wind-shift remain verifiable.
+    // True when the final_snapshot can deterministically carry a safety-grade signal for this
+    // phenomenon, so a Safety-tier claim is checkable against the blocks. Fog/haze/smoke/dust have
+    // no block field (Obscuration is reserved, always None today) and temperature has no safety
+    // threshold, so a Safety-tier change naming one of those is exempt from the backing check and
+    // governed by the prompt rule alone — a documented residual. Severe, the precip phenomena and
+    // wind/wind-shift remain verifiable.
     private static bool SafetyTierIsVerifiable(ChangePhenomenon p) => p is not (
         ChangePhenomenon.Fog or ChangePhenomenon.Haze or ChangePhenomenon.Smoke
         or ChangePhenomenon.Dust or ChangePhenomenon.Temperature);
 
-    // WX-160: windKt carries SUSTAINED wind only — a gust belongs in the narrative
-    // {q:gust} token, never in windKt. Claude has historically folded a TAF/observed
-    // gust into windKt.max ("12 kt G20 kt" → max 20), which corrupts the stored
-    // baseline and makes the significance gate's sustained-wind comparison
-    // apples-to-oranges (a GFS-sustained current vs a gust-laden prior). The ceiling
-    // each block's windKt.max is pinned to is the SAME GFS+TAF sustained merge the
-    // gate compares against (TafBlockProjector.Merge) — read off the merged body
-    // rather than re-derived here, so the validator's TAF-coverage model is identical
-    // to the gate's by construction (the two diverged when this recomputed per-period
-    // overlap while Merge uses prevailing-timeline persistence). The current
-    // observation's sustained wind raises the ceiling only for the block that contains
-    // it. An overshoot beyond ceiling + WxThresholds.SustainedCeilingToleranceKt is a
-    // folded gust (or an invented wind); it fails closed through the same retry-with-
-    // feedback path as every other contract check, with a message telling Claude to
-    // move the gust to the narrative.
+    // The windKt field carries SUSTAINED wind only — a gust belongs in the narrative {q:gust}
+    // token, never
+    // in windKt. Claude has historically folded a TAF/observed gust into windKt.max ("12 kt G20
+    // kt" -> max 20), which corrupts the stored baseline and makes the significance gate's
+    // sustained-wind comparison apples-to-oranges: a GFS-sustained current against a gust-laden
+    // prior.
+    //
+    // The ceiling is read off the SAME GFS+TAF sustained merge the gate compares against
+    // (TafBlockProjector.Merge) rather than re-derived here, so the validator's TAF-coverage model
+    // is identical to the gate's BY CONSTRUCTION. Do not recompute it: the two diverged when this
+    // did its own per-period overlap while Merge uses prevailing-timeline persistence. The current
+    // observation's sustained wind raises the ceiling only for the block containing it.
     /// <summary>
-    /// WX-180: enforce the windKt-is-sustained-only invariant by <b>clamping</b> a
+    /// enforce the windKt-is-sustained-only invariant by <b>clamping</b> a
     /// folded gust out of <c>windKt.max</c>, rather than rejecting it. The merged
     /// GFS+TAF body's <c>windKt.max</c> (plus any in-block observation's sustained
     /// wind) is the per-block sustained ceiling; whenever Claude returns a
-    /// <c>windKt.max</c> above that ceiling (a folded gust), it is corrected down to
-    /// the ceiling.
+    /// <c>windKt.max</c> above that ceiling by more than
+    /// <see cref="WxThresholds.SustainedCeilingToleranceKt"/> (a folded gust), it is corrected
+    /// down to the ceiling. An overshoot WITHIN that tolerance is deliberately left alone — it is
+    /// normal rounding against the merged ceiling, not a folded gust, and clamping it would
+    /// rewrite almost every block.
     /// <para>
-    /// WX-160 originally <em>rejected</em> a folded gust (throw → retry → degrade). On
+    /// This originally <em>rejected</em> a folded gust (throw → retry → degrade). On
     /// a gusty forecast Claude could not converge across the attempts, so the locality
-    /// degraded every cycle and re-burned reconciliations — the ~$45/day cost incident
-    /// (WX-180). The ceiling IS the correct sustained value, so clamping yields the
+    /// degraded every cycle and re-burned reconciliations — the ~$45/day cost incident.
+    /// The ceiling IS the correct sustained value, so clamping yields the
     /// same invariant deterministically with no retry. The gust still belongs in the
     /// narrative <c>{q:gust}</c> token; clamping never touches the narrative.
     /// </para>
@@ -829,14 +814,16 @@ public sealed class ForecastReconciler
         return corrected is null ? finalSnapshot : finalSnapshot with { Blocks = corrected };
     }
 
-    // WX-149: prose hygiene over the language-keyed narrative — two reader-facing
-    // faults the structured-schema and the change/snapshot consistency checks
-    // cannot see, because they live in the prose itself. Both fail closed via
+    // Prose hygiene over the language-keyed narrative — several reader-facing faults the
+    // structured-schema and the change/snapshot consistency checks cannot see, because they live
+    // in the prose itself: raw UTC blocks, internal jargon, synoptic-mechanism attribution, the
+    // precipitation register, the retired likelihood word, and day-part/token agreement.
+    // They all fail closed via
     // JsonException so they route through the same retry-with-feedback → degrade
     // path as every other contract check. Applied to BOTH narrative sections
     // (changeSummary and closing); a leak or a contradiction is just as wrong in
     // the closing wrap-up as in the change band.
-    // Instance (WX-336): CheckProse now reads the language's validator day-part words from the
+    // Instance: CheckProse now reads the language's validator day-part words from the
     // injected _templates store, so this and CheckProse are no longer static.
     private void ValidateProseHygiene(StructuredReportBody report, TimeZoneInfo tz)
     {
@@ -847,7 +834,7 @@ public sealed class ForecastReconciler
         }
     }
 
-    // WX-189: returns a copy of the report with one prose section dropped across EVERY
+    // Returns a copy of the report with one prose section dropped across EVERY
     // language — changeSummary → null (the renderer then shows the deterministic band
     // fallback built from the computed changes), closing → a short, snapshot-safe
     // localized line (the schema requires a non-blank closing). Used by the
@@ -868,7 +855,7 @@ public sealed class ForecastReconciler
     // else the existing closing kept verbatim. Keeping the original is the resilient choice: it
     // is already non-blank (the schema requires it), so a single language somehow missing the
     // fallback token never blanks the closing nor throws mid-degrade — the per-recipient send
-    // gate (WX-171) is the loud fail-closed boundary, not this shared degrade.
+    // gate is the loud fail-closed boundary, not this shared degrade.
     private string ClosingFallbackFor(string lang, string current)
     {
         var set = _templates.ForLanguage(lang);
@@ -886,7 +873,7 @@ public sealed class ForecastReconciler
     // false-positive surface ("5 Zulu", a number adjacent to a Z-word).
     private static readonly Regex RawUtcBlock =
         new(@"\d{1,2}Z\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    // WX-154: internal data-source / aviation acronyms that must never appear in
+    // Internal data-source / aviation acronyms that must never appear in
     // recipient prose. TAF/METAR/GFS/ICAO have no lowercase homograph, so they are
     // matched case-INsensitively — a lowercased leak ("the latest metar…") is caught
     // too, matching the sibling RawUtcBlock policy. CAPE is matched case-SENSITIVELY
@@ -898,15 +885,15 @@ public sealed class ForecastReconciler
     // {q:time:<ISO-8601 UTC>} — the only sanctioned way to express an instant in
     // prose. Captures the inner timestamp so we can render it to a local hour.
     private static readonly Regex QTimeToken = new(@"\{q:time:([^}]+)\}", RegexOptions.Compiled);
-    // WX-139: synoptic-MECHANISM vocabulary must never reach recipient prose. The
+    // Synoptic-MECHANISM vocabulary must never reach recipient prose. The
     // model's inputs are single-point data (no pressure field, no upstream stations,
     // snapshot blocks carry no wind direction), so it cannot evidence a causal "why";
     // a confidently invented mechanism ("as a front pushes through") is the credibility
     // defect this bans. The prompt rule (ReconcilerPrompts) is the primary defense —
     // it enumerates the same terms so the model avoids them — and this validator is the
-    // deterministic backstop, failing closed through the WX-189 retry. Lists are
+    // deterministic backstop, failing closed through the retry. Lists are
     // unambiguous-ONLY: bare "system/wave/trough/ridge/boundary/cap" stay prompt-only
-    // (too many innocent uses to hard-reject), and only en/es (the enabled languages)
+    // (too many innocent uses to hard-reject), and only en/es (the regex-covered subset)
     // are scanned. English: multi-word phrases spelled out (so an ambiguous stem like
     // "convergence" only matches as "convergence zone"), plus the two headline offenders
     // "front"/"frontal" — guarded so the positional idiom "in front of" stays legal.
@@ -929,18 +916,18 @@ public sealed class ForecastReconciler
         + @"|un frente|el frente|baja presión|alta presión|vaguada|borrasca"
         + @"|anticiclón|brisa marina|línea seca)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    // WX-284: the non-severe LIQUID precipitation REGISTER. Most recipients don't distinguish
+    // The non-severe LIQUID precipitation REGISTER. Most recipients don't distinguish
     // "showers", "drizzle", a "downpour", or a "thundershower" from ordinary rain, so the report
     // confines non-severe liquid precip to plain "rain" — these convective-intensity / coverage words
     // must never reach recipient prose (they collapse to "rain"). Storm/thunderstorm (severe-storms)
-    // wording is governed by the reconciler prompt's absolute severe-storm gate — WX-340 retired the
+    // wording is governed by the reconciler prompt's absolute severe-storm gate, which retired the
     // deterministic CheckSevereStormVocabulary that formerly backed it, moving that class to the prompt
     // for every language. The prompt rule (ReconcilerPrompts) is the primary defense; this register check
-    // is the deterministic backstop, failing closed through the WX-189 retry. Unambiguous
-    // precip-register words ONLY, en/es (the enabled languages) — every other language leans on the
+    // is the deterministic backstop, failing closed through the retry. Unambiguous
+    // precip-register words ONLY, en/es (the regex-covered subset) — every other language leans on the
     // prompt rule, matching the SynopticMechanism policy above.
     //
-    // FROZEN GUARD: WX-284 collapses only the LIQUID convective gradient — snow/wintry precip keeps
+    // FROZEN GUARD: collapses only the LIQUID convective gradient — snow/wintry precip keeps
     // its own words. "showers" has a frozen compound ("snow showers", "wintry showers") that must
     // stay legal, so it is excluded when a frozen qualifier precedes it (a negative lookbehind). The
     // other words are liquid-only and need no guard. (Spanish frozen compounds put the qualifier
@@ -952,7 +939,7 @@ public sealed class ForecastReconciler
     private static readonly Regex NonSeverePrecipRegisterSpanish = new(
         @"\b(?:chubascos?|lloviznas?|lloviznando|aguaceros?)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    // WX-284 step 2 (CR #4a): "likely" is the RETIRED recipient precip-likelihood word — the hedge
+    // "likely" is the RETIRED recipient precip-likelihood word — the hedge
     // collapsed to "possible" ("expected" only for a certain NON-severe block; a severe block is always
     // "possible"). The renderer can only emit "possible"/"expected" (deterministic tokens), so the one
     // path by which "likely" reaches a recipient is Claude's free prose — this is the fail-closed
@@ -991,7 +978,7 @@ public sealed class ForecastReconciler
                 + $"('{leak.Value.Trim()}') into recipient prose; express instants only as "
                 + "{q:time:...} tokens, never the internal NNZ block shorthand.");
 
-        // WX-154: internal data-source / aviation jargon must never reach the reader —
+        // Internal data-source / aviation jargon must never reach the reader —
         // name no data source (TAF/METAR/GFS/CAPE/ICAO); use plain wording ("indications").
         var jargon = JargonToken.Match(masked);
         if (jargon.Success)
@@ -1000,11 +987,11 @@ public sealed class ForecastReconciler
                 + $"'{jargon.Value}' in recipient prose; never name a data source "
                 + "(TAF/METAR/GFS/CAPE/ICAO) — use plain wording such as 'the latest indications'.");
 
-        // WX-139: synoptic-mechanism attribution. The model cannot evidence a causal
+        // Synoptic-mechanism attribution. The model cannot evidence a causal
         // "why" from single-point data, so an invented mechanism ("as a front pushes
-        // through") must never reach the reader. en/es only (the enabled languages);
+        // through") must never reach the reader. en/es only (the regex-covered subset);
         // any other language leans on the prompt rule (its equivalents aren't enumerated
-        // here), matching the WX-264 English-only pattern below.
+        // here), matching the en/es validator cases in the switch below.
         var synoptic = lang switch
         {
             "en" => SynopticEnglishMechanism,
@@ -1019,7 +1006,7 @@ public sealed class ForecastReconciler
                 + "never a 'why' — no fronts, pressure systems, troughs/ridges, or other "
                 + "named weather mechanisms (the data cannot support a cause).");
 
-        // WX-284: non-severe precipitation register. "showers"/"drizzle"/"downpour"/"thundershower"
+        // Non-severe precipitation register. "showers"/"drizzle"/"downpour"/"thundershower"
         // all read as ordinary rain to the recipient, so say plain "rain". en/es only; other
         // languages lean on the prompt rule (their equivalents aren't enumerated here).
         var register = lang switch
@@ -1036,7 +1023,7 @@ public sealed class ForecastReconciler
                 + "distinguish it from ordinary rain, so say plain \"rain\" (WX-284) — reserve "
                 + "elevated \"severe storms\" wording for a severe block.");
 
-        // WX-284 step 2 (CR #4a): the retired likelihood word "likely" must never reach a recipient —
+        // The retired likelihood word "likely" must never reach a recipient —
         // the hedge collapsed to "possible" ("expected" only for a certain non-severe block; a severe
         // block is always "possible"). Fail-closed backstop to the prompt rule, precip-scoped so a
         // non-precip "likely" (temperature/wind) is untouched.
@@ -1054,7 +1041,7 @@ public sealed class ForecastReconciler
                 + "\"[precip] possible\" (\"expected\" only for a certain non-severe block; a severe block "
                 + "is always \"possible\"). \"likely\" is retired for recipient-facing precipitation.");
 
-        // WX-336: the language's validator-safe day-part words, built from the DB templates
+        // The language's validator-safe day-part words, built from the DB templates
         // (DayPart1–4 rows flagged ValidatorUse=Yes). An empty list — a language with none curated
         // (de/eo/da/sq today) or unloaded — makes the day-part check below no-op for it, the safe
         // residual (never a false reject). Replaces the retired per-language ILanguageLexicon plugin.
@@ -1170,12 +1157,12 @@ public sealed class ForecastReconciler
     // A day-part word governs the {q:time} token when the gap between them holds no other WORD —
     // either nothing but whitespace/punctuation, OR a single POINT connective ("afternoon AROUND
     // {q:time}") where the day-part word and the token name the SAME instant, so a day-part mismatch
-    // is a real contradiction. This is the WX-264 relaxation of the original no-letters-at-all rule,
+    // is a real contradiction. This is the relaxation of the original no-letters-at-all rule,
     // which let "afternoon around {q:time}" slip because "around" sat in the gap. Deliberately NOT
     // range/span connectives ("into", "through", "until", "to", "from", …): those tie a NEAR-terminus
     // day-part word to a FAR-terminus token of a DIFFERENT part ("Monday evening into {q:time:early
     // Tuesday}" — the compressed both-ends phrasing the prompt encourages), which is correct — binding
-    // across them would FALSE-REJECT a valid span (WX-264 review). A gap of two or more words is a
+    // across them would FALSE-REJECT a valid span. A gap of two or more words is a
     // clause, not a connective, and never binds either (conservative).
     private static readonly string[] PointConnectors =
     {
@@ -1218,7 +1205,7 @@ public sealed class ForecastReconciler
     }
 
     // A change window endpoint must land on a snapshot block boundary. Blocks are
-    // anchored to the locality's local day-parts (WX-155), so alignment is checked
+    // anchored to the locality's local day-parts, so alignment is checked
     // in LOCAL time: the endpoint must be a local 00/06/12/18 boundary.
     private static bool IsBlockAligned(DateTime utc, TimeZoneInfo tz)
     {
@@ -1239,14 +1226,14 @@ public sealed class ForecastReconciler
     private static bool TryMapPrecip(ChangePhenomenon p, out PrecipPhenomenon precip) =>
         Enum.TryParse(p.ToString(), out precip) && Enum.IsDefined(precip);
 
-    // WX-151: highest precipExpectation across blocks overlapping the window whose
+    // Highest precipExpectation across blocks overlapping the window whose
     // phenomenon is p — None when no such block (a block carrying a phenomenon
     // always has a non-None expectation by the snapshot invariant). Used to compare
     // the prior and new snapshots' in-window intensity for a phenomenon.
-    // WX-284: match on the RECIPIENT phenomenon (RecipientPrecip.Of) so a non-severe thunderstorm
+    // match on the RECIPIENT phenomenon (RecipientPrecip.Of) so a non-severe thunderstorm
     // counts on the Rain axis — the exact fold DeterministicChangeDetector.ExpectOf/SevereOf use, so
-    // this oracle accepts precisely what the detector emits (the WX-189/151 tautology stays green).
-    // WX-284 step 2: the tier folds through RecipientPrecip.Expectation(block) too — the same fold
+    // this oracle accepts precisely what the detector emits, so the tautology stays green.
+    // the tier folds through RecipientPrecip.Expectation(block) too — the same fold
     // ExpectOf/BlockExpect apply (Possible == Likely; a severe block pinned to the top) — so a possible
     // <-> likely move, and a tier bump on a block that stays severe, both read flat here as well.
     private static PrecipExpectation MaxExpect(ForecastSnapshotBody body, PrecipPhenomenon p, ChangeWindow w)
@@ -1261,18 +1248,18 @@ public sealed class ForecastReconciler
         return max;
     }
 
-    // WX-151: whether any block overlapping the window carries the safety severeFlag.
+    // Whether any block overlapping the window carries the safety severeFlag.
     private static bool AnySevereInWindow(ForecastSnapshotBody body, ChangeWindow w) =>
         body.Blocks.Any(b => b.SevereFlag && BlockOverlapsWindow(b.StartUtc, w));
 
-    // WX-151: severe within the window on a block carrying phenomenon p — the
+    // Severe within the window on a block carrying phenomenon p — the
     // per-phenomenon severe axis, so an unrelated severe block does not vouch for a
-    // different phenomenon's change. WX-284: on the recipient phenomenon (a severe thunderstorm
+    // different phenomenon's change. Matched on the RECIPIENT phenomenon (a severe thunderstorm
     // keeps its own axis; a non-severe one folds to Rain and carries no severe).
     private static bool SevereForPhenomenon(ForecastSnapshotBody body, PrecipPhenomenon p, ChangeWindow w) =>
         body.Blocks.Any(b => RecipientPrecip.Of(b) == p && b.SevereFlag && BlockOverlapsWindow(b.StartUtc, w));
 
-    // WX-151: true when the prior has a block at EVERY 6-hour step of the window.
+    // True when the prior has a block at EVERY 6-hour step of the window.
     // Weakening/clearing is only verifiable against a prior that fully covers the
     // window — a prior reaching only part of a multi-block window (e.g. near its
     // horizon edge) is incomplete evidence, so we treat it as uncoverable and do not
@@ -1286,15 +1273,15 @@ public sealed class ForecastReconciler
         return true;
     }
 
-    // ── WX-204 per-block change backing ───────────────────────────────────────
+    // ── per-block change backing ───────────────────────────────────────
     // DeterministicChangeDetector classifies each block against its prior-by-StartUtc counterpart
     // and groups consecutive same-direction blocks into one change window, so a window is a REAL
     // change when an INTERIOR block moved even if the window aggregate (MaxExpect / AnySevereInWindow)
     // is flat. These mirror that per-block axis so the consistency net accepts exactly what the
-    // detector emits (tautological) while still rejecting a change no block carries (the WX-151 intent).
+    // detector emits (tautological) while still rejecting a change no block carries.
     // The expectation/severe axis matches the detector's ExpectOf/SevereOf: a block backs phenomenon
-    // p only when its RECIPIENT phenomenon (RecipientPrecip.Of, WX-284) is p — a non-severe
-    // thunderstorm backs Rain, not Thunderstorm. WX-284 step 2: the tier folds through
+    // p only when its RECIPIENT phenomenon (RecipientPrecip.Of) is p — a non-severe
+    // thunderstorm backs Rain, not Thunderstorm. The tier folds through
     // RecipientPrecip.Expectation(block) (Possible == Likely; a severe block pinned to the top),
     // matching ExpectOf, so neither a possible <-> likely move nor a tier bump on a block that stays
     // severe backs a Strengthening/Weakening the detector never emits.
@@ -1335,7 +1322,7 @@ public sealed class ForecastReconciler
         final.Blocks.Where(b => BlockOverlapsWindow(b.StartUtc, w)).Any(b =>
             !IsStandaloneSevere(b) && IsStandaloneSevere(PriorBlockAt(prior, b.StartUtc)));
 
-    // WX-120 fall-safe, carried into the structured-report world (WX-130): true
+    // The fall-safe, carried into the structured-report world: true
     // when any requested language's narrative is near-blank. The narrative now
     // carries only the two judgment sections — the optional changeSummary band
     // and the required closing — so a genuine report's visible prose is far
@@ -1358,8 +1345,8 @@ public sealed class ForecastReconciler
         return false;
     }
 
-    // WX-130: smallest combined visible narrative length (changeSummary + closing)
-    // a real report can carry per language. Recalibrated down from the WX-120
+    // Smallest combined visible narrative length (changeSummary + closing)
+    // a real report can carry per language. Recalibrated down from the original
     // whole-email_body floor of 200: the narrative is now just the two judgment
     // sections, and on a steady scheduled send changeSummary is null, leaving only
     // a one-or-two-sentence closing. A real closing ("Quiet weather; no changes
@@ -1369,7 +1356,7 @@ public sealed class ForecastReconciler
 
     // Signals that Claude returned a well-formed but near-blank narrative — it
     // passed the schema (Closing is merely non-blank) but carries no real
-    // forecast prose (WX-120, carried forward in WX-130). Holds the
+    // forecast prose. Holds the
     // reasoning_trace so a skippable-cycle skip can keep Claude's audit trail.
     private sealed class DegenerateNarrativeException : Exception
     {
@@ -1385,13 +1372,13 @@ public sealed class ForecastReconciler
     // block). Unlike the cached guidance (block 2), this varies per cycle — the
     // requested languages, a station fallback, the trigger severity, whether
     // skipping is permitted — so it is deliberately small. The HTML layout,
-    // units, and per-day grid rules that used to live here are gone: the WX-129
+    // units, and per-day grid rules that used to live here are gone: the
     // StructuredReportRenderer builds each recipient's email deterministically
     // from the structured report. Claude writes only the two judgment sections
     // (changeSummary + closing); the content rules below scope the prose those
     // sections may carry.
     // internal (not private) so ReconcilerSystemPromptTests can assert the vocabulary glossary
-    // actually reaches the assembled prompt — the WX-238 no-op-regression guard.
+    // actually reaches the assembled prompt — the no-op-regression guard.
     internal static string BuildReconcilerSystemPrompt(
         IReadOnlyList<string> narrativeLanguages,
         ReportKind reportKind, bool allowSkip, string vocabularyGlossary)
@@ -1402,9 +1389,9 @@ public sealed class ForecastReconciler
                 "This is an unscheduled update — conditions have changed since the last report. "
                 + "For the changeSummary, write one or two sentences summarising "
                 + "what has changed (e.g. a forecast risk that has appeared, or a significant temperature shift). ",
-            // WX-178: a scheduled report's "What's changed" band rides ONLY a newly-appearing
+            // A scheduled report's "What's changed" band rides ONLY a newly-appearing
             // near-term severe hazard; everything else belongs in the grid + closing, not a band.
-            // WX-165: the Diagnostic (startup verification) kind gets the SAME suppression — it
+            // the Diagnostic (startup verification) kind gets the SAME suppression — it
             // previously fell through to the empty default below, the one report kind that never
             // received this "an empty changes array is the correct answer" coaching, so against a
             // stale prior it filled the band and the resulting phantom degraded the send (and a
@@ -1423,7 +1410,7 @@ public sealed class ForecastReconciler
             _ => "",
         };
 
-        // WX-128/WX-130: the exact language set the structured report's narrative
+        // The exact language set the structured report's narrative
         // must carry — the distinct languages across this locality's recipients.
         // The cached guidance defines the structured-report rules language-
         // agnostically; this line supplies the actual set, matching the required
@@ -1463,8 +1450,8 @@ public sealed class ForecastReconciler
             + "\"severe storms\" — severeFlag alone does not authorize storm wording. "
             + "When precipitation is forecast near freezing temperatures, consider whether "
             + "snow, sleet, or a wintry mix is possible and mention it if so. "
-            // WX-244: time-of-day discipline for the free narrative — extends the deterministic
-            // WX-190 daypart rule into the prose (a night-word attached to a day names the WRONG day;
+            // Time-of-day discipline for the free narrative — extends the deterministic
+            // daypart rule into the prose (a night-word attached to a day names the WRONG day;
             // the post-midnight block is that day's early morning, not the prior day's night).
             + "Time-of-day discipline: name a period by its daypart, bound to its OWN calendar day. "
             + "Never attach a night word to a day name — '<day> night' reads as the night FOLLOWING that "
@@ -1478,7 +1465,7 @@ public sealed class ForecastReconciler
             + "them '<prior day> night'. "
             + changeAlertInstruction
             + narrativeLanguageInstruction
-            // WX-238: the per-report approved-vocabulary glossary (uncached block; empty when no
+            // The per-report approved-vocabulary glossary (uncached block; empty when no
             // glossary tokens/phrases resolve). The cached guidance already tells the narrative to
             // honor it; this supplies the actual per-language terms.
             + (string.IsNullOrEmpty(vocabularyGlossary) ? "" : "\n\n" + vocabularyGlossary + "\n")
@@ -1512,7 +1499,7 @@ public sealed class ForecastReconciler
         sb.AppendLine(provisional.Serialize());
         sb.AppendLine();
 
-        // WX-228: deterministically characterize the per-day highs/lows into the one
+        // Deterministically characterize the per-day highs/lows into the one
         // or two whole-°C ranges the closing should speak in, handed to Claude as ready
         // {q:temp_range:...} tokens so it phrases the band natively instead of wrapping
         // a single point value in fuzzy words ("the upper 97°F range"). Derived from the
@@ -1525,7 +1512,7 @@ public sealed class ForecastReconciler
             sb.AppendLine();
         }
 
-        // WX-246: the per-language date→day-name reference (empty when there are no forecast blocks).
+        // The per-language date→day-name reference (empty when there are no forecast blocks).
         if (dayNameReference.Length > 0)
         {
             sb.Append(dayNameReference);
@@ -1543,7 +1530,7 @@ public sealed class ForecastReconciler
         }
         sb.AppendLine();
 
-        // WX-130: the data payload is recipient-agnostic now, so it uses
+        // The data payload is recipient-agnostic now, so it uses
         // SnapshotDescriber's default display units (US customary). For the
         // forecast bodies this is harmless — the final_snapshot schema fixes
         // canonical °C/kt and the structured_report's change quantities derive
@@ -1553,7 +1540,7 @@ public sealed class ForecastReconciler
         // directly in narrative prose it must convert it to the canonical
         // {q:...} unit by hand (the token grammar accepts any number, so a
         // copy-the-displayed-figure slip would not fail validation). This is a
-        // pre-existing WX-128 property, not introduced here; a follow-up could
+        // pre-existing property, not introduced here; a follow-up could
         // give SnapshotDescriber a canonical mode so the payload units match the
         // token convention end-to-end.
         sb.AppendLine("current_observation and current_forecast (structured text):");
@@ -1574,7 +1561,7 @@ public sealed class ForecastReconciler
         return sb.ToString();
     }
 
-    // Renders the WX-108 changed_since_last_sent_report descriptor: which inputs
+    // Renders the changed_since_last_sent_report descriptor: which inputs
     // are newer than at the last delivered report, phrased so the anti-reversal
     // rule reads naturally. "observation only" is the case the rule keys on.
     private static string DescribeChangedSinceLastSend(
