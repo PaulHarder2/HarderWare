@@ -327,9 +327,10 @@ public sealed class ForecastReconciler
                 //   Failure   the snapshot itself never parsed, or the field message stands
                 //   Degraded  the snapshot parsed but the narrative could not be made
                 //             self-consistent — a hazard report goes out without prose
-                //   Success   a PROSE fault confined to one section: that section is dropped
-                //             and the rest is sent
-                //   NotNews   the degrade left a content-less narrative on a skippable cycle
+                //   Success   a PROSE fault confined to one section: DropProseSection removes
+                //             it, the survivor re-validates, and the rest is sent
+                //   NotNews   a content-less narrative on a SKIPPABLE cycle — no degrade is
+                //             involved; the same fault on a guaranteed send returns Failure
                 // windKt must be sustained-only — CLAMP a folded gust out of
                 // windKt.max (rather than reject → retry → degrade, which on a gusty
                 // forecast never converged and degraded every cycle: the ~$45/day cost
@@ -990,7 +991,7 @@ public sealed class ForecastReconciler
         // "why" from single-point data, so an invented mechanism ("as a front pushes
         // through") must never reach the reader. en/es only (the regex-covered subset);
         // any other language leans on the prompt rule (its equivalents aren't enumerated
-        // here), matching the English-only pattern below.
+        // here), matching the en/es validator cases in the switch below.
         var synoptic = lang switch
         {
             "en" => SynopticEnglishMechanism,
