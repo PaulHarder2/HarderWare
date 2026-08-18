@@ -113,7 +113,7 @@ public sealed class ForecastReconciler
 
     /// <summary>Initializes a new instance backed by the supplied <see cref="ClaudeClient"/>.</summary>
     /// <param name="claude">Anthropic Messages API wrapper used for the tool-use call.</param>
-    /// <param name="templates">The DB-backed template store, read only for the per-language <see cref="Tok.ClosingFallback"/> when the independent-section degrade replaces an unusable closing.</param>
+    /// <param name="templates">The DB-backed template store. Supplies the approved-vocabulary glossary for the narrative, <c>CultureFor</c> for localized day names, the per-language validator-safe day-part words, and the <see cref="Tok.ClosingFallback"/> used when the independent-section degrade replaces an unusable closing.</param>
     public ForecastReconciler(ClaudeClient claude, LanguageTemplateStore templates)
     {
         _claude = claude;
@@ -319,9 +319,17 @@ public sealed class ForecastReconciler
                 // the StructuredReportRenderer builds every recipient's email from it,
                 // so its validation is fatal again (it was best-effort during the additive
                 // transition, when email_body was the sent artifact).
-                // A missing field, schema/token violation, or a requested language
-                // absent/extra all throw and route through the retry → skip/Failure
-                // path, exactly like a final_snapshot schema violation.
+                // A missing field, schema/token violation, or a requested language absent/extra
+                // all throw and enter the SAME retry branch as a final_snapshot schema violation
+                // — MissingToolUseFieldException and JsonException included.
+                // ⚠️ Exhausting the retries does NOT mean skip/Failure. Four outcomes are
+                // reachable after the last attempt, and which one depends on the fault class:
+                //   Failure   the snapshot itself never parsed, or the field message stands
+                //   Degraded  the snapshot parsed but the narrative could not be made
+                //             self-consistent — a hazard report goes out without prose
+                //   Success   a PROSE fault confined to one section: that section is dropped
+                //             and the rest is sent
+                //   NotNews   the degrade left a content-less narrative on a skippable cycle
                 // windKt must be sustained-only — CLAMP a folded gust out of
                 // windKt.max (rather than reject → retry → degrade, which on a gusty
                 // forecast never converged and degraded every cycle: the ~$45/day cost
@@ -413,10 +421,11 @@ public sealed class ForecastReconciler
                     continue;
                 }
 
-                // Exhausted. Report exactly as the pre-retry single-shot path did —
-                // precise by-name field message, or the schema-validation
-                // message — so the operator-facing failure is unchanged but for the
-                // attempt count. The caller leaves the provisional CommittedSend in
+                // Exhausted, and this is the FAILURE arm specifically — the other three
+                // exhaustion outcomes are handled above. Report exactly as the pre-retry
+                // single-shot path did — the precise by-name field message, or the
+                // schema-validation message — so the operator-facing failure is unchanged but
+                // for the attempt count. The caller leaves the provisional CommittedSend in
                 // place as a failed-attempt audit row (SentAtUtc stays null, so it
                 // never becomes a prior snapshot); the next cycle reconciles a fresh
                 // provisional, which is how the system self-heals.
@@ -804,9 +813,11 @@ public sealed class ForecastReconciler
         return corrected is null ? finalSnapshot : finalSnapshot with { Blocks = corrected };
     }
 
-    // Prose hygiene over the language-keyed narrative — two reader-facing
-    // faults the structured-schema and the change/snapshot consistency checks
-    // cannot see, because they live in the prose itself. Both fail closed via
+    // Prose hygiene over the language-keyed narrative — several reader-facing faults the
+    // structured-schema and the change/snapshot consistency checks cannot see, because they live
+    // in the prose itself: raw UTC blocks, internal jargon, synoptic-mechanism attribution, the
+    // precipitation register, the retired likelihood word, and day-part/token agreement.
+    // They all fail closed via
     // JsonException so they route through the same retry-with-feedback → degrade
     // path as every other contract check. Applied to BOTH narrative sections
     // (changeSummary and closing); a leak or a contradiction is just as wrong in
@@ -881,7 +892,7 @@ public sealed class ForecastReconciler
     // it enumerates the same terms so the model avoids them — and this validator is the
     // deterministic backstop, failing closed through the retry. Lists are
     // unambiguous-ONLY: bare "system/wave/trough/ridge/boundary/cap" stay prompt-only
-    // (too many innocent uses to hard-reject), and only en/es (the enabled languages)
+    // (too many innocent uses to hard-reject), and only en/es (the regex-covered subset)
     // are scanned. English: multi-word phrases spelled out (so an ambiguous stem like
     // "convergence" only matches as "convergence zone"), plus the two headline offenders
     // "front"/"frontal" — guarded so the positional idiom "in front of" stays legal.
@@ -912,7 +923,7 @@ public sealed class ForecastReconciler
     // deterministic CheckSevereStormVocabulary that formerly backed it, moving that class to the prompt
     // for every language. The prompt rule (ReconcilerPrompts) is the primary defense; this register check
     // is the deterministic backstop, failing closed through the retry. Unambiguous
-    // precip-register words ONLY, en/es (the enabled languages) — every other language leans on the
+    // precip-register words ONLY, en/es (the regex-covered subset) — every other language leans on the
     // prompt rule, matching the SynopticMechanism policy above.
     //
     // FROZEN GUARD: collapses only the LIQUID convective gradient — snow/wintry precip keeps
@@ -977,7 +988,7 @@ public sealed class ForecastReconciler
 
         // Synoptic-mechanism attribution. The model cannot evidence a causal
         // "why" from single-point data, so an invented mechanism ("as a front pushes
-        // through") must never reach the reader. en/es only (the enabled languages);
+        // through") must never reach the reader. en/es only (the regex-covered subset);
         // any other language leans on the prompt rule (its equivalents aren't enumerated
         // here), matching the English-only pattern below.
         var synoptic = lang switch
