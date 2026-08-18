@@ -1,6 +1,6 @@
 # WxServices development workflow
 
-Last updated 2026-07-10.
+Last updated 2026-08-18.
 
 This document is the authoritative workflow for landing a change in WxServices. It is a snapshot of the rules Paul and Claude have agreed on over time; when something here conflicts with an ad-hoc direction, this document wins unless the conflict is flagged and the document updated.
 
@@ -210,25 +210,29 @@ Only after this pass — not the poller's verdict — is CodeRabbit "clear." *Re
 
 ## 10. Hash-fill commit
 
-When CodeRabbit is clean, add a **separate commit** whose sole change is filling in the v1.N.N commit hash in `VERSIONS.md` (replacing `_pending_`). **Record the final commit on the branch before this hash-fill commit — the branch HEAD at that moment — regardless of whether it is the version-bump commit, and even when it is unrelated to what satisfied the ticket.** *(Paul's ruling, 2026-06-09: it is the one rule that is always unambiguous and always points at the actual shipping tip.)* It is never the hash-fill commit itself, and never the merge commit.
+When CodeRabbit is clean, add a **separate commit** whose sole change is filling in the v1.N.N commit hash in `VERSIONS.md` (replacing `_pending_`).
 
-⚠️ **It is NOT necessarily the commit that bumped `Directory.Build.props`.** The two coincide only when nothing follows the bump; review rounds after it make them different commits, and the bump commit's source is then not what shipped. **The error is silent — a wrong hash still resolves to a real commit and reads as correct.**
+**Record the commit whose source tree is what ships — normally the branch tip immediately before this hash-fill commit**, regardless of whether it is the version-bump commit, and even when it is unrelated to what satisfied the ticket *(Paul's ruling)*. Never the hash-fill commit itself, and never this PR's own merge into `master`.
 
-🔴 **RE-VERIFY AT MERGE — for the row you are filling on this branch. If ANY commit lands after the hash-fill — a further review round, a revert, an amend or a rebase — RE-FILL.** The recorded hash is a claim about the branch tip, and anything appended to the branch falsifies it with nothing failing. **This applies only to the row being filled now; rows already on `master` are history and are covered by the note below.** *(WX-451: a source change landed eleven minutes after the fill; the hash was re-filled to match.)*
+⚠️ **It is NOT necessarily the commit that bumped `Directory.Build.props`.** Those coincide only when nothing follows the bump; review rounds after it make them different, and the bump commit's source is then not what shipped. **The error is silent — a wrong hash still resolves to a real commit and reads as correct.**
 
-⚠️ **ONE BRANCH, ONE VERSION BUMP** — which is what practice already is: every one of the last twenty bumps is a single version on a single branch. **If a change genuinely needs two, split it into two PRs.** The rule above assumes exactly one `_pending_` row: filling a second row in a second commit would record *the first hash-fill commit* as the branch tip, which this section forbids.
+🔴 **If any commit lands on the branch after the fill, RE-FILL.** A *substantive* post-fill commit also re-enters §7d and §9 — only the re-fill itself is exempt from re-review.
 
-⚠️ **Nothing automatic detects a leftover `_pending_`** — `check-version-consistency.sh` compares version *numbers* against the top row only, and no CI step or hook greps for it. **Before merging, check by hand:**
+**Your branch must carry exactly one unfilled `_pending_` row, and it must be yours.** A merge from `master` can bring in another ticket's unfilled row; fill only your own, and never re-fill someone else's with your branch tip. Before merging:
 
 ```bash
-grep -n '_pending_' WxServices/VERSIONS.md    # expect no output
+grep -c '_pending_' "$(git rev-parse --show-toplevel)/WxServices/VERSIONS.md"    # expect: 0
 ```
 
-This hash-fill commit does **not** gate on a fresh CodeRabbit review. It is a deterministic `_pending_`→hash substitution, and the substantive change has by now cleared both Claude's `/code-review` (§7d) and CodeRabbit. Merge it as soon as **CI** is green. ⚠️ **CodeRabbit posts NOTHING on a hash-fill-only push** — WX-196 (2026-06-16) added `!WxServices/VERSIONS.md` to `.coderabbit.yaml`, so a push whose only changed file is `VERSIONS.md` is excluded from review and spends no review-frequency quota. **Do not poll `check-cr.sh` for a verdict that will never arrive.** *Added 2026-05-29 — supersedes the earlier "wait for CR even on the hash-fill" practice, which added latency with no payoff on a mechanical edit.*
+*(`grep -c` prints a bare `0` and cannot be confused with a failed read, which prints nothing and exits 2.)*
+
+⚠️ **A retroactive fill — a branch whose only change is the hash for an already-merged version, as in WX-449 — has no branch tip of its own.** Record the commit that shipped that version.
+
+This hash-fill commit does **not** gate on a fresh CodeRabbit review. It is a deterministic `_pending_`→hash substitution, and the substantive change has by now cleared both Claude's `/code-review` (§7d) and CodeRabbit. Merge it as soon as **CI** is green. ⚠️ **CodeRabbit posts NOTHING on a hash-fill-only push** — WX-196 added `!WxServices/VERSIONS.md` to `.coderabbit.yaml`, so a push whose only changed file is `VERSIONS.md` is excluded from review. **Do not poll `check-cr.sh` for a verdict that will never arrive.**
 
 Skip this step for pure-tooling / pure-docs PRs that did not bump the version (see §5).
 
-⚠️ **Rows recorded before 2026-08-18 follow the earlier convention** — e.g. `1.61.2 = 6333674`, which is the version-bump commit with six commits after it. **Do not retro-edit them** to match this rule.
+⚠️ **Rows up to and including `1.61.2` follow the earlier convention** — the version-bump commit. **Do not retro-edit them.** `1.61.3` onward follow the rule above.
 
 ## 11. Merge — always "Create a merge commit"
 
