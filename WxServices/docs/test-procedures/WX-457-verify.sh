@@ -2,100 +2,137 @@
 # WX-457-verify.sh - prove a comments-only trim really is comments-only, and that it
 # introduced none of the mechanical defects a trim is prone to.
 #
-# Reusable. Nothing here is specific to WX-457 except the defaults: pass a different
-# --file and --base to run it against the next trim (ReportWorker.cs is the intended
-# next subject).
+# Reusable: --file and --base point it at the next trim.
 #
-# 🔴 WHY THIS EXISTS RATHER THAN A HUMAN READING THE DIFF. Three reviewers read the
-#    WX-457 diff and between them found 12 defects. FOUR of the mechanical ones were
-#    found only by these checks, and one of those was created BY a repair of the same
-#    defect class two hours after the reviewers' passes - so no amount of reading could
-#    have caught it. Reading finds meaning; these find mechanism.
+# 🔴 EVERY CHECK IS SCORED BY ITS EXIT STATUS, NEVER BY ITS OUTPUT TEXT, AND THAT IS THE
+#    WHOLE ARCHITECTURE OF THIS SCRIPT. The previous version grepped stdout for "FAIL"
+#    through a pipe. Under `set -o pipefail` the pipeline returned the CHECKER's non-zero
+#    rather than grep's zero, so the `if` was false exactly when a guard HAD failed:
+#    guards 1-3 could never fail the run. Text is what a human reads; status is what a
+#    machine acts on. If you add a check here, capture its rc directly - no pipes.
 #
 # Usage:
 #   ./WX-457-verify.sh [--file PATH] [--base REV] [--head REV]
-#   ./WX-457-verify.sh --selftest      # prove the checks can FAIL
+#   ./WX-457-verify.sh --selftest
 #
-# Exit: 0 all checks pass · 1 a check failed · 2 usage/lookup error
-set -uo pipefail   # NOT -e: we want every check to run and report, not stop at the first
+# Exit: 0 all checks passed · 1 a check failed · 2 usage/lookup error
+#       3 a check COULD NOT RUN - never a pass
+set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"
 FILE="WxServices/src/WxReport.Svc/ForecastReconciler.cs"
-BASE="origin/master"; HEAD_REV="HEAD"
+BASE="origin/master"; HEAD_REV="HEAD"; SELFTEST=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --file)  FILE="$2"; shift 2 ;;
-    --base)  BASE="$2"; shift 2 ;;
-    --head)  HEAD_REV="$2"; shift 2 ;;
-    --selftest)
-        echo "AC-1 verifier selftest:"; python3 "$HERE/comment-trim-ac1.py" --selftest 2>/dev/null \
-          || echo "  (comment-trim-ac1.py has no --selftest; its control is exercised below)"
-        echo "Comment-hygiene selftest:"; python3 "$HERE/comment-hygiene.py" --selftest; exit $? ;;
-    -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
+    --file) FILE="$2"; shift 2 ;;
+    --base) BASE="$2"; shift 2 ;;
+    --head) HEAD_REV="$2"; shift 2 ;;
+    --selftest) SELFTEST=1; shift ;;
+    -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
+
+if [ "$SELFTEST" -eq 1 ]; then
+  # 🔴 The selftest must exercise EVERY guard, and its own status must be the aggregate.
+  #    An earlier version reported six green on a build where two guards had been gutted.
+  echo "comment-hygiene selftest:"
+  python3 "$HERE/comment-hygiene.py" --selftest; h=$?
+  echo "AC-1 stripper selftest:"
+  python3 "$HERE/comment-trim-ac1.py" --selftest; a=$?
+  [ "$h" -eq 0 ] && [ "$a" -eq 0 ] && { echo "SELFTEST PASS"; exit 0; }
+  echo "SELFTEST FAIL (hygiene=$h ac1=$a)"; exit 1
+fi
 
 cd "$REPO" || exit 2
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 BEFORE="$TMP/before.cs"; AFTER="$TMP/after.cs"
 
-# Derive BOTH revisions from git. Deliberately not from a scratch copy: a scratch file
-# is unversioned, and a verification that depends on one cannot be re-run by anyone else.
 git show "$BASE:$FILE" > "$BEFORE" 2>/dev/null || { echo "cannot read $FILE at $BASE" >&2; exit 2; }
 git show "$HEAD_REV:$FILE" > "$AFTER" 2>/dev/null || { echo "cannot read $FILE at $HEAD_REV" >&2; exit 2; }
 
+BASE_SHA="$(git rev-parse "$BASE")"; HEAD_SHA="$(git rev-parse "$HEAD_REV")"
+
 echo "============================================================"
-echo " WX-457 comment-trim verification"
+echo " comment-trim verification"
 echo "============================================================"
 echo " file : $FILE"
-echo " base : $BASE   ($(git rev-parse --short "$BASE"))"
-echo " head : $HEAD_REV   ($(git rev-parse --short "$HEAD_REV"))"
+echo " base : $BASE   (${BASE_SHA:0:8})"
+echo " head : $HEAD_REV   (${HEAD_SHA:0:8})"
 echo
 
-rc=0
+# 🔴 REFUSE A VACUOUS RUN. Once this branch merges, origin/master == HEAD and the
+#    default invocation compares a file with itself - every check passes on an empty
+#    diff and the banner still says PASS. A verification that quietly becomes a no-op
+#    the moment it lands is worse than none.
+if [ "$BASE_SHA" = "$HEAD_SHA" ]; then
+  echo "  REFUSING TO RUN: base and head are the same commit (${BASE_SHA:0:8})."
+  echo "  There is no change to verify, and a PASS here would mean nothing."
+  echo "  Pass --base explicitly, e.g. --base HEAD~1."
+  exit 3
+fi
+if cmp -s "$BEFORE" "$AFTER"; then
+  echo "  REFUSING TO RUN: $FILE is identical at both revisions."
+  echo "  Nothing to verify. Check --file and --base."
+  exit 3
+fi
 
-echo " AC-1 - the change is COMMENTS ONLY"
-python3 "$HERE/comment-trim-ac1.py" "$BEFORE" "$AFTER" || rc=1
+rc=0; cannot=0
+
+echo " [1] AC-1 - the change is COMMENTS ONLY"
+python3 "$HERE/comment-trim-ac1.py" "$BEFORE" "$AFTER"; s=$?
+case "$s" in 0) : ;; 3) echo "   -> CANNOT CHECK"; cannot=1 ;; *) rc=1 ;; esac
 echo
-echo " POSITIVE CONTROL - the AC-1 check must be able to FAIL"
-# Plant a real CODE change in a copy. If this passes, the check is decoration.
-# ⚠️ It must be CODE. An earlier version of this control inserted a /*comment*/, which
-# AC-1 correctly ignored - so the control "failed" while the check was working perfectly.
-# A control that plants the wrong KIND of change measures nothing.
+
+echo " [2] POSITIVE CONTROL - AC-1 must DETECT a planted code change"
+# ⚠️ It must plant CODE. An earlier control inserted a /*comment*/, which AC-1 correctly
+#    ignored - so the control reported failure while the check worked perfectly. And it
+#    must target a line AC-1 can actually see: a mutation landing inside a region the
+#    stripper mis-swallows would go undetected and the control would report "ok" on a
+#    file whose real change is invisible.
 python3 - "$AFTER" "$TMP/mutant.cs" <<'MUT'
 import sys, re
 src = open(sys.argv[1], encoding='utf-8-sig').read()
-# flip the first integer literal in an assignment - unambiguously code, never a comment
 out, k = re.subn(r'(=\s*)(\d+)(\s*;)', lambda m: f"{m.group(1)}{int(m.group(2))+1}{m.group(3)}", src, count=1)
 if k != 1:
-    sys.stderr.write("MUTATION FAILED TO APPLY - the control below is void\n"); sys.exit(3)
+    sys.stderr.write("no integer-assignment to mutate\n"); sys.exit(3)
 open(sys.argv[2], 'w', encoding='utf-8').write(out)
 MUT
-if [ $? -ne 0 ]; then echo "   FAIL  could not plant a mutation; this control is VOID"; rc=1; fi
-if python3 "$HERE/comment-trim-ac1.py" "$BEFORE" "$TMP/mutant.cs" >/dev/null 2>&1; then
-    echo "   FAIL  a planted code change was NOT detected - AC-1 above proves nothing"; rc=1
+m=$?
+if [ "$m" -ne 0 ]; then
+  echo "   CANNOT CHECK - could not plant a mutation; this control is VOID"; cannot=1
 else
-    echo "   ok    planted code change detected; the AC-1 result above is meaningful"
+  python3 "$HERE/comment-trim-ac1.py" "$BEFORE" "$TMP/mutant.cs" >/dev/null 2>&1; s=$?
+  if [ "$s" -eq 1 ]; then echo "   ok    planted code change detected; [1] is meaningful"
+  else echo "   FAIL  planted code change NOT detected (rc=$s) - [1] proves nothing"; rc=1; fi
 fi
 echo
-echo " MECHANICAL GUARDS - defects a trim introduces that reading misses"
-# Guards 1-3 are pass/fail. Guard 4 (/// text changed) is INFORMATIONAL: doc text
-# legitimately changes when a trim repairs a doc that had become false, as this one did.
-# It fails only a claim of "XML docs untouched" - so it is reported, not scored.
-python3 "$HERE/comment-hygiene.py" "$AFTER" | grep -vE '/// text changed' || true
-if python3 "$HERE/comment-hygiene.py" "$AFTER" | grep -qE '^  FAIL'; then rc=1; fi
+
+echo " [3] MECHANICAL GUARDS - findings INTRODUCED by this change"
+# 🔴 SCORED BY COMPARISON AGAINST THE BASELINE, not by the AFTER file being clean.
+#    A finding present in both revisions is a pre-existing habit of the file; only what
+#    the change ADDED is attributable to it. The earlier version scored the two
+#    separately, which made any file with existing habits permanently unpassable.
+python3 "$HERE/comment-hygiene.py" --delta "$AFTER" "$BEFORE"; s=$?
+[ "$s" -ne 0 ] && rc=1
 echo
-echo " INFORMATIONAL - /// content delta (NOT a failure; see above)"
-python3 "$HERE/comment-hygiene.py" "$AFTER" "$BEFORE" 2>&1 | grep -E '/// text changed' | sed 's/FAIL/    /'
+
+echo " [4] BASELINE - absolute guard state, both revisions (context, not scored)"
+echo "   before:"; python3 "$HERE/comment-hygiene.py" "$BEFORE" 2>&1 | sed 's/^/  /' || true
+echo "   after:";  python3 "$HERE/comment-hygiene.py" "$AFTER"  2>&1 | sed 's/^/  /' || true
 echo
-echo " BASELINE - the same guards against the PRE-TRIM file"
-echo "   (they must be clean BEFORE, or they are flagging pre-existing noise)"
-python3 "$HERE/comment-hygiene.py" "$BEFORE" 2>&1 | sed 's/^/  /'
+
+echo " [5] INFORMATIONAL - /// content delta (not scored)"
+python3 "$HERE/comment-hygiene.py" --doc-delta "$AFTER" "$BEFORE" || true
 echo
+
 echo "============================================================"
+if [ "$cannot" -ne 0 ]; then
+  echo "  ====>  CANNOT CHECK - a check did not run. This is NOT a pass."
+  echo "============================================================"; exit 3
+fi
 if [ "$rc" -eq 0 ]; then
   echo "  ====>  PASS"
   echo "  Test Result: PASS $(date -u +%Y-%m-%d) - comments-only proven; guards clean"
