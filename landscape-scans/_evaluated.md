@@ -77,6 +77,19 @@ finding with no row has not been dispositioned, and a scan with no sub-section h
 not been worked at all. That makes this register its own completeness check — the
 property a tool-indexed list cannot have.
 
+### 2026-09
+
+Report: [`2026-09.md`](2026-09.md) · scanned 2026-09-01 · 3 findings.
+**One trigger fired and was answered, one trigger-check ran and changed nothing, and one
+was already satisfied.** No ticket was opened against any finding. Decisions taken by
+Paul on 2026-09-01; recorded under WX-492.
+
+| Finding | Verdict | Entry |
+|---|---|---|
+| 1. Sonnet 5 deferral trigger fired — pricing case reversed | **Deferral upheld.** The trigger genuinely fired: $2/$10 is now the permanent standard price, so Sonnet 5 is ~13% cheaper effective rather than ~30% dearer. That reverses **reason 2 of four** and touches none of the others. **Cost stopped being an argument AGAINST migrating; it did not become an argument FOR migrating now** | [Claude Sonnet 5 for the WxServices runtime](#sonnet-5-runtime) |
+| 2. Claude Fable 5 — Opus 5 adoption trigger check | **Checked, no change.** Opus 5 retained for Claude Code; 2× the price is decisive on its own | [Claude Code on Claude Opus 5](#opus-5-claude-code) |
+| 3. .NET 8.0.30 patch | **Already satisfied** — measured on PaulOmniBook 2026-09-01, `dotnet --list-runtimes` reports `Microsoft.NETCore.App 8.0.30`. The scan predicted this from the 8.0.29 pattern and predicted right; **the measurement is what settles it, not the prediction** | — |
+
 ### 2026-08
 
 Report: [`2026-08.md`](2026-08.md) · scanned 2026-08-01 · 4 findings + 1 note.
@@ -147,7 +160,8 @@ Already in the stack. The scan must not recommend adopting these again, though a
 
 #### Claude Code on Claude Opus 5 — in place as of 2026-08-01
 
-**Raised by:** [2026-08](#2026-08) finding 1; [2026-07](#2026-07) note.
+**Raised by:** [2026-08](#2026-08) finding 1; [2026-07](#2026-07) note;
+[2026-09](#2026-09) finding 2 (trigger check).
 
 `claude-opus-5` became Claude Code's default Opus model in v2.1.219 (2026-07-24) at
 unchanged pricing — $5/$25 per MTok, 1M context. Verified in use 2026-08-01: the running
@@ -160,6 +174,25 @@ to Opus 4.8 is superseded rather than contradicted.
 **Note for the scan.** The 2026-08 scan reported this as an open action while it was
 already in place, because the routine prompt's hardcoded stack inventory still named an
 older model. This entry exists partly to stop that repeating.
+
+✅ **TRIGGER CHECK, 2026-09-01 (WX-492) — THE FIRST BULLET BELOW FIRED, AND THE ANSWER IS
+NO CHANGE.** Claude Fable 5 (`claude-fable-5`, released 2026-06-09) is Anthropic's
+highest-capability widely released model, which fires *"otherwise the better tier for
+long-horizon multi-file work."* **Opus 5 is retained.**
+
+🔑 **$10/$50 against $5/$25 — 2× — is decisive on its own**, and the check deliberately
+does **not** rest on the two weaker arguments the scan offered. *(Its refusal-handling
+argument is the weaker one: a refusal is a documented `stop_reason` with a first-class
+server-side fallback, so it is a handled condition rather than a disqualifier. Recorded
+so a later reader does not treat it as load-bearing and then retire a correct conclusion
+on finding it refutable.)*
+
+⚠️ **AND THE ROUTINE WAS LATE — THE SAME BLIND SPOT THE NOTE ABOVE RECORDS, IN NEW
+CLOTHES.** Measured 2026-09-01: Fable 5 shipped 2026-06-09 and appears **zero** times in
+the 2026-05 through 2026-08 reports or anywhere in this file. This entry's trigger was
+only written 2026-08-01, so no earlier scan was strictly obliged to check it — but a new
+top-tier model going unmentioned across two scans is worth a routine-side fix. **Not
+actioned here; a candidate to discuss, not a filed ticket.**
 
 **Re-evaluate if:**
 
@@ -177,9 +210,10 @@ Examined and consciously postponed. **Do not resurface before the named trigger 
 
 <a id="sonnet-5-runtime"></a>
 
-#### Claude Sonnet 5 for the WxServices runtime — deferred 2026-08-01
+#### Claude Sonnet 5 for the WxServices runtime — deferred 2026-08-01, upheld 2026-09-01
 
-**Raised by:** [2026-07](#2026-07) finding 1; [2026-08](#2026-08) finding 2.
+**Raised by:** [2026-07](#2026-07) finding 1; [2026-08](#2026-08) finding 2;
+[2026-09](#2026-09) finding 1.
 
 **Not adopted, and no ticket opened** — deliberately. Paul, 2026-08-01: *"nothing we
 really need to act on now… That will come later when Sonnet 4.6 sunsets."*
@@ -198,6 +232,33 @@ really need to act on now… That will come later when Sonnet 4.6 sunsets."*
    a month. *(Tokenizer factor is the scans' claim, consistent across 2026-07 and
    2026-08, but not independently verified against the pricing docs — do that before
    acting on it.)*
+
+   > 🔴 **REASON 2 IS DEAD AS OF 2026-09-01, AND IT IS THE ONLY ONE OF THE FOUR THAT
+   > MOVED.** The scheduled increase to $3/$15 **did not happen.** The pricing page now
+   > carries an explicit note that the $2/$10 rate *"is now the standard price"* and that
+   > the previously scheduled increase *"will not occur."* So Sonnet 5 is **~13% cheaper
+   > effective, permanently** — not ~30% dearer. **Read the paragraph above as a record
+   > of what was true on 2026-08-01, not as current guidance.**
+   >
+   > ✅ **AND THE TOKENIZER FACTOR IS NOW VERIFIED FIRST-HAND, which discharges this
+   > entry's own standing instruction to do exactly that before acting.** The pricing
+   > page states that the newer tokenizer *"produces approximately 30% more tokens for
+   > the same text"*, and adds that *"the exact increase depends on the content and
+   > workload shape."*
+   >
+   > ⚠️ **SO ~13% IS A POINT ESTIMATE ON AN APPROXIMATION, AND BREAK-EVEN SITS AT
+   > EXACTLY 1.5× — for input and output alike** ($2 × 1.5 = $3; $10 × 1.5 = $15). At
+   > 1.3× we save ~13%; at 1.5× we save nothing; above it the migration is a permanent
+   > raise. 🔴 **OUR OWN RATIO IS UNMEASURED**, and the translator emits non-English
+   > prose, which is precisely where a tokenizer ratio drifts furthest from a headline
+   > figure. `count_tokens` against real reconciler and translator payloads would settle
+   > it. **Nobody has run it, and no trigger depends on it** — this is a note for
+   > whoever opens the migration, not an open action.
+   >
+   > 🔑 **WHAT THIS CHANGES, STATED PRECISELY: cost stopped being an argument AGAINST
+   > migrating. It did not become an argument FOR migrating now.** Reasons 1, 3 and 4
+   > stand untouched, and 3 and 4 are the ones carrying the real cost.
+
 3. **It is a breaking API change, not a config swap — and it is PLATFORM-WIDE, not a
    Sonnet 5 quirk.** A non-default `temperature` returns **HTTP 400** on Sonnet 5 **and
    on Opus 4.7+** (2026-07 scan). `ClaudeClient.cs` sends one on both call paths:
@@ -233,14 +294,20 @@ exactly once:
   purpose: through 2026-08-31 the introductory rate already makes Sonnet 5 ~13% cheaper,
   so a trigger phrased about "pricing" alone would be satisfied the day it was written —
   the failure the rule above forbids.)*
+  ✅ **FIRED 2026-09-01 AND ANSWERED — deferral upheld; see the block under reason
+  2. This trigger is SPENT and cannot fire again.** The three triggers above it are
+  unfired and unchanged, and the 2026-12-01 backstop still stands.
 *(A fifth trigger stood here — "token spend grows enough that a percentage difference
 becomes material" — and was removed. It named no threshold and no observer, so nobody
 could ever determine whether it had fired, which makes it indistinguishable from having
 no trigger at all. The 2026-12-01 backstop already forces a deliberate revisit. Add a
 figure and it can come back.)*
 
-**Do not re-raise this as a cost saving before a trigger fires.** The saving was examined
-and found to invert after 2026-08-31.
+**Do not re-raise this as a cost saving.** ⚠️ **The REASON changed on 2026-09-01 and the
+INSTRUCTION did not.** The saving no longer inverts — at the headline tokenizer ratio it
+is real and permanent. But a ~13% saving was never what was holding this migration back,
+and it answers neither reason 3 nor reason 4. **A cost argument is not a sufficient
+reason to open this work; the retirement clock and the 2026-12-01 backstop are.**
 
 ### Declined
 
