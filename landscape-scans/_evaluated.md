@@ -188,16 +188,36 @@ so a later reader does not treat it as load-bearing and then retire a correct co
 on finding it refutable.)*
 
 ⚠️ **AND THE ROUTINE WAS LATE — THE SAME BLIND SPOT THE NOTE ABOVE RECORDS, IN NEW
-CLOTHES.** Measured 2026-09-01: Fable 5 shipped 2026-06-09 and appears **zero** times in
-the 2026-05 through 2026-08 reports or anywhere in this file. This entry's trigger was
+CLOTHES.** Measured 2026-09-01, **immediately before this entry was written**: Fable 5
+shipped 2026-06-09 and appeared **zero** times in the 2026-05 through 2026-08 reports,
+and nowhere in this file. ⚠️ **The second half of that stopped being true the moment this
+block was committed — it is a record of the state before the 2026-09 entry, not a claim a
+reader can re-run.** *(Written in the present tense first, which made it false on arrival:
+the sentence asserted an absence into the file that was ending it. Caught by CodeRabbit on
+PR #231.)* This entry's trigger was
 only written 2026-08-01, so no earlier scan was strictly obliged to check it — but a new
 top-tier model going unmentioned across two scans is worth a routine-side fix. **Not
 actioned here; a candidate to discuss, not a filed ticket.**
 
 **Re-evaluate if:**
 
-- **A newer model supersedes `claude-opus-5` as Claude Code's default Opus model, or is
-  otherwise the better tier for long-horizon multi-file work.** This is the trigger that
+- **A model THIS ENTRY HAS NOT ALREADY EVALUATED supersedes `claude-opus-5` as Claude
+  Code's default Opus model, or is otherwise the better tier for long-horizon multi-file
+  work.** The evaluated set, which is the whole of it:
+
+      claude-fable-5   evaluated 2026-09-01, DECLINED - see the trigger check above
+
+  🔴 **THE EXCLUSION IS LOAD-BEARING: UNBOUNDED, `claude-fable-5` SATISFIES THIS CLAUSE
+  FOREVER.** It was evaluated and declined, so an unbounded trigger lets every future scan
+  re-raise a model this register has already dispositioned — defeating the file's own
+  promise that *"a decision recorded there will not be raised at you again."*
+  ⚠️ **ADD TO THE SET when a model is evaluated and declined here — do NOT convert this to a
+  RELEASE-DATE bound.** A date was written first and is the wrong shape: it would also
+  excuse a model released *before* the date that nobody ever evaluated — `claude-mythos-5`
+  is exactly that case today, released and never assessed here. **An enumerated set can
+  only exclude what someone actually looked at; a date excludes by accident of timing.**
+  *(Finding: CodeRabbit, PR #231. The date-versus-set correction is mine, on re-reading my
+  own fix before committing it.)* This is the trigger that
   matters, and it is the one the first draft of this entry lacked: without it, an Opus 6
   shipping at the same price with `claude-opus-5` still Active fires nothing, and the
   scan is barred from raising the very upgrade this entry records us having made.
@@ -274,8 +294,10 @@ really need to act on now… That will come later when Sonnet 4.6 sunsets."*
    two constants also move in **opposite** directions from the default: the reconciler's
    was deliberately raised so the prose breathes.
 
-**Re-evaluate if any of these triggers fire.** None of them is satisfied by the state
-recorded above — 2027-02-17 is that state, not a trigger. Most name a *change*; the
+**Re-evaluate if any of these triggers fire.** ⚠️ **"None of them is satisfied" was true of
+the 2026-08-01 BASELINE and is no longer true: the pricing trigger FIRED on 2026-09-01 and
+is marked spent below.** As written on 2026-08-01: none was satisfied by the state recorded
+above — 2027-02-17 is that state, not a trigger. Most name a *change*; the
 second is a *future date*, which is legitimate because it is not yet true and will fire
 exactly once:
 
