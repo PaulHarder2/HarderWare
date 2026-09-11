@@ -69,6 +69,10 @@ DRY = {"en": r"\b(dry|drier|rain-free|clear|quiet)\b",
        "es": r"\b(sec[oa]s?|sin lluvia|despejad[oa]s?|tranquil[oa]s?)\b",
        "de": r"(trocken\w*|niederschlagsfrei|\bklar\w*|\bruhig\w*)",
        "eo": r"\b(seka\w*|senpluv\w*|klara\w*|trankvil\w*)\b"}
+# C1's own exclusion: a precipitation word negated INSIDE the phrase ("rain-free"). Deliberately not
+# DRY, whose aggregate words ("dry", "quiet") often describe ANOTHER day in the same sentence.
+PRECIP_FREE = {"en": r"\brain-free\b", "es": r"\bsin lluvia\b",
+               "de": r"(regenfrei\w*|niederschlagsfrei\w*)", "eo": r"\bsenpluv\w*"}
 HEDGE = {"en": r"\b(mostly|largely|generally|mainly)\s+(\w+\s+)?", "es": r"\b(mayormente|mayoritariamente|en general)\s+",
          "de": r"\b(überwiegend|weitgehend|meist)\s+", "eo": r"\b(plejparte|ĝenerale)\s+"}
 NEG = {"en": r"\b(no|not|without|ends?|ending|clears?|clearing|tapers?|stops?|winds? down)\b",
@@ -244,7 +248,7 @@ def screen(sections, lang, grid, changes):
             prior = bool(re.search(PRIOR[lang], low))
             neg = bool(re.search(NEG[lang], low))
             # C1
-            if re.search(PRECIP[lang], low) and not re.search(DRY[lang], low) and not neg and not prior \
+            if re.search(PRECIP[lang], low) and not re.search(PRECIP_FREE[lang], low) and not neg and not prior \
                     and blks and not any(b["wet"] for b in blks):
                 hits.append(("C1", sec, sent, grid.summary(blks)))
             # C2 / C2h
@@ -434,6 +438,11 @@ FIX = [  # (id, lang, text, wet, severe, changes, expected)
     (53, "es", "El fin de semana estará tranquilo.",                      (SUN_AM,), (), [], {"C2"}),
     (54, "de", "Das Wochenende bleibt ruhig.",                            (SUN_AM,), (), [], {"C2"}),
     (55, "eo", "La semajnfino restas trankvila.",                         (SUN_AM,), (), [], {"C2"}),
+    # a dry word about ANOTHER day does not excuse rain placed in a dry block (only Monday morning is wet)
+    (56, "en", "Rain arrives Saturday evening; Sunday stays quiet.",      (L(3, 6),), (), [], {"C1"}),
+    (57, "en", "Rain arrives Saturday evening; Sunday stays dry.",        (L(3, 6),), (), [], {"C1"}),
+    # ...but a precipitation word negated in the phrase itself is not a rain claim
+    (58, "en", "Saturday evening stays rain-free.",                       (L(3, 6),), (), [], set()),
     # the early hours in their natural word order: rain IS in Saturday's 00:00-06:00
     (48, "es", "Lluvia posible el sábado por la mañana temprano.",        (L(1, 0),), (), [], set()),
     (49, "eo", "Pluvo eblas sabate frue matene.",                         (L(1, 0),), (), [], set()),
