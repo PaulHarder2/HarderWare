@@ -20,7 +20,7 @@ Usage:  analyze.py corpus.jsonl            -> candidates + counts (+ corpus.json
         chosen by a fixed seed, for the hand-read that measures what the screen misses.
 """
 import json, re, sys, hashlib, random
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 def tz_of(name):
@@ -65,8 +65,10 @@ PRECIP = {"en": r"\b(rain\w*|snow\w*|sleet|freezing rain|wintry mix|precipitatio
           "es": r"\b(lluvi\w*|llov\w*|nieve|nevad\w*|aguanieve|precipitaci\w*)\b",
           "de": r"(regen\w*|schnee\w*|niederschl\w*|graupel|schauer)",
           "eo": r"\b(pluv\w*|neĝ\w*|precipitaĵ\w*)\b"}
-DRY = {"en": r"\b(dry|drier|rain-free)\b", "es": r"\b(sec[oa]s?|sin lluvia)\b",
-       "de": r"(trocken\w*|niederschlagsfrei)", "eo": r"\b(seka\w*|senpluv\w*)\b"}
+DRY = {"en": r"\b(dry|drier|rain-free|clear|quiet)\b",
+       "es": r"\b(sec[oa]s?|sin lluvia|despejad[oa]s?|tranquil[oa]s?)\b",
+       "de": r"(trocken\w*|niederschlagsfrei|\bklar\w*|\bruhig\w*)",
+       "eo": r"\b(seka\w*|senpluv\w*|klara\w*|trankvil\w*)\b"}
 HEDGE = {"en": r"\b(mostly|largely|generally|mainly)\s+(\w+\s+)?", "es": r"\b(mayormente|mayoritariamente|en general)\s+",
          "de": r"\b(überwiegend|weitgehend|meist)\s+", "eo": r"\b(plejparte|ĝenerale)\s+"}
 NEG = {"en": r"\b(no|not|without|ends?|ending|clears?|clearing|tapers?|stops?|winds? down)\b",
@@ -118,8 +120,9 @@ class Grid:
         # A block ends where the next begins: 5 or 7 UTC hours on a DST day, never a fixed 6.
         for cur, nxt in zip(self.blocks, self.blocks[1:]):
             cur["end"] = nxt["start"]
-        if self.blocks:
-            self.blocks[-1]["end"] = self.blocks[-1]["start"] + timedelta(hours=6)
+        if self.blocks:  # the last block has no successor: its end is the next local day-part boundary
+            loc = self.blocks[-1]["start"].astimezone(tz).replace(tzinfo=None)
+            self.blocks[-1]["end"] = (loc + timedelta(hours=6)).replace(tzinfo=tz).astimezone(timezone.utc)
         self.today = sent_utc.astimezone(tz).date()
         self.dates = sorted({b["date"] for b in self.blocks})
     def by_date_part(self, date, part):
@@ -425,6 +428,12 @@ FIX = [  # (id, lang, text, wet, severe, changes, expected)
     (47, "de", "Samstagfrüh setzt Regen ein.",                            (L(1, 12),), (), [], {"C1"}),
     # two days in one sentence: each compound must keep its own day-part
     (50, "de", "Regen fällt Samstagabends und Sonntagmorgens.",           (L(1, 6),), (), [], {"C1"}),
+    # C2 is "dry, clear or quiet" in every language
+    (51, "en", "The weekend stays clear.",                                (SUN_AM,), (), [], {"C2"}),
+    (52, "en", "The weekend stays quiet.",                                (), (), [], set()),
+    (53, "es", "El fin de semana estará tranquilo.",                      (SUN_AM,), (), [], {"C2"}),
+    (54, "de", "Das Wochenende bleibt ruhig.",                            (SUN_AM,), (), [], {"C2"}),
+    (55, "eo", "La semajnfino restas trankvila.",                         (SUN_AM,), (), [], {"C2"}),
     # the early hours in their natural word order: rain IS in Saturday's 00:00-06:00
     (48, "es", "Lluvia posible el sábado por la mañana temprano.",        (L(1, 0),), (), [], set()),
     (49, "eo", "Pluvo eblas sabate frue matene.",                         (L(1, 0),), (), [], set()),
@@ -458,6 +467,22 @@ def selftest():
                      SentAtUtc="2026-11-01T04:00:00Z", SnapshotBody=fb,
                      StructuredReport=json.dumps({"changes": [], "narrative": {
                          "en": {"changeSummary": None, "closing": "Rain arrives {q:time:2026-11-01T11:30:00Z}."}}})))
+    # the LAST block on a DST day: fall-back, the early block runs 05Z-12Z, so 11:30Z is inside it (dry)
+    fb_last = json.dumps({"schemaVersion": 3, "blocks": [
+        {"startUtc": "2026-10-31T23:00:00Z", "precipExpectation": "likely", "precipPhenomenon": "rain", "severeFlag": False},
+        {"startUtc": "2026-11-01T05:00:00Z", "precipExpectation": "none", "severeFlag": False}]})
+    rows.append(dict(Id=96, ForecastSnapshotId=96, IsoCode="en", RecipientId="dstlast_en", LocalityTz="America/Chicago",
+                     SentAtUtc="2026-10-31T20:00:00Z", SnapshotBody=fb_last,
+                     StructuredReport=json.dumps({"changes": [], "narrative": {
+                         "en": {"changeSummary": None, "closing": "Rain arrives {q:time:2026-11-01T11:30:00Z}."}}})))
+    # spring-forward, the early block runs 06Z-11Z, so 11:30Z is PAST the last (dry) block: nothing to contradict
+    sf_last = json.dumps({"schemaVersion": 3, "blocks": [
+        {"startUtc": "2026-03-08T00:00:00Z", "precipExpectation": "likely", "precipPhenomenon": "rain", "severeFlag": False},
+        {"startUtc": "2026-03-08T06:00:00Z", "precipExpectation": "none", "severeFlag": False}]})
+    rows.append(dict(Id=95, ForecastSnapshotId=95, IsoCode="en", RecipientId="sflast_en", LocalityTz="America/Chicago",
+                     SentAtUtc="2026-03-07T20:00:00Z", SnapshotBody=sf_last,
+                     StructuredReport=json.dumps({"changes": [], "narrative": {
+                         "en": {"changeSummary": None, "closing": "Rain arrives {q:time:2026-03-08T11:30:00Z}."}}})))
     _, cands, skipped, _, units = run(rows)
     got = {}
     for c in cands:
@@ -465,7 +490,9 @@ def selftest():
     bad = 0
     EXTRA = [(99, "de", "(dropped recipient, tz from sibling)", 0, 0, 0, {"C1"}),
              (98, "en", "(no locality tz, no sibling: the recipient's own tz)", 0, 0, 0, {"C1"}),
-             (97, "en", "(DST fall-back: a {q:time} in the 7-hour early block)", 0, 0, 0, {"C1"})]
+             (97, "en", "(DST fall-back: a {q:time} in the 7-hour early block)", 0, 0, 0, {"C1"}),
+             (96, "en", "(DST fall-back, LAST block: its 7th hour is still inside it)", 0, 0, 0, {"C1"}),
+             (95, "en", "(DST spring-forward, LAST block: its 6th hour is past it)", 0, 0, 0, set())]
     for fid, lang, text, _, _, _, exp in FIX + EXTRA:
         g = got.get(fid, set())
         ok = g == exp
