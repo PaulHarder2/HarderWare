@@ -58,6 +58,11 @@ internal static class ReconcilerPrompts
             actually SENT for this locality. "observation only" means no new
             TAF or GFS run has arrived since you last sent — the only fresh input is
             a routine hourly observation.
+          • block_local_labels  — each forecast block's LOCAL date, weekday,
+            day-part and clock span, keyed by its startUtc and computed from the
+            locality's timezone. Every day and day-part you write about is the one
+            given here; the localized WORDS still come from day_name_reference and
+            the approved glossary (see the day-part rules below).
 
         Reconciliation procedure:
 
@@ -82,6 +87,10 @@ internal static class ReconcilerPrompts
 
         Not every invalidation is equally worth a recipient's attention. Weigh the
         news against three tiers, and against how near the affected blocks are.
+        The weather terms in this section and its examples (thunderstorm, convective)
+        are for YOUR judgment of the snapshot, not recipient wording: recipient prose
+        follows the recipient-vocabulary rule further down, which reserves "severe
+        storms" / "severe weather" for a block whose severeFlag is set.
 
           • Safety-critical — severe thunderstorms (damaging winds, large hail, or
             tornadic potential), dense fog, ice or freezing precipitation, and newly
@@ -89,9 +98,10 @@ internal static class ReconcilerPrompts
             or greater. Any newly introduced or newly removed hazard at this tier is
             news at ANY horizon and warrants a prompt send; when in doubt here, send.
             An ordinary, non-severe thunderstorm is NOT automatically safety-critical:
-            a change to scattered thunderstorms reaches this tier only when the storm
-            energy points to strong-to-severe storms (the snapshot's severeFlag and
-            convective signals). Otherwise treat thunderstorms as plans-affecting.
+            a change to scattered thunderstorms reaches this tier only when the
+            convective signals point to strong-to-severe convection — the case in which
+            you set severeFlag in your final_snapshot. Otherwise treat thunderstorms as
+            plans-affecting.
             When winds of 34 kt or greater qualify, the send is warranted regardless
             of how you describe those winds in the narrative. Two wind rules for the
             structured snapshot: windKt is SUSTAINED wind only (min/max) — NEVER fold a
@@ -155,8 +165,8 @@ internal static class ReconcilerPrompts
             out is not urgent — skip_send and let it ride the next scheduled send.
           • Plans-affecting / skip. The committed forecast several days out was
             precipPhenomenon rain. A new GFS shifts it to scattered, non-severe
-            thunderstorms (severeFlag false, modest energy) at that distant horizon.
-            skip_send — garden-variety storms days away are not urgent and can ride the
+            thunderstorms (severeFlag false) at that distant horizon.
+            skip_send — non-severe convection days away is not urgent and can ride the
             next scheduled send.
           • Ambient-interest / skip. Committed winds were 5-10 kt; new data nudges them
             to 8-12 kt, a pleasant breeze with no hazard and no plans impact. skip_send
@@ -173,8 +183,8 @@ internal static class ReconcilerPrompts
           • Safety-critical / skip (anti-reversal on observation only). The committed
             18-00Z block was severeFlag true from the latest GFS and TAF.
             changed_since_last_sent_report is "observation only" — no newer model run or
-            TAF. Re-reading the numbers you might now call the afternoon merely
-            "scattered storms," but nothing fresh supports lowering the hazard. Keep
+            TAF. Re-reading the numbers you might now judge the afternoon merely
+            scattered thunderstorms, but nothing fresh supports lowering the hazard. Keep
             severeFlag true and skip_send — do not whipsaw the recipient by reversing a
             severe call on a routine observation alone.
 
@@ -369,7 +379,9 @@ internal static class ReconcilerPrompts
             local clock, so a token at 12:00Z that is 7:00 AM locally reads as
             "morning", not "afternoon". When you write a day-part word
             ("morning", "afternoon", "evening") beside a {q:time} token, make the
-            word agree with that token's local hour.
+            word agree with that token's local hour. For a token at a block's
+            startUtc, that local day and day-part are the block's label in
+            block_local_labels.
           • The 00:00-06:00 pre-dawn block now has an approved day-part word in the
             glossary (English "early hours"; e.g. Spanish "madrugada", German "frühe
             Morgenstunden") — use it in the form its position idiomatically requires.
@@ -378,11 +390,16 @@ internal static class ReconcilerPrompts
             night that FOLLOWS Saturday, not its first six hours. Always bind this
             block to its OWN day, beside the {q:time} token that renders the exact
             local time.
-          • Each block is exactly one local day-part (WX-155): its local START hour
-            names it — 00:00 the pre-dawn "early hours", 06:00 morning, 12:00
-            afternoon, 18:00 evening. A time's day-part is fixed by its LOCAL hour
-            and its day by its LOCAL date (see day_name_reference); read BOTH off the
-            {q:time} token, never guess a day-part word independently of it.
+          • Each block is exactly one local day-part (WX-155): 00:00 the pre-dawn
+            "early hours", 06:00 morning, 12:00 afternoon, 18:00 evening. A block's
+            day and day-part are GIVEN in block_local_labels, keyed by its startUtc —
+            take them from there, and NEVER convert a block's startUtc to local
+            time yourself. A block labelled early hours is never plain "morning" (that is the
+            06:00-12:00 block): name it with its approved early-hours word, and its day
+            is the label's day, never the day before or after. Every day and day-part
+            the prose names must be the day and day-part in the label of the block it
+            describes, and a {q:time} token must agree with the label of the block
+            that contains the token's own instant.
           • Label a time WINDOW by BOTH of its ends, each named by day AND day-part.
             Within one day-part: "{day} {day-part}" (e.g. "Monday morning"). Within
             one day but across day-parts: the day once, both day-parts (e.g. "Monday
@@ -391,7 +408,11 @@ internal static class ReconcilerPrompts
             into the early hours of Tuesday") — a window that crosses midnight
             belongs to BOTH days. Never collapse such a window to its single tail day
             ("the early hours of Tuesday" alone drops the Monday-evening start) nor
-            to bare days without day-parts ("Monday into Tuesday").
+            to bare days without day-parts ("Monday into Tuesday"). Take each end's
+            day and day-part from block_local_labels: the label of the window's
+            FIRST block and the label of its LAST block. A {q:time} token for the
+            window's end takes that LAST block's startUtc, never the instant the
+            window ends, which already falls in the next block.
           • Hedged certainty: never state weather as flatly certain, in any
             language — no forecast is ever 100% sure. Render a "certain"
             NON-SEVERE precip expectation as calibrated confidence ("almost
@@ -415,8 +436,10 @@ internal static class ReconcilerPrompts
             the snapshot vocabulary is unchanged.)
             ABSOLUTE GATE — non-severe convection reads as "rain": never write a
             liquid storm-family word — "storm", "storms", "stormy", "thunderstorm",
-            or "squall" (nor any-language equivalent) — for a window whose severeFlag
-            is NOT set. The gate keys on severeFlag, NOT on the snapshot's
+            "thunder", or "squall" (nor any-language equivalent) — for a window whose
+            severeFlag is NOT set, and do not write around the gate with "storm
+            energy", "convective energy" or a "convective signal": it is rain, so call
+            it rain. The gate keys on severeFlag, NOT on the snapshot's
             precipPhenomenon: a non-severe window is plain "rain" to the recipient
             EVEN WHEN its precipPhenomenon is thunderstorm. (Frozen precipitation is
             unaffected — it keeps its own words per the rule above: snow, wintry mix,

@@ -40,6 +40,9 @@ public static class TranslationQaRunner
     /// into <c>&lt;iso&gt;.&lt;stamp&gt;.judged.json</c> (the only file that makes the package visible in the
     /// WX-219 review tab). Throws on a hard failure (missing templates, IO, judge error);
     /// <see cref="OperationCanceledException"/> propagates for the caller to map to a cancel.
+    /// WX-504: with <c>writeReconciledJson</c> (the dev tool's <c>--raw</c>) each reconciled scenario's final
+    /// snapshot and structured report are also written as <c>&lt;stamp&gt;.&lt;scenario&gt;.reconciled.json</c>, so the
+    /// prose can be screened against the grid it came from. The service never sets it.
     /// </summary>
     public static async Task<Result> RunAsync(
         string targetIso,
@@ -51,7 +54,8 @@ public static class TranslationQaRunner
         Func<WeatherDataContext> dbFactory,
         IJudge? judge,
         Action<string>? log,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool writeReconciledJson = false)
     {
         void Log(string m) => log?.Invoke(m);
 
@@ -86,12 +90,12 @@ public static class TranslationQaRunner
             // is millisecond-precise) — but fail loud rather than silently mix/overwrite artifacts if it ever does.
             throw new InvalidOperationException($"package directory already exists, refusing to overwrite: {packageDir}");
         Directory.CreateDirectory(packageDir); // also creates outDir as its parent
-        var tz = Exemplars.LocalityTz;
 
         var anyFailed = false;
         var rendered = new List<RenderedScenario>();
         foreach (var scenario in scenarios)
         {
+            var tz = scenario.Tz;   // WX-504: per scenario; UTC for the two translation exemplars
             Log($"Reconciling {scenario.Name} (en + {targetIso}) via a live Claude call …");
 
             var prior = new ForecastSnapshot
@@ -133,6 +137,22 @@ public static class TranslationQaRunner
                 continue;
             }
             Log($"  ✓ {scenario.Name} reconciled — {success.Tokens} tokens.");
+
+            if (writeReconciledJson)
+            {
+                // An IANA id, so a Python screen (zoneinfo) can read it; on Linux tz.Id already is one.
+                var tzId = TimeZoneInfo.TryConvertWindowsIdToIanaId(tz.Id, out var iana) ? iana : tz.Id;
+                var raw = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["scenario"] = scenario.Name,
+                    ["tz"] = tzId,
+                    ["anchorUtc"] = scenario.AnchorDay.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture),
+                    ["finalSnapshot"] = System.Text.Json.Nodes.JsonNode.Parse(success.FinalSnapshot.Serialize()),
+                    ["structuredReport"] = System.Text.Json.Nodes.JsonNode.Parse(success.StructuredReport.Serialize()),
+                };
+                await File.WriteAllTextAsync(
+                    Path.Combine(packageDir, $"{stamp}.{scenario.Name}.reconciled.json"), raw.ToJsonString(), ct);
+            }
 
             var htmlByLang = new Dictionary<string, string>(StringComparer.Ordinal);
             foreach (var lang in renderLangs)

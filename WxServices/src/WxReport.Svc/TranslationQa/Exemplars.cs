@@ -42,10 +42,32 @@ public static class Exemplars
         ForecastSnapshotBody Provisional,
         ForecastSnapshotBody Prior,
         WeatherSnapshot PrimaryObservation,
-        IReadOnlyList<NamedObservation> AltObservations);
+        IReadOnlyList<NamedObservation> AltObservations)
+    {
+        /// <summary>
+        /// WX-504: the locality timezone this scenario is authored in. Defaults to <see cref="LocalityTz"/>
+        /// (UTC), where a block's StartUtc hour IS its local hour — which also makes the UTC→local
+        /// conversion a no-op, so a UTC scenario cannot exercise local day-part or day errors.
+        /// </summary>
+        public TimeZoneInfo Tz { get; init; } = LocalityTz;
+    }
 
-    /// <summary>Both exemplars.</summary>
+    /// <summary>
+    /// The translation-QA exemplars. <c>QaRerunWorker</c> judges every one of these with Gemini on each
+    /// rerun, so adding a scenario here adds a judged scenario, and its cost, to production QA.
+    /// </summary>
     public static IReadOnlyList<Scenario> All() => [WarmConvective(), WinterFrozen()];
+
+    /// <summary>
+    /// WX-504: scenarios the dev tool runs by name (<c>--scenario</c>) that are deliberately NOT in
+    /// <see cref="All"/>, so production QA reruns never judge them.
+    /// </summary>
+    public static IReadOnlyList<Scenario> HarnessOnly() => [ChicagoDayParts()];
+
+    /// <summary>Finds a scenario by name across <see cref="All"/> and <see cref="HarnessOnly"/>, or null.</summary>
+    public static Scenario? Named(string name) =>
+        All().Concat(HarnessOnly())
+            .FirstOrDefault(s => s.Name.Equals(name.Trim(), StringComparison.OrdinalIgnoreCase));
 
     // ── builders (public mirror of the renderer golden corpus helpers) ───────────────────────────
 
@@ -183,6 +205,64 @@ public static class Exemplars
         return new Scenario("warm-convective",
             "Gulf-coast warm sector → severe cold-frontal squall line → cool, dry, gusty post-frontal high (~2.5 days).",
             anchor, provisional, prior, primary, alt);
+    }
+
+    // ── Scenario C — local day-parts in a DST-observing zone (WX-504, harness-only) ──────────────
+
+    /// <summary>
+    /// WX-504: a Friday-to-Monday outlook authored in America/Chicago, so each block's startUtc differs
+    /// from its local hour and the reconciler must name days and day-parts in local time — the step the
+    /// WX-340 production watch found failing. Built to bait each failure class that watch measured:
+    /// non-severe thunderstorm blocks (storm wording without a severe block); rain confined to Saturday's
+    /// early hours after a wet Friday evening (a midnight-crossing window, and an early-hours block
+    /// misnamed "morning"); and a weekend dry except early Saturday and Sunday afternoon (a "weekend stays
+    /// dry" claim). The one severe block, Sunday evening, keeps the change band on this diagnostic report
+    /// (a near-term severe onset) and gives legitimate severe wording something to contrast with.
+    /// Not in <see cref="All"/>: production QA never judges it.
+    /// </summary>
+    public static Scenario ChicagoDayParts()
+    {
+        var tz = TimeZoneInfo.FindSystemTimeZoneById(
+            OperatingSystem.IsWindows() ? "Central Standard Time" : "America/Chicago");
+        // A LOCAL wall-clock day-part start in September 2026 (CDT) → its UTC instant.
+        DateTime L(int day, int hour) =>
+            TimeZoneInfo.ConvertTimeToUtc(new DateTime(2026, 9, day, hour, 0, 0, DateTimeKind.Unspecified), tz);
+
+        var provisional = Fc(
+            Blk(L(11, 0), SkyState.Clear, PrecipExpectation.None, null, (22, 25), (4, 8)),
+            Blk(L(11, 6), SkyState.PartlyCloudy, PrecipExpectation.None, null, (23, 30), (5, 10)),
+            Blk(L(11, 12), SkyState.MostlyCloudy, PrecipExpectation.Possible, PrecipPhenomenon.Thunderstorm, (29, 34), (8, 15)),         // non-severe storm bait
+            Blk(L(11, 18), SkyState.Overcast, PrecipExpectation.Likely, PrecipPhenomenon.Thunderstorm, (25, 30), (8, 16)),              // non-severe; opens the midnight-crossing window
+            Blk(L(12, 0), SkyState.Overcast, PrecipExpectation.Possible, PrecipPhenomenon.Rain, (22, 25), (6, 12)),                     // rain ONLY in Saturday's early hours
+            Blk(L(12, 6), SkyState.PartlyCloudy, PrecipExpectation.None, null, (22, 28), (5, 10)),                                      // Saturday morning is dry
+            Blk(L(12, 12), SkyState.Clear, PrecipExpectation.None, null, (28, 33), (5, 10)),
+            Blk(L(12, 18), SkyState.Clear, PrecipExpectation.None, null, (25, 29), (3, 8)),
+            Blk(L(13, 0), SkyState.Clear, PrecipExpectation.None, null, (21, 24), (3, 6)),
+            Blk(L(13, 6), SkyState.PartlyCloudy, PrecipExpectation.None, null, (22, 29), (4, 9)),
+            Blk(L(13, 12), SkyState.MostlyCloudy, PrecipExpectation.Possible, PrecipPhenomenon.Rain, (28, 32), (8, 14)),                // the weekend is NOT all dry
+            Blk(L(13, 18), SkyState.Overcast, PrecipExpectation.Likely, PrecipPhenomenon.Thunderstorm, (24, 29), (15, 30), severe: true), // the one severe block
+            Blk(L(14, 0), SkyState.PartlyCloudy, PrecipExpectation.None, null, (20, 23), (8, 14)),
+            Blk(L(14, 6), SkyState.Clear, PrecipExpectation.None, null, (20, 27), (6, 12)),
+            Blk(L(14, 12), SkyState.Clear, PrecipExpectation.None, null, (26, 30), (6, 12)),
+            Blk(L(14, 18), SkyState.Clear, PrecipExpectation.None, null, (22, 26), (3, 8)));
+
+        // A quieter prior, so the change detector has onsets to narrate: no Friday storms, no Saturday
+        // early-hours rain, no Sunday-afternoon rain, and a non-severe Sunday evening.
+        var prior = Fc(
+            Blk(L(11, 12), SkyState.PartlyCloudy, PrecipExpectation.None, null, (29, 34), (6, 12)),
+            Blk(L(11, 18), SkyState.MostlyCloudy, PrecipExpectation.Possible, PrecipPhenomenon.Rain, (25, 30), (6, 12)),
+            Blk(L(12, 0), SkyState.PartlyCloudy, PrecipExpectation.None, null, (22, 25), (4, 8)),
+            Blk(L(13, 12), SkyState.PartlyCloudy, PrecipExpectation.None, null, (28, 32), (6, 12)),
+            Blk(L(13, 18), SkyState.MostlyCloudy, PrecipExpectation.Possible, PrecipPhenomenon.Rain, (24, 29), (8, 15)));
+
+        // "Now" is Friday 00:00 local, so no block has elapsed and the whole grid renders.
+        var anchor = L(11, 0);
+        var primary = Obs([Layer(SkyCoverage.Clear, null)], anchor, tempC: 24, dewC: 19, windDir: 170, windSpd: 6);
+
+        return new Scenario("chicago-day-parts",
+            "America/Chicago, Friday to Monday: non-severe Friday storms, rain only in Saturday's early hours, a partly-wet weekend, one severe Sunday evening.",
+            anchor, provisional, prior, primary, [])
+        { Tz = tz };
     }
 
     // ── Scenario B — winter/frozen storm ─────────────────────────────────────────────────────────
