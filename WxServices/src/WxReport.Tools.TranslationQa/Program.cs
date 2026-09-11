@@ -24,7 +24,9 @@ using WxReport.Tools.TranslationQa;
 //
 // Usage:
 //   --lang <iso>        target language (required), e.g. de, es, eo, da
-//   --scenario <name>   warm-convective | winter-frozen (default: both)   [generate]
+//   --scenario <name>   warm-convective | winter-frozen (default: both), or the harness-only
+//                       chicago-day-parts (WX-504; never in the default, never in QA reruns)   [generate]
+//   --raw               also write each reconciled scenario's snapshot + structured report as JSON   [generate]
 //   --out <dir>         output directory (default: C:\HarderWare\translation-qa)   [generate]
 //   --judge gemini      after generating, judge automatically via the Gemini API   [generate]
 //   --response <file>   parse a saved model reply instead of generating (manual fallback)   [judge]
@@ -48,7 +50,7 @@ if (argMap.TryGetValue("response", out var responseFile) && !string.IsNullOrWhit
 if (!argMap.TryGetValue("lang", out var targetIso) || string.IsNullOrWhiteSpace(targetIso))
 {
     Console.Error.WriteLine("error: --lang <iso> is required to generate (or pass --response <reply-file> to parse a reply).");
-    Console.Error.WriteLine("usage: --lang <iso> [--scenario warm-convective|winter-frozen] [--out <dir>] [--judge gemini]  |  --response <reply-file>");
+    Console.Error.WriteLine("usage: --lang <iso> [--scenario warm-convective|winter-frozen|chicago-day-parts] [--out <dir>] [--judge gemini] [--raw]  |  --response <reply-file>");
     return 2;
 }
 targetIso = LanguageTemplateStore.CanonicalIso(targetIso);
@@ -64,12 +66,15 @@ var outDir = argMap.TryGetValue("out", out var o) && !string.IsNullOrWhiteSpace(
 var scenarios = Exemplars.All();
 if (argMap.TryGetValue("scenario", out var scn) && !string.IsNullOrWhiteSpace(scn))
 {
-    scenarios = [.. scenarios.Where(s => s.Name.Equals(scn.Trim(), StringComparison.OrdinalIgnoreCase))];
-    if (scenarios.Count == 0)
+    // WX-504: resolve across All() and the harness-only scenarios. The default above stays All().
+    var named = Exemplars.Named(scn);
+    if (named is null)
     {
-        Console.Error.WriteLine($"error: unknown --scenario '{scn}'. Known: warm-convective, winter-frozen.");
+        var known = string.Join(", ", Exemplars.All().Concat(Exemplars.HarnessOnly()).Select(s => s.Name));
+        Console.Error.WriteLine($"error: unknown --scenario '{scn}'. Known: {known}.");
         return 2;
     }
+    scenarios = [named];
 }
 
 // WX-227: optional automated judge. Validate early so a typo fails before the expensive Claude calls.
@@ -183,7 +188,8 @@ try
 {
     result = await TranslationQaRunner.RunAsync(
         targetIso, scenarios, outDir, reconciler, templates, reportCfg,
-        () => new WeatherDataContext(dbOptions), judge, Console.WriteLine, cts.Token);
+        () => new WeatherDataContext(dbOptions), judge, Console.WriteLine, cts.Token,
+        writeReconciledJson: argMap.ContainsKey("raw"));
 }
 catch (OperationCanceledException) when (cts.IsCancellationRequested)
 {

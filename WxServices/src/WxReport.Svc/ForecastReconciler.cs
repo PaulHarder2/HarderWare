@@ -1519,6 +1519,16 @@ public sealed class ForecastReconciler
             sb.AppendLine();
         }
 
+        // WX-504: each block's local date, weekday, day-part and clock span, keyed by startUtc, so the
+        // narrative copies a block's time instead of converting its UTC start — the conversion the
+        // WX-340 production watch found failing in shipped prose.
+        var blockLabels = BlockLocalLabels.Build(provisional, tz);
+        if (blockLabels.Length > 0)
+        {
+            sb.Append(blockLabels);
+            sb.AppendLine();
+        }
+
         if (tafIssuanceUtc.HasValue && tafValidToUtc.HasValue)
         {
             sb.Append("current_forecast.issuance_utc: ").AppendLine(tafIssuanceUtc.Value.ToString("O"));
