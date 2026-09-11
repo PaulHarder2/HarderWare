@@ -241,8 +241,9 @@ def aggregate_period(kind, cl, low, lang, grid, refs):
             blocks = [b for b in blocks if b["start"] > last]
     return blocks
 
-# C1 clauses: not on ":" (it would cut {q:time:...} tokens and clock times).
-C1_CLAUSE = re.compile(r"\s[—–-]\s|[;,]")
+# Claim clauses for C1, C3 and C4: not split on ":" (it would cut {q:time:...} tokens and clock times).
+# An exclusion (negation, "rain-free", the PRIOR forecast) counts only inside the clause making the claim.
+CLAIM_CLAUSE = re.compile(r"\s[—–-]\s|[;,]")
 
 def screen(sections, lang, grid, changes):
     hits = []
@@ -252,10 +253,9 @@ def screen(sections, lang, grid, changes):
             low = lowered_prose(sent)
             refs, exact = day_refs(sent, lang, grid)
             blks = blocks_for(refs, exact, grid)
-            prior = bool(re.search(PRIOR[lang], low))
             # C1 - per clause, so an exclusion about one day cannot cancel a rain claim about another. A
             # clause naming no day falls back to the whole sentence's days.
-            for cl in C1_CLAUSE.split(sent):
+            for cl in CLAIM_CLAUSE.split(sent):
                 cl_low = lowered_prose(cl)
                 if not re.search(PRECIP[lang], cl_low) or re.search(PRECIP_FREE[lang], cl_low) \
                         or re.search(NEG[lang], cl_low) or re.search(PRIOR[lang], cl_low):
@@ -265,23 +265,24 @@ def screen(sections, lang, grid, changes):
                 if cblks and not any(b["wet"] for b in cblks):
                     hits.append(("C1", sec, sent, grid.summary(cblks)))
                     break
-            # C2 / C2h
-            if not prior:
-                ad = aggregate_dry(low, lang)
-                if ad:
-                    kind, hedged, cl = ad
-                    pb = aggregate_period(kind, cl, low, lang, grid, refs)
-                    if any(b["wet"] for b in pb):
-                        hits.append(("C2h" if hedged else "C2", sec, sent, grid.summary(pb)))
+            # C2 / C2h - PRIOR counts only in the clause carrying the aggregate claim
+            ad = aggregate_dry(low, lang)
+            if ad and not re.search(PRIOR[lang], ad[2]):
+                kind, hedged, cl = ad
+                pb = aggregate_period(kind, cl, low, lang, grid, refs)
+                if any(b["wet"] for b in pb):
+                    hits.append(("C2h" if hedged else "C2", sec, sent, grid.summary(pb)))
             # C3 / C3p
-            if re.search(STORM[lang], low):
-                cls = "C3p" if prior else "C3"
+            storm_cls = [c for c in map(lowered_prose, CLAIM_CLAUSE.split(sent)) if re.search(STORM[lang], c)]
+            if storm_cls:  # C3p only when EVERY storm clause is about the prior forecast
+                cls = "C3p" if all(re.search(PRIOR[lang], c) for c in storm_cls) else "C3"
                 if not has_severe:
                     hits.append((cls, sec, sent, "no severeFlag anywhere in grid"))
                 elif blks and not any(b["severe"] for b in blks):
                     hits.append((cls, sec, sent, grid.summary(blks)))
             # C4 - against the COMPUTED change windows, not the grid
-            if re.search(PRECIP[lang], low) and not prior:
+            if any(re.search(PRECIP[lang], c) and not re.search(PRIOR[lang], c)
+                   for c in map(lowered_prose, CLAIM_CLAUSE.split(sent))):
                 named = {d for d, _ in refs} | {b["date"] for b in exact}
                 for s, e in changes:
                     wb = grid.in_window(s, e)
@@ -468,6 +469,19 @@ FIX = [  # (id, lang, text, wet, severe, changes, expected)
     (65, "en", "Rain arrives Saturday evening; Sunday stays mostly cloudy.", (SUN_AM,), (), [], {"C1"}),
     # a rain clause naming no day falls back to the sentence's day and day-part
     (66, "en", "Saturday, rain arrives in the evening.",                  (SUN_AM,), (), [], {"C1"}),
+    # a PRIOR clause about another day must not suppress C2 / C4 or turn a current storm claim into C3p
+    (67, "en", "Storms are possible Sunday afternoon; the earlier rain chance for Saturday was removed.",
+     (SUN_PM,), (), [], {"C3"}),
+    (68, "en", "The weekend stays dry; the earlier chance for Friday was removed.", (SUN_AM,), (), [], {"C2"}),
+    (69, "en", "Rain is now possible in the early hours of Monday; the Saturday chance was removed.",
+     (SUN_EVE, MON_EARLY), (), [X(SUN_EVE, L(3, 6))], {"C4"}),
+    # ...while PRIOR in the claim's OWN clause still excludes it
+    # two storm clauses, one current and one about the prior forecast: the current one makes it C3
+    (72, "en", "Storms are possible Sunday afternoon; the earlier storm chance for Saturday was dropped.",
+     (SUN_PM,), (), [], {"C3"}),
+    (70, "en", "The earlier dry weekend forecast was dropped; rain arrives Sunday morning.", (SUN_AM,), (), [], set()),
+    (71, "en", "Rain was expected in the early hours of Monday.",         (SUN_EVE, MON_EARLY), (),
+     [X(SUN_EVE, L(3, 6))], set()),
     # the early hours in their natural word order: rain IS in Saturday's 00:00-06:00
     (48, "es", "Lluvia posible el sábado por la mañana temprano.",        (L(1, 0),), (), [], set()),
     (49, "eo", "Pluvo eblas sabate frue matene.",                         (L(1, 0),), (), [], set()),
