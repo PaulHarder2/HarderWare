@@ -102,6 +102,10 @@ DE_TAIL = {"morgen": "morning", "vormittag": "morning", "mittag": "afternoon", "
 QTIME = re.compile(r"\{q:time:([0-9T:\-]+Z)\}")
 TOKEN = re.compile(r"\{[^}]*\}")
 
+def lowered_prose(text):
+    """Lowercased prose with every token blanked except {q:time:...}, which carries a real instant."""
+    return TOKEN.sub(lambda m: m.group(0) if m.group(0).startswith("{q:time") else " ", text).lower()
+
 def sentences(text):
     return [s.strip() for s in re.split(r"(?<=[.!?])\s+", text or "") if s.strip()]
 
@@ -237,20 +241,30 @@ def aggregate_period(kind, cl, low, lang, grid, refs):
             blocks = [b for b in blocks if b["start"] > last]
     return blocks
 
+# C1 clauses: not on ":" (it would cut {q:time:...} tokens and clock times).
+C1_CLAUSE = re.compile(r"\s[—–-]\s|[;,]")
+
 def screen(sections, lang, grid, changes):
     hits = []
     has_severe = any(b["severe"] for b in grid.blocks)
     for sec, text in sections:
         for sent in sentences(text):
-            low = TOKEN.sub(lambda m: m.group(0) if m.group(0).startswith("{q:time") else " ", sent).lower()
+            low = lowered_prose(sent)
             refs, exact = day_refs(sent, lang, grid)
             blks = blocks_for(refs, exact, grid)
             prior = bool(re.search(PRIOR[lang], low))
-            neg = bool(re.search(NEG[lang], low))
-            # C1
-            if re.search(PRECIP[lang], low) and not re.search(PRECIP_FREE[lang], low) and not neg and not prior \
-                    and blks and not any(b["wet"] for b in blks):
-                hits.append(("C1", sec, sent, grid.summary(blks)))
+            # C1 - per clause, so an exclusion about one day cannot cancel a rain claim about another. A
+            # clause naming no day falls back to the whole sentence's days.
+            for cl in C1_CLAUSE.split(sent):
+                cl_low = lowered_prose(cl)
+                if not re.search(PRECIP[lang], cl_low) or re.search(PRECIP_FREE[lang], cl_low) \
+                        or re.search(NEG[lang], cl_low) or re.search(PRIOR[lang], cl_low):
+                    continue
+                crefs, cexact = day_refs(cl, lang, grid)
+                cblks = blocks_for(crefs, cexact, grid) if (crefs or cexact) else blks
+                if cblks and not any(b["wet"] for b in cblks):
+                    hits.append(("C1", sec, sent, grid.summary(cblks)))
+                    break
             # C2 / C2h
             if not prior:
                 ad = aggregate_dry(low, lang)
@@ -443,6 +457,17 @@ FIX = [  # (id, lang, text, wet, severe, changes, expected)
     (57, "en", "Rain arrives Saturday evening; Sunday stays dry.",        (L(3, 6),), (), [], {"C1"}),
     # ...but a precipitation word negated in the phrase itself is not a rain claim
     (58, "en", "Saturday evening stays rain-free.",                       (L(3, 6),), (), [], set()),
+    # an exclusion in ONE clause (rain-free / no / removed) must not cancel a rain claim in another
+    (59, "en", "Rain arrives Saturday evening; Sunday stays rain-free.",  (L(3, 6),), (), [], {"C1"}),
+    (60, "en", "Rain arrives Saturday evening; no rain Sunday.",          (L(3, 6),), (), [], {"C1"}),
+    (61, "en", "Rain arrives Saturday evening, with the earlier chance for Sunday removed.", (L(3, 6),), (), [], {"C1"}),
+    (62, "de", "Samstagabend Regen, Sonntag regenfrei.",                  (L(3, 6),), (), [], {"C1"}),
+    (63, "en", "Rain arrives Saturday evening; Sunday stays rain-free.",  (SAT_EVE,), (), [], set()),
+    (64, "en", "Rain arrives Saturday evening; no rain Sunday.",          (SAT_EVE,), (), [], set()),
+    # the rain clause's OWN days decide: a wet Sunday named in another clause does not excuse Saturday
+    (65, "en", "Rain arrives Saturday evening; Sunday stays mostly cloudy.", (SUN_AM,), (), [], {"C1"}),
+    # a rain clause naming no day falls back to the sentence's day and day-part
+    (66, "en", "Saturday, rain arrives in the evening.",                  (SUN_AM,), (), [], {"C1"}),
     # the early hours in their natural word order: rain IS in Saturday's 00:00-06:00
     (48, "es", "Lluvia posible el sábado por la mañana temprano.",        (L(1, 0),), (), [], set()),
     (49, "eo", "Pluvo eblas sabate frue matene.",                         (L(1, 0),), (), [], set()),
