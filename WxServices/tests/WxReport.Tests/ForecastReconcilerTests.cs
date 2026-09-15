@@ -108,33 +108,6 @@ public class ForecastReconcilerTests
         }
         """;
 
-    // Defect 2 (send 1927): prose says "afternoon" next to a {q:time} token at
-    // 11:00Z, which renders to 6:00 AM local (CDT) — the morning, not afternoon.
-    private const string ProseTimeMismatchReportJson = """
-        {
-          "schemaVersion": 5,
-          "narrative": {
-            "en": { "changeSummary": "Rain is now expected to develop Saturday afternoon, {q:time:2026-06-13T11:00:00Z}.", "closing": "A wet start to the weekend." }
-          }
-        }
-        """;
-
-    // The same shape but the prose word AGREES with the token's local rendering
-    // (11:00Z is 6:00 AM CDT — morning) — must NOT be rejected.
-    private const string ProseTimeAgreesReportJson = """
-        {
-          "schemaVersion": 5,
-          "narrative": {
-            "en": { "changeSummary": "Rain develops this morning, {q:time:2026-06-09T11:00:00Z}.", "closing": "A wet start to the day." }
-          }
-        }
-        """;
-
-    // A 6/13 11-17Z block carrying rain — backs the prose-token-mismatch change.
-    private const string RainBlock613SnapshotJson = """
-        {"schemaVersion":5,"blocks":[{"startUtc":"2026-06-13T11:00:00Z","skyState":"partly_cloudy","obscuration":"none","temperatureCelsius":{"min":22,"max":30},"windKt":{"min":5,"max":12},"precipExpectation":"possible","precipPhenomenon":"rain","severeFlag":false}]}
-        """;
-
     // ── happy path ──────────────────────────────────────────────────────────
 
     [Fact]
@@ -745,13 +718,6 @@ public class ForecastReconcilerTests
         Assert.Equal("See the forecast above for the full outlook.", success.StructuredReport.Narrative["en"].Closing);
     }
 
-    // WX-139: a two-language structured report body — used by the synoptic-mechanism
-    // tests to exercise the en and es validator arms in one report.
-    private static string EnEsReport(string? enChange, string enClosing, string? esChange, string esClosing) =>
-        "{\"schemaVersion\":5,\"changes\":[],\"narrative\":{"
-        + "\"en\":{\"changeSummary\":" + JsonSerializer.Serialize(enChange) + ",\"closing\":" + JsonSerializer.Serialize(enClosing) + "},"
-        + "\"es\":{\"changeSummary\":" + JsonSerializer.Serialize(esChange) + ",\"closing\":" + JsonSerializer.Serialize(esClosing) + "}}}";
-
     [Fact]
     public async Task SynopticMechanism_FrontInClosing_DropsClosingOnly()
     {
@@ -766,30 +732,6 @@ public class ForecastReconcilerTests
 
         var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
         Assert.Equal("See the forecast above for the full outlook.", success.StructuredReport.Narrative["en"].Closing);
-    }
-
-    [Fact]
-    public async Task SynopticMechanism_FrontalBoundaryInChangeSummary_DropsChangeSummaryOnly()
-    {
-        // The change-band form of the same defect (send 1637: "...as a frontal boundary pushes
-        // through"). The changeSummary is dropped to the deterministic band and the closing sends.
-        const string report = """
-            {
-              "schemaVersion": 5,
-              "narrative": {
-                "en": { "changeSummary": "Winds turn gusty with showers arriving this evening as a frontal boundary pushes through.", "closing": "Conditions settle down as the week goes on." }
-              }
-            }
-            """;
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: RainBlockSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: report);
-
-        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
-        Assert.Null(success.StructuredReport.Narrative["en"].ChangeSummary);
-        Assert.Equal("Conditions settle down as the week goes on.", success.StructuredReport.Narrative["en"].Closing);
     }
 
     [Fact]
@@ -822,339 +764,305 @@ public class ForecastReconcilerTests
         Assert.Equal("See the forecast above for the full outlook.", success.StructuredReport.Narrative["en"].Closing);
     }
 
-    [Fact]
-    public async Task SynopticMechanism_EnglishInFrontOf_IsLegal_Succeeds()
-    {
-        // The positional idiom "in front of" is NOT a synoptic mechanism — the "front"/"frontal"
-        // arm is lookbehind-guarded so a legal report is never falsely suppressed.
-        const string report = """
-            {
-              "schemaVersion": 5,
-              "narrative": {
-                "en": { "changeSummary": "Breezy conditions build this evening, with the drier air sitting just in front of the coast.", "closing": "A quieter stretch settles in for the rest of the week." }
-              }
-            }
-            """;
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: RainBlockSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: report);
-
-        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
-        Assert.Equal("Breezy conditions build this evening, with the drier air sitting just in front of the coast.", success.StructuredReport.Narrative["en"].ChangeSummary);
-    }
-
-    [Fact]
-    public async Task SynopticMechanism_InFrontOf_WhitespaceRun_IsLegal_Succeeds()
-    {
-        // The "in front of" guard tolerates a whitespace RUN between "in" and "front"
-        // (CodeRabbit, PR #182): the lookbehind is (?<!\bin\s+), so a double space still
-        // reads as the positional idiom, not a flagged mechanism.
-        const string report = """
-            {
-              "schemaVersion": 5,
-              "narrative": {
-                "en": { "changeSummary": "Breezy conditions build this evening, with the drier air sitting just in  front of the coast.", "closing": "A quieter stretch settles in for the rest of the week." }
-              }
-            }
-            """;
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: RainBlockSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: report);
-
-        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
-        Assert.Equal("Breezy conditions build this evening, with the drier air sitting just in  front of the coast.", success.StructuredReport.Narrative["en"].ChangeSummary);
-    }
-
-    [Fact]
-    public async Task SynopticMechanism_SpanishFrenteFrio_DropsChangeSummary()
-    {
-        // The es arm catches "un frente frío" (article + noun, and the weather-adjective form).
-        // The changeSummary is dropped across every language (WX-189 uniform section degrade).
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: RainBlockSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: EnEsReport(
-                enChange: "Winds turn gusty with a few showers this evening.",
-                enClosing: "Conditions settle down as the week goes on.",
-                esChange: "Los vientos se vuelven racheados con algunas lluvias esta tarde mientras avanza un frente frío.",
-                esClosing: "Las condiciones se calman durante la semana."));
-
-        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(
-            _ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(responseJson, Encoding.UTF8, "application/json") },
-            narrativeLanguages: new[] { "en", "es" }));
-        Assert.Null(success.StructuredReport.Narrative["es"].ChangeSummary);
-        Assert.Null(success.StructuredReport.Narrative["en"].ChangeSummary);
-    }
-
-    [Fact]
-    public async Task SynopticMechanism_SpanishFrenteA_IsLegal_Succeeds()
-    {
-        // Ticket-required guard: the positional "frente a" (= off/facing, "frente a la costa"),
-        // which never takes an article, must stay legal — only "frente" + a weather adjective or
-        // article is a mechanism. A legal es report survives intact.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: RainBlockSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: EnEsReport(
-                enChange: "Winds pick up this evening with rain around.",
-                enClosing: "A calmer stretch follows for the rest of the week.",
-                esChange: "Los vientos aumentan esta tarde, con el aire más seco justo frente a la costa.",
-                esClosing: "Sigue un periodo más tranquilo durante la semana."));
-
-        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(
-            _ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(responseJson, Encoding.UTF8, "application/json") },
-            narrativeLanguages: new[] { "en", "es" }));
-        Assert.Equal("Los vientos aumentan esta tarde, con el aire más seco justo frente a la costa.", success.StructuredReport.Narrative["es"].ChangeSummary);
-    }
-
-    // ── WX-168 Spanish deterministic timing/claim validator parity ────────────
-
-    // One WET block on the reference local day (06-09): "hoy" resolves to it, and it carries rain.
-    private const string WetTodaySnapshotJson = """
-        {"schemaVersion":5,"blocks":[{"startUtc":"2026-06-09T18:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":20,"max":28},"windKt":{"min":5,"max":12},"precipExpectation":"likely","precipPhenomenon":"rain","severeFlag":false}]}
-        """;
-
-    [Fact]
-    public async Task SpanishDayPart_MadrugadaContradictsToken_IsCaught_Degrades()
-    {
-        // WX-168: the es day-part {q:time} agreement check (WX-149) fires on the one unambiguous es
-        // day-part word — "madrugada" (pre-dawn, part 0) next to a {q:time} that renders to the
-        // afternoon/evening contradicts the token's local hour. es-only: en's lexicon has no "madrugada",
-        // so this proves the es day-part wiring, not just en's.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: WetTodaySnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: EnEsReport(
-                enChange: "Rain around today.",
-                enClosing: "Keep an umbrella handy.",
-                esChange: "Lluvia en la madrugada, {q:time:2026-06-09T18:00:00Z}.",
-                esClosing: "Manténgase al tanto."));
-
-        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(
-            _ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(responseJson, Encoding.UTF8, "application/json") },
-            narrativeLanguages: new[] { "en", "es" }));
-        // The madrugada(pre-dawn)/afternoon-token contradiction degrades the es changeSummary; the
-        // offending word is gone (en unaffected).
-        Assert.DoesNotContain("madrugada", success.StructuredReport.Narrative["es"].ChangeSummary ?? "");
-        Assert.Equal("Keep an umbrella handy.", success.StructuredReport.Narrative["en"].Closing);
-    }
-
-    // ── WX-284 recipient precipitation vocabulary collapse ────────────────────
-
-    // A non-severe SNOW block — frozen precip keeps its own words (snow showers, winter storm), which
-    // the liquid-only vocabulary bans must NOT reject.
-    private const string SnowBlockSnapshotJson = """
-        {"schemaVersion":5,"blocks":[{"startUtc":"2026-01-09T21:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":-6,"max":-1},"windKt":{"min":6,"max":14},"precipExpectation":"likely","precipPhenomenon":"snow","severeFlag":false}]}
-        """;
-
-    [Fact]
-    public async Task NonSeverePrecipRegister_ShowersInChangeSummary_DropsChangeSummaryOnly()
-    {
-        // WX-284: "showers" reads as ordinary rain to the recipient, so the register must not reach
-        // prose. The changeSummary is dropped to the deterministic band and the closing still sends.
-        const string report = """
-            {
-              "schemaVersion": 5,
-              "narrative": {
-                "en": { "changeSummary": "Breezy conditions build with a few showers this evening.", "closing": "A calmer stretch follows later this week." }
-              }
-            }
-            """;
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: RainBlockSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: report);
-
-        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
-        Assert.Null(success.StructuredReport.Narrative["en"].ChangeSummary);
-        Assert.Equal("A calmer stretch follows later this week.", success.StructuredReport.Narrative["en"].Closing);
-    }
-
-    [Fact]
-    public async Task PrecipLikelihood_LikelyInChangeSummary_DropsChangeSummaryOnly()
-    {
-        // WX-284 step 2 (CR #4a): "likely" is the RETIRED recipient precip-likelihood word — the hedge
-        // collapsed to "possible". It must not reach prose; the changeSummary drops to the deterministic
-        // band and the closing still sends. (No time reference, so only the likelihood ban can fire.)
-        const string report = """
-            {
-              "schemaVersion": 5,
-              "narrative": {
-                "en": { "changeSummary": "Widespread rain is likely.", "closing": "A calmer stretch follows later this week." }
-              }
-            }
-            """;
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: RainBlockSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: report);
-
-        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
-        Assert.Null(success.StructuredReport.Narrative["en"].ChangeSummary);
-        Assert.Equal("A calmer stretch follows later this week.", success.StructuredReport.Narrative["en"].Closing);
-    }
-
-    [Fact]
-    public async Task NonSeverePrecipRegister_SnowShowers_IsLegal_Succeeds()
-    {
-        // WX-284 frozen guard: the liquid "showers" ban must NOT catch "snow showers" — frozen precip
-        // keeps its own words. A snowy report survives intact.
-        const string report = """
-            {
-              "schemaVersion": 5,
-              "narrative": {
-                "en": { "changeSummary": "Snow showers are possible through the afternoon.", "closing": "Bundle up and allow extra travel time." }
-              }
-            }
-            """;
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: SnowBlockSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: report);
-
-        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
-        Assert.Equal("Snow showers are possible through the afternoon.", success.StructuredReport.Narrative["en"].ChangeSummary);
-    }
-
-    [Fact]
-    public async Task ProseTimeWord_ContradictsTokenLocalRendering_DropsChangeSummaryOnly()
-    {
-        // Defect 2 (Spring 6/13, send 1927): the changeSummary says "afternoon" beside a
-        // {q:time} token at 11:00Z that renders to 6:00 AM local (CDT) — morning. WX-189
-        // independent-section degrade: the changeSummary is dropped (→ null, so the renderer
-        // falls back to the deterministic band) and the closing still sends.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: RainBlock613SnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: ProseTimeMismatchReportJson);
-
-        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
-        Assert.Null(success.StructuredReport.Narrative["en"].ChangeSummary);
-        Assert.Equal("A wet start to the weekend.", success.StructuredReport.Narrative["en"].Closing);
-    }
-
-    [Fact]
-    public async Task ProseTimeWord_AgreesWithTokenLocalRendering_Succeeds()
-    {
-        // The conservative check must not false-reject: "morning" beside a token
-        // that renders to 6:00 AM local (CDT) agrees, so the report sends cleanly.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: RainBlockSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: ProseTimeAgreesReportJson);
-
-        Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
-    }
-
-    // ── WX-264: day-part connective + cross-boundary day labels ───────────────
-
-    // 4a: the day-part word binds to the {q:time} token across a single connective
-    // ("afternoon AROUND {q:time}") — the hole that shipped the paul_en bug. 11:00Z = 6:00 AM
-    // CDT (morning), so "afternoon" contradicts it.
-    private const string ProseTimeConnectiveMismatchReportJson = """
-        {
-          "schemaVersion": 5,
-          "narrative": {
-            "en": { "changeSummary": "Rain is now expected to develop Saturday afternoon around {q:time:2026-06-13T11:00:00Z}.", "closing": "A wet start to the weekend." }
-          }
-        }
-        """;
-
-    // A Mon-evening → Wed-early storm span backing the cross-boundary prose above.
-    private const string StormMonWedSnapshotJson = """
-        {"schemaVersion":5,"blocks":[
-          {"startUtc":"2026-07-06T23:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":22,"max":28},"windKt":{"min":6,"max":14},"precipExpectation":"likely","precipPhenomenon":"thunderstorm","severeFlag":false},
-          {"startUtc":"2026-07-07T11:00:00Z","skyState":"partly_cloudy","obscuration":"none","temperatureCelsius":{"min":23,"max":31},"windKt":{"min":5,"max":12},"precipExpectation":"likely","precipPhenomenon":"thunderstorm","severeFlag":false},
-          {"startUtc":"2026-07-07T23:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":22,"max":28},"windKt":{"min":6,"max":14},"precipExpectation":"likely","precipPhenomenon":"thunderstorm","severeFlag":false},
-          {"startUtc":"2026-07-08T05:00:00Z","skyState":"partly_cloudy","obscuration":"none","temperatureCelsius":{"min":20,"max":24},"windKt":{"min":4,"max":9},"precipExpectation":"likely","precipPhenomenon":"thunderstorm","severeFlag":false}]}
-        """;
-
-    [Fact]
-    public async Task ProseDaypartWord_BoundAcrossConnective_ContradictsToken_DropsChangeSummary()
-    {
-        // WX-264 4a: "afternoon around {q:time:11:00Z}" — 6:00 AM CDT is morning; the connective
-        // "around" must not let the contradiction slip (the pre-WX-264 no-letters rule did).
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: RainBlock613SnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: ProseTimeConnectiveMismatchReportJson);
-
-        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
-        Assert.Null(success.StructuredReport.Narrative["en"].ChangeSummary);
-    }
-
-    // 4a must NOT bind a day-part word across a RANGE connective to a far token of a different
-    // part — "evening into {q:time:00:00 Tue}" is a valid compressed span (the prompt's own
-    // both-ends phrasing), not a contradiction. (WX-264 review: range connectives were wrongly
-    // in SpanConnectors and would have false-rejected this.)
-    private const string ProseRangeConnectiveNotRejectedReportJson = """
-        {
-          "schemaVersion": 5,
-          "narrative": {
-            "en": { "changeSummary": "Rain is possible Monday evening into {q:time:2026-07-07T05:00:00Z}, easing thereafter.", "closing": "Stay weather-aware." }
-          }
-        }
-        """;
-
-    [Fact]
-    public async Task ProseDaypartWord_RangeConnective_NotBoundToFarToken_Succeeds()
-    {
-        // "evening into {q:time}" where the token is 00:00 Tue (part 0) — "into" is a range
-        // connective, so "evening" (the near terminus) must NOT bind to the far token's part; no
-        // contradiction, must send clean. A single token → the 4b both-days check does not fire.
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: StormMonWedSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: ProseRangeConnectiveNotRejectedReportJson);
-
-        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson, tz: Cdt));
-        Assert.NotNull(success.StructuredReport.Narrative["en"].ChangeSummary);
-    }
-
-    // ── WX-152 closing-claim validation ──────────────────────────────────────
-    // Snapshots: first block is 2026-06-09T17:00:00Z = Tue 12:00 CDT (afternoon), so
-    // refDate = Tue 6/9; "tonight" = Tue 18:00 → Wed 06:00 local (the 23Z + 05Z blocks).
-
+    // A structured report carrying only an English closing, for the closing prose-check tests above.
     private static string ClosingOnlyReport(string closing) =>
         "{\"schemaVersion\":5,\"changes\":[],\"narrative\":{\"en\":{\"changeSummary\":null,\"closing\":"
         + JsonSerializer.Serialize(closing) + "}}}";
 
-    [Fact]
-    public async Task ClosingFault_WithValidChangeSummary_KeepsChangeSummary_DropsClosing()
-    {
-        // WX-189 independent-section degrade preserves the GOOD section: a clean
-        // changeSummary survives while a jargon-leaking closing is dropped to the fallback.
-        const string report = """
-            {
-              "schemaVersion": 5,
-              "narrative": {
-                "en": { "changeSummary": "Conditions are trending more active.", "closing": "The latest TAF backs the wetter trend." }
-              }
-            }
-            """;
-        var responseJson = BuildClaudeResponseJson(
-            finalSnapshotJson: RainBlockSnapshotJson,
-            reasoningTrace: "trace",
-            inputTokens: 10, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-            structuredReportJson: report);
+    // ── WX-506: the change band is a second call, written from the computed changes ──
+    // The band scenario: the prior forecast had the 11Z block dry, the reconciled one has rain possible there,
+    // so the detector computes one Rain-appearing change and an unscheduled send shows a band. Call 1 is the
+    // reconciliation; every later call is the change-band call. The prose checks (WX-139/149/168/264/284) now
+    // run on the band call's output, so these tests drive that call rather than the first call's prose.
 
-        var success = Assert.IsType<ReconcileResult.Success>(await RunReconciler(responseJson));
-        Assert.Equal("Conditions are trending more active.", success.StructuredReport.Narrative["en"].ChangeSummary);
+    private static readonly DateTime BandNowUtc = new(2026, 6, 9, 6, 0, 0, DateTimeKind.Utc);
+
+    private const string BandPriorDryJson = """
+        {"schemaVersion":5,"blocks":[{"startUtc":"2026-06-09T11:00:00Z","skyState":"partly_cloudy","obscuration":"none","temperatureCelsius":{"min":22,"max":30},"windKt":{"min":5,"max":12},"precipExpectation":"none","severeFlag":false}]}
+        """;
+
+    private const string BandClosing = "A wet start to the day, then a calmer stretch settles in.";
+
+    private static string BandReportJson(IReadOnlyList<string> languages, string? firstCallChangeSummary = null, string closing = BandClosing) =>
+        "{\"schemaVersion\":5,\"narrative\":{"
+        + string.Join(",", languages.Select(l =>
+            $"\"{l}\":{{\"changeSummary\":{JsonSerializer.Serialize(firstCallChangeSummary)},\"closing\":{JsonSerializer.Serialize(closing)}}}"))
+        + "}}";
+
+    private static string BandToolResponse(IReadOnlyDictionary<string, string> summaries, string stopReason = "tool_use") =>
+        BuildClaudeResponseJsonWithRawInput(
+            JsonSerializer.Serialize(new { changeSummary = summaries }),
+            inputTokens: 7, outputTokens: 3, toolName: "submit_change_summary", stopReason: stopReason);
+
+    private static Dictionary<string, string> En(string text) => new() { ["en"] = text };
+
+    // Runs the band scenario. bandResponse is keyed by the 1-based band attempt; null returns HTTP 400.
+    private static async Task<(ReconcileResult Result, List<string> Requests)> RunBand(
+        Func<int, string?> bandResponse,
+        string[]? languages = null,
+        ReportKind reportKind = ReportKind.Unscheduled,
+        Func<int, string>? reconcileResponse = null,
+        int reconcileCalls = 1)
+    {
+        languages ??= ["en"];
+        reconcileResponse ??= _ => BuildClaudeResponseJson(RainBlockSnapshotJson, "trace", 10, 10, 0, 0, BandReportJson(languages));
+        var requests = new List<string>();
+        int call = 0;
+        var result = await RunReconciler(
+            req =>
+            {
+                call++;
+                requests.Add(req.Content!.ReadAsStringAsync().GetAwaiter().GetResult());
+                var body = call <= reconcileCalls ? reconcileResponse(call) : bandResponse(call - reconcileCalls);
+                return body is null
+                    ? new HttpResponseMessage(HttpStatusCode.BadRequest) { Content = new StringContent("{}") }
+                    : new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+            },
+            narrativeLanguages: languages, tz: Cdt, prior: PriorOf(BandPriorDryJson),
+            reportKind: reportKind, nowUtc: BandNowUtc);
+        return (result, requests);
+    }
+
+    [Fact]
+    public async Task Band_Unscheduled_WrittenBySecondCall_FromComputedChanges()
+    {
+        var (result, requests) = await RunBand(_ => BandToolResponse(En("Rain is now possible this morning, where the prior forecast was dry.")));
+
+        var success = Assert.IsType<ReconcileResult.Success>(result);
+        Assert.Equal(2, requests.Count);
+        Assert.Contains("\"name\":\"submit_change_summary\"", requests[1]);
+        Assert.Single(success.StructuredReport.Changes);
+        Assert.Equal("Rain is now possible this morning, where the prior forecast was dry.", success.StructuredReport.Narrative["en"].ChangeSummary);
+        Assert.Equal(BandClosing, success.StructuredReport.Narrative["en"].Closing);
+        // Both calls are billed.
+        Assert.Equal(17, success.Tokens.InputTokens);
+        Assert.Equal(13, success.Tokens.OutputTokens);
+    }
+
+    [Fact]
+    public async Task Band_Request_CarriesOnlyTheComputedFacts_NoSecondForecast()
+    {
+        // The defect: the band was written beside the provisional snapshot and the TAF, and send 9341
+        // reported the provisional's value as the prior's. The band call must see neither.
+        var (_, requests) = await RunBand(_ => BandToolResponse(En("Rain is now possible this morning.")));
+
+        var band = requests[1];
+        Assert.Contains("computed_changes", band);
+        Assert.Contains("precipitation was none, now possible rain", band);
+        Assert.Contains("block_local_labels", band);
+        Assert.DoesNotContain("provisional_snapshot.body", band);
+        Assert.DoesNotContain("prior_snapshot.body", band);
+        Assert.DoesNotContain("current_forecast", band);
+        Assert.DoesNotContain("current_observation", band);
+    }
+
+    [Fact]
+    public async Task Band_FirstCallChangeSummary_IsDiscarded()
+    {
+        // The first call's schema no longer offers changeSummary. Text it sends anyway never reaches the band:
+        // the band call's output replaces it, and a failed band call leaves null, not the first call's text.
+        var (result, requests) = await RunBand(
+            _ => null,
+            reconcileResponse: _ => BuildClaudeResponseJson(RainBlockSnapshotJson, "trace", 10, 10, 0, 0,
+                BandReportJson(["en"], firstCallChangeSummary: "The afternoon has been upgraded — the prior forecast was dry.")));
+
+        var success = Assert.IsType<ReconcileResult.Success>(result);
+        Assert.Equal(2, requests.Count);
+        Assert.Null(success.StructuredReport.Narrative["en"].ChangeSummary);
+        Assert.DoesNotContain("changeSummary", ExtractFirstToolSchema(requests[0]));
+    }
+
+    [Fact]
+    public async Task Band_ApiFailure_FallsBackToDeterministicBand_StillSends()
+    {
+        var (result, requests) = await RunBand(_ => null);
+
+        var success = Assert.IsType<ReconcileResult.Success>(result);
+        Assert.Equal(2, requests.Count);                                   // no retry on a transport failure
+        Assert.Null(success.StructuredReport.Narrative["en"].ChangeSummary);
+        Assert.Single(success.StructuredReport.Changes);                   // the fallback band renders from these
+    }
+
+    [Fact]
+    public async Task Band_UnexpectedException_StaysInTheBandStep_NoReconciliationRetry()
+    {
+        // A tool input that is not an object makes TryGetProperty throw InvalidOperationException, which the band
+        // call's own catch does not cover. The band step runs inside the reconciliation call's retry block, so
+        // unless it is contained there it re-runs the whole reconciliation.
+        var (result, requests) = await RunBand(_ => BuildClaudeResponseJsonWithRawInput("\"not an object\"", toolName: "submit_change_summary"));
+
+        var success = Assert.IsType<ReconcileResult.Success>(result);
+        Assert.Equal(2, requests.Count);
+        Assert.Null(success.StructuredReport.Narrative["en"].ChangeSummary);
+        // The band call was billed (10 input tokens, on top of the reconciliation's 10) before the step threw;
+        // its tokens still count.
+        Assert.Equal(20, success.Tokens.InputTokens);
+    }
+
+    [Fact]
+    public async Task Band_Truncated_FallsBackToDeterministicBand()
+    {
+        var (result, requests) = await RunBand(_ => BandToolResponse(En("Rain is now"), stopReason: "max_tokens"));
+
+        var success = Assert.IsType<ReconcileResult.Success>(result);
+        Assert.Equal(2, requests.Count);
+        Assert.Null(success.StructuredReport.Narrative["en"].ChangeSummary);
+    }
+
+    [Fact]
+    public async Task Band_RejectedOnce_RetriesWithFeedback_ThenAccepts()
+    {
+        var (result, requests) = await RunBand(attempt => attempt == 1
+            ? BandToolResponse(En("The latest TAF adds rain this morning."))
+            : BandToolResponse(En("Rain is now possible this morning.")));
+
+        var success = Assert.IsType<ReconcileResult.Success>(result);
+        Assert.Equal(3, requests.Count);
+        Assert.Contains("\"is_error\":true", requests[2]);
+        Assert.Contains("Your previous change band was rejected", requests[2]);
+        Assert.Equal("Rain is now possible this morning.", success.StructuredReport.Narrative["en"].ChangeSummary);
+    }
+
+    [Fact]
+    public async Task Band_MissingLanguage_IsRejected_ThenFallsBack()
+    {
+        var (result, requests) = await RunBand(
+            _ => BandToolResponse(En("Rain is now possible this morning.")),
+            languages: ["en", "es"]);
+
+        var success = Assert.IsType<ReconcileResult.Success>(result);
+        Assert.Equal(3, requests.Count);
+        Assert.All(success.StructuredReport.Narrative.Values, n => Assert.Null(n.ChangeSummary));
+    }
+
+    [Fact]
+    public async Task Band_NotCalled_WhenNoChanges()
+    {
+        // Prior == final: nothing changed, so there is no band to write.
+        var (result, requests) = await RunBand(
+            _ => throw new InvalidOperationException("the band call must not run"),
+            reconcileResponse: _ => BuildClaudeResponseJson(BandPriorDryJson, "trace", 10, 10, 0, 0, BandReportJson(["en"])));
+
+        var success = Assert.IsType<ReconcileResult.Success>(result);
+        Assert.Single(requests);
+        Assert.Empty(success.StructuredReport.Changes);
+    }
+
+    [Fact]
+    public async Task Band_Called_ScheduledWithNearTermSevereOnset()
+    {
+        // The other side of the scheduled rule: a block going severe in the near term keeps the band, so the band
+        // call runs. Without this, a band step that always suppressed scheduled reports would pass.
+        const string severe = """
+            {"schemaVersion":5,"blocks":[{"startUtc":"2026-06-09T11:00:00Z","skyState":"overcast","obscuration":"none","temperatureCelsius":{"min":22,"max":30},"windKt":{"min":5,"max":12},"precipExpectation":"likely","precipPhenomenon":"thunderstorm","severeFlag":true}]}
+            """;
+        var (result, requests) = await RunBand(
+            _ => BandToolResponse(En("Severe storms are now possible this morning.")),
+            reportKind: ReportKind.Scheduled,
+            reconcileResponse: _ => BuildClaudeResponseJson(severe, "trace", 10, 10, 0, 0, BandReportJson(["en"])));
+
+        var success = Assert.IsType<ReconcileResult.Success>(result);
+        Assert.Equal(2, requests.Count);
+        Assert.Equal("Severe storms are now possible this morning.", success.StructuredReport.Narrative["en"].ChangeSummary);
+    }
+
+    [Fact]
+    public async Task Band_NotCalled_ScheduledWithoutSevereOnset()
+    {
+        // A scheduled report shows a band only for a near-term severe onset; ReportWorker strips any other,
+        // so the band call is not paid for.
+        var (result, requests) = await RunBand(
+            _ => throw new InvalidOperationException("the band call must not run"),
+            reportKind: ReportKind.Scheduled);
+
+        var success = Assert.IsType<ReconcileResult.Success>(result);
+        Assert.Single(requests);
+        Assert.Single(success.StructuredReport.Changes);
+        Assert.Null(success.StructuredReport.Narrative["en"].ChangeSummary);
+    }
+
+    // The prose checks, now applied to the band call's output. `reject` = both band attempts return this prose
+    // and the band falls back to null; `accept` = it is kept verbatim.
+    [Theory]
+    // WX-139 synoptic mechanism
+    [InlineData("Winds turn gusty with rain arriving this evening as a frontal boundary pushes through.", "attributes a synoptic mechanism")]
+    [InlineData("Breezy conditions build this evening, with the drier air sitting just in front of the coast.", null)]
+    [InlineData("Breezy conditions build this evening, with the drier air sitting just in  front of the coast.", null)]
+    // WX-284 register and likelihood
+    [InlineData("Breezy conditions build with a few showers this evening.", "uses the precipitation register")]
+    [InlineData("Widespread rain is likely.", "renders a precipitation likelihood")]
+    [InlineData("Snow showers are possible through the afternoon.", null)]
+    // WX-149 / WX-264 day-part word vs {q:time} (11:00Z = 06:00 CDT, morning; 05:00Z = 00:00 CDT, early hours).
+    // The "around" row has no directly adjacent day-part word, so only the WX-264 connective binding can reject it.
+    [InlineData("Rain is now possible Saturday afternoon, {q:time:2026-06-13T11:00:00Z}.", "prose time-of-day word contradicts the token")]
+    [InlineData("Rain is now possible Saturday afternoon around {q:time:2026-06-13T11:00:00Z}.", "prose time-of-day word contradicts the token")]
+    [InlineData("Rain develops this morning, {q:time:2026-06-09T11:00:00Z}.", null)]
+    [InlineData("Rain is possible Monday evening into {q:time:2026-07-07T05:00:00Z}, easing thereafter.", null)]
+    // WX-149 raw UTC and jargon
+    [InlineData("Rain is now possible in the 12-18Z block.", "leaks raw UTC block notation")]
+    [InlineData("The latest TAF adds rain this morning.", "uses the internal/aviation term")]
+    public async Task Band_ProseChecks_ApplyToTheBandCall(string prose, string? rejectedBecause)
+    {
+        var (result, requests) = await RunBand(_ => BandToolResponse(En(prose)));
+
+        var success = Assert.IsType<ReconcileResult.Success>(result);
+        if (rejectedBecause is null)
+        {
+            Assert.Equal(2, requests.Count);
+            Assert.Equal(prose, success.StructuredReport.Narrative["en"].ChangeSummary);
+        }
+        else
+        {
+            // A rejection retries once, and the retry carries the rule that fired — so each row proves ITS rule.
+            Assert.Equal(3, requests.Count);
+            Assert.Contains(rejectedBecause, requests[2]);
+            Assert.Null(success.StructuredReport.Narrative["en"].ChangeSummary);
+        }
+    }
+
+    [Theory]
+    // WX-139 es mechanism vs the positional "frente a"; WX-168 es day-part (18:00Z = 13:00 CDT, afternoon)
+    [InlineData("Los vientos se vuelven racheados con algo de lluvia esta tarde mientras avanza un frente frío.", "attributes a synoptic mechanism")]
+    [InlineData("Los vientos aumentan esta tarde, con el aire más seco justo frente a la costa.", null)]
+    [InlineData("Lluvia en la madrugada, {q:time:2026-06-09T18:00:00Z}.", "prose time-of-day word contradicts the token")]
+    public async Task Band_SpanishProseChecks_ApplyToTheBandCall_AndDropEveryLanguage(string esProse, string? rejectedBecause)
+    {
+        const string en = "Rain is now possible this morning.";
+        bool accepted = rejectedBecause is null;
+        var (result, requests) = await RunBand(
+            _ => BandToolResponse(new Dictionary<string, string> { ["en"] = en, ["es"] = esProse }),
+            languages: ["en", "es"]);
+
+        var success = Assert.IsType<ReconcileResult.Success>(result);
+        Assert.Equal(accepted ? 2 : 3, requests.Count);
+        if (!accepted)
+            Assert.Contains(rejectedBecause!, requests[2]);
+        Assert.Equal(accepted ? esProse : null, success.StructuredReport.Narrative["es"].ChangeSummary);
+        Assert.Equal(accepted ? en : null, success.StructuredReport.Narrative["en"].ChangeSummary);
+    }
+
+    [Fact]
+    public async Task Band_Survives_WhenTheClosingIsDropped()
+    {
+        // WX-189 independent-section degrade still keeps the good section: a jargon closing that never converges
+        // drops to the fallback, and the band call still runs on the cleaned report.
+        var (result, requests) = await RunBand(
+            _ => BandToolResponse(En("Rain is now possible this morning.")),
+            reconcileResponse: _ => BuildClaudeResponseJson(RainBlockSnapshotJson, "trace", 10, 10, 0, 0,
+                BandReportJson(["en"], closing: "The latest TAF backs the wetter trend this morning.")),
+            reconcileCalls: 3);
+
+        var success = Assert.IsType<ReconcileResult.Success>(result);
+        Assert.Equal(4, requests.Count);
+        Assert.Equal("Rain is now possible this morning.", success.StructuredReport.Narrative["en"].ChangeSummary);
         Assert.Equal("See the forecast above for the full outlook.", success.StructuredReport.Narrative["en"].Closing);
+    }
+
+    // The first tool definition's input_schema in a captured request, as raw JSON.
+    private static string ExtractFirstToolSchema(string requestJson)
+    {
+        using var doc = JsonDocument.Parse(requestJson);
+        return doc.RootElement.GetProperty("tools")[0].GetProperty("input_schema").GetRawText();
     }
 
     // ── WX-165: generation-side invention reduction ──────────────────────────
@@ -1178,21 +1086,18 @@ public class ForecastReconcilerTests
     }
 
     [Fact]
-    public async Task DiagnosticKind_ReceivesNearTermSevereOnsetBandInstruction()
+    public async Task DiagnosticKind_KeepsDiagnosticLeadIn_AndNoBandInstruction()
     {
-        // The Diagnostic kind previously fell through changeAlertInstruction's empty
-        // default — the one report kind never given "an empty changes array is the
-        // correct answer" coaching — so it filled the band against a stale prior and
-        // the phantom degraded the (hard-aborting) startup verification. It now gets
-        // the same near-term-severe-onset rule as a scheduled report.
+        // WX-506: the band is written by a separate call, so the reconciliation prompt no longer instructs on
+        // changeSummary for any kind — only the kind's own lead-in remains.
         var (result, requests) = await RunReconcilerCapturing(
             _ => BuildClaudeResponseJson("""{"schemaVersion":5,"blocks":[]}""", "trace", 10, 10, 0, 0),
             reportKind: ReportKind.Diagnostic);
 
         Assert.IsType<ReconcileResult.Success>(result);
         Assert.Contains("diagnostic (startup verification) report", requests[0]);
-        Assert.Contains("a NEW severe hazard", requests[0]);
-        Assert.Contains("emit an EMPTY changes array", requests[0]);
+        Assert.DoesNotContain("a NEW severe hazard", requests[0]);
+        Assert.DoesNotContain("changeSummary", ExtractFirstToolSchema(requests[0]));
     }
 
     [Fact]
@@ -1345,7 +1250,7 @@ public class ForecastReconcilerTests
             Content = new StringContent(anthropicResponseJson, Encoding.UTF8, "application/json"),
         }, allowSkip, tz: tz, prior: prior);
 
-    private static async Task<ReconcileResult> RunReconciler(Func<HttpRequestMessage, HttpResponseMessage> respond, bool allowSkip = false, string[]? narrativeLanguages = null, TimeZoneInfo? tz = null, ForecastSnapshot? prior = null, ForecastSnapshotBody? provisional = null, WeatherSnapshot? snapshot = null, ReportKind reportKind = ReportKind.Scheduled)
+    private static async Task<ReconcileResult> RunReconciler(Func<HttpRequestMessage, HttpResponseMessage> respond, bool allowSkip = false, string[]? narrativeLanguages = null, TimeZoneInfo? tz = null, ForecastSnapshot? prior = null, ForecastSnapshotBody? provisional = null, WeatherSnapshot? snapshot = null, ReportKind reportKind = ReportKind.Scheduled, DateTime? nowUtc = null)
     {
         var http = new HttpClient(new StubHandler(respond));
         var claude = new ClaudeClient(http, apiKey: "test-key", model: "claude-sonnet-4-6", personaPrefix: "Persona text.");
@@ -1364,7 +1269,7 @@ public class ForecastReconcilerTests
             allowSkip: allowSkip,
             changedSinceLastSend: Array.Empty<TriggerSource>(),
             significanceCfg: new SignificanceGateConfig(),
-            nowUtc: DateTime.UtcNow,
+            nowUtc: nowUtc ?? DateTime.UtcNow,
             ct: default);
     }
 

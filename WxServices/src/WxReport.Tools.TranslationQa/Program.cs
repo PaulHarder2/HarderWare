@@ -1,6 +1,7 @@
 using System.Text.Json;
 
 using MetarParser.Data;
+using MetarParser.Data.Entities;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -30,6 +31,16 @@ using WxReport.Tools.TranslationQa;
 //   --out <dir>         output directory (default: C:\HarderWare\translation-qa)   [generate]
 //   --judge gemini      after generating, judge automatically via the Gemini API   [generate]
 //   --response <file>   parse a saved model reply instead of generating (manual fallback)   [judge]
+//
+// WX-506 replay mode (no QA package; prints to stdout):
+//   --replay-band --prior <ForecastSnapshotId> --final <ForecastSnapshotId> --tz <IANA id> --langs en,es [--now <ISO UTC>]
+//                       --now defaults to the final snapshot's GeneratedAtUtc, the stored instant closest to the cycle.
+//                       re-write the "Why this update" band from two stored snapshots through the production
+//                       band path, printing the computed facts and the band per language.
+//                       Exit 0 band written · 1 band call failed or rejected · 2 usage · 3 no computed changes
+//   --replay-band ... --facts-only
+//                       print only the computed facts the band call would receive; no model call.
+//                       Exit 0 facts printed · 2 usage · 3 no computed changes
 
 var argMap = ParseArgs(args);
 
@@ -46,15 +57,18 @@ Console.CancelKeyPress += (_, e) =>
 if (argMap.TryGetValue("response", out var responseFile) && !string.IsNullOrWhiteSpace(responseFile))
     return await RunJudgePhaseAsync(responseFile, cts.Token);
 
+var replayBand = argMap.ContainsKey("replay-band");
+
 // ── PHASE 1 — generate (requires --lang) ─────────────────────────────────────────────────────────
-if (!argMap.TryGetValue("lang", out var targetIso) || string.IsNullOrWhiteSpace(targetIso))
+string? targetIso = null;
+if (!replayBand && (!argMap.TryGetValue("lang", out targetIso) || string.IsNullOrWhiteSpace(targetIso)))
 {
     Console.Error.WriteLine("error: --lang <iso> is required to generate (or pass --response <reply-file> to parse a reply).");
     Console.Error.WriteLine("usage: --lang <iso> [--scenario warm-convective|winter-frozen|chicago-day-parts] [--out <dir>] [--judge gemini] [--raw]  |  --response <reply-file>");
     return 2;
 }
-targetIso = LanguageTemplateStore.CanonicalIso(targetIso);
-if (string.IsNullOrWhiteSpace(targetIso))
+targetIso = replayBand ? "" : LanguageTemplateStore.CanonicalIso(targetIso!);
+if (!replayBand && string.IsNullOrWhiteSpace(targetIso))
 {
     Console.Error.WriteLine("error: --lang did not resolve to a language code.");
     return 2;
@@ -175,6 +189,9 @@ using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(claudeCfg.Timeo
 http.DefaultRequestHeaders.Add("User-Agent", "WxReport-TranslationQA/1.0");
 var reconciler = new ForecastReconciler(new ClaudeClient(http, claudeCfg.ApiKey!, claudeCfg.Model, persona.Text), templates);
 
+if (replayBand)
+    return await RunReplayBandAsync(argMap, reconciler, reportCfg, dbOptions, cts.Token);
+
 HttpClient? geminiHttp = null;
 IJudge? judge = null;
 if (autoJudgeGemini)
@@ -268,6 +285,95 @@ static Dictionary<string, string> ParseArgs(string[] args)
         map[key] = val;
     }
     return map;
+}
+
+// WX-506: re-write a "Why this update" band from two stored snapshots through the production band path.
+static async Task<int> RunReplayBandAsync(
+    Dictionary<string, string> argMap, ForecastReconciler reconciler, ReportConfig reportCfg,
+    DbContextOptions<WeatherDataContext> dbOptions, CancellationToken ct)
+{
+    if (!int.TryParse(argMap.GetValueOrDefault("prior"), out var priorId)
+        || !int.TryParse(argMap.GetValueOrDefault("final"), out var finalId)
+        || string.IsNullOrWhiteSpace(argMap.GetValueOrDefault("tz"))
+        || string.IsNullOrWhiteSpace(argMap.GetValueOrDefault("langs"))
+        || (argMap.ContainsKey("now") && !DateTime.TryParse(argMap["now"], System.Globalization.CultureInfo.InvariantCulture,
+               System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal, out _)))
+    {
+        Console.Error.WriteLine("usage: --replay-band --prior <ForecastSnapshotId> --final <ForecastSnapshotId> --tz <IANA id> --langs en,es [--now <ISO UTC>] [--facts-only]");
+        return 2;
+    }
+
+    var langs = argMap["langs"].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .Select(LanguageTemplateStore.CanonicalIso).ToArray();
+    if (langs.Any(string.IsNullOrWhiteSpace))
+    {
+        Console.Error.WriteLine($"error: --langs '{argMap["langs"]}' contains a code that does not resolve to a language.");
+        return 2;
+    }
+    langs = langs.Distinct(StringComparer.Ordinal).ToArray();
+
+    TimeZoneInfo tz;
+    try { tz = TimeZoneInfo.FindSystemTimeZoneById(argMap["tz"]); }
+    catch (TimeZoneNotFoundException)
+    {
+        Console.Error.WriteLine($"error: --tz '{argMap["tz"]}' is not a known time zone.");
+        return 2;
+    }
+
+    string? priorBody, finalBody;
+    DateTime finalGeneratedUtc = default;
+    await using (var ctx = new WeatherDataContext(dbOptions))
+    {
+        priorBody = await ctx.ForecastSnapshots.Where(s => s.Id == priorId).Select(s => s.Body).SingleOrDefaultAsync(ct);
+        var final = await ctx.ForecastSnapshots.Where(s => s.Id == finalId)
+            .Select(s => new { s.Body, s.GeneratedAtUtc }).SingleOrDefaultAsync(ct);
+        finalBody = final?.Body;
+        if (final is not null)
+            finalGeneratedUtc = DateTime.SpecifyKind(final.GeneratedAtUtc, DateTimeKind.Utc);
+    }
+    if (priorBody is null || finalBody is null)
+    {
+        Console.Error.WriteLine($"error: ForecastSnapshot {(priorBody is null ? priorId : finalId)} does not exist.");
+        return 2;
+    }
+    // Without --now, the cycle instant is taken as the final snapshot's generation time: the closest stored instant
+    // to when the cycle's changes were computed (a little after it, never before).
+    var nowUtc = argMap.ContainsKey("now")
+        ? DateTime.Parse(argMap["now"], System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal)
+        : finalGeneratedUtc;
+    Console.WriteLine($"now: {nowUtc:yyyy-MM-ddTHH:mm:ssZ}");
+    if (argMap.ContainsKey("facts-only"))
+    {
+        var facts = reconciler.BuildChangeBandFacts(
+            ForecastSnapshotBody.Deserialize(priorBody), ForecastSnapshotBody.Deserialize(finalBody),
+            langs, tz, reportCfg.SignificanceGate, nowUtc);
+        if (facts.Changes.Count == 0)
+        {
+            Console.WriteLine("no computed changes: production would show no band and make no band call.");
+            return 3;
+        }
+        Console.WriteLine(facts.UserMessage);
+        return 0;
+    }
+
+    var replay = await reconciler.ReplayChangeBandAsync(
+        ForecastSnapshotBody.Deserialize(priorBody), ForecastSnapshotBody.Deserialize(finalBody),
+        langs, tz, reportCfg.SignificanceGate, nowUtc, ct);
+
+    if (replay.Changes.Count == 0)
+    {
+        // Production makes no band call when nothing changed, so there is nothing to replay.
+        Console.WriteLine("no computed changes: production would show no band and make no band call.");
+        return 3;
+    }
+
+    Console.WriteLine(replay.UserMessage);
+    Console.WriteLine("── change band ──");
+    foreach (var (lang, band) in replay.ChangeSummary)
+        Console.WriteLine($"{lang}: {band ?? "(null — the band call failed or was rejected; production would show the deterministic band)"}");
+    Console.WriteLine($"tokens: in={replay.Tokens.InputTokens} out={replay.Tokens.OutputTokens} cache-read={replay.Tokens.CacheReadInputTokens} cache-write={replay.Tokens.CacheCreationInputTokens}");
+    return replay.ChangeSummary.Values.All(v => v is not null) ? 0 : 1;
 }
 
 // Phase 2: parse the operator's saved model reply into a validated JudgeResponse and persist it.

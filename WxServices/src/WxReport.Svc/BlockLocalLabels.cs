@@ -47,22 +47,37 @@ public static class BlockLocalLabels
             + "local time yourself):");
         foreach (var block in snapshot.Blocks.OrderBy(b => b.StartUtc))
         {
-            // Blocks carry kind-unspecified UTC instants (the convention DayNameReference also follows).
-            var startUtc = DateTime.SpecifyKind(block.StartUtc, DateTimeKind.Utc);
-            var local = TimeZoneInfo.ConvertTimeFromUtc(startUtc, tz);
-            var part = local.Hour / 6;
-            // The span ENDS at the next local boundary. Deriving it from startUtc + 6h would be wrong on a
-            // DST day, when the local 00-06 block is 5 or 7 UTC hours long.
-            var endHour = (part + 1) * 6;
             sb.Append("  ")
-              .Append(startUtc.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture))
+              .Append(UtcKey(block.StartUtc))
               .Append(" = ")
-              .Append(local.ToString("ddd yyyy-MM-dd", CultureInfo.InvariantCulture))
-              .Append(' ').Append(PartNames[part])
-              .Append(" (").Append(local.ToString("HH:mm", CultureInfo.InvariantCulture))
-              .Append('-').Append(endHour.ToString("00", CultureInfo.InvariantCulture)).Append(":00)")
+              .Append(Label(block.StartUtc, tz))
               .AppendLine();
         }
         return sb.ToString();
     }
+
+    /// <summary>
+    /// One block's local label, e.g. <c>Tue 2026-09-15 afternoon (12:00-18:00)</c> — the right-hand side of a
+    /// <see cref="Build"/> line. WX-506 reuses it for the change-band call's input, so both calls name a block
+    /// identically.
+    /// </summary>
+    /// <param name="blockStartUtc">The block's start instant (UTC, kind-unspecified per the snapshot convention).</param>
+    /// <param name="tz">Locality timezone.</param>
+    public static string Label(DateTime blockStartUtc, TimeZoneInfo tz)
+    {
+        var local = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(blockStartUtc, DateTimeKind.Utc), tz);
+        var part = local.Hour / 6;
+        // The span ENDS at the next local boundary. Deriving it from startUtc + 6h would be wrong on a
+        // DST day, when the local 00-06 block is 5 or 7 UTC hours long.
+        var endHour = (part + 1) * 6;
+        return local.ToString("ddd yyyy-MM-dd", CultureInfo.InvariantCulture)
+            + " " + PartNames[part]
+            + " (" + local.ToString("HH:mm", CultureInfo.InvariantCulture)
+            + "-" + endHour.ToString("00", CultureInfo.InvariantCulture) + ":00)";
+    }
+
+    /// <summary>A block start as the ISO-8601 UTC key used in <see cref="Build"/> and in <c>{q:time}</c> tokens.</summary>
+    /// <param name="blockStartUtc">The block's start instant (UTC, kind-unspecified per the snapshot convention).</param>
+    public static string UtcKey(DateTime blockStartUtc) =>
+        DateTime.SpecifyKind(blockStartUtc, DateTimeKind.Utc).ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture);
 }

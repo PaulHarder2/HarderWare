@@ -55,7 +55,7 @@ During the additive transition (until WX-130 rewires the loop), the column is pe
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `changeSummary` | string or null | Prose for the "What's changed:" band; null when there is no band. The **only** section where `{chN}` anchors appear. |
+| `changeSummary` | string or null | Prose for the "Why this update" band; null when there is no band, or when the band call fell back (the renderer then shows a deterministic line built from `changes`). Written by a separate change-band call from the computed `changes`, not by the reconciliation call (WX-506). No `{chN}` anchors (retired in WX-189). |
 | `currentConditions` | string | Prose for the Current Conditions section. |
 | `extendedForecast` | string | Prose for the Extended Forecast section. |
 | `closing` | string | Prose for the "In summary:" closing. |
