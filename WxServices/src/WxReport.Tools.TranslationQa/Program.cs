@@ -37,7 +37,7 @@ using WxReport.Tools.TranslationQa;
 //                       --now defaults to the final snapshot's GeneratedAtUtc, the stored instant closest to the cycle.
 //                       re-write the "Why this update" band from two stored snapshots through the production
 //                       band path, printing the computed facts and the band per language.
-//                       Exit 0 band written · 1 band call failed or rejected · 2 usage · 3 no computed changes
+//                       Exit 0 band written · 1 band call failed or rejected · 2 usage or unreadable snapshot · 3 no computed changes
 //   --replay-band ... --facts-only
 //                       print only the computed facts the band call would receive; no model call.
 //                       Exit 0 facts printed · 2 usage · 3 no computed changes
@@ -336,6 +336,20 @@ static async Task<int> RunReplayBandAsync(
         Console.Error.WriteLine($"error: ForecastSnapshot {(priorBody is null ? priorId : finalId)} does not exist.");
         return 2;
     }
+    // A stored body can predate the current schema or be corrupt; say which snapshot, rather than crash.
+    ForecastSnapshotBody priorSnapshot, finalSnapshot;
+    try { priorSnapshot = ForecastSnapshotBody.Deserialize(priorBody); }
+    catch (JsonException ex)
+    {
+        Console.Error.WriteLine($"error: ForecastSnapshot {priorId} body could not be parsed — {ex.Message}");
+        return 2;
+    }
+    try { finalSnapshot = ForecastSnapshotBody.Deserialize(finalBody); }
+    catch (JsonException ex)
+    {
+        Console.Error.WriteLine($"error: ForecastSnapshot {finalId} body could not be parsed — {ex.Message}");
+        return 2;
+    }
     // Without --now, the cycle instant is taken as the final snapshot's generation time: the closest stored instant
     // to when the cycle's changes were computed (a little after it, never before).
     var nowUtc = argMap.ContainsKey("now")
@@ -346,7 +360,7 @@ static async Task<int> RunReplayBandAsync(
     if (argMap.ContainsKey("facts-only"))
     {
         var facts = reconciler.BuildChangeBandFacts(
-            ForecastSnapshotBody.Deserialize(priorBody), ForecastSnapshotBody.Deserialize(finalBody),
+            priorSnapshot, finalSnapshot,
             langs, tz, reportCfg.SignificanceGate, nowUtc);
         if (facts.Changes.Count == 0)
         {
@@ -358,7 +372,7 @@ static async Task<int> RunReplayBandAsync(
     }
 
     var replay = await reconciler.ReplayChangeBandAsync(
-        ForecastSnapshotBody.Deserialize(priorBody), ForecastSnapshotBody.Deserialize(finalBody),
+        priorSnapshot, finalSnapshot,
         langs, tz, reportCfg.SignificanceGate, nowUtc, ct);
 
     if (replay.Changes.Count == 0)
