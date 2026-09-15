@@ -142,7 +142,9 @@ await using (var ctx = new WeatherDataContext(dbOptions))
     claudeCfg.ApiKey = gs?.ClaudeApiKey;
     geminiKeyFromDb = gs?.GeminiApiKey;
 }
-if (string.IsNullOrWhiteSpace(claudeCfg.ApiKey))
+// --replay-band --facts-only makes no model call, so it needs neither the Claude key nor the persona.
+var factsOnly = replayBand && argMap.ContainsKey("facts-only");
+if (!factsOnly && string.IsNullOrWhiteSpace(claudeCfg.ApiKey))
 {
     Console.Error.WriteLine("error: GlobalSettings.ClaudeApiKey is not set in the database — cannot make a live Claude call.");
     return 1;
@@ -165,12 +167,12 @@ if (autoJudgeGemini)
 
 // Persona prefix ships beside the binary (copied from AboutPaul.md), as in the service.
 var personaPath = Path.Combine(AppContext.BaseDirectory, "AboutPaul.md");
-if (!File.Exists(personaPath))
+if (!factsOnly && !File.Exists(personaPath))
 {
     Console.Error.WriteLine($"error: AboutPaul.md not found at {personaPath}.");
     return 1;
 }
-var persona = new PersonaPrefix(await File.ReadAllTextAsync(personaPath));
+var persona = new PersonaPrefix(File.Exists(personaPath) ? await File.ReadAllTextAsync(personaPath) : "");
 
 // DB-backed template store (the production path, not the test seed).
 var templates = new LanguageTemplateStore(
@@ -187,10 +189,20 @@ var templates = new LanguageTemplateStore(
 
 using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(claudeCfg.TimeoutSeconds) };
 http.DefaultRequestHeaders.Add("User-Agent", "WxReport-TranslationQA/1.0");
-var reconciler = new ForecastReconciler(new ClaudeClient(http, claudeCfg.ApiKey!, claudeCfg.Model, persona.Text), templates);
+var reconciler = new ForecastReconciler(new ClaudeClient(http, claudeCfg.ApiKey ?? "", claudeCfg.Model, persona.Text), templates);
 
 if (replayBand)
-    return await RunReplayBandAsync(argMap, reconciler, reportCfg, dbOptions, cts.Token);
+{
+    try
+    {
+        return await RunReplayBandAsync(argMap, reconciler, reportCfg, dbOptions, cts.Token);
+    }
+    catch (OperationCanceledException) when (cts.IsCancellationRequested)
+    {
+        Console.Error.WriteLine("\nCancelled.");
+        return 130;
+    }
+}
 
 HttpClient? geminiHttp = null;
 IJudge? judge = null;

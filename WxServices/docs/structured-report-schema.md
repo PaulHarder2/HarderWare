@@ -1,4 +1,4 @@
-# Structured report body schema (v3)
+# Structured report body schema (v5)
 
 **Schema version:** 3 (lockstep with the forecast snapshot body — see Versioning)
 **C# source of truth:** `MetarParser.Data.Entities.StructuredReportBody`
@@ -6,15 +6,15 @@
 
 ## Purpose
 
-The unit-neutral, language-complete representation of one report's *content*, emitted by the Claude reconciliation alongside the forecast snapshot (WX-128). Where the snapshot body captures forecast *state* (6-hour blocks), this captures what the report *says*: a salience-ranked changes array (language-free facts) plus a language-keyed narrative whose quantities are substitution tokens. A deterministic renderer (WX-129) turns it into each recipient's email — units, locale, language — with no further LLM call, which is what makes the one-call-per-locality economics of WX-123 work.
+The unit-neutral, language-complete representation of one report's *content* (WX-128). Where the snapshot body captures forecast *state* (6-hour blocks), this captures what the report *says*: a salience-ranked changes array (language-free facts) plus a language-keyed narrative whose quantities are substitution tokens. The Claude reconciliation writes the `closing`; `DeterministicChangeDetector` computes `changes` afterwards (WX-189); and a separate change-band call writes `changeSummary` from those changes (WX-506). A deterministic renderer (WX-129) turns it into each recipient's email — units, locale, language — with no further LLM call, which is what makes the one-call-per-locality economics of WX-123 work.
 
-During the additive transition (until WX-130 rewires the loop), the column is persisted-but-unread: `email_body` remains the sent artifact.
+Since WX-130 this body is the live rendering source; there is no `email_body`.
 
 ## Top-level shape
 
 ```json
 {
-  "schemaVersion": 3,
+  "schemaVersion": 5,
   "changes": [ /* zero or more change objects, most important first */ ],
   "narrative": {
     "en": { /* sections */ },
@@ -25,7 +25,7 @@ During the additive transition (until WX-130 rewires the loop), the column is pe
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `schemaVersion` | `int` | Current value: 3. |
+| `schemaVersion` | `int` | Current value: 5. |
 | `changes` | array of change | Reader-relevant differences versus the prior committed forecast, most important first. Empty when nothing changed. |
 | `narrative` | object | One key per ISO 639-1 language code. Which languages must be present is a per-call contract (the locality's recipients' distinct languages); validation fails closed on a missing one. |
 
@@ -90,3 +90,5 @@ Per-call (reconciler-level) contracts, on top of the intrinsic ones: every *requ
 `schemaVersion` moves in **lockstep** with `ForecastSnapshotBody.SchemaVersionCurrent` (decided at WX-128 grooming): the two bodies travel in the same tool_use envelope, so a shape change to either bumps both. Born at v3.
 
 - **v3** (WX-128): initial shape.
+- **v4** (WX-130): the narrative slimmed to the judgment sections, `changeSummary` and `closing`.
+- **v5** (WX-155): forecast blocks bucketed on locality-local day-parts.
