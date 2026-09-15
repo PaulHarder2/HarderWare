@@ -167,10 +167,8 @@ public sealed record NarrativeSections
 {
     /// <summary>
     /// Prose for the "What's changed:" band.  <see langword="null"/> when the
-    /// cycle carries no change worth a band (typical scheduled send).  This is
-    /// the only section in which <c>{chN}</c> anchors may appear; when the
-    /// parent body's changes list is non-empty, every change's anchor must
-    /// appear here in every language.
+    /// cycle carries no change worth a band (typical scheduled send), or when the
+    /// change-band call fell back (WX-506).  Carries no <c>{chN}</c> anchors (WX-189).
     /// </summary>
     [JsonPropertyName("changeSummary")]
     public string? ChangeSummary { get; init; }
@@ -215,9 +213,8 @@ public sealed record ReportChange
     public IReadOnlyList<ReportQuantity> Quantities { get; init; } = [];
 
     /// <summary>
-    /// Anchor name (<c>ch1</c>, <c>ch2</c>, …) tying this change to its
-    /// sentence in every language's changeSummary, where it appears wrapped as
-    /// <c>{ch1}</c>.  Unique within the body.
+    /// Stable identity for this change (<c>ch1</c>, <c>ch2</c>, …), unique within the body.  No prose
+    /// references it: <c>{chN}</c> anchoring was retired in WX-189.
     /// </summary>
     [JsonPropertyName("summaryToken")]
     public required string SummaryToken { get; init; }

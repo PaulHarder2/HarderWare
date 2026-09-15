@@ -37,7 +37,10 @@ internal static class ReconcilerPrompts
     /// and worked examples — added in WX-81), and the three artifacts the tool
     /// must return.
     /// </summary>
-    internal const string ReconciliationGuidanceText = """
+    internal const string ReconciliationGuidanceText = GuidanceProcedureText + "\n" + NarrativeProseRulesText + "\n" + GuidanceClosingText;
+
+    /// <summary>The reconciliation procedure, significance hierarchy, tools and artifacts — the call-specific head of <see cref="ReconciliationGuidanceText"/>.</summary>
+    private const string GuidanceProcedureText = """
         You receive structured weather data for a single locality cycle:
 
           • provisional_snapshot — a ForecastSnapshotBody derived deterministically
@@ -240,48 +243,32 @@ internal static class ReconcilerPrompts
           deterministic program with NO further LLM involvement, so it must be
           unit-neutral and language-complete by construction.
 
-          • You do NOT author a structured change list. After this call, a
-            deterministic program computes "what changed" by comparing
-            prior_snapshot against your final_snapshot, so you cannot introduce a
-            structural change the data does not support — get the final_snapshot
-            right and the change set follows. Your job for the band is the
-            changeSummary PROSE (below).
-              - changeSummary answers the reader's question "Why this update?" —
-                name, in one or two plain sentences, the SINGLE change that
-                warranted this send: the one triggering difference from
-                prior_snapshot (precipitation appearing where the prior was dry, a
-                hazard appearing, a band strengthening, a meaningful temperature or
-                wind change). Lead with that trigger; do NOT enumerate every
-                difference — a list of minor changes buries the reason you
-                interrupted the reader. If several things changed, name the most
-                significant one (the one that justifies the send) and let the
-                forecast grid below carry the rest. Narrate only REAL prior-vs-now
-                differences the final_snapshot supports — if the prior already
-                carried the same precipitation at the same likelihood in a window,
-                it has NOT changed (and "possible" and "likely" are the same tier —
-                a possible-to-likely move is not a change); never describe an
-                onset, downgrade, or clearing the comparison does not show.
-              - Sky-cover drift (partly/mostly cloudy/overcast) and a few knots of
-                wind within the same impact band are NOT news — do not narrate
-                them in the change band.
-              - Never describe precipitation, a storm, or a hazard at a time the
-                final_snapshot blocks do not carry it; the per-day grid the reader
-                sees is built from those same blocks, so the band must agree with
-                them. Express every instant as a {q:time:...} token (the renderer
-                shows it in local time), never an internal clock window.
-              - When you cite a specific figure for a day (a wind speed, a
-                temperature), use the value that day's forecast-grid row shows — its
-                headline/peak for that quantity — not a narrower sub-period reading
-                that would read to the recipient as contradicting the grid (do not
-                write "reaching 8 mph through midday" when the day's grid row
-                headlines 13 mph; cite 13).
+          • You do NOT author a structured change list, and you do NOT write the
+            "Why this update" change band. After this call, a deterministic program
+            computes "what changed" by comparing prior_snapshot against your
+            final_snapshot, and a separate step writes the band from that computed
+            list — so get the final_snapshot right and the change set follows.
           • narrative — one entry per language code requested below, each with
-            exactly two prose sections: changeSummary (the change-band prose; null
-            only on a scheduled or diagnostic report with no near-term severe
-            onset) and closing (the "In summary:" wrap-up). The current-
-            conditions table and the per-day forecast grid are rendered
-            deterministically from the data, so do NOT narrate them here. Write
-            each language natively and idiomatically — never translate
+            exactly one prose section: closing (the "In summary:" wrap-up). The
+            current-conditions table and the per-day forecast grid are rendered
+            deterministically from the data, so do NOT narrate them here.
+        """;
+
+    /// <summary>
+    /// WX-506: the recipient-prose rules shared by BOTH narrative-writing calls — the reconciliation
+    /// call (the closing) and the change-band call (<see cref="ChangeSummaryGuidanceText"/>). One copy, so
+    /// the two calls cannot drift apart on vocabulary, tokens, day-parts or hedging.
+    /// </summary>
+    internal const string NarrativeProseRulesText = """
+        Recipient prose rules (they apply to every sentence a recipient reads):
+
+          • When you cite a specific figure for a day (a wind speed, a
+            temperature), use the value that day's forecast-grid row shows — its
+            headline/peak for that quantity — not a narrower sub-period reading
+            that would read to the recipient as contradicting the grid (do not
+            write "reaching 8 mph through midday" when the day's grid row
+            headlines 13 mph; cite 13).
+          • Write each language natively and idiomatically — never translate
             word-for-word — but keep the meteorological content identical across
             languages. When an "Approved vocabulary for this report" glossary is
             provided below, use each listed concept's approved wording — specifically
@@ -356,14 +343,6 @@ internal static class ReconcilerPrompts
             unit system — no "in the low 90s", no "below freezing point of 32".
             Say "highs near {q:temp:33.5}", "gusts to {q:gust:30}". Relative or
             unit-free phrasing ("a sharp warm-up", "near freezing") is fine.
-          • Daily high/low summary: when you summarize daytime highs or overnight
-            lows in the closing, use the ready ranges given under
-            temperature_summary in the per-cycle data, written as their
-            {q:temp_range:lo:hi} tokens — verbatim. NEVER build a band by wrapping a
-            single {q:temp:...} point in vague words ("the upper {q:temp:36} range",
-            "highs in the low {q:temp:33}s"): a {q:temp_range:...} token already
-            renders a complete range in the recipient's units. You still phrase the
-            sentence (and any early/later split) natively and idiomatically.
           • Never write raw UTC block notation in prose. The 6-hour grid
             shorthand ("12-18Z", "18Z", "the 12-18Z block") is internal
             engineering notation; it must NEVER reach the reader. Express every
@@ -460,8 +439,22 @@ internal static class ReconcilerPrompts
             "system", "disturbance", "impulse", instability, lift, or forcing.
             State the observed effect and stop — "winds turn gusty with rain
             arriving this evening", NOT "as a front pushes through".
+        """;
+
+    /// <summary>Closing-only rules and the tool instruction — the tail of <see cref="ReconciliationGuidanceText"/>.</summary>
+    private const string GuidanceClosingText = """
+        Closing rules:
+
+          • Daily high/low summary: when you summarize daytime highs or overnight
+            lows in the closing, use the ready ranges given under
+            temperature_summary in the per-cycle data, written as their
+            {q:temp_range:lo:hi} tokens — verbatim. NEVER build a band by wrapping a
+            single {q:temp:...} point in vague words ("the upper {q:temp:36} range",
+            "highs in the low {q:temp:33}s"): a {q:temp_range:...} token already
+            renders a complete range in the recipient's units. You still phrase the
+            sentence (and any early/later split) natively and idiomatically.
           • The closing only SUMMARIZES the reconciled forecast (the current
-            conditions, the per-day grid, and the change band). It must NOT
+            conditions and the per-day grid). It must NOT
             introduce a precipitation, storm, or hazard chance — or a timing for
             one — that the final_snapshot blocks do not carry. If the blocks show
             a dry evening, do not write "a chance of a storm tonight"; if a storm
@@ -485,6 +478,65 @@ internal static class ReconcilerPrompts
 
         Always act via one of the two tools. Never return free text outside a tool call.
         """;
+
+    /// <summary>
+    /// WX-506: the call-specific guidance for the change-band ("Why this update") call. That call runs
+    /// AFTER <see cref="DeterministicChangeDetector"/> and is handed only the computed changes, so the band
+    /// can name only a change that actually happened. Sent as <see cref="ChangeSummaryGuidanceText"/>, which
+    /// appends the shared <see cref="NarrativeProseRulesText"/>.
+    /// </summary>
+    private const string ChangeSummaryProcedureText = """
+        You write the "Why this update" band of a weather report for a general
+        (non-specialist) audience: one or two plain sentences per requested
+        language.
+
+        You receive computed_changes: the differences between the forecast the
+        recipient was last sent and the new forecast, computed by a program and
+        listed most significant first. Each change gives its local window and what it
+        was before and is now: per block for precipitation; per day for temperature
+        (the day's high and low) and wind (the day's peak sustained wind), as the
+        program compared them, with hours already past kept as they were sent; a
+        day figure given as "none" does not exist for that day. A wind change's window is where
+        the day's peak rose or fell, which need not be where the new peak falls. A
+        wind shift carries no value,
+        because the data holds no wind direction.
+        You also receive block_local_labels, day_name_reference and, when provided,
+        an approved-vocabulary glossary.
+
+        Rules for the band:
+
+          • Name the FIRST change in computed_changes — it is the one that
+            warranted this update. Say what it was before and what it is now, and
+            when, in plain words. You may add ONE further change in a second
+            sentence only if it is also plans-affecting or safety-critical; let
+            the forecast grid carry the rest.
+          • Each change's [importance: ...] label is for your judgment only. Never
+            write it, or any tier, importance or severity-ranking word, in the band.
+          • Narrate ONLY the changes listed. Never describe a change, a prior
+            value, a window or a hazard that computed_changes does not state. If a
+            change says a block was "none" before, the prior forecast had it dry;
+            if it says "possible rain" before, the prior forecast already carried
+            rain there — never call it newly appearing.
+          • Name a window's day and day-part from the labels given with the change
+            (first and last block), and when you add a {q:time:...} token use the
+            first or last block's UTC key exactly as given.
+          • Sky-cover drift (partly/mostly cloudy/overcast) and a few knots of
+            wind within the same impact band are NOT news — never add them as the
+            second change.
+          • Temperatures are in °C and winds in knots in the facts; write them only
+            as {q:temp:...} / {q:wind:...} tokens, never as numbers with units. Cite
+            only a figure that changed; a day figure the facts show unchanged is not
+            news.
+          • A precipitation value "possible" or "likely" is written "possible";
+            "certain" is written with the approved higher-confidence wording; a
+            "severe thunderstorm" or "severe weather" value follows the severe-storms
+            rule below and is always worded as possible.
+
+        Call the submit_change_summary tool exactly once. Never return free text.
+        """;
+
+    /// <summary>WX-506: the full system guidance for the change-band call — its procedure plus the shared recipient-prose rules.</summary>
+    internal const string ChangeSummaryGuidanceText = ChangeSummaryProcedureText + "\n" + NarrativeProseRulesText;
 
     /// <summary>
     /// Builds the Anthropic tool definition for the single tool the reconciler
@@ -515,12 +567,9 @@ internal static class ReconcilerPrompts
             required = new[] { "closing" },
             properties = new
             {
-                changeSummary = new
-                {
-                    type = new[] { "string", "null" },
-                    description = "Prose for the change band: one or two plain sentences describing what genuinely changed since the prior committed forecast. Null only on a scheduled/diagnostic report with no near-term severe onset. Quantities appear only as {q:...} tokens; no anchors.",
-                },
-                closing = new { type = "string", description = "Prose for the \"In summary:\" closing. The current-conditions table and per-day grid are rendered deterministically — narrate only the change band and this closing." },
+                // WX-506: no changeSummary. The band is written by a separate call from the computed
+                // change set, after this one (ForecastReconciler.WriteChangeSummaryAsync).
+                closing = new { type = "string", description = "Prose for the \"In summary:\" closing. The current-conditions table and per-day grid are rendered deterministically — narrate only this closing." },
             },
         };
         // Normalized: distinct + ordinal-sorted, so the serialized tool JSON —
@@ -610,6 +659,49 @@ internal static class ReconcilerPrompts
                     {
                         type = "string",
                         description = "Brief audit log naming what changed at each of the three reconciliation steps.",
+                    },
+                },
+            },
+        };
+    }
+
+    /// <summary>
+    /// WX-506: the tool for the change-band call — one changeSummary string per requested language, every
+    /// language required and no other key permitted. Languages are normalized (distinct, ordinal-sorted) for
+    /// the same cache-stability reason as <see cref="BuildSubmitReconciledReportTool"/>.
+    /// </summary>
+    /// <param name="narrativeLanguages">ISO 639-1 codes the band must be written in.</param>
+    /// <returns>The serialisable tool definition.</returns>
+    internal static object BuildSubmitChangeSummaryTool(IReadOnlyList<string> narrativeLanguages)
+    {
+        var languages = narrativeLanguages
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        var properties = languages.ToDictionary(
+            lang => lang,
+            _ => (object)new
+            {
+                type = "string",
+                description = "The \"Why this update\" band in this language: one or two plain sentences naming the computed change(s). Quantities only as {q:...} tokens.",
+            });
+
+        return new
+        {
+            name = "submit_change_summary",
+            description = "Submit the \"Why this update\" band, one entry per requested language.",
+            input_schema = new
+            {
+                type = "object",
+                required = new[] { "changeSummary" },
+                properties = new
+                {
+                    changeSummary = new
+                    {
+                        type = "object",
+                        required = languages,
+                        properties,
+                        additionalProperties = false,
                     },
                 },
             },

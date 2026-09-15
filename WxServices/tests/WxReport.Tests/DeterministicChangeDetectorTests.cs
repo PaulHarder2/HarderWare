@@ -86,23 +86,21 @@ public class DeterministicChangeDetectorTests
     }
 
     [Fact]
-    public void Rain_Strengthening_OnExpectationStep()
+    public void Rain_ExpectationStep_IsNotReported()
     {
-        // A genuine step above the merged possible/likely tier — likely -> "expected" (Certain) —
-        // is still a real strengthening (the "expected" register survives the WX-284 collapse).
-        var c = Assert.Single(Detect(
+        // WX-506: likely -> "expected" (Certain) is a real wording change, but none of the gate's criteria fires on it, so
+        // it cannot prompt an update and What's Changed leaves it to the forecast table (Paul, 2026-09-15).
+        Assert.Empty(Detect(
             Body(Blk(precip: PrecipExpectation.Likely, phenom: PrecipPhenomenon.Rain)),
             Body(Blk(precip: PrecipExpectation.Certain, phenom: PrecipPhenomenon.Rain))));
-        Assert.Equal(ChangeDirection.Strengthening, c.Direction);
     }
 
     [Fact]
-    public void Rain_Weakening_AndClearing()
+    public void Rain_WeakeningStep_IsNotReported_ButClearingIs()
     {
-        var weaken = Assert.Single(Detect(
+        Assert.Empty(Detect(
             Body(Blk(precip: PrecipExpectation.Certain, phenom: PrecipPhenomenon.Rain)),
             Body(Blk(precip: PrecipExpectation.Likely, phenom: PrecipPhenomenon.Rain))));
-        Assert.Equal(ChangeDirection.Weakening, weaken.Direction);
 
         var clear = Assert.Single(Detect(
             Body(Blk(precip: PrecipExpectation.Likely, phenom: PrecipPhenomenon.Rain)),
@@ -222,17 +220,17 @@ public class DeterministicChangeDetectorTests
     [Fact]
     public void TempMagnitude_Warming_Strengthening_Cooling_Weakening()
     {
-        var warm = Assert.Single(Detect(Body(Blk(hiF: 60)), Body(Blk(hiF: 70))));
+        var warm = Assert.Single(Detect(Body(Blk(hoursFromNow: 12, hiF: 60)), Body(Blk(hoursFromNow: 12, hiF: 70))));
         Assert.Equal(ChangePhenomenon.Temperature, warm.Phenomenon);
         Assert.Equal(ChangeDirection.Strengthening, warm.Direction);
 
-        var cool = Assert.Single(Detect(Body(Blk(hiF: 70)), Body(Blk(hiF: 60))));
+        var cool = Assert.Single(Detect(Body(Blk(hoursFromNow: 12, hiF: 70)), Body(Blk(hoursFromNow: 12, hiF: 60))));
         Assert.Equal(ChangeDirection.Weakening, cool.Direction);
     }
 
     [Fact]
     public void TempMagnitude_SubThreshold_NoChange() =>
-        Assert.Empty(Detect(Body(Blk(hiF: 60)), Body(Blk(hiF: 63)))); // T1 threshold is 5 °F
+        Assert.Empty(Detect(Body(Blk(hoursFromNow: 12, hiF: 60)), Body(Blk(hoursFromNow: 12, hiF: 63)))); // T1 threshold is 5 °F
 
     [Fact]
     public void Temperature_OneChangePerDay_FreezeBeatsMagnitude()

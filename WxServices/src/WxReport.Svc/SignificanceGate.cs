@@ -81,7 +81,7 @@ internal static class SignificanceGate
         if (AnyInHorizon(current, nowUtc, horizonEnd) && !HasOverlap(prior, current, nowUtc, horizonEnd))
             return new SignificanceResult(true, ["disjoint-horizon"], null, false);
 
-        EvaluateDailyTemperature(prior, current, cfg, nowUtc, horizonEnd, tz, fired, stats);
+        EvaluateDailyFigures(prior, current, cfg, nowUtc, horizonEnd, tz, fired, stats);
         EvaluatePerBlockEvents(prior, current, cfg, nowUtc, horizonEnd, tz, fired, stats);
 
         return new SignificanceResult(fired.Count > 0, fired, stats.EarliestDayLocal, stats.SevereEntered);
@@ -106,62 +106,55 @@ internal static class SignificanceGate
         public void NoteSevereEntered() => SevereEntered = true;
     }
 
-    // ── Per-day temperature: daily high/low magnitude, freeze/thaw, heat crossing ──
+    // ── Per-day temperature and wind: daily high/low magnitude, freeze/thaw, heat crossing,
+    // peak-wind advisory and magnitude ──
     // Daily aggregation (not per-block) because the extended forecast shows one row
     // per local calendar day (WX-112) — a 6-hour block wobble that does not move the
-    // day's high or low is not something the recipient ever sees.
-    private static void EvaluateDailyTemperature(
+    // day's high, low or peak wind is not something the recipient ever sees. The
+    // published and new day figures come from DayFigures, shared with
+    // DeterministicChangeDetector (WX-506): hours already past keep their published values.
+    private static void EvaluateDailyFigures(
         ForecastSnapshotBody prior, ForecastSnapshotBody current,
         SignificanceGateConfig cfg, DateTime nowUtc, DateTime horizonEnd, TimeZoneInfo tz,
         List<string> fired, ChangeStats stats)
     {
-        var curDays = DailyHiLoDegF(current, nowUtc, horizonEnd, tz);
-        var priDays = DailyHiLoDegF(prior, nowUtc, horizonEnd, tz);
-
-        foreach (var (day, cur) in curDays)
+        foreach (var d in DayFigures.Compare(prior, current, nowUtc, horizonEnd, tz))
         {
-            // A day that rolled into the horizon has no prior counterpart — not news by itself.
-            if (!priDays.TryGetValue(day, out var pri))
-                continue;
+            var day = d.Day;
+            // The criteria are judged once for the gate and the detector (DayCriteria, WX-506). The temperature tier is
+            // the day's earliest compared block still to come (not local midnight), which keeps day tiering consistent
+            // with per-block tiering and avoids a DST-fragile local-midnight→UTC conversion.
+            if (DayCriteria.Temperature(d, cfg, nowUtc) is { } t)
+            {
+                if (t.Delta)
+                    fired.Add($"temp-delta@T{t.Tier + 1}({day:yyyy-MM-dd})");
+                if (t.FreezeAdd)
+                    fired.Add($"freeze-add({day:yyyy-MM-dd})");
+                if (t.Thaw)
+                    fired.Add($"thaw({day:yyyy-MM-dd})");
+                if (t.HeatAdd || t.HeatEnd)
+                    fired.Add($"heat-cross({day:yyyy-MM-dd})");
+                if (t.Any)
+                    stats.Note(day);
+            }
 
-            // Tier from the day's earliest in-horizon block (not local midnight): keeps
-            // day tiering consistent with per-block tiering and avoids a DST-fragile
-            // local-midnight→UTC conversion.
-            int tier = TierOf(cur.FirstStartUtc, nowUtc);
-            if (tier < 0)
-                continue;
-
-            int before = fired.Count;
-
-            // Daily high/low magnitude change.
-            int delta = PerTier(cfg.TempDeltaDegF, tier);
-            if (Math.Abs(cur.Hi - pri.Hi) >= delta || Math.Abs(cur.Lo - pri.Lo) >= delta)
-                fired.Add($"temp-delta@T{tier + 1}({day:yyyy-MM-dd})");
-
-            // Freeze ADD (falling through freezing): prior not freezing, now strictly below 32 °F. Always significant.
-            if (pri.Lo >= WxThresholds.FreezeDegF && cur.Lo < WxThresholds.FreezeDegF)
-                fired.Add($"freeze-add({day:yyyy-MM-dd})");
-
-            // Thaw (rising out of a freeze): prior freezing, now strictly above 32 °F.
-            // Deliberately modeled as a threshold *crossing* — always significant at every
-            // tier — not as a lazy near-term cessation: a hard freeze breaking is
-            // planning-relevant (frost protection, pipes, travel) even days out, matching
-            // the agreed "frost/freeze threshold crossing = ALWAYS" row.
-            if (pri.Lo < WxThresholds.FreezeDegF && cur.Lo > WxThresholds.FreezeDegF)
-                fired.Add($"thaw({day:yyyy-MM-dd})");
-
-            // Heat-advisory crossing (either direction). Always significant.
-            bool priHeat = pri.Hi >= cfg.HeatAdvisoryDegF;
-            bool curHeat = cur.Hi >= cfg.HeatAdvisoryDegF;
-            if (priHeat != curHeat)
-                fired.Add($"heat-cross({day:yyyy-MM-dd})");
-
-            if (fired.Count > before)
-                stats.Note(day);
+            // Peak sustained wind: the window block is the one holding the new peak, or the published peak when it fell.
+            if (DayCriteria.Wind(d, cfg, nowUtc) is { } w)
+            {
+                string at = $"@T{w.Tier + 1}({w.WindowStartUtc:MM-dd HH}Z)";
+                if (w.AdvisoryAdd)
+                    fired.Add($"wind-advisory-add{at}");
+                if (w.AdvisoryRemove)
+                    fired.Add($"wind-advisory-remove{at}");
+                if (w.Delta)
+                    fired.Add($"wind-delta{at}");
+                if (w.Any)
+                    stats.Note(day);
+            }
         }
     }
 
-    // ── Per-block events: precip occurrence/type, severe, wind advisory + magnitude ──
+    // ── Per-block events: precip occurrence/type, severe ──
     private static void EvaluatePerBlockEvents(
         ForecastSnapshotBody prior, ForecastSnapshotBody current,
         SignificanceGateConfig cfg, DateTime nowUtc, DateTime horizonEnd, TimeZoneInfo tz,
@@ -178,77 +171,23 @@ internal static class SignificanceGate
             if (!priorByStart.TryGetValue(cur.StartUtc, out var pri))
                 continue; // rolled-in block — not news by itself
 
-            int tier = TierOf(cur.StartUtc, nowUtc);
+            int tier = ChangeHorizons.TierOf(cur.StartUtc, nowUtc);
             if (tier < 0)
                 continue;
             string at = $"@T{tier + 1}({cur.StartUtc:MM-dd HH}Z)";
             int before = fired.Count;
 
-            bool priWet = pri.PrecipExpectation != PrecipExpectation.None;
-            bool curWet = cur.PrecipExpectation != PrecipExpectation.None;
-
-            // Precip occurrence ADD (dry→wet): all tiers.
-            if (!priWet && curWet)
-                fired.Add($"precip-add{at}");
-            // Precip occurrence REMOVE (wet→dry): near-term only (T1).
-            if (priWet && !curWet && tier == 0)
-                fired.Add($"precip-remove{at}");
-
-            // Precip type ADD frozen/freezing (snow, sleet, ZR): safety floor, all tiers.
-            if (!IsFrozen(pri) && IsFrozen(cur))
-                fired.Add($"frozen-add{at}");
-            // Precip type downgrade frozen→liquid rain: T1–T2.
-            if (IsFrozen(pri) && cur.PrecipPhenomenon == PrecipPhenomenon.Rain && tier <= 1)
-                fired.Add($"frozen-downgrade{at}");
-
-            // Severe ADD (onset): safety floor, all tiers.
-            if (!pri.SevereFlag && cur.SevereFlag)
+            // The criteria are shared with DeterministicChangeDetector (BlockCriteria, WX-506).
+            foreach (var criterion in BlockCriteria.Fired(pri, cur, tier))
             {
-                fired.Add($"severe-add{at}");
-                stats.NoteSevereEntered();
+                fired.Add($"{criterion}{at}");
+                if (criterion == "severe-add")
+                    stats.NoteSevereEntered();
             }
-            // Severe REMOVE (cleared): T1–T3 (T4 is info-only, does not gate).
-            if (pri.SevereFlag && !cur.SevereFlag && tier <= 2)
-                fired.Add($"severe-remove{at}");
-
-            // Wind reaches advisory (ADD): always significant.
-            if (pri.WindKt.Max < cfg.WindAdvisoryKt && cur.WindKt.Max >= cfg.WindAdvisoryKt)
-                fired.Add($"wind-advisory-add{at}");
-            // Wind drops below advisory (REMOVE): T1–T2.
-            if (pri.WindKt.Max >= cfg.WindAdvisoryKt && cur.WindKt.Max < cfg.WindAdvisoryKt && tier <= 1)
-                fired.Add($"wind-advisory-remove{at}");
-            // Sustained-wind magnitude change: per-tier threshold, all tiers.
-            if (Math.Abs(cur.WindKt.Max - pri.WindKt.Max) >= PerTier(cfg.WindDeltaKt, tier))
-                fired.Add($"wind-delta{at}");
 
             if (fired.Count > before)
                 stats.Note(DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(cur.StartUtc, DateTimeKind.Utc), tz)));
         }
-    }
-
-    /// <summary>A block is frozen/freezing when snow, freezing precipitation, or a rain/snow mix.  Mixed counts as frozen — it carries snow/ice and is de-icing-relevant — so a Rain→Mixed transition trips the safety-floor frozen ADD; only a move to plain Rain is treated as a frozen→liquid downgrade.</summary>
-    private static bool IsFrozen(ForecastSnapshotBlock b) =>
-        b.PrecipPhenomenon is PrecipPhenomenon.Snow or PrecipPhenomenon.FreezingPrecip or PrecipPhenomenon.Mixed;
-
-    /// <summary>Per-local-day high/low in °F across in-horizon blocks, with the day's earliest block start (for tiering).</summary>
-    private static Dictionary<DateOnly, (double Hi, double Lo, DateTime FirstStartUtc)> DailyHiLoDegF(
-        ForecastSnapshotBody body, DateTime nowUtc, DateTime horizonEnd, TimeZoneInfo tz)
-    {
-        var days = new Dictionary<DateOnly, (double Hi, double Lo, DateTime FirstStartUtc)>();
-        foreach (var b in body.Blocks)
-        {
-            if (!InHorizon(b.StartUtc, nowUtc, horizonEnd))
-                continue;
-            var local = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(b.StartUtc, DateTimeKind.Utc), tz);
-            var day = DateOnly.FromDateTime(local);
-            double hi = CtoF(b.TemperatureCelsius.Max);
-            double lo = CtoF(b.TemperatureCelsius.Min);
-            if (days.TryGetValue(day, out var cur))
-                days[day] = (Math.Max(cur.Hi, hi), Math.Min(cur.Lo, lo), b.StartUtc < cur.FirstStartUtc ? b.StartUtc : cur.FirstStartUtc);
-            else
-                days[day] = (hi, lo, b.StartUtc);
-        }
-        return days;
     }
 
     /// <summary>True when the body has at least one block within the 0–120h horizon.</summary>
@@ -272,24 +211,9 @@ internal static class SignificanceGate
         return false;
     }
 
-    /// <summary>Per-tier threshold with defensive clamping: a misconfigured short array reuses its last element for higher tiers; an empty array yields 0 (so any change is significant — the gate fails toward calling Claude, never toward suppressing).</summary>
-    private static int PerTier(int[] arr, int tier) =>
-        arr is { Length: > 0 } ? arr[Math.Min(tier, arr.Length - 1)] : 0;
-
     /// <summary>A block is in the gate's horizon when it has not fully elapsed and starts before the 120h edge.</summary>
     private static bool InHorizon(DateTime startUtc, DateTime nowUtc, DateTime horizonEnd) =>
         startUtc.AddHours(6) > nowUtc && startUtc < horizonEnd;
-
-    /// <summary>Horizon tier (0-based) of a block start, or -1 if beyond the last <see cref="WxThresholds.TierUpperBoundHours"/> bound.  A block already in progress (start before now) is tier 0.</summary>
-    private static int TierOf(DateTime startUtc, DateTime nowUtc)
-    {
-        double hours = (startUtc - nowUtc).TotalHours;
-        if (hours < 0) return 0;
-        for (int t = 0; t < WxThresholds.TierUpperBoundHours.Length; t++)
-            if (hours < WxThresholds.TierUpperBoundHours[t])
-                return t;
-        return -1;
-    }
 
     private static double CtoF(double celsius) => celsius * 9.0 / 5.0 + 32.0;
 }

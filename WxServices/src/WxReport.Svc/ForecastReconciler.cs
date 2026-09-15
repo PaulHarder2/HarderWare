@@ -77,6 +77,17 @@ public abstract record ReconcileResult
     public sealed record Degraded(ForecastSnapshotBody FinalSnapshot, TokenUsage Tokens, string Reason) : ReconcileResult;
 }
 
+/// <summary>WX-506: the result of <see cref="ForecastReconciler.ReplayChangeBandAsync"/>.</summary>
+/// <param name="Changes">The change set the detector computed.</param>
+/// <param name="UserMessage">The user message the band call received (the computed facts and labels).</param>
+/// <param name="ChangeSummary">The band per language; a null value means the call fell back to the deterministic band.</param>
+/// <param name="Tokens">Tokens spent on the band call(s).</param>
+public sealed record ChangeBandReplay(
+    IReadOnlyList<ReportChange> Changes,
+    string UserMessage,
+    IReadOnlyDictionary<string, string?> ChangeSummary,
+    TokenUsage Tokens);
+
 /// <summary>
 /// Orchestrates the forecast reconciliation pass, once per locality:
 /// builds Claude's reconciliation system prompt and user message from
@@ -327,7 +338,7 @@ public sealed class ForecastReconciler
                 //   Failure   the snapshot itself never parsed, or the field message stands
                 //   Degraded  the snapshot parsed but the narrative could not be made
                 //             self-consistent — a hazard report goes out without prose
-                //   Success   a PROSE fault confined to one section: DropProseSection removes
+                //   Success   a PROSE fault in the closing: WithClosingFallback replaces
                 //             it, the survivor re-validates, and the rest is sent
                 //   NotNews   a content-less narrative on a SKIPPABLE cycle — no degrade is
                 //             involved; the same fault on a guaranteed send returns Failure
@@ -341,7 +352,10 @@ public sealed class ForecastReconciler
                 lastParsedSnapshot = finalSnapshot;
 
                 var structuredReportJson = RequireProperty(input, "structured_report").GetRawText();
-                var structuredReport = StructuredReportBody.Deserialize(structuredReportJson);
+                // WX-506: the band is not this call's to write — WriteChangeSummaryAsync writes it from the
+                // computed change set below. The tool schema no longer offers changeSummary; any the model
+                // sends anyway is discarded here, so nothing it reasoned out about "the prior" can reach the band.
+                var structuredReport = WithoutChangeSummary(StructuredReportBody.Deserialize(structuredReportJson));
                 lastParsedReport = structuredReport;
                 ValidateNarrativeContract(structuredReport, narrativeLanguages);
                 ValidateProseHygiene(structuredReport, tz);
@@ -369,7 +383,10 @@ public sealed class ForecastReconciler
                 if (IsDegenerateNarrative(structuredReport, narrativeLanguages))
                     throw new DegenerateNarrativeException(reasoningTrace);
 
-                return new ReconcileResult.Success(finalSnapshot, structuredReport, reasoningTrace, tokens);
+                var (banded, bandTokens) = await WriteChangeSummaryAsync(
+                    structuredReport, finalSnapshot, priorBody, narrativeLanguages, vocabularyGlossary,
+                    reportKind, nowUtc, tz, tokens, ct);
+                return new ReconcileResult.Success(finalSnapshot, banded, reasoningTrace, bandTokens);
             }
             catch (Exception ex) when (ex is MissingToolUseFieldException or JsonException or InvalidOperationException or DegenerateNarrativeException)
             {
@@ -414,7 +431,7 @@ public sealed class ForecastReconciler
                     var feedback = ex is NarrativeProseException
                         ? $"Your previous report's narrative was rejected ({ex.Message}). Keep your final_snapshot "
                           + "EXACTLY as you submitted it — do not change any block. Re-author ONLY the narrative prose "
-                          + "(the changeSummary and/or the closing) to fix this, then resubmit via the tool."
+                          + "(the closing) to fix this, then resubmit via the tool."
                         : $"Your previous {apiResult.ToolName} was rejected ({ex.Message}). Fix only that and resubmit via the tool.";
                     corrections.Add(new ReconciliationCorrection(
                         apiResult.ToolUseId, apiResult.ToolName, apiResult.ToolUseInput, feedback));
@@ -460,7 +477,7 @@ public sealed class ForecastReconciler
                 if (ex is NarrativeProseException npe && lastParsedReport is not null && lastParsedSnapshot is not null)
                 {
                     var changes = DeterministicChangeDetector.Detect(priorBody, lastParsedSnapshot, significanceCfg, nowUtc, tz);
-                    var cleaned = DropProseSection(lastParsedReport, npe.Section) with { Changes = changes };
+                    var cleaned = WithClosingFallback(lastParsedReport) with { Changes = changes };
                     try
                     {
                         // Re-validate the cleaned report's SURVIVING content: the first prose
@@ -480,7 +497,10 @@ public sealed class ForecastReconciler
                         return new ReconcileResult.Degraded(lastParsedSnapshot, tokens, cleanEx.Message);
                     }
                     Logger.Error($"Reconciliation could not make the {npe.Section} prose self-consistent after {maxAttempts} attempts ({ex.Message}); dropping that section only and sending the rest (WX-189 independent-section degrade).");
-                    return new ReconcileResult.Success(lastParsedSnapshot, cleaned, lastReasoningTrace ?? string.Empty, tokens);
+                    var (bandedClean, bandTokens) = await WriteChangeSummaryAsync(
+                        cleaned, lastParsedSnapshot, priorBody, narrativeLanguages, vocabularyGlossary,
+                        reportKind, nowUtc, tz, tokens, ct);
+                    return new ReconcileResult.Success(lastParsedSnapshot, bandedClean, lastReasoningTrace ?? string.Empty, bandTokens);
                 }
 
                 // If the snapshot itself parsed cleanly and only the narrative
@@ -496,6 +516,234 @@ public sealed class ForecastReconciler
                 return new ReconcileResult.Failure($"Schema validation failed (after {maxAttempts} attempts): {ex.Message}");
             }
         }
+    }
+
+    // ── the change band (WX-506) ─────────────────────────────────────
+
+    /// <summary>
+    /// WX-506: runs the production change-band path on an already-reconciled pair of snapshots, for the
+    /// TranslationQa dev tool's <c>--replay-band</c> mode — so a band a recipient received can be re-written from
+    /// the same two stored snapshots and compared. Detects the changes exactly as a cycle does, builds the same
+    /// facts, and calls <see cref="WriteChangeSummaryAsync"/> as an unscheduled update. Makes no reconciliation
+    /// call and persists nothing.
+    /// </summary>
+    /// <param name="prior">The forecast last sent, or <see langword="null"/> for a first send.</param>
+    /// <param name="final">The reconciled forecast the band is for.</param>
+    /// <param name="narrativeLanguages">ISO 639-1 codes to write the band in.</param>
+    /// <param name="tz">Locality timezone.</param>
+    /// <param name="significanceCfg">Significance thresholds for the change detector.</param>
+    /// <param name="nowUtc">The cycle instant the detector measures horizons from.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The computed changes, the facts the band call received, the band per language (null values when the call fell back), and the tokens spent.</returns>
+    public async Task<ChangeBandReplay> ReplayChangeBandAsync(
+        ForecastSnapshotBody? prior, ForecastSnapshotBody final, IReadOnlyList<string> narrativeLanguages,
+        TimeZoneInfo tz, SignificanceGateConfig significanceCfg, DateTime nowUtc, CancellationToken ct = default)
+    {
+        var facts = BuildChangeBandFacts(prior, final, narrativeLanguages, tz, significanceCfg, nowUtc);
+        if (prior is not null && prior.SchemaVersion != ForecastSnapshotBody.SchemaVersionCurrent)
+            prior = null;
+        var report = new StructuredReportBody
+        {
+            Changes = facts.Changes,
+            Narrative = narrativeLanguages.ToDictionary(
+                l => l, _ => new NarrativeSections { Closing = "(replay)" }, StringComparer.Ordinal),
+        };
+        var (banded, tokens) = await WriteChangeSummaryAsync(
+            report, final, prior, narrativeLanguages, NarrativeGlossary.Build(_templates, narrativeLanguages),
+            ReportKind.Unscheduled, nowUtc, tz, new TokenUsage(0, 0, 0, 0), ct);
+        return facts with
+        {
+            ChangeSummary = banded.Narrative.ToDictionary(kv => kv.Key, kv => kv.Value.ChangeSummary, StringComparer.Ordinal),
+            Tokens = tokens,
+        };
+    }
+
+    /// <summary>
+    /// WX-506: the change set and the band call's user message for a stored pair of snapshots, with no model call —
+    /// what a band call on this pair would be given. The production watch (docs/test-procedures/WX-506.md) judges
+    /// each shipped band against this, since the band's prior → now values exist only in the facts.
+    /// </summary>
+    /// <returns>A <see cref="ChangeBandReplay"/> with an empty <see cref="ChangeBandReplay.ChangeSummary"/> and zero tokens.</returns>
+    public ChangeBandReplay BuildChangeBandFacts(
+        ForecastSnapshotBody? prior, ForecastSnapshotBody final, IReadOnlyList<string> narrativeLanguages,
+        TimeZoneInfo tz, SignificanceGateConfig significanceCfg, DateTime nowUtc)
+    {
+        // Mirror ReconcileAsync: a prior from an older schema is dropped, so this computes what production did.
+        if (prior is not null && prior.SchemaVersion != ForecastSnapshotBody.SchemaVersionCurrent)
+            prior = null;
+        var changes = DeterministicChangeDetector.Detect(prior, final, significanceCfg, nowUtc, tz);
+        return new ChangeBandReplay(
+            changes,
+            changes.Count == 0 ? "" : BuildChangeSummaryUserMessage(changes, prior, final, narrativeLanguages, _templates.CultureFor, tz, nowUtc),
+            new Dictionary<string, string?>(StringComparer.Ordinal),
+            new TokenUsage(0, 0, 0, 0));
+    }
+
+    // Attempts for the change-band call: one retry carrying the rejection back, then the deterministic
+    // fallback band. The band is never worth blocking a send over.
+    private const int ChangeSummaryMaxAttempts = 2;
+
+    /// <summary>
+    /// WX-506: writes the "Why this update" band in a second call, from the COMPUTED change set, when a band
+    /// will show. Returns <paramref name="report"/> unchanged (every changeSummary null) when there are no
+    /// changes, when a scheduled/diagnostic band would be suppressed anyway, or when the call cannot produce a
+    /// valid band after <see cref="ChangeSummaryMaxAttempts"/> — the renderer then shows the deterministic
+    /// fallback band built from <see cref="StructuredReportBody.Changes"/>. Never fails the reconciliation.
+    /// </summary>
+    private async Task<(StructuredReportBody Report, TokenUsage Tokens)> WriteChangeSummaryAsync(
+        StructuredReportBody report, ForecastSnapshotBody finalSnapshot, ForecastSnapshotBody? priorBody,
+        IReadOnlyList<string> narrativeLanguages, string vocabularyGlossary, ReportKind reportKind,
+        DateTime nowUtc, TimeZoneInfo tz, TokenUsage tokens, CancellationToken ct)
+    {
+        if (report.Changes.Count == 0)
+            return (report, tokens);
+        // The same predicate ReportWorker strips the band with, so a band the send would drop is never paid for.
+        if (ReportWorker.SuppressesScheduledChangeBand(reportKind, report, finalSnapshot, priorBody, nowUtc, tz))
+            return (report, tokens);
+
+        // Holds the running total, so a band call already billed still counts if a later step throws.
+        var spent = new TokenTally(tokens);
+        try
+        {
+            return (await WriteChangeSummaryCoreAsync(report, finalSnapshot, priorBody, narrativeLanguages, vocabularyGlossary, tz, nowUtc, spent, ct), spent.Value);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // This runs inside the reconciliation call's retry block. Anything escaping here would be read as a
+            // fault in THAT call's output and re-run the whole reconciliation, so the band's own failure stops here.
+            Logger.Error($"Change-band step threw ({ex.GetType().Name}: {ex.Message}); falling back to the deterministic change band (WX-506).");
+            return (report, spent.Value);
+        }
+    }
+
+    private async Task<StructuredReportBody> WriteChangeSummaryCoreAsync(
+        StructuredReportBody report, ForecastSnapshotBody finalSnapshot, ForecastSnapshotBody? priorBody,
+        IReadOnlyList<string> narrativeLanguages, string vocabularyGlossary, TimeZoneInfo tz, DateTime nowUtc, TokenTally spent,
+        CancellationToken ct)
+    {
+        var systemPrompt = BuildChangeSummarySystemPrompt(narrativeLanguages, vocabularyGlossary);
+        var userMessage = BuildChangeSummaryUserMessage(
+            report.Changes, priorBody, finalSnapshot, narrativeLanguages, _templates.CultureFor, tz, nowUtc);
+        var corrections = new List<ReconciliationCorrection>();
+
+        for (int attempt = 1; ; attempt++)
+        {
+            var api = await _claude.InvokeChangeSummaryAsync(systemPrompt, userMessage, narrativeLanguages, corrections, ct);
+            if (api is null)
+            {
+                Logger.Warn("Change-band call failed; the report falls back to the deterministic change band (WX-506).");
+                return report;
+            }
+
+            spent.Value = new TokenUsage(
+                spent.Value.InputTokens + api.Tokens.InputTokens,
+                spent.Value.OutputTokens + api.Tokens.OutputTokens,
+                spent.Value.CacheReadInputTokens + api.Tokens.CacheReadInputTokens,
+                spent.Value.CacheCreationInputTokens + api.Tokens.CacheCreationInputTokens);
+
+            if (api.StopReason == "max_tokens")
+            {
+                Logger.Warn("Change-band call was truncated at its output cap; falling back to the deterministic change band (WX-506).");
+                return report;
+            }
+
+            try
+            {
+                var banded = WithChangeSummary(report, api.ToolUseInput, narrativeLanguages);
+                // Serialize runs the body's intrinsic validation: token grammar, and no {chN} anchors.
+                banded.Serialize();
+                foreach (var (lang, sections) in banded.Narrative)
+                    CheckProse(lang, NarrativeSection.ChangeSummary, sections.ChangeSummary, tz);
+                // The production-watch fingerprint (docs/test-procedures/WX-506.md) — keep the wording in step.
+                Logger.Info($"Change band written by the band call from {report.Changes.Count} computed change(s) (attempt {attempt}/{ChangeSummaryMaxAttempts}; WX-506).");
+                return banded;
+            }
+            catch (Exception ex) when (ex is JsonException or MissingToolUseFieldException)
+            {
+                if (attempt < ChangeSummaryMaxAttempts)
+                {
+                    corrections.Add(new ReconciliationCorrection(
+                        api.ToolUseId, api.ToolName, api.ToolUseInput,
+                        $"Your previous change band was rejected ({ex.Message}). Fix only that and resubmit via the tool."));
+                    Logger.Warn($"Change-band output failed validation (attempt {attempt}/{ChangeSummaryMaxAttempts}): {ex.Message}; retrying with feedback.");
+                    continue;
+                }
+                Logger.Error($"Change-band output failed validation after {ChangeSummaryMaxAttempts} attempts ({ex.Message}); falling back to the deterministic change band (WX-506).");
+                return report;
+            }
+        }
+    }
+
+    // The band step's running token total, shared by WriteChangeSummaryAsync and its core so a billed call still
+    // counts when a later step throws.
+    private sealed class TokenTally(TokenUsage value)
+    {
+        public TokenUsage Value { get; set; } = value;
+    }
+
+    // A copy of the report with every language's changeSummary cleared, keeping each closing.
+    private static StructuredReportBody WithoutChangeSummary(StructuredReportBody report) =>
+        report.Narrative.Values.All(n => n.ChangeSummary is null)
+            ? report
+            : report with
+            {
+                Narrative = report.Narrative.ToDictionary(
+                    kv => kv.Key, kv => kv.Value with { ChangeSummary = null }, StringComparer.Ordinal),
+            };
+
+    // Reads submit_change_summary's input onto the report: exactly the requested languages, each non-blank.
+    // A missing, blank, extra or non-string entry throws, so it routes through the band call's retry.
+    private static StructuredReportBody WithChangeSummary(
+        StructuredReportBody report, JsonElement input, IReadOnlyList<string> requestedLanguages)
+    {
+        var summaries = RequireProperty(input, "changeSummary");
+        if (summaries.ValueKind != JsonValueKind.Object)
+            throw new JsonException("changeSummary must be an object keyed by language code.");
+
+        foreach (var entry in summaries.EnumerateObject())
+            if (!requestedLanguages.Contains(entry.Name, StringComparer.Ordinal))
+                throw new JsonException($"changeSummary contains unrequested language '{entry.Name}'.");
+
+        var narrative = new Dictionary<string, NarrativeSections>(report.Narrative.Count, StringComparer.Ordinal);
+        foreach (var (lang, sections) in report.Narrative)
+        {
+            if (!summaries.TryGetProperty(lang, out var value)
+                || value.ValueKind != JsonValueKind.String
+                || string.IsNullOrWhiteSpace(value.GetString()))
+                throw new JsonException($"changeSummary is missing or blank for requested language '{lang}'.");
+            narrative[lang] = sections with { ChangeSummary = value.GetString() };
+        }
+        return report with { Narrative = narrative };
+    }
+
+    // The change-band call's per-cycle system block: the language set and the approved-vocabulary glossary.
+    internal static string BuildChangeSummarySystemPrompt(IReadOnlyList<string> narrativeLanguages, string vocabularyGlossary) =>
+        "The changeSummary object must contain exactly these language keys, and no others: "
+        + string.Join(", ", narrativeLanguages.Select(l => $"'{l}'"))
+        + ". "
+        + (string.IsNullOrEmpty(vocabularyGlossary) ? "" : "\n\n" + vocabularyGlossary + "\n");
+
+    // The change-band call's user message: ONLY the computed changes and the labels needed to name them.
+    // Deliberately no provisional snapshot, TAF or observation — see ChangeSummaryFacts.
+    internal static string BuildChangeSummaryUserMessage(
+        IReadOnlyList<ReportChange> changes, ForecastSnapshotBody? priorBody, ForecastSnapshotBody finalSnapshot,
+        IReadOnlyList<string> narrativeLanguages, Func<string, CultureInfo> cultureFor, TimeZoneInfo tz, DateTime nowUtc)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("Write the \"Why this update\" band for this locality and submit it via the submit_change_summary tool.");
+        sb.AppendLine();
+        sb.Append(ChangeSummaryFacts.Build(changes, priorBody, finalSnapshot, tz, nowUtc));
+        sb.AppendLine();
+
+        var dayNames = DayNameReference.Build(finalSnapshot, narrativeLanguages, cultureFor, tz);
+        if (dayNames.Length > 0)
+        {
+            sb.Append(dayNames);
+            sb.AppendLine();
+        }
+
+        sb.Append(BlockLocalLabels.Build(finalSnapshot, tz));
+        return sb.ToString();
     }
 
     // ── tool_use field accessors ─────────────────────────────────────
@@ -820,33 +1068,26 @@ public sealed class ForecastReconciler
     // precipitation register, the retired likelihood word, and day-part/token agreement.
     // They all fail closed via
     // JsonException so they route through the same retry-with-feedback → degrade
-    // path as every other contract check. Applied to BOTH narrative sections
-    // (changeSummary and closing); a leak or a contradiction is just as wrong in
-    // the closing wrap-up as in the change band.
+    // path as every other contract check. This pass covers the closing, the only prose the
+    // reconciliation call writes; the change band gets the same CheckProse in
+    // WriteChangeSummaryAsync (WX-506).
     // Instance: CheckProse now reads the language's validator day-part words from the
     // injected _templates store, so this and CheckProse are no longer static.
     private void ValidateProseHygiene(StructuredReportBody report, TimeZoneInfo tz)
     {
         foreach (var (lang, sections) in report.Narrative)
-        {
-            CheckProse(lang, NarrativeSection.ChangeSummary, sections.ChangeSummary, tz);
             CheckProse(lang, NarrativeSection.Closing, sections.Closing, tz);
-        }
     }
 
-    // Returns a copy of the report with one prose section dropped across EVERY
-    // language — changeSummary → null (the renderer then shows the deterministic band
-    // fallback built from the computed changes), closing → a short, snapshot-safe
-    // localized line (the schema requires a non-blank closing). Used by the
-    // independent-section degrade so a fault in one section never takes the whole
-    // narrative down. All languages are cleaned uniformly.
-    private StructuredReportBody DropProseSection(StructuredReportBody report, NarrativeSection section)
+    // Returns a copy of the report with the closing replaced, in EVERY language, by a short,
+    // snapshot-safe localized line (the schema requires a non-blank closing). Used by the
+    // independent-section degrade so a closing fault never takes the whole report down. (The
+    // change band has its own fallback inside WriteChangeSummaryAsync — WX-506.)
+    private StructuredReportBody WithClosingFallback(StructuredReportBody report)
     {
         var narrative = new Dictionary<string, NarrativeSections>(report.Narrative.Count, StringComparer.Ordinal);
         foreach (var (lang, sections) in report.Narrative)
-            narrative[lang] = section == NarrativeSection.ChangeSummary
-                ? sections with { ChangeSummary = null }
-                : sections with { Closing = ClosingFallbackFor(lang, sections.Closing) };
+            narrative[lang] = sections with { Closing = ClosingFallbackFor(lang, sections.Closing) };
         return report with { Narrative = narrative };
     }
 
@@ -1323,11 +1564,10 @@ public sealed class ForecastReconciler
             !IsStandaloneSevere(b) && IsStandaloneSevere(PriorBlockAt(prior, b.StartUtc)));
 
     // The fall-safe, carried into the structured-report world: true
-    // when any requested language's narrative is near-blank. The narrative now
-    // carries only the two judgment sections — the optional changeSummary band
-    // and the required closing — so a genuine report's visible prose is far
-    // shorter than the old whole-email_body measure, but a degenerate one (empty
-    // closing, anchors only) still strips to ~0. Distinct from the schema floor:
+    // when any requested language's closing is near-blank. The closing is the only prose the
+    // reconciliation call writes (WX-506 moved the band to its own call), so a genuine report's
+    // visible prose is far shorter than the old whole-email_body measure, but a degenerate one
+    // (empty or punctuation-only) still strips to ~0. Distinct from the schema floor:
     // a well-formed-but-thin narrative is Claude effectively skipping, so on an
     // allowSkip cycle this yields a skip-with-trace rather than a hard Failure.
     private static bool IsDegenerateNarrative(
@@ -1337,19 +1577,14 @@ public sealed class ForecastReconciler
         {
             if (!report.Narrative.TryGetValue(lang, out var sections))
                 continue;  // missing-language is ValidateNarrativeContract's job, not this guard's
-            int visible = ReportTokens.VisibleLength(sections.Closing)
-                + ReportTokens.VisibleLength(sections.ChangeSummary ?? "");
-            if (visible < MinVisibleNarrativeChars)
+            if (ReportTokens.VisibleLength(sections.Closing) < MinVisibleNarrativeChars)
                 return true;
         }
         return false;
     }
 
-    // Smallest combined visible narrative length (changeSummary + closing)
-    // a real report can carry per language. Recalibrated down from the original
-    // whole-email_body floor of 200: the narrative is now just the two judgment
-    // sections, and on a steady scheduled send changeSummary is null, leaving only
-    // a one-or-two-sentence closing. A real closing ("Quiet weather; no changes
+    // Smallest visible closing length a real report can carry per language. Recalibrated down
+    // from the original whole-email_body floor of 200 to fit a one-or-two-sentence closing. A real closing ("Quiet weather; no changes
     // expected.") clears 30 comfortably; a near-blank one (empty/punctuation-only,
     // which the schema's non-blank check alone would let through) strips to ~0.
     private const int MinVisibleNarrativeChars = 30;
@@ -1374,39 +1609,22 @@ public sealed class ForecastReconciler
     // skipping is permitted — so it is deliberately small. The HTML layout,
     // units, and per-day grid rules that used to live here are gone: the
     // StructuredReportRenderer builds each recipient's email deterministically
-    // from the structured report. Claude writes only the two judgment sections
-    // (changeSummary + closing); the content rules below scope the prose those
-    // sections may carry.
+    // from the structured report. This call writes only the closing; the content rules below scope
+    // that prose. (The change band has its own call — WX-506.)
     // internal (not private) so ReconcilerSystemPromptTests can assert the vocabulary glossary
     // actually reaches the assembled prompt — the no-op-regression guard.
     internal static string BuildReconcilerSystemPrompt(
         IReadOnlyList<string> narrativeLanguages,
         ReportKind reportKind, bool allowSkip, string vocabularyGlossary)
     {
+        // WX-506: the change band is written by a separate call from the computed change set, so this block no
+        // longer instructs on it — only on which kind of report the closing belongs to.
         var changeAlertInstruction = reportKind switch
         {
             ReportKind.Unscheduled =>
-                "This is an unscheduled update — conditions have changed since the last report. "
-                + "For the changeSummary, write one or two sentences summarising "
-                + "what has changed (e.g. a forecast risk that has appeared, or a significant temperature shift). ",
-            // A scheduled report's "What's changed" band rides ONLY a newly-appearing
-            // near-term severe hazard; everything else belongs in the grid + closing, not a band.
-            // the Diagnostic (startup verification) kind gets the SAME suppression — it
-            // previously fell through to the empty default below, the one report kind that never
-            // received this "an empty changes array is the correct answer" coaching, so against a
-            // stale prior it filled the band and the resulting phantom degraded the send (and a
-            // diagnostic degrade is a hard abort, suppressing the deploy verification entirely).
-            ReportKind.Scheduled or ReportKind.Diagnostic =>
-                (reportKind == ReportKind.Diagnostic
-                    ? "This is a diagnostic (startup verification) report. "
-                    : "This is a scheduled report. ")
-                + "Show a \"What's changed\" band ONLY when a NEW severe hazard "
-                + "appears in the near term — a block that was not previously severe becoming severe within "
-                + "the next three local days (today through the day after tomorrow). In that case emit the "
-                + "change(s) and a one- or two-sentence changeSummary naming the hazard and its timing. For "
-                + "every other case — ordinary or non-severe changes, or nothing material — emit an EMPTY "
-                + "changes array and a null changeSummary; that context belongs in the per-day grid and the "
-                + "closing, not a change band. ",
+                "This is an unscheduled update — conditions have changed since the last report. ",
+            ReportKind.Diagnostic => "This is a diagnostic (startup verification) report. ",
+            ReportKind.Scheduled => "This is a scheduled report. ",
             _ => "",
         };
 
@@ -1433,7 +1651,7 @@ public sealed class ForecastReconciler
             + "structured report for a general (non-specialist) audience. A deterministic renderer turns "
             + "your structured report into each recipient's email — you do not produce HTML, and you write "
             + "no current-conditions table or per-day forecast grid (those are rendered from the data). "
-            + "Your prose is only the two judgment sections: the changeSummary band and the closing. "
+            + "Your prose is only the closing; the \"Why this update\" band is written separately from the computed changes. "
             + "Narrative content rules (apply to that prose): "
             + "use only the data provided — never invent or estimate conditions. "
             + "Never show raw METAR codes, numeric precipitation rates, or CAPE values to the reader. "

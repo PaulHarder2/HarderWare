@@ -101,13 +101,18 @@ public sealed class ClaudeClient
     // rolled a FRESH phantom instead of converging. WX-189 moved change DETECTION out
     // of the LLM — changes[] is now computed deterministically from the snapshot — so
     // structural correctness no longer rides on sampling, and the WX-165 payoff applies:
-    // raise the temperature back up so the changeSummary/closing prose breathes
+    // raise the temperature back up so the closing and change-band prose breathe
     // (0.25 flattens it toward repetitive phrasing across localities and days).
     // Deliberately a MODERATE 0.5, not the old 1.0 default: final_snapshot is still
     // Claude's, and the computed change set derives from it, so we still want a
     // reasonably stable reconciled snapshot — 0.5 frees the prose without letting the
     // snapshot wander. Final value calibrated post-deploy (WX-189 §13).
     private const double ReconcilerTemperature = 0.5;
+
+    // WX-506 change-band call: one or two sentences per language. The cap is generous against a truncation
+    // (which fails the call and falls back to the deterministic band) — billing is per token generated.
+    private const int ChangeSummaryBaseOutputTokens = 1024;
+    private const int ChangeSummaryPerLanguageOutputTokens = 512;
 
     // WX-172 template-generation call. Translation is faithful, not creative — a low
     // temperature keeps it close to the sense the context fixes rather than paraphrasing.
@@ -234,6 +239,54 @@ public sealed class ClaudeClient
             ? new HashSet<string>(StringComparer.Ordinal) { "submit_reconciled_report", "skip_send" }
             : new HashSet<string>(StringComparer.Ordinal) { "submit_reconciled_report" };
         return await SendForToolUseAsync(request, permittedTools, ct);
+    }
+
+    /// <summary>
+    /// WX-506: invokes Claude to write the "Why this update" change band from the computed change set.
+    /// Runs after <see cref="InvokeReconciliationAsync"/> succeeds and the deterministic change detector has
+    /// run, and only when a band will show. The request carries the persona, the cached
+    /// <see cref="ReconcilerPrompts.ChangeSummaryGuidanceText"/>, a small per-cycle block (languages +
+    /// glossary), and a user message holding ONLY the computed changes and the local labels — no provisional,
+    /// TAF or observation — so there is no second forecast to mistake for the prior. Forces the
+    /// <c>submit_change_summary</c> tool.
+    /// </summary>
+    /// <param name="perCycleSystemPrompt">The uncached per-cycle block: the requested languages and the approved-vocabulary glossary.</param>
+    /// <param name="userMessageText">The computed changes, block labels and day-name reference.</param>
+    /// <param name="narrativeLanguages">ISO 639-1 codes the band must be written in; the tool's required keys.</param>
+    /// <param name="corrections">A rejected prior attempt replayed as tool_use + tool_result; <see langword="null"/> on the first attempt.</param>
+    /// <param name="ct">Cancellation token propagated to the HTTP request.</param>
+    /// <returns>The tool's input plus token usage on success; <see langword="null"/> on transport, schema, or parse failure. A host-shutdown cancellation throws <see cref="OperationCanceledException"/>.</returns>
+    /// <sideeffects>Makes an HTTP POST request to the Anthropic Messages API. Writes error log entries on failure.</sideeffects>
+    public async Task<ClaudeReconciliationResult?> InvokeChangeSummaryAsync(
+        string perCycleSystemPrompt,
+        string userMessageText,
+        IReadOnlyList<string> narrativeLanguages,
+        IReadOnlyList<ReconciliationCorrection>? corrections = null,
+        CancellationToken ct = default)
+    {
+        var request = new
+        {
+            model = _model,
+            max_tokens = ChangeSummaryBaseOutputTokens + ChangeSummaryPerLanguageOutputTokens * narrativeLanguages.Count,
+            temperature = ReconcilerTemperature,   // same prose register as the closing
+            system = new object[]
+            {
+                new { type = "text", text = _personaPrefix },
+                new
+                {
+                    type = "text",
+                    text = ReconcilerPrompts.ChangeSummaryGuidanceText,
+                    cache_control = new { type = "ephemeral" },
+                },
+                new { type = "text", text = perCycleSystemPrompt },
+            },
+            tools = new[] { ReconcilerPrompts.BuildSubmitChangeSummaryTool(narrativeLanguages) },
+            tool_choice = new { type = "tool", name = "submit_change_summary" },
+            messages = BuildMessages(userMessageText, corrections),
+        };
+
+        return await SendForToolUseAsync(
+            request, new HashSet<string>(StringComparer.Ordinal) { "submit_change_summary" }, ct);
     }
 
     /// <summary>

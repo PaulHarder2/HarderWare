@@ -1,4 +1,4 @@
-# Structured report body schema (v3)
+# Structured report body schema (v5)
 
 **Schema version:** 3 (lockstep with the forecast snapshot body — see Versioning)
 **C# source of truth:** `MetarParser.Data.Entities.StructuredReportBody`
@@ -6,15 +6,15 @@
 
 ## Purpose
 
-The unit-neutral, language-complete representation of one report's *content*, emitted by the Claude reconciliation alongside the forecast snapshot (WX-128). Where the snapshot body captures forecast *state* (6-hour blocks), this captures what the report *says*: a salience-ranked changes array (language-free facts) plus a language-keyed narrative whose quantities are substitution tokens. A deterministic renderer (WX-129) turns it into each recipient's email — units, locale, language — with no further LLM call, which is what makes the one-call-per-locality economics of WX-123 work.
+The unit-neutral, language-complete representation of one report's *content* (WX-128). Where the snapshot body captures forecast *state* (6-hour blocks), this captures what the report *says*: a salience-ranked changes array (language-free facts) plus a language-keyed narrative whose quantities are substitution tokens. The Claude reconciliation writes the `closing`; `DeterministicChangeDetector` computes `changes` afterwards (WX-189); and a separate change-band call writes `changeSummary` from those changes (WX-506). A deterministic renderer (WX-129) turns it into each recipient's email — units, locale, language — with no further LLM call, which is what makes the one-call-per-locality economics of WX-123 work.
 
-During the additive transition (until WX-130 rewires the loop), the column is persisted-but-unread: `email_body` remains the sent artifact.
+Since WX-130 this body is the live rendering source; there is no `email_body`.
 
 ## Top-level shape
 
 ```json
 {
-  "schemaVersion": 3,
+  "schemaVersion": 5,
   "changes": [ /* zero or more change objects, most important first */ ],
   "narrative": {
     "en": { /* sections */ },
@@ -25,7 +25,7 @@ During the additive transition (until WX-130 rewires the loop), the column is pe
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `schemaVersion` | `int` | Current value: 3. |
+| `schemaVersion` | `int` | Current value: 5. |
 | `changes` | array of change | Reader-relevant differences versus the prior committed forecast, most important first. Empty when nothing changed. |
 | `narrative` | object | One key per ISO 639-1 language code. Which languages must be present is a per-call contract (the locality's recipients' distinct languages); validation fails closed on a missing one. |
 
@@ -49,15 +49,13 @@ During the additive transition (until WX-130 rewires the loop), the column is pe
 | `direction` | enum | `appearing`, `strengthening`, `weakening`, `clearing`, `shifting`. Appearing/clearing carry the directional asymmetry. |
 | `window` | `{ startUtc, endUtc }` | ISO 8601 UTC window the change affects. |
 | `quantities` | array | `{ kind, value }` pairs in the kind's canonical unit (below). May be empty for purely categorical changes. |
-| `summaryToken` | string | `ch1`, `ch2`, … in array order; unique. Ties the change to its sentence in every language's `changeSummary`. |
+| `summaryToken` | string | `ch1`, `ch2`, … in array order; unique. A stable identity for the change; no prose references it (anchoring was retired in WX-189). |
 
 ## Narrative sections (per language)
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `changeSummary` | string or null | Prose for the "What's changed:" band; null when there is no band. The **only** section where `{chN}` anchors appear. |
-| `currentConditions` | string | Prose for the Current Conditions section. |
-| `extendedForecast` | string | Prose for the Extended Forecast section. |
+| `changeSummary` | string or null | Prose for the "Why this update" band; null when there is no band, or when the band call fell back (the renderer then shows a deterministic line built from `changes`). Written by a separate change-band call from the computed `changes`, not by the reconciliation call (WX-506). No `{chN}` anchors (retired in WX-189). |
 | `closing` | string | Prose for the "In summary:" closing. |
 
 ## Token grammar
@@ -71,18 +69,19 @@ Validated by `ReportTokens` at serialize and deserialize time; any brace-delimit
 | `{q:gust:30}` | gust | knots |
 | `{q:pressure:1013.2}` | pressure | hPa |
 | `{q:precip_mm:12}` | liquid-equivalent accumulation | millimetres |
+| `{q:temp_range:24:26}` | a temperature range, low:high | degrees Celsius |
 | `{q:time:2026-06-08T21:00:00Z}` | an instant | ISO-8601 UTC; rendered in locality-local time |
-| `{ch1}` | change anchor | renders to nothing; sentence ↔ change link |
+
+`{ch1}`-style change anchors were retired in WX-189: they parse, but are rejected in both prose sections.
 
 Values use a period decimal separator regardless of language; the renderer formats per recipient locale. Prose adjacent to tokens must be unit-neutral ("highs near {q:temp:33.5}", never "in the low 90s") — enforced by prompt. One sub-case **is** validated deterministically: a literal unit word or symbol immediately after a token (`{q:gust:41} kt`, `{q:gust:30} nudos`) is rejected, because the renderer appends the unit at substitution time and the prose copy would double it ("47 mph kt"). Claude produced exactly this on its first live call against the v3 schema, so the rule earned a validator, not just a prompt line.
 
 ## Invariants (enforced at serialize and deserialize)
 
 - At least one narrative language; keys are well-formed ISO 639-1 codes.
-- `currentConditions`, `extendedForecast`, `closing` non-blank in every language.
-- `summaryToken`s well-formed and unique.
-- Every change's anchor appears in every language's `changeSummary`, and no anchor dangles — the structural "no change goes unnarrated, in any language" guarantee.
-- Anchors appear only in `changeSummary`; every token parses.
+- `closing` non-blank in every language; `changeSummary` may be null.
+- `summaryToken`s well-formed and unique; every change window runs forward (`endUtc` not before `startUtc`).
+- No `{chN}` anchor in `changeSummary` or `closing`; every token in both parses.
 
 Per-call (reconciler-level) contracts, on top of the intrinsic ones: every *requested* language present, and each requested language's narrative clears a WX-120-style visible-length floor.
 
@@ -91,3 +90,5 @@ Per-call (reconciler-level) contracts, on top of the intrinsic ones: every *requ
 `schemaVersion` moves in **lockstep** with `ForecastSnapshotBody.SchemaVersionCurrent` (decided at WX-128 grooming): the two bodies travel in the same tool_use envelope, so a shape change to either bumps both. Born at v3.
 
 - **v3** (WX-128): initial shape.
+- **v4** (WX-130): the narrative slimmed to the judgment sections, `changeSummary` and `closing`.
+- **v5** (WX-155): forecast blocks bucketed on locality-local day-parts.

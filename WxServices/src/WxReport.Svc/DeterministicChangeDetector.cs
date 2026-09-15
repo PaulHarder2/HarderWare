@@ -84,7 +84,7 @@ internal static class DeterministicChangeDetector
         DetectPrecip(final, priorByStart, nowUtc, horizonEnd, candidates);
         DetectSevere(final, priorByStart, nowUtc, horizonEnd, candidates);
         DetectTemperature(prior, final, cfg, nowUtc, horizonEnd, tz, candidates);
-        DetectWind(final, priorByStart, cfg, nowUtc, horizonEnd, candidates);
+        DetectWind(prior, final, cfg, nowUtc, horizonEnd, tz, candidates);
 
         return Rank(candidates);
     }
@@ -140,6 +140,12 @@ internal static class DeterministicChangeDetector
                 if (p == PrecipPhenomenon.Rain && (IsSevereStorm(block) || IsSevereStorm(pri)))
                     dir = null;
 
+                // WX-506: only a change that could prompt an update is reported — a block where one of the gate's
+                // criteria fires (BlockCriteria, shared). A smaller move, such as rain firming from possible to
+                // expected, is left to the forecast table.
+                if (dir is not null && BlockCriteria.Fired(pri, block, ChangeHorizons.TierOf(block.StartUtc, nowUtc)).Count == 0)
+                    dir = null;
+
                 // Severe carried by THIS precip block is folded into the phenomenon's
                 // own change (a severe thunderstorm is a Thunderstorm strengthening),
                 // so the standalone Severe phenomenon is reserved for severe with no
@@ -177,6 +183,9 @@ internal static class DeterministicChangeDetector
                 newSevere && !priorSevere ? ChangeDirection.Appearing
                 : priorSevere && !newSevere ? ChangeDirection.Clearing
                 : null;
+            // WX-506: reported only where a shared gate criterion fires (severe onset, or clearing near-term).
+            if (dir is not null && BlockCriteria.Fired(pri, block, ChangeHorizons.TierOf(block.StartUtc, nowUtc)).Count == 0)
+                dir = null;
 
             // Standalone severe is always safety-tier (it exists only for ≥50 kt wind).
             runs.Offer(block.StartUtc, dir, ChangeTier.Safety, quantities: []);
@@ -188,30 +197,19 @@ internal static class DeterministicChangeDetector
     // Daily aggregation, not per-block: the extended-forecast grid shows one row per
     // local calendar day (WX-112), so a 6-hour wobble that doesn't move the day's high
     // or low is invisible to the reader. One change per day, the most salient signal
-    // winning (a freeze/heat crossing outranks a bare magnitude delta).
+    // winning (a freeze/heat crossing outranks a bare magnitude delta). The day's
+    // published and new figures come from DayFigures, shared with the gate (WX-506):
+    // hours already past keep their published values.
     private static void DetectTemperature(
         ForecastSnapshotBody prior, ForecastSnapshotBody final,
         SignificanceGateConfig cfg, DateTime nowUtc, DateTime horizonEnd, TimeZoneInfo tz,
         List<Candidate> candidates)
     {
-        var curDays = DailyHiLo(final, nowUtc, horizonEnd, tz);
-        var priDays = DailyHiLo(prior, nowUtc, horizonEnd, tz);
-
-        foreach (var (day, cur) in curDays)
+        foreach (var day in DayFigures.Compare(prior, final, nowUtc, horizonEnd, tz))
         {
-            // A day that rolled into the horizon has no prior counterpart — not news.
-            if (!priDays.TryGetValue(day, out var pri))
+            // Judged once for the gate and the detector (DayCriteria, WX-506).
+            if (DayCriteria.Temperature(day, cfg, nowUtc) is not { Any: true } t)
                 continue;
-            int tier = TierOf(cur.FirstStartUtc, nowUtc);
-            if (tier < 0)
-                continue;
-
-            bool freezeAdd = pri.LoF >= WxThresholds.FreezeDegF && cur.LoF < WxThresholds.FreezeDegF;
-            bool thaw = pri.LoF < WxThresholds.FreezeDegF && cur.LoF > WxThresholds.FreezeDegF;
-            bool curHeat = cur.HiF >= cfg.HeatAdvisoryDegF;
-            bool priHeat = pri.HiF >= cfg.HeatAdvisoryDegF;
-            int delta = PerTier(cfg.TempDeltaDegF, tier);
-            bool magnitude = Math.Abs(cur.HiF - pri.HiF) >= delta || Math.Abs(cur.LoF - pri.LoF) >= delta;
 
             // Priority: a safety-grade threshold crossing (freeze/heat) outranks a
             // plain magnitude shift. ChangePhenomenon has no Freeze/Heat member, so all
@@ -223,72 +221,62 @@ internal static class DeterministicChangeDetector
             // meaning is carried by the prose + quantities; direction only feeds salience.
             ChangeDirection dir;
             ChangeTier ctier;
-            if (freezeAdd || (curHeat && !priHeat))
+            if (t.FreezeAdd || t.HeatAdd)
             {
                 dir = ChangeDirection.Appearing;
                 ctier = ChangeTier.Safety;
             }
-            else if (thaw || (priHeat && !curHeat))
+            else if (t.Thaw || t.HeatEnd)
             {
                 dir = ChangeDirection.Clearing;
                 ctier = ChangeTier.Plans;  // a hazard lifting is news, but not safety-urgent
             }
-            else if (magnitude)
-            {
-                // Sign from whichever extreme moved further, biased to the high.
-                double hiMove = cur.HiF - pri.HiF, loMove = cur.LoF - pri.LoF;
-                double dominant = Math.Abs(hiMove) >= Math.Abs(loMove) ? hiMove : loMove;
-                dir = dominant >= 0 ? ChangeDirection.Strengthening : ChangeDirection.Weakening;
-                ctier = HorizonTier(tier);
-            }
             else
             {
-                continue;
+                // Sign from whichever extreme moved further, biased to the high.
+                double dominant = Math.Abs(t.HiMoveF) >= Math.Abs(t.LoMoveF) ? t.HiMoveF : t.LoMoveF;
+                dir = dominant >= 0 ? ChangeDirection.Strengthening : ChangeDirection.Weakening;
+                ctier = HorizonTier(t.Tier);
             }
 
-            var window = new ChangeWindow(cur.FirstStartUtc, cur.LastStartUtc.AddHours(GfsSnapshotBuilder.BlockHours));
-            candidates.Add(new Candidate(ChangePhenomenon.Temperature, dir, window, ctier,
-                [new ReportQuantity { Kind = QuantityKind.Temp, Value = cur.HiC },
-                 new ReportQuantity { Kind = QuantityKind.Temp, Value = cur.LoC }]));
+            var window = new ChangeWindow(day.FirstLiveStartUtc, day.LastLiveStartUtc.AddHours(GfsSnapshotBuilder.BlockHours));
+            List<ReportQuantity> quantities = [];
+            if (day.Now.HiC is { } hi)
+                quantities.Add(new ReportQuantity { Kind = QuantityKind.Temp, Value = hi });
+            if (day.Now.LoC is { } lo)
+                quantities.Add(new ReportQuantity { Kind = QuantityKind.Temp, Value = lo });
+            candidates.Add(new Candidate(ChangePhenomenon.Temperature, dir, window, ctier, quantities));
         }
     }
 
-    // ── wind magnitude (per block, via the gate's tuned thresholds) ───────────
-    // Wind always exists, so it never "appears" or "clears" — only Strengthening /
-    // Weakening. A change fires when the advisory line (cfg.WindAdvisoryKt) is crossed
-    // or the per-tier magnitude delta is exceeded; consecutive same-direction blocks
-    // group into one window. Sustained only (windKt is sustained-only, WX-160).
+    // ── wind magnitude (per local day, via the gate's tuned thresholds) ───────
+    // The day's peak sustained wind, the figure its grid row shows, compared through DayFigures
+    // (shared with the gate, WX-506): hours already past keep their published values, so a
+    // weaker block after today's peak is not news. Wind always exists, so it never "appears" or
+    // "clears" — only Strengthening / Weakening. A change fires when the advisory line
+    // (cfg.WindAdvisoryKt) is crossed or the per-tier magnitude delta is exceeded. Its window
+    // is the block holding the new peak (strengthening) or the published one (weakening), so
+    // the band still names a day-part. Sustained only (windKt is sustained-only, WX-160).
     private static void DetectWind(
-        ForecastSnapshotBody final, IReadOnlyDictionary<DateTime, ForecastSnapshotBlock> priorByStart,
-        SignificanceGateConfig cfg, DateTime nowUtc, DateTime horizonEnd, List<Candidate> candidates)
+        ForecastSnapshotBody prior, ForecastSnapshotBody final,
+        SignificanceGateConfig cfg, DateTime nowUtc, DateTime horizonEnd, TimeZoneInfo tz,
+        List<Candidate> candidates)
     {
-        var runs = new RunBuilder(ChangePhenomenon.Wind, candidates);
-        foreach (var block in InHorizonOrdered(final, nowUtc, horizonEnd))
+        foreach (var day in DayFigures.Compare(prior, final, nowUtc, horizonEnd, tz))
         {
-            int tier = TierOf(block.StartUtc, nowUtc);
-            if (tier < 0 || !priorByStart.TryGetValue(block.StartUtc, out var pri))
-            {
-                runs.Offer(block.StartUtc, dir: null, ChangeTier.Ambient, quantities: []);
+            // Judged once for the gate and the detector (DayCriteria, WX-506).
+            if (DayCriteria.Wind(day, cfg, nowUtc) is not { Any: true } w)
                 continue;
-            }
-
-            int cMax = block.WindKt.Max, pMax = pri.WindKt.Max;
-            bool advAdd = pMax < cfg.WindAdvisoryKt && cMax >= cfg.WindAdvisoryKt;
-            bool advRemove = pMax >= cfg.WindAdvisoryKt && cMax < cfg.WindAdvisoryKt;
-            bool magnitude = Math.Abs(cMax - pMax) >= PerTier(cfg.WindDeltaKt, tier);
-
-            ChangeDirection? dir =
-                (advAdd || (cMax > pMax && magnitude)) ? ChangeDirection.Strengthening
-                : (advRemove || (cMax < pMax && magnitude)) ? ChangeDirection.Weakening
-                : null;
+            int cMax = w.NowPeakKt, pMax = w.PublishedPeakKt;
+            var dir = (w.AdvisoryAdd || (cMax > pMax && w.Delta)) ? ChangeDirection.Strengthening : ChangeDirection.Weakening;
 
             // Sustained wind reaching the safety floor (≥34 kt) is safety-tier — the
             // same bright line the oracle's safety-backing check uses.
-            var ctier = cMax >= WxThresholds.SafetyWindKt ? ChangeTier.Safety : HorizonTier(tier);
-            runs.Offer(block.StartUtc, dir, ctier,
-                [new ReportQuantity { Kind = QuantityKind.Wind, Value = cMax }]);
+            var ctier = cMax >= WxThresholds.SafetyWindKt ? ChangeTier.Safety : HorizonTier(w.Tier);
+            candidates.Add(new Candidate(ChangePhenomenon.Wind, dir,
+                new ChangeWindow(w.WindowStartUtc, w.WindowStartUtc.AddHours(GfsSnapshotBuilder.BlockHours)), ctier,
+                [new ReportQuantity { Kind = QuantityKind.Wind, Value = cMax }]));
         }
-        runs.Flush();
     }
 
     // ── ranking + token assignment ────────────────────────────────────────────
@@ -350,7 +338,7 @@ internal static class DeterministicChangeDetector
             return ChangeTier.Safety;
         if (dir is ChangeDirection.Weakening or ChangeDirection.Clearing && IsSafetyGradePrecip(prior))
             return ChangeTier.Safety;
-        return HorizonTier(TierOf(final.StartUtc, nowUtc));
+        return HorizonTier(ChangeHorizons.TierOf(final.StartUtc, nowUtc));
     }
 
     private static bool IsSafetyGradePrecip(ForecastSnapshotBlock b) =>
@@ -402,61 +390,12 @@ internal static class DeterministicChangeDetector
             .Where(b => b.StartUtc.AddHours(GfsSnapshotBuilder.BlockHours) > nowUtc && b.StartUtc < horizonEnd)
             .OrderBy(b => b.StartUtc);
 
-    // Per-local-day high/low in both °F (threshold logic) and °C (canonical
-    // quantities), with the day's first/last in-horizon block starts (for the window
-    // and tiering). Mirrors SignificanceGate.DailyHiLoDegF.
-    private static Dictionary<DateOnly, DayTemp> DailyHiLo(
-        ForecastSnapshotBody body, DateTime nowUtc, DateTime horizonEnd, TimeZoneInfo tz)
-    {
-        var days = new Dictionary<DateOnly, DayTemp>();
-        foreach (var b in body.Blocks)
-        {
-            if (b.StartUtc.AddHours(GfsSnapshotBuilder.BlockHours) <= nowUtc || b.StartUtc >= horizonEnd)
-                continue;
-            var local = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(b.StartUtc, DateTimeKind.Utc), tz);
-            var day = DateOnly.FromDateTime(local);
-            var hiC = b.TemperatureCelsius.Max;
-            var loC = b.TemperatureCelsius.Min;
-            if (days.TryGetValue(day, out var cur))
-                days[day] = cur.With(hiC, loC, b.StartUtc);
-            else
-                days[day] = DayTemp.First(hiC, loC, b.StartUtc);
-        }
-        return days;
-    }
-
-    private static int PerTier(int[] arr, int tier) =>
-        arr is { Length: > 0 } ? arr[Math.Min(tier, arr.Length - 1)] : 0;
-
-    // Horizon tier (0-based) of a block start, or -1 beyond the last bound. A block
-    // already in progress is tier 0. Mirrors SignificanceGate.TierOf.
-    private static int TierOf(DateTime startUtc, DateTime nowUtc)
-    {
-        double hours = (startUtc - nowUtc).TotalHours;
-        if (hours < 0) return 0;
-        for (int t = 0; t < WxThresholds.TierUpperBoundHours.Length; t++)
-            if (hours < WxThresholds.TierUpperBoundHours[t])
-                return t;
-        return -1;
-    }
-
     private static double CtoF(double celsius) => celsius * 9.0 / 5.0 + 32.0;
 
     // A change under construction (no SummaryToken yet — assigned in rank order).
     private readonly record struct Candidate(
         ChangePhenomenon Phenomenon, ChangeDirection Direction, ChangeWindow Window,
         ChangeTier Tier, IReadOnlyList<ReportQuantity> Quantities);
-
-    private readonly record struct DayTemp(double HiC, double LoC, DateTime FirstStartUtc, DateTime LastStartUtc)
-    {
-        public double HiF => CtoF(HiC);
-        public double LoF => CtoF(LoC);
-        public static DayTemp First(double hiC, double loC, DateTime startUtc) => new(hiC, loC, startUtc, startUtc);
-        public DayTemp With(double hiC, double loC, DateTime startUtc) => new(
-            Math.Max(HiC, hiC), Math.Min(LoC, loC),
-            startUtc < FirstStartUtc ? startUtc : FirstStartUtc,
-            startUtc > LastStartUtc ? startUtc : LastStartUtc);
-    }
 
     // Groups a phenomenon's consecutive same-direction blocks into one change window.
     // "Consecutive" = block starts exactly BlockHours apart; a gap, a direction change,

@@ -54,22 +54,22 @@ public class SignificanceGateTests
     public void TempDelta_BelowThreshold_NotSignificant()
     {
         // T1 threshold is 5 °F; a 4 °F high move stays below it.
-        Assert.False(Sig(Body(Blk(hiF: 60)), Body(Blk(hiF: 64))));
+        Assert.False(Sig(Body(Blk(hoursFromNow: 12, hiF: 60)), Body(Blk(hoursFromNow: 12, hiF: 64))));
     }
 
     [Fact]
     public void TempDelta_AtThreshold_Significant()
     {
-        Assert.True(Sig(Body(Blk(hiF: 60)), Body(Blk(hiF: 65))));
+        Assert.True(Sig(Body(Blk(hoursFromNow: 12, hiF: 60)), Body(Blk(hoursFromNow: 12, hiF: 65))));
     }
 
     [Fact]
     public void TempDelta_LoosensWithHorizon()
     {
         // A 6 °F move at T4 (threshold 12) is not significant...
-        Assert.False(Sig(Body(Blk(hoursFromNow: 90, hiF: 60)), Body(Blk(hoursFromNow: 90, hiF: 66))));
+        Assert.False(Sig(Body(Blk(hoursFromNow: 84, hiF: 60)), Body(Blk(hoursFromNow: 84, hiF: 66))));
         // ...but the same move at T1 (threshold 5) is.
-        Assert.True(Sig(Body(Blk(hoursFromNow: 0, hiF: 60)), Body(Blk(hoursFromNow: 0, hiF: 66))));
+        Assert.True(Sig(Body(Blk(hoursFromNow: 12, hiF: 60)), Body(Blk(hoursFromNow: 12, hiF: 66))));
     }
 
     [Fact]
@@ -104,7 +104,7 @@ public class SignificanceGateTests
     public void Heat_CrossingAdvisoryLine_Significant()
     {
         // High 98 → 101 °F crosses the 100 °F line (3 °F move, sub-threshold).
-        Assert.True(Sig(Body(Blk(hiF: 98, loF: 80)), Body(Blk(hiF: 101, loF: 80))));
+        Assert.True(Sig(Body(Blk(hoursFromNow: 12, hiF: 98, loF: 80)), Body(Blk(hoursFromNow: 12, hiF: 101, loF: 80))));
     }
 
     [Fact]
@@ -226,9 +226,12 @@ public class SignificanceGateTests
     public void TierBoundary_24h_FallsInLooserTier()
     {
         // A block at exactly 24h is T2 (threshold 7 °F), so a 6 °F move does not fire...
-        Assert.False(Sig(Body(Blk(hoursFromNow: 24, hiF: 60)), Body(Blk(hoursFromNow: 24, hiF: 66))));
+        // (Zones chosen so each block is the local afternoon, which a day needs for a high — WX-506/WX-234.)
+        var minus12 = TimeZoneInfo.CreateCustomTimeZone("utc-minus-12", TimeSpan.FromHours(-12), "UTC-12", "UTC-12");
+        var minus11 = TimeZoneInfo.CreateCustomTimeZone("utc-minus-11", TimeSpan.FromHours(-11), "UTC-11", "UTC-11");
+        Assert.False(SignificanceGate.Evaluate(Body(Blk(hoursFromNow: 24, hiF: 60)), Body(Blk(hoursFromNow: 24, hiF: 66)), Cfg, Now, minus12).Significant);
         // ...while at 23h it is still T1 (threshold 5 °F) and does.
-        Assert.True(Sig(Body(Blk(hoursFromNow: 23, hiF: 60)), Body(Blk(hoursFromNow: 23, hiF: 66))));
+        Assert.True(SignificanceGate.Evaluate(Body(Blk(hoursFromNow: 23, hiF: 60)), Body(Blk(hoursFromNow: 23, hiF: 66)), Cfg, Now, minus11).Significant);
     }
 
     [Fact]
@@ -237,8 +240,8 @@ public class SignificanceGateTests
         // The day's high is set by the warmer second block; nudging the cooler block's
         // high by 5 °F leaves the daily high (and low) unchanged — so it is not news.
         // This proves temperature is judged on the daily aggregate, not per block.
-        var prior = Body(Blk(hoursFromNow: 0, loF: 40, hiF: 50), Blk(hoursFromNow: 6, loF: 40, hiF: 60));
-        var current = Body(Blk(hoursFromNow: 0, loF: 40, hiF: 55), Blk(hoursFromNow: 6, loF: 40, hiF: 60));
+        var prior = Body(Blk(hoursFromNow: 6, loF: 40, hiF: 50), Blk(hoursFromNow: 12, loF: 40, hiF: 60));
+        var current = Body(Blk(hoursFromNow: 6, loF: 40, hiF: 55), Blk(hoursFromNow: 12, loF: 40, hiF: 60));
         Assert.False(Sig(prior, current));
     }
 
@@ -269,8 +272,8 @@ public class SignificanceGateTests
     {
         // Exercises the local-day grouping with a non-UTC (fixed -6h) offset.
         var minus6 = TimeZoneInfo.CreateCustomTimeZone("utc-minus-6", TimeSpan.FromHours(-6), "UTC-6", "UTC-6");
-        var prior = Body(Blk(loF: 35, hiF: 45));
-        var current = Body(Blk(loF: 30, hiF: 45));
+        var prior = Body(Blk(hoursFromNow: 6, loF: 35, hiF: 45));
+        var current = Body(Blk(hoursFromNow: 6, loF: 30, hiF: 45));
         Assert.True(SignificanceGate.Evaluate(prior, current, Cfg, Now, minus6).Significant);
     }
 
