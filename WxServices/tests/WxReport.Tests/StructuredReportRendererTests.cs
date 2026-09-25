@@ -506,6 +506,55 @@ public class StructuredReportRendererTests
         Assert.Contains("Unscheduled Update", unscheduled);
     }
 
+    // WX-506 rework: every unscheduled update that gets past the post-reconciliation backstop
+    // shows the "Why this update" band. Covers every combination of computed changes (none or
+    // one), band prose (absent or present) and a severe block appearing that the detector does not
+    // count (one the prior never covered); a combination that would render without the band must be
+    // suppressed by EvaluateUnscheduledSuppression. The baseline-reset exemption is outside this
+    // guarantee by design and is tested in UnscheduledSuppressionTests.
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, false, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    public void UnscheduledUpdate_ThatIsSent_AlwaysShowsTheBand(bool hasChange, bool hasProse, bool severeRolledIn)
+    {
+        var baseForecast = Forecast();
+        var final = severeRolledIn
+            ? baseForecast with { Blocks = [.. baseForecast.Blocks, baseForecast.Blocks[^1] with { StartUtc = baseForecast.Blocks[^1].StartUtc.AddHours(6), SevereFlag = true }] }
+            : baseForecast;
+        // Materially different from the final forecast, so the decision is never Redundant.
+        var prior = baseForecast with
+        {
+            Blocks = [baseForecast.Blocks[0] with { PrecipExpectation = PrecipExpectation.None, PrecipPhenomenon = null }, .. baseForecast.Blocks.Skip(1)],
+        };
+
+        var report = new StructuredReportBody
+        {
+            Changes = hasChange
+                ? [new ReportChange { Tier = ChangeTier.Plans, Phenomenon = ChangePhenomenon.Thunderstorm, Direction = ChangeDirection.Appearing, Window = new(AnchorUtc, AnchorUtc.AddHours(6)), Quantities = [], SummaryToken = "ch1" }]
+                : [],
+            Narrative = new Dictionary<string, NarrativeSections>
+            {
+                ["en"] = new() { ChangeSummary = hasProse ? "Thunderstorms now expected this afternoon." : null, Closing = ClosingTokens },
+            },
+        };
+
+        var decision = ReportWorker.EvaluateUnscheduledSuppression(
+            prior, final, freshGuidanceSinceLastSend: true, computedChangeCount: report.Changes.Count, baselineReset: false);
+        var rendered = StructuredReportRenderer.Render(report, final, Observation(), Imperial(), T("en"), C("en"), Utc, ReportKind.Unscheduled, RenderNow);
+
+        if (decision == ReportWorker.UnscheduledSuppression.None)
+            Assert.Contains("Why this update:", rendered);
+        else
+            Assert.Equal(ReportWorker.UnscheduledSuppression.NoComputedChange, decision);
+
+        // Controls: a report with a computed change is sent; one without is not.
+        Assert.Equal(hasChange, decision == ReportWorker.UnscheduledSuppression.None);
+    }
+
     [Fact]
     public void NoObservation_OmitsTableShowsNote()
     {
