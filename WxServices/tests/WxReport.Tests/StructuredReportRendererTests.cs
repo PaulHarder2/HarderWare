@@ -538,7 +538,7 @@ public class StructuredReportRendererTests
                 : [],
             Narrative = new Dictionary<string, NarrativeSections>
             {
-                ["en"] = new() { ChangeSummary = hasProse ? "{ch1}Thunderstorms now expected this afternoon." : null, Closing = ClosingTokens },
+                ["en"] = new() { ChangeSummary = hasProse ? "Thunderstorms now expected this afternoon." : null, Closing = ClosingTokens },
             },
         };
 

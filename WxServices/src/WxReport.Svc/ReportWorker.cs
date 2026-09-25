@@ -1348,7 +1348,7 @@ public sealed class ReportWorker : BackgroundService
                 };
                 counter.Add(1);
                 await PersistUnsentCycleAsync(ctx, label, state, inputHash, ct);
-                Logger.Info($"{label}: {tag} suppressed {triggerType} send — {why}.");
+                Logger.Info($"{label}: {tag} suppressed {triggerType} send — {why}. Trace: {success.ReasoningTrace}");
                 return 0;
             }
         }

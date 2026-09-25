@@ -43,7 +43,8 @@ from zoneinfo import ZoneInfo
 PARTS = ["early hours", "morning", "afternoon", "evening"]
 WRITTEN = "Change band written by the band call"
 FALLBACK = "deterministic change band (WX-506)"
-LOCALITY = re.compile(r"locality '([^']+)' \(Id=\d+\)")
+# Keyed by the numeric Id: a name can contain an apostrophe (O'Fallon) and two localities can share one.
+LOCALITY = re.compile(r"locality '(.+?)' \(Id=(\d+)\)")
 ARRIVAL = "arrival — invoking Claude invalidation gate"
 SCHEDULED = "): generating "
 SENT = "): report sent (locality '"
@@ -156,12 +157,13 @@ def bandless_updates(paths, since):
                 if len(stamp) == 23 and stamp[4] == "-" and stamp[10] == " " and not (since and stamp[:19] < since):
                     lines.append((stamp, line))
     lines.sort(key=lambda t: t[0])
-    current, pending = None, {}
+    current, pending, names = None, {}, {}
     sent, bandless, by_design = 0, [], 0
     for stamp, line in lines:
         m = LOCALITY.search(line)
         if m:
-            current = m.group(1)
+            current = m.group(2)
+            names[current] = m.group(1)
         if m and ARRIVAL in line:
             pending[current] = {"at": stamp[:19], "band": False, "by_design": False}   # replaces any stale cycle
         elif m and SCHEDULED in line:
@@ -171,13 +173,13 @@ def bandless_updates(paths, since):
         elif (HAZARD_SEND in line or BASELINE_RESET in line) and current in pending:
             pending[current]["by_design"] = True
         elif m and SENT in line:
-            cycle = pending.pop(m.group(1), None)   # the first recipient's send closes the cycle
+            cycle = pending.pop(m.group(2), None)   # the first recipient's send closes the cycle
             if cycle:
                 sent += 1
                 if cycle["by_design"]:
                     by_design += 1
                 elif not cycle["band"]:
-                    bandless.append((cycle["at"], m.group(1)))
+                    bandless.append((cycle["at"], names[m.group(2)]))
         elif m and any(k in line for k in NO_SEND):
             pending.pop(current, None)
     return sent, bandless, by_design
@@ -331,6 +333,14 @@ def selftest():
           run(("10:22:22", gate), ("10:23:14", failed), ("11:22:22", gate), ("11:23:10", band), ("11:23:14", sent_spring)) == (1, [], 0))
     check("B4: a send on a baseline reset is counted apart, not as bandless",
           run(("10:22:22", gate), ("10:22:30", reset), ("10:23:14", sent_spring)) == (1, [], 1))
+    ofallon_gate = "INFO  [ReportWorker.cs::ProcessLocalityAsync:1093] locality 'O'Fallon, MO' (Id=7): taf arrival — invoking Claude invalidation gate.\n"
+    ofallon_sent = "INFO  [ReportWorker.cs::DeliverWeatherReportAsync:1718] a_en a@example.com (A): report sent (locality 'O'Fallon, MO' (Id=7)).\n"
+    twin_gate = "INFO  [ReportWorker.cs::ProcessLocalityAsync:1093] locality 'Spring, TX' (Id=9): gfs arrival — invoking Claude invalidation gate.\n"
+    check("B4: a locality name with an apostrophe is followed",
+          run(("10:22:22", ofallon_gate), ("10:23:14", ofallon_sent))[1] == [("2026-09-23 10:22:22", "O'Fallon, MO")])
+    check("B4: two localities sharing a name are kept apart by Id",
+          run(("10:22:22", gate), ("10:22:23", twin_gate), ("10:23:10", band), ("10:23:14", sent_spring))
+          == (1, [("2026-09-23 10:22:22", "Spring, TX")], 0))
     check("B4: lines split across rotated files are merged in time order",
           run(("10:22:22", gate), ("10:23:10", band), ("10:23:14", sent_spring), files=2) == (1, [], 0))
     check("B4: --since drops a gate pass before it",
