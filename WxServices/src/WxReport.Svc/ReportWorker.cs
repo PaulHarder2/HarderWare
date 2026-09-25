@@ -53,6 +53,7 @@ public sealed class ReportWorker : BackgroundService
     private readonly Counter<long> _claudeNotNews;
     private readonly Counter<long> _redundantSuppressed;
     private readonly Counter<long> _severeFlipSuppressed;
+    private readonly Counter<long> _noComputedChangeSuppressed;
     private readonly Counter<long> _significanceGateSkips;
     private readonly Counter<long> _debounceSuppressed;
     private readonly Counter<long> _quietWindowSuppressed;
@@ -102,6 +103,7 @@ public sealed class ReportWorker : BackgroundService
         _claudeNotNews = _meter.CreateCounter<long>("wxreport.claude.not_news.total", description: "Reconciliation calls where Claude's invalidation gate judged the evidence not news and suppressed the send.");
         _redundantSuppressed = _meter.CreateCounter<long>("wxreport.suppressed.redundant.total", description: "WX-108: unscheduled sends suppressed because the reconciled snapshot was materially identical to the last sent report.");
         _severeFlipSuppressed = _meter.CreateCounter<long>("wxreport.suppressed.severe_flip.total", description: "WX-108: unscheduled sends suppressed because the only change was a severe-flag flip on an observation-only advance with no newer GFS run or TAF.");
+        _noComputedChangeSuppressed = _meter.CreateCounter<long>("wxreport.suppressed.no_computed_change.total", description: "WX-506: unscheduled sends suppressed because the reconciled report carried no computed change, so it would have had no \"Why this update\" band.");
         _significanceGateSkips = _meter.CreateCounter<long>("wxreport.suppressed.significance_gate.total", description: "WX-114: cycles the deterministic significance gate found unchanged since the last sent report, tagged by mode (enforce = Claude call skipped; shadow = would-skip but Claude still called).");
         _debounceSuppressed = _meter.CreateCounter<long>("wxreport.suppressed.debounce.total", description: "WX-181: significant unscheduled cycles suppressed by the day-banded debounce (the change's day-band min-gap had not elapsed since the last unscheduled send), tagged by mode (enforce = Claude call skipped; shadow = would-skip but Claude still called).");
         _quietWindowSuppressed = _meter.CreateCounter<long>("wxreport.suppressed.quietwindow.total", description: "WX-157: significant unscheduled cycles suppressed by the day-banded pre-scheduled quiet window (the next scheduled slot fell within the change's day-band quiet window; content rides the scheduled report), tagged by mode (enforce = Claude call skipped; shadow = would-skip but Claude still called).");
@@ -1331,16 +1333,22 @@ public sealed class ReportWorker : BackgroundService
         {
             var priorBody = ForecastSnapshotBody.Deserialize(priorSnapshot.Body);
             var suppression = EvaluateUnscheduledSuppression(
-                priorBody, success.FinalSnapshot, freshGuidanceSinceLastSend);
+                priorBody, success.FinalSnapshot, freshGuidanceSinceLastSend, success.StructuredReport.Changes.Count,
+                baselineReset: priorSnapshot.SchemaVersion != ForecastSnapshotBody.SchemaVersionCurrent);
             if (suppression != UnscheduledSuppression.None)
             {
-                if (suppression == UnscheduledSuppression.Redundant) _redundantSuppressed.Add(1);
-                else _severeFlipSuppressed.Add(1);
-                var why = suppression == UnscheduledSuppression.Redundant
-                    ? "reconciled snapshot is materially identical to the last sent report (redundant re-send)"
-                    : "severe-flag de-escalation on an observation-only advance with no newer GFS run or TAF (hysteresis)";
+                var (counter, tag, why) = suppression switch
+                {
+                    UnscheduledSuppression.Redundant => (_redundantSuppressed, "WX-108",
+                        "reconciled snapshot is materially identical to the last sent report (redundant re-send)"),
+                    UnscheduledSuppression.SevereFlip => (_severeFlipSuppressed, "WX-108",
+                        "severe-flag de-escalation on an observation-only advance with no newer GFS run or TAF (hysteresis)"),
+                    _ => (_noComputedChangeSuppressed, "WX-506",
+                        "the reconciled report has no computed change, so the update would carry no \"Why this update\" band"),
+                };
+                counter.Add(1);
                 await PersistUnsentCycleAsync(ctx, label, state, inputHash, ct);
-                Logger.Info($"{label}: WX-108 suppressed {triggerType} send — {why}.");
+                Logger.Info($"{label}: {tag} suppressed {triggerType} send — {why}.");
                 return 0;
             }
         }
@@ -2235,6 +2243,9 @@ public sealed class ReportWorker : BackgroundService
 
         /// <summary>Suppress: the only material change is a severe-flag *de-escalation* on an observation-only advance with no newer GFS run or TAF. A severe *escalation* is never suppressed — it is news.</summary>
         SevereFlip,
+
+        /// <summary>Suppress (WX-506): the reconciled report carries no computed change, so an update would reach the recipient with no "Why this update" band and nothing new to say. The gate reads the provisional forecast and can pass a change that reconciliation then drops. A severe hazard appearing on a baseline reset is not suppressed this way.</summary>
+        NoComputedChange,
     }
 
     /// <summary>
@@ -2246,15 +2257,20 @@ public sealed class ReportWorker : BackgroundService
     /// <param name="priorBody">The last <em>sent</em> snapshot body for the recipient (the committed anchor).</param>
     /// <param name="finalBody">The freshly reconciled snapshot body Claude returned this cycle.</param>
     /// <param name="freshGuidanceSinceLastSend">True when a newer GFS run or TAF issuance has arrived since the last sent report; a severe-flag flip is trusted only then.</param>
+    /// <param name="computedChangeCount">The number of computed changes in the reconciled report (<see cref="StructuredReportBody.Changes"/>). An unscheduled update renders its "Why this update" band from these, so with none it would go out with no band.</param>
+    /// <param name="baselineReset">True when the prior snapshot's schema version is not the current one, so the reconciler dropped it and the detector computed changes against nothing.</param>
     /// <returns>
     /// <see cref="UnscheduledSuppression.Redundant"/> when the bodies are materially
     /// equal; <see cref="UnscheduledSuppression.SevereFlip"/> when they differ only by
     /// severe flags, no fresh guidance supports the flip, and the flip is a
-    /// de-escalation (no new severe hazard appears); otherwise
+    /// de-escalation (no new severe hazard appears);
+    /// <see cref="UnscheduledSuppression.NoComputedChange"/> when the report carries no
+    /// computed change, unless a severe hazard appears on a baseline reset; otherwise
     /// <see cref="UnscheduledSuppression.None"/>.
     /// </returns>
     internal static UnscheduledSuppression EvaluateUnscheduledSuppression(
-        ForecastSnapshotBody priorBody, ForecastSnapshotBody finalBody, bool freshGuidanceSinceLastSend)
+        ForecastSnapshotBody priorBody, ForecastSnapshotBody finalBody, bool freshGuidanceSinceLastSend,
+        int computedChangeCount, bool baselineReset)
     {
         if (priorBody.MateriallyEquals(finalBody))
             return UnscheduledSuppression.Redundant;
@@ -2265,6 +2281,11 @@ public sealed class ReportWorker : BackgroundService
             && priorBody.MateriallyEqualsIgnoringSevere(finalBody)
             && !finalBody.HasSevereEscalationOver(priorBody))
             return UnscheduledSuppression.SevereFlip;
+        // On a baseline reset the detector computes nothing, so a severe hazard appearing goes out
+        // without a band rather than not at all. Scoped to the reset: otherwise HasSevereEscalationOver
+        // also counts a severe block the prior never covered, which the detector treats as not news.
+        if (computedChangeCount == 0 && !(baselineReset && finalBody.HasSevereEscalationOver(priorBody)))
+            return UnscheduledSuppression.NoComputedChange;
         return UnscheduledSuppression.None;
     }
 

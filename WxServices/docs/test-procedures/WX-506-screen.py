@@ -17,6 +17,17 @@ It also counts the band call's log fingerprints in wxreport-svc.log files, when 
   written   "Change band written by the band call"
   fallback  "deterministic change band (WX-506)"
 
+and, from the same logs, every UNSCHEDULED update that was sent with no band (class B4). The dump cannot
+see a report's kind, and a scheduled report legitimately has no band, so this comes from the log: an
+unscheduled cycle opens with "<source> arrival — invoking Claude invalidation gate" for its locality
+(logged in every gate mode; a scheduled cycle logs "generating <reason> report" instead), and its band
+shows as a "written" or "fallback" line before the first "report sent". Band lines name no locality;
+localities are processed one at a time, so a band line belongs to the locality named most recently. A cycle
+closes on its first send, on a "no send" or "suppressed" line, or when that locality's next cycle begins, so
+a cycle that ended silently (every delivery failed, a restart) is never paired with a later send. Two kinds
+of send omit the band by design and are counted separately, not as B4: a narrative-less hazard report
+(WX-148), and a severe hazard appearing on a baseline reset (the prior dropped after a schema bump).
+
 Usage:
   WX-506-screen.py CORPUS.jsonl [--since 'YYYY-MM-DD HH:MM:SS'] [--log FILE ...]
   WX-506-screen.py --selftest
@@ -24,6 +35,7 @@ Usage:
 Exit: 0 ran · 1 selftest failure · 2 usage or unreadable input
 """
 import json
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -31,6 +43,13 @@ from zoneinfo import ZoneInfo
 PARTS = ["early hours", "morning", "afternoon", "evening"]
 WRITTEN = "Change band written by the band call"
 FALLBACK = "deterministic change band (WX-506)"
+LOCALITY = re.compile(r"locality '([^']+)' \(Id=\d+\)")
+ARRIVAL = "arrival — invoking Claude invalidation gate"
+SCHEDULED = "): generating "
+SENT = "): report sent (locality '"
+HAZARD_SEND = "sending a narrative-less hazard report"
+BASELINE_RESET = "treating this cycle as a baseline reset"
+NO_SEND = ("no send", "suppressed")
 
 
 def parse_utc(s):
@@ -122,6 +141,46 @@ def count_log(paths, since):
                 elif FALLBACK in line:
                     fallback += 1
     return written, fallback, earliest
+
+
+def bandless_updates(paths, since):
+    """Returns (sent, bandless, by_design): the number of unscheduled updates sent, the (timestamp, locality) of
+    each sent with no band (B4), and the number sent without a band by design (a narrative-less hazard report, or
+    a send on a baseline reset). Lines from every file are merged in time order: the state carries across a
+    rotation."""
+    lines = []
+    for p in paths:
+        with open(p, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                stamp = line[:23]
+                if len(stamp) == 23 and stamp[4] == "-" and stamp[10] == " " and not (since and stamp[:19] < since):
+                    lines.append((stamp, line))
+    lines.sort(key=lambda t: t[0])
+    current, pending = None, {}
+    sent, bandless, by_design = 0, [], 0
+    for stamp, line in lines:
+        m = LOCALITY.search(line)
+        if m:
+            current = m.group(1)
+        if m and ARRIVAL in line:
+            pending[current] = {"at": stamp[:19], "band": False, "by_design": False}   # replaces any stale cycle
+        elif m and SCHEDULED in line:
+            pending.pop(current, None)
+        elif (WRITTEN in line or FALLBACK in line) and current in pending:
+            pending[current]["band"] = True
+        elif (HAZARD_SEND in line or BASELINE_RESET in line) and current in pending:
+            pending[current]["by_design"] = True
+        elif m and SENT in line:
+            cycle = pending.pop(m.group(1), None)   # the first recipient's send closes the cycle
+            if cycle:
+                sent += 1
+                if cycle["by_design"]:
+                    by_design += 1
+                elif not cycle["band"]:
+                    bandless.append((cycle["at"], m.group(1)))
+        elif m and any(k in line for k in NO_SEND):
+            pending.pop(current, None)
+    return sent, bandless, by_design
 
 
 def report(cyc, write=print, rows=()):
@@ -220,6 +279,63 @@ def selftest():
     finally:
         os.unlink(path)
 
+    gate = "INFO  [ReportWorker.cs::ProcessLocalityAsync:1093] locality 'Spring, TX' (Id=1): gfs arrival — invoking Claude invalidation gate.\n"
+    shadow = "DEBUG [ReportWorker.cs::ProcessLocalityAsync:1186] locality 'Spring, TX' (Id=1): WX-114 significance gate (shadow) WOULD suppress gfs cycle — calling Claude anyway.\n"
+    scheduled = "INFO  [ReportWorker.cs::ProcessLocalityAsync:1093] locality 'Spring, TX' (Id=1): generating scheduled report.\n"
+    failed = "ERROR [ReportWorker.cs::ProcessLocalityAsync:1410] paul_en PaulHarder2@gmail.com (Paul): failed to render or send report for locality 'Spring, TX' (Id=1).\n"
+    reset = "INFO  [ForecastReconciler.cs::ReconcileAsync:183] Prior snapshot is schema v4 (current v5); treating this cycle as a baseline reset (WX-155 local-day-part rebucketing).\n"
+    band = "INFO  [ForecastReconciler.cs::WriteChangeSummaryCoreAsync:658] Change band written by the band call from 1 computed change(s) (attempt 1/2; WX-506).\n"
+    sent_spring = "INFO  [ReportWorker.cs::DeliverWeatherReportAsync:1718] paul_en PaulHarder2@gmail.com (Paul): report sent (locality 'Spring, TX' (Id=1)).\n"
+    sent_spring2 = "INFO  [ReportWorker.cs::DeliverWeatherReportAsync:1718] niki_en nik@example.com (Nicole): report sent (locality 'Spring, TX' (Id=1)).\n"
+    other = "INFO  [ReportWorker.cs::ProcessLocalityAsync:1027] locality 'Austin, TX' (Id=2): GFS run x.\n"
+    hazard_line = "WARN  [ReportWorker.cs::ProcessLocalityAsync:1270] locality 'Spring, TX' (Id=1): reconciliation degraded (x); sending a narrative-less hazard report (summary omitted) to served members.\n"
+    suppressed = "INFO  [ReportWorker.cs::ProcessLocalityAsync:1343] locality 'Spring, TX' (Id=1): WX-506 suppressed gfs send — no computed change.\n"
+    diag = "INFO  [ReportWorker.cs::SendStartupReportAsync:416] paul_en PaulHarder2@gmail.com (Paul): startup (diagnostic) report sent (locality 'Spring, TX' (Id=1)).\n"
+
+    def run(*events, files=1, since=None):
+        paths = []
+        try:
+            chunks = [events[i::files] for i in range(files)] if files > 1 else [events]
+            for chunk in chunks:
+                with tempfile.NamedTemporaryFile("w", delete=False, suffix=".log", encoding="utf-8") as f:
+                    for stamp, text in chunk:
+                        f.write(f"2026-09-23 {stamp}.000 {text}")
+                    paths.append(f.name)
+            return bandless_updates(paths, since)
+        finally:
+            for p in paths:
+                os.unlink(p)
+
+    check("B4: an update sent with a band is not bandless",
+          run(("10:22:22", gate), ("10:23:10", band), ("10:23:14", sent_spring)) == (1, [], 0))
+    check("B4: the 2026-09-23 shape, gate passed then sent with no band, is bandless",
+          run(("10:22:22", gate), ("10:23:14", sent_spring)) == (1, [("2026-09-23 10:22:22", "Spring, TX")], 0))
+    check("B4: several recipients count as one update",
+          run(("10:22:22", gate), ("10:23:14", sent_spring), ("10:23:16", sent_spring2))[0] == 1)
+    check("B4: a band line belongs to the locality named last, not an earlier one",
+          run(("10:22:22", gate), ("10:23:00", other), ("10:23:10", band), ("10:23:14", sent_spring))[1]
+          == [("2026-09-23 10:22:22", "Spring, TX")])
+    check("B4: a narrative-less hazard report is counted apart, not as bandless",
+          run(("10:22:22", gate), ("10:23:00", hazard_line), ("10:23:14", sent_spring)) == (1, [], 1))
+    check("B4: a suppressed cycle is not a send",
+          run(("10:22:22", gate), ("10:23:12", suppressed), ("10:30:00", diag)) == (0, [], 0))
+    check("B4: a scheduled send (no gate pass) is not an update",
+          run(("12:02:00", sent_spring)) == (0, [], 0))
+    check("B4: a diagnostic send does not close a pending update",
+          run(("10:22:22", gate), ("10:22:50", diag), ("10:23:14", sent_spring)) == (1, [("2026-09-23 10:22:22", "Spring, TX")], 0))
+    check("B4: a cycle is followed in shadow gate mode, which logs no 'gate passed'",
+          run(("10:22:21", gate), ("10:22:22", shadow), ("10:23:14", sent_spring))[1] == [("2026-09-23 10:22:21", "Spring, TX")])
+    check("B4: a cycle that ended silently is not paired with the next scheduled send",
+          run(("10:22:22", gate), ("10:23:14", failed), ("12:00:00", scheduled), ("12:02:00", sent_spring)) == (0, [], 0))
+    check("B4: a cycle that ended silently is replaced by the locality's next unscheduled cycle",
+          run(("10:22:22", gate), ("10:23:14", failed), ("11:22:22", gate), ("11:23:10", band), ("11:23:14", sent_spring)) == (1, [], 0))
+    check("B4: a send on a baseline reset is counted apart, not as bandless",
+          run(("10:22:22", gate), ("10:22:30", reset), ("10:23:14", sent_spring)) == (1, [], 1))
+    check("B4: lines split across rotated files are merged in time order",
+          run(("10:22:22", gate), ("10:23:10", band), ("10:23:14", sent_spring), files=2) == (1, [], 0))
+    check("B4: --since drops a gate pass before it",
+          run(("10:22:22", gate), ("10:23:14", sent_spring), since="2026-09-23 10:23:00") == (0, [], 0))
+
     print(f"{ok}/{total} as expected")
     return 0 if ok == total else 1
 
@@ -257,6 +373,10 @@ def main(argv):
         written, fallback, earliest = count_log(logs, start)
         coverage = "complete" if start and earliest and earliest <= start else "INCOMPLETE — pass older rotated logs"
         print(f"\nlog: window_start={start}  band_written={written}  band_fallback={fallback}  earliest={earliest}  coverage={coverage}")
+        sent, bandless, by_design = bandless_updates(logs, start)
+        print(f"updates: sent={sent}  bandless={len(bandless)}  by_design_without_band={by_design}")
+        for at, locality in bandless:
+            print(f"  B4 bandless update: gate passed {at}  {locality}")
     return 0
 
 
