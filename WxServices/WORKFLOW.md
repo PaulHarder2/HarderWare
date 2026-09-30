@@ -1,6 +1,6 @@
 # WxServices development workflow
 
-Last updated 2026-08-18.
+Last updated 2026-09-30.
 
 This document is the authoritative workflow for landing a change in WxServices. It is a snapshot of the rules Paul and Claude have agreed on over time; when something here conflicts with an ad-hoc direction, this document wins unless the conflict is flagged and the document updated.
 
@@ -198,15 +198,15 @@ AI-reviewer independence matters here: CodeRabbit is OpenAI, Claude is Anthropic
 
 CodeRabbit's behavior is tuned via `.coderabbit.yaml` at the repo root (added in WX-32). The config enables the `assertive` review profile, high-level summaries, Jira-issue linking, effort estimates, and per-path guidance for C#, Python, Markdown, and PowerShell. Tune as needed; changes to the yaml are themselves PRs through this same workflow.
 
-### 9a. Never trust an "all clear" — verify the actual review state by hand
+### What "CodeRabbit is clean" means
 
-**Standing policy (added 2026-06-30):** every time CodeRabbit *appears* clear — the `check-cr.sh` poller prints a short/empty finding list, the GitHub check shows a green ✓, or a summary "looks done" — treat that as *unconfirmed* and do a complete manual recheck against the API before acting on it (hash-fill, merge, or telling Paul it's green). The convenience signals are flaky in **both** directions; the authoritative state is only what these queries show:
+Every later step that says CodeRabbit is clean (§10's hash-fill, §11's merge) means all of the following, judged on the PR's **head commit**:
 
-1. **Every review, with its state and commit.** `gh api repos/<owner>/<repo>/pulls/<N>/reviews --jq '.[] | {id, author: .user.login, state, commit: .commit_id[0:7], submitted: .submitted_at}'`. The *effective* review is the latest one **on the head commit**. An earlier-commit `CHANGES_REQUESTED` stays **sticky** — it holds `reviewDecision`/`mergeStateStatus` at `CHANGES_REQUESTED`/`BLOCKED` even after the newest review is only `COMMENTED` — and is cleared by **dismissing that specific review id** at merge time, *not* by assuming it's irrelevant.
-2. **The full latest-review body, including every collapsed `<summary>` section.** The poller parses the inline list and **misses** findings folded into `⚠️ Outside diff range comments`, `♻️ Duplicate comments`, and `🧹 Nitpick`. Read the raw body (`gh api .../pulls/<N>/reviews/<id> --jq '.body'`) and scan those sections — a Major correctness finding can live there (e.g. WX-235's "publish in-flight state before the await" was an *outside-diff* comment the poller never showed).
-3. **Every inline comment on the head commit, read in full.** `gh api .../pulls/<N>/comments --paginate` filtered to the head SHA. A finding re-posted on the new commit is **not** necessarily unaddressed, and one the poller dropped is **not** necessarily accepted — distinguish only by the literal **`✅ Addressed in commit <sha>`** marker CodeRabbit appends, and by reading the comment text (a re-post often carries a *refined* ask, e.g. a TOCTOU re-check the first fix missed).
+1. **The latest CodeRabbit review there is a genuine review**, not a rate-limit skip. A skip posts no findings and can still leave the status check green.
+2. **Every finding in that review is addressed or declined in writing** — including the findings folded into its collapsed *outside diff range*, *duplicate* and *nitpick* sections, which a summary does not show.
+3. **An earlier-commit `CHANGES_REQUESTED` review that still blocks the merge is dismissed by its review id**, with the rationale, at merge time.
 
-Only after this pass — not the poller's verdict — is CodeRabbit "clear." *Reason: on WX-235 (PR #149) the poller reported one open finding when three were materially open, including a Major concurrency bug; the green-looking state was an artifact of a stale sticky review plus collapsed sections. `check-cr.sh` is a triage aid, never the source of truth.*
+A green status check, a short summary or a script's verdict does not establish any of these. How the maintainer verifies them is part of the shared policy described at the top of this document.
 
 ## 10. Hash-fill commit
 
@@ -228,7 +228,7 @@ grep -c '_pending_' "$(git rev-parse --show-toplevel)/WxServices/VERSIONS.md"   
 
 ⚠️ **A retroactive fill — a branch whose only change is the hash for an already-merged version, as in WX-449 — has no branch tip of its own.** Record the commit that shipped that version.
 
-This hash-fill commit does **not** gate on a fresh CodeRabbit review. It is a deterministic `_pending_`→hash substitution, and the substantive change has by now cleared both Claude's `/code-review` (§7d) and CodeRabbit. Merge it as soon as **CI** is green. ⚠️ **CodeRabbit posts NOTHING on a hash-fill-only push** — WX-196 added `!WxServices/VERSIONS.md` to `.coderabbit.yaml`, so a push whose only changed file is `VERSIONS.md` is excluded from review. **Do not poll `check-cr.sh` for a verdict that will never arrive.**
+This hash-fill commit does **not** gate on a fresh CodeRabbit review. It is a deterministic `_pending_`→hash substitution, and the substantive change has by now cleared both Claude's `/code-review` (§7d) and CodeRabbit. Merge it as soon as **CI** is green. ⚠️ **CodeRabbit posts NOTHING on a hash-fill-only push** — WX-196 added `!WxServices/VERSIONS.md` to `.coderabbit.yaml`, so a push whose only changed file is `VERSIONS.md` is excluded from review. **Do not wait for a CodeRabbit verdict that will never arrive.**
 
 Skip this step for pure-tooling / pure-docs PRs that did not bump the version (see §5).
 
@@ -281,7 +281,7 @@ When in doubt, test — a wrongly-skipped verification is the costlier mistake.
 ### Two tiers of verification
 
 1. **Baseline smoke (every deploy):** services came up, heartbeat current, the expected version is running (cross-check `deploy-history.log` against the release), no new ERRORs.
-2. **Change-specific verification (the warranted change):** confirm the change's *fingerprint* is present in production and the old behavior is gone. Where scriptable, the script lives **in the repo, beside its procedure** at `docs/test-procedures/WX-NN-verify.sh` — e.g. `WX-160-verify.sh`, which reads the service log and reports `taf-fresh` → 0, the new suppressions, and health. Keeping it in the repo (not `Code/tools`) is what lets it **ride the PR** (below) and stay versioned with the code it checks — the script greps that code's literal log strings, so the two must change together. The boundary: *ticket-/version-coupled verification → repo; generic cross-cutting workflow tooling (`check-ci.sh`, `check-cr.sh`) → `Code/tools`, outside the repo.* One documented carve-out: a *generic helper that exists to serve the in-repo verify scripts* lives beside them, not in `Code/tools` — e.g. `deploy-info.sh`, which returns the deploy boundary from `deploy-history.log` for any `WX-NN-verify.sh` — the latest deploy time of one or more named components (or `all`), and, with `--version V`, the most recent deploy matching that version as `timestamp<TAB>commit` (boundary + identity; see *Choosing the verification boundary* below). It is generic, but it must travel and be reviewed with the verify scripts that call it, so the repo is its home.
+2. **Change-specific verification (the warranted change):** confirm the change's *fingerprint* is present in production and the old behavior is gone. Where scriptable, the script lives **in the repo, beside its procedure** at `docs/test-procedures/WX-NN-verify.sh` — e.g. `WX-160-verify.sh`, which reads the service log and reports `taf-fresh` → 0, the new suppressions, and health. Keeping it in the repo is what lets it **ride the PR** (below) and stay versioned with the code it checks — the script greps that code's literal log strings, so the two must change together. The boundary: *ticket-/version-coupled verification → repo; generic cross-cutting workflow tooling → outside this repo.* One documented carve-out: a *generic helper that exists to serve the in-repo verify scripts* lives beside them, not outside the repo — e.g. `deploy-info.sh`, which returns the deploy boundary from `deploy-history.log` for any `WX-NN-verify.sh` — the latest deploy time of one or more named components (or `all`), and, with `--version V`, the most recent deploy matching that version as `timestamp<TAB>commit` (boundary + identity; see *Choosing the verification boundary* below). It is generic, but it must travel and be reviewed with the verify scripts that call it, so the repo is its home.
 
 ### Author the procedure *before* review
 
@@ -363,4 +363,4 @@ A uniform, tooling-based replacement for this manual step (a dedicated migrator 
 
 _None currently._
 
-The long-standing item here — Dropbox's file watcher intermittently locking `.git/config.lock` or `.git/refs/remotes/origin/*.lock` during a push, so the push reached GitHub but the local ref/upstream write failed — was **resolved in WX-241** by moving the repo out of the Dropbox tree to `C:\Code`. The dedicated recovery tooling (`git-push-safe.sh`, `clean-git-locks.sh`, and `pr-merge.sh`'s lock-clearing logic) was retired at the same time. If you ever see a stray zero-byte `*.lock` under `.git/` (e.g. inherited from an old clone), remove it and re-sync — in **PowerShell**: `Get-ChildItem -Path .git -Recurse -Filter *.lock | Remove-Item -Force`, then `git fetch origin` (WSL / Git Bash equivalent: `find .git -name '*.lock' -delete`).
+The long-standing item here — Dropbox's file watcher intermittently locking `.git/config.lock` or `.git/refs/remotes/origin/*.lock` during a push, so the push reached GitHub but the local ref/upstream write failed — was **resolved in WX-241** by moving the repo out of the Dropbox tree to `C:\Code`. The dedicated recovery tooling (a push wrapper, a lock cleaner, and the merge script's lock-clearing logic) was retired at the same time. If you ever see a stray zero-byte `*.lock` under `.git/` (e.g. inherited from an old clone), remove it and re-sync — in **PowerShell**: `Get-ChildItem -Path .git -Recurse -Filter *.lock | Remove-Item -Force`, then `git fetch origin` (WSL / Git Bash equivalent: `find .git -name '*.lock' -delete`).

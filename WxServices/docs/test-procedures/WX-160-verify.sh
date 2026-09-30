@@ -19,7 +19,7 @@
 # Lives in the repo beside its procedure (docs/test-procedures/WX-160.md): a
 # change-specific verification rides the same PR as the code it checks, so it is
 # reviewed and versioned with that code (WORKFLOW.md §13). Generic cross-cutting
-# workflow tools (check-ci.sh, check-cr.sh) stay in Code/tools.
+# workflow tools (check-ci.sh, check-cr.sh) stay outside this repo.
 #
 # The shared scaffold -- arg parsing, the version-pinned deploy boundary (via the
 # shared deploy-info.sh helper), the before/after window, and the header -- lives in
