@@ -17,11 +17,12 @@
 // the Claude call when it asks nothing new: the gate fires only criteria on record, against the
 // same prior, with the same TAF and GFS run in hand, and the METAR shows the same station,
 // present weather, wind band and visibility band. The gate's forecast is built from the GFS
-// run and the TAF, so with both unchanged its criteria cannot have grown. What the skip lets
+// run and the TAF; with both unchanged, the clock can still bring new criteria (a block
+// crossing into a nearer tier), and those are not on record, so Claude is asked. What the skip lets
 // pass is a METAR that moved only in sky cover or temperature band, which is most of the
 // hourly churn; that is a judgment, not a proof that Claude would answer the same, and the
-// window bounds it. Anything else asks Claude again. A delivery that moves the baseline clears
-// the record.
+// window bounds it. Anything else asks Claude again. A delivered weather report clears the
+// record; a prior that moved any other way turns it away.
 
 using MetarParser.Data.Entities;
 
@@ -62,9 +63,9 @@ internal enum RejectedGateCheck
 }
 
 /// <summary>
-/// The WX-506 repeat skip: records, on the locality's state, the gate criteria and the input
-/// identity behind a withheld unscheduled update, and recognises a later cycle that asks
-/// nothing new. Pure functions over <see cref="LocalityState"/>; the caller persists the state.
+/// The WX-506 repeat skip: records, on the locality's state, the gate criteria, the input
+/// identity and the prior behind an unscheduled cycle that Claude answered without a send
+/// (withheld, or not news), and recognises a later cycle that asks nothing new. Pure functions over <see cref="LocalityState"/>; the caller persists the state.
 /// </summary>
 internal static class RejectedGateMemory
 {
@@ -104,7 +105,7 @@ internal static class RejectedGateMemory
         state.LastRejectedPriorSnapshotId = recorded ? priorSnapshotId : null;
     }
 
-    /// <summary>Forget any rejection on record: called whenever a delivery moves the locality's baseline.</summary>
+    /// <summary>Forget any rejection on record: called when a weather report is delivered.</summary>
     internal static void Clear(LocalityState state)
     {
         state.LastRejectedGateCriteria = null;

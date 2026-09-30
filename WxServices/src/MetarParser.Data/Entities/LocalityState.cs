@@ -56,13 +56,15 @@ public class LocalityState
 
     /// <summary>
     /// The WX-114 gate criteria that fired on the locality's most recent unscheduled cycle
-    /// whose reconciled report was then withheld as carrying no change (WX-506), serialised
+    /// that Claude answered without a send: its reconciled report withheld as carrying no
+    /// change or as redundant (WX-506), or the arrival judged not news; serialised
     /// by <c>RejectedGateMemory</c>.  The gate had judged the model's forecast materially
     /// different from the last sent report; Claude, weighing all the evidence, did not adopt
     /// the difference.  Until <see cref="LastRejectedGateUtc"/> is older than the configured
     /// window, a later cycle whose gate fires only these criteria again, on the same evidence
     /// (<see cref="LastRejectedInputHash"/>), skips the Claude call, so the same question is not
-    /// paid for on every arrival.  Cleared whenever a delivery moves the locality's baseline.
+    /// paid for on every arrival.  Cleared when a weather report is delivered; a prior that moved
+    /// any other way turns the record away (<see cref="LastRejectedPriorSnapshotId"/>).
     /// <see langword="null"/> when there is no such rejection on record.
     /// </summary>
     public string? LastRejectedGateCriteria { get; set; }

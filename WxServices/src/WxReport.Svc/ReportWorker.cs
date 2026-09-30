@@ -1454,19 +1454,9 @@ public sealed class ReportWorker : BackgroundService
         // welcomes (first-contact, no weather) must NOT move it (see helper).
         if (weatherSent > 0)
             await AdvanceBaselineAfterSendAsync(ctx, state, reason, now, inputHash, snapshot, label, ct);
-        else if (welcomeSent > 0 && state.LastRejectedGateCriteria is not null)
-        {
-            // WX-506 rework: a welcome-only delivery leaves the cadence alone, but its
-            // CommittedSend points at this cycle's snapshot, so the next cycle's prior moves and a
-            // rejection measured against the old prior no longer applies.
-            RejectedGateMemory.Clear(state);
-            try { await ctx.SaveChangesAsync(ct); }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                _statePersistFailures.Add(1);
-                Logger.Error($"{label}: failed to clear the WX-506 rejected-gate record after a welcome-only delivery.", ex);
-            }
-        }
+        // A welcome-only delivery also moves the next cycle's prior (its CommittedSend points at
+        // this cycle's snapshot). The WX-506 rejected-gate record is left as it is: the prior-id
+        // check turns it away (NewBaseline) and logs that it did.
 
         return weatherSent + welcomeSent;
     }

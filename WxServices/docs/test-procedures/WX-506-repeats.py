@@ -10,9 +10,11 @@ repeat skipped"), so after the deploy there should be none.
 
 The code logs its reason to ask again ("WX-506 rejected-gate record not applied (<reason>)": a new
 TAF or GFS run, new observed weather, a new prior, a severe onset, the window running out). Such a
-line restarts the pairing for that locality, as does a weather report delivered to it ("report sent
-(locality ..."; not the startup diagnostic report, and not a welcome, which clears the service's
-record only on a cycle that also reconciled, a case this script cannot tell apart).
+line, logged within 10 minutes before a withheld cycle, makes that cycle's question a fair one: it
+is not counted, and it replaces the earlier record, as the service's own record is replaced. A
+reason line on a cycle that ends some other way changes nothing, because the service keeps its
+record then too. A weather report delivered to the locality ("report sent (locality ..."; not the
+startup diagnostic report, and not a welcome) clears the pairing, as it clears the service's record.
 Because the service logs WindowExpired itself, no time tolerance is needed after the deploy;
 --tolerance-minutes (default 0) exists only for reading logs from before it.
 
@@ -28,7 +30,7 @@ Prints, from --since on:
   one "calls <date> <n>" line per UTC date: Claude calls logged (LogClaudeTokens)
 
 Usage:
-  WX-506-repeats.py --since 'YYYY-MM-DD HH:MM:SS' [--window-hours 6] [--tolerance-minutes 15] --log FILE [--log FILE ...]
+  WX-506-repeats.py --since 'YYYY-MM-DD HH:MM:SS' [--window-hours 6] [--tolerance-minutes 0] --log FILE [--log FILE ...]
   WX-506-repeats.py --selftest
 """
 from __future__ import annotations
@@ -63,6 +65,7 @@ def scan(lines, since: datetime, window: timedelta):
     """(withheld, repeat_skipped, b5 list, calls per date) for the lines at or after `since`."""
     gate_by_loc: dict[str, tuple[datetime, frozenset[str]]] = {}
     last_withheld: dict[str, tuple[datetime, frozenset[str]]] = {}
+    reasked_at: dict[str, datetime] = {}
     withheld = skipped = 0
     b5: list[tuple[str, datetime, datetime, frozenset[str]]] = []
     calls: Counter[str] = Counter()
@@ -92,14 +95,16 @@ def scan(lines, since: datetime, window: timedelta):
             gate_by_loc.pop(loc, None)
             continue
         if REASKED in line:
-            last_withheld.pop(loc, None)
+            reasked_at[loc] = at
             continue
         if is_withheld(line):
             withheld += 1
             gate = gate_by_loc.pop(loc, None)   # this cycle's gate line, used once
             fired = gate[1] if gate and at - gate[0] <= GATE_MAX_AGE else frozenset()
             prev = last_withheld.get(loc)
-            if prev and fired and fired <= prev[1] and at - prev[0] < window:
+            asked_at = reasked_at.pop(loc, None)
+            justified = asked_at is not None and at - asked_at <= GATE_MAX_AGE
+            if prev and fired and not justified and fired <= prev[1] and at - prev[0] < window:
                 b5.append((loc, prev[0], at, fired))
             if fired:
                 last_withheld[loc] = (at, fired)
@@ -170,6 +175,14 @@ def selftest() -> int:
         ("a logged re-ask reason restarts the pairing", [
             f"{t} 10:00:00.000 {gate.format(A)}", f"{t} 10:01:00.000 {held}",
             f"{t} 11:00:00.000 {gate.format(A)}", f"{t} 11:00:00.500 {reask}", f"{t} 11:01:00.000 {held}"], 0, 2, 0, 0),
+        ("a re-ask on a cycle that ended otherwise keeps the earlier record", [
+            f"{t} 10:00:00.000 {gate.format(A)}", f"{t} 10:01:00.000 {held}",
+            f"{t} 11:00:00.000 {gate.format(A)}", f"{t} 11:00:00.500 {reask}",
+            f"{t} 12:00:00.000 {gate.format(A)}", f"{t} 12:01:00.000 {held}"], 1, 2, 0, 0),
+        ("a re-asked withheld cycle replaces the record, and a repeat of it is B5", [
+            f"{t} 10:00:00.000 {gate.format(A)}", f"{t} 10:01:00.000 {held}",
+            f"{t} 11:00:00.000 {gate.format(A)}", f"{t} 11:00:00.500 {reask}", f"{t} 11:01:00.000 {held}",
+            f"{t} 12:00:00.000 {gate.format(A)}", f"{t} 12:01:00.000 {held}"], 1, 3, 0, 0),
         ("a report sent in between restarts the pairing", [
             f"{t} 10:00:00.000 {gate.format(A)}", f"{t} 10:01:00.000 {held}",
             f"{t} 12:00:00.000 {sent}",
