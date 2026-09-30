@@ -55,6 +55,44 @@ public class LocalityState
     public string? LastDegradedInputHash { get; set; }
 
     /// <summary>
+    /// The WX-114 gate criteria that fired on the locality's most recent unscheduled cycle
+    /// that Claude answered without a send: its reconciled report withheld as carrying no
+    /// change or as redundant (WX-506), or the arrival judged not news; serialised
+    /// by <c>RejectedGateMemory</c>.  The gate had judged the model's forecast materially
+    /// different from the last sent report; Claude, weighing all the evidence, did not adopt
+    /// the difference.  Until <see cref="LastRejectedGateUtc"/> is older than the configured
+    /// window, a later cycle whose gate fires only these criteria again, on the same evidence
+    /// (<see cref="LastRejectedInputHash"/>), skips the Claude call, so the same question is not
+    /// paid for on every arrival.  Cleared when a weather report is delivered; a prior that moved
+    /// any other way turns the record away (<see cref="LastRejectedPriorSnapshotId"/>).
+    /// <see langword="null"/> when there is no such rejection on record.
+    /// </summary>
+    public string? LastRejectedGateCriteria { get; set; }
+
+    /// <summary>Column length of <see cref="LastRejectedGateCriteria"/>.  A criteria set that serialises longer is not recorded, so the skip never acts on a truncated set.</summary>
+    public const int RejectedGateCriteriaMaxLength = 2000;
+
+    /// <summary>UTC time <see cref="LastRejectedGateCriteria"/> was recorded; the repeat skip applies only within the configured window after it.  <see langword="null"/> with it.</summary>
+    public DateTime? LastRejectedGateUtc { get; set; }
+
+    /// <summary>
+    /// Serialised <c>InputIdentity</c> of the evidence Claude weighed when it rejected
+    /// <see cref="LastRejectedGateCriteria"/>.  The repeat skip applies only while the same TAF
+    /// and GFS run are in hand and the METAR's station, present weather, wind band and
+    /// visibility band are unchanged.  <see langword="null"/> with the criteria.
+    /// </summary>
+    public string? LastRejectedInputHash { get; set; }
+
+    /// <summary>
+    /// Id of the prior <c>ForecastSnapshot</c> the gate measured against when Claude answered
+    /// <see cref="LastRejectedGateCriteria"/>.  The prior can move without a delivery here (a
+    /// served recipient reassigned from another locality brings their latest snapshot), so the
+    /// skip applies only while the gate measures against the same prior.  <see langword="null"/>
+    /// with the criteria.
+    /// </summary>
+    public int? LastRejectedPriorSnapshotId { get; set; }
+
+    /// <summary>
     /// ICAO of the METAR station behind the locality's most recent report.  Detects
     /// station switches within the locality's priority-ordered hierarchy (the primary
     /// had no recent data).  Only captured when an observation was available.
