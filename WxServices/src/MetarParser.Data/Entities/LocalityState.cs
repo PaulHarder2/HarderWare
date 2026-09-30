@@ -55,6 +55,24 @@ public class LocalityState
     public string? LastDegradedInputHash { get; set; }
 
     /// <summary>
+    /// The WX-114 gate criteria that fired on the locality's most recent unscheduled cycle
+    /// whose reconciled report was then withheld as carrying no change (WX-506), serialised
+    /// by <c>RejectedGateMemory</c>.  The gate had judged the model's forecast materially
+    /// different from the last sent report; Claude, weighing all the evidence, did not adopt
+    /// the difference.  Until <see cref="LastRejectedGateUtc"/> is older than the configured
+    /// window, a later cycle whose gate fires only these criteria again skips the Claude
+    /// call, so the same question is not paid for on every arrival.  Cleared whenever a
+    /// report is sent.  <see langword="null"/> when there is no such rejection on record.
+    /// </summary>
+    public string? LastRejectedGateCriteria { get; set; }
+
+    /// <summary>Column length of <see cref="LastRejectedGateCriteria"/>.  A criteria set that serialises longer is not recorded, so the skip never acts on a truncated set.</summary>
+    public const int RejectedGateCriteriaMaxLength = 2000;
+
+    /// <summary>UTC time <see cref="LastRejectedGateCriteria"/> was recorded; the repeat skip applies only within the configured window after it.  <see langword="null"/> with it.</summary>
+    public DateTime? LastRejectedGateUtc { get; set; }
+
+    /// <summary>
     /// ICAO of the METAR station behind the locality's most recent report.  Detects
     /// station switches within the locality's priority-ordered hierarchy (the primary
     /// had no recent data).  Only captured when an observation was available.

@@ -54,6 +54,7 @@ public sealed class ReportWorker : BackgroundService
     private readonly Counter<long> _redundantSuppressed;
     private readonly Counter<long> _severeFlipSuppressed;
     private readonly Counter<long> _noComputedChangeSuppressed;
+    private readonly Counter<long> _rejectedRepeatSuppressed;
     private readonly Counter<long> _significanceGateSkips;
     private readonly Counter<long> _debounceSuppressed;
     private readonly Counter<long> _quietWindowSuppressed;
@@ -104,6 +105,7 @@ public sealed class ReportWorker : BackgroundService
         _redundantSuppressed = _meter.CreateCounter<long>("wxreport.suppressed.redundant.total", description: "WX-108: unscheduled sends suppressed because the reconciled snapshot was materially identical to the last sent report.");
         _severeFlipSuppressed = _meter.CreateCounter<long>("wxreport.suppressed.severe_flip.total", description: "WX-108: unscheduled sends suppressed because the only change was a severe-flag flip on an observation-only advance with no newer GFS run or TAF.");
         _noComputedChangeSuppressed = _meter.CreateCounter<long>("wxreport.suppressed.no_computed_change.total", description: "WX-506: unscheduled sends suppressed because the reconciled report carried no computed change, so it would have had no \"Why this update\" band.");
+        _rejectedRepeatSuppressed = _meter.CreateCounter<long>("wxreport.suppressed.rejected_repeat.total", description: "WX-506 rework: significant unscheduled cycles whose gate fired only criteria Claude had already rejected within the window, tagged by mode (enforce = Claude call skipped; shadow = would-skip but Claude still called).");
         _significanceGateSkips = _meter.CreateCounter<long>("wxreport.suppressed.significance_gate.total", description: "WX-114: cycles the deterministic significance gate found unchanged since the last sent report, tagged by mode (enforce = Claude call skipped; shadow = would-skip but Claude still called).");
         _debounceSuppressed = _meter.CreateCounter<long>("wxreport.suppressed.debounce.total", description: "WX-181: significant unscheduled cycles suppressed by the day-banded debounce (the change's day-band min-gap had not elapsed since the last unscheduled send), tagged by mode (enforce = Claude call skipped; shadow = would-skip but Claude still called).");
         _quietWindowSuppressed = _meter.CreateCounter<long>("wxreport.suppressed.quietwindow.total", description: "WX-157: significant unscheduled cycles suppressed by the day-banded pre-scheduled quiet window (the next scheduled slot fell within the change's day-band quiet window; content rides the scheduled report), tagged by mode (enforce = Claude call skipped; shadow = would-skip but Claude still called).");
@@ -1159,6 +1161,7 @@ public sealed class ReportWorker : BackgroundService
         // via the retired `taf-fresh` shortcut. Wind in the merge is sustained-only
         // (gust touches a gate decision solely through the 50-kt severe rule).
         var gateMode = cfg.SignificanceGate.Mode;
+        SignificanceResult? passedGate = null;   // the gate result behind this cycle's Claude call, if the gate ran and passed
         if (gateMode != SignificanceGateMode.Off && allowSkip && priorSnapshot is not null)
         {
             SignificanceResult? gate = null;
@@ -1187,6 +1190,7 @@ public sealed class ReportWorker : BackgroundService
             }
             else if (gate is { Significant: true } passed)
             {
+                passedGate = passed;
                 // Two day-banded admission-control suppressors, evaluated before the Claude
                 // call: WX-181 post-send debounce, then the WX-157 pre-scheduled quiet window.
                 // Each folds a significant, non-severe-onset unscheduled change away (its
@@ -1209,6 +1213,23 @@ public sealed class ReportWorker : BackgroundService
                     return 0;
 
                 Logger.Debug($"{label}: WX-114 significance gate passed ({gateMode}, {triggerType}) — fired: {string.Join(", ", passed.FiredCriteria)}.");
+
+                // WX-506 rework: the gate asks only what Claude already answered on a recent cycle
+                // whose update was then withheld as carrying no change. Asking again would pay for
+                // the same answer (Austin, 2026-09-29: 18 times in a row). Honors enforce/shadow.
+                if (RejectedGateMemory.IsRepeat(passed, state, now, cfg.SignificanceGate.RejectedRepeatWindowHours))
+                {
+                    bool enforce = gateMode == SignificanceGateMode.Enforce;
+                    _rejectedRepeatSuppressed.Add(1, new KeyValuePair<string, object?>("mode", enforce ? "enforce" : "shadow"));
+                    var since = state.LastRejectedGateUtc is { } at ? $"{(now - at).TotalMinutes:F0} min ago" : "earlier";
+                    if (enforce)
+                    {
+                        Logger.Info($"{label}: WX-506 repeat skipped {triggerType} cycle — the gate fired only criteria Claude rejected {since} ({string.Join(", ", passed.FiredCriteria)}); Claude not called.");
+                        await PersistUnsentCycleAsync(ctx, label, state, inputHash, ct);
+                        return 0;
+                    }
+                    Logger.Debug($"{label}: WX-506 repeat (shadow) WOULD skip {triggerType} — criteria rejected {since}; calling Claude anyway.");
+                }
             }
         }
 
@@ -1347,6 +1368,11 @@ public sealed class ReportWorker : BackgroundService
                         "the reconciled report has no computed change, so the update would carry no \"Why this update\" band"),
                 };
                 counter.Add(1);
+                // WX-506 rework: Claude has now weighed this gate result and found nothing to send.
+                // Remember what the gate fired, so the same question is not paid for on the next
+                // arrival. Not for the severe-flag hysteresis: that withholds a change Claude did make.
+                if (suppression != UnscheduledSuppression.SevereFlip && passedGate is { } weighed)
+                    RejectedGateMemory.Record(state, weighed, now);
                 await PersistUnsentCycleAsync(ctx, label, state, inputHash, ct);
                 Logger.Info($"{label}: {tag} suppressed {triggerType} send — {why}. Trace: {success.ReasoningTrace}");
                 return 0;
@@ -1432,6 +1458,24 @@ public sealed class ReportWorker : BackgroundService
         WeatherDataContext ctx, LocalityState state, string reason, DateTime now, string inputHash,
         WeatherSnapshot snapshot, string label, CancellationToken ct, bool clearDegraded = true)
     {
+        ApplySentState(state, reason, now, inputHash, snapshot, clearDegraded);
+
+        try { await ctx.SaveChangesAsync(ct); }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _statePersistFailures.Add(1);
+            Logger.Error($"{label}: failed to save locality state after sends — baseline did not advance; next cycle may resend.", ex);
+        }
+    }
+
+    /// <summary>
+    /// The locality-state changes a delivered report makes, apart from saving them: the cadence
+    /// stamp for its kind, both input hashes, the WX-182 degrade breaker (unless a cached re-send
+    /// keeps it armed), the WX-506 rejected-gate record, and the METAR station.
+    /// </summary>
+    internal static void ApplySentState(
+        LocalityState state, string reason, DateTime now, string inputHash, WeatherSnapshot snapshot, bool clearDegraded)
+    {
         if (reason is "scheduled" or "first")
             state.LastScheduledSentUtc = now;
         else
@@ -1443,15 +1487,10 @@ public sealed class ReportWorker : BackgroundService
         // same stuck input stay cost-0.
         if (clearDegraded)
             state.LastDegradedInputHash = null;
+        // WX-506 rework: the baseline the rejected criteria were measured against has moved.
+        RejectedGateMemory.Clear(state);
         if (snapshot.ObservationAvailable)
             state.LastMetarIcao = snapshot.StationIcao;
-
-        try { await ctx.SaveChangesAsync(ct); }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            _statePersistFailures.Add(1);
-            Logger.Error($"{label}: failed to save locality state after sends — baseline did not advance; next cycle may resend.", ex);
-        }
     }
 
     /// <summary>

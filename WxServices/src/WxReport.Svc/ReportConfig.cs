@@ -140,6 +140,15 @@ public class SignificanceGateConfig
     /// <summary>Daily-high temperature (°F) marking the heat-advisory line; crossing it is always significant.  Fixed nationally for v1 — regionalizing it is a deferred follow-up.</summary>
     public int HeatAdvisoryDegF { get; set; } = 100;
 
+    /// <summary>
+    /// WX-506 rework: how long, in hours, a gate result that Claude has already rejected is remembered.  When an
+    /// unscheduled update is withheld as carrying no change, the criteria the gate fired are recorded; a later
+    /// cycle within this window whose gate fires only those criteria again skips the Claude call.  After it,
+    /// Claude is asked again.  Six hours is Paul's decision (2026-09-30): it bounds how long a model change
+    /// Claude once rejected can go unreconsidered.  0 or less turns the repeat skip off.
+    /// </summary>
+    public double RejectedRepeatWindowHours { get; set; } = 6;
+
     // Fixed bright lines the gate keys off — the freeze point and the horizon-tier
     // bounds — are not deployment-tunable, so they live as constants in
     // WxServices.Common.WxThresholds (single source, shared across assemblies), not as
