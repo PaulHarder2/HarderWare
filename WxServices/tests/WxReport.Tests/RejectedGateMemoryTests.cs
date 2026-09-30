@@ -25,18 +25,20 @@ public class RejectedGateMemoryTests
         Taf: "2026-09-29T12:00:00.0000000Z",
         Gfs: "2026-09-29T06:00:00.0000000Z");
 
+    private const int Prior = 23600;   // the prior ForecastSnapshot the gate measured against
+
     private static SignificanceResult Passed(params string[] fired) =>
         new(true, fired, new DateOnly(2026, 9, 30), SevereEntered: false);
 
     private static LocalityState Rejected(params string[] fired)
     {
         var state = new LocalityState();
-        RejectedGateMemory.Record(state, Passed(fired), Evidence, Now);
+        RejectedGateMemory.Record(state, Passed(fired), Evidence, Prior, Now);
         return state;
     }
 
-    private static RejectedGateCheck Check(SignificanceResult gate, LocalityState state, InputIdentity? input = null, double hoursLater = 1, double window = Window) =>
-        RejectedGateMemory.Check(gate, state, input ?? Evidence, Now.AddHours(hoursLater), window);
+    private static RejectedGateCheck Check(SignificanceResult gate, LocalityState state, InputIdentity? input = null, double hoursLater = 1, double window = Window, int prior = Prior) =>
+        RejectedGateMemory.Check(gate, state, input ?? Evidence, prior, Now.AddHours(hoursLater), window);
 
     [Fact]
     public void SameCriteriaAndEvidence_WithinWindow_IsRepeat() =>
@@ -47,12 +49,38 @@ public class RejectedGateMemoryTests
         Assert.Equal(RejectedGateCheck.Repeat, Check(Passed(Austin), Rejected(Austin, "temp-delta@T2(2026-10-01)")));
 
     [Fact]
-    public void OnlyTheMetarBandsMoved_IsRepeat()
+    public void OnlySkyAndTemperatureBandsMoved_IsRepeat()
     {
-        // Hourly re-observations change the temperature, wind and sky bands; that is what
-        // Claude already weighed the forecast against.
-        var laterMetar = Evidence with { Metar = "KAUS;W2;V1;S3;T17;P" };
+        // The hourly churn: cloud cover and the ~5 F temperature band. Not treated as reason to
+        // reconsider a rejected forecast change.
+        var laterMetar = Evidence with { Metar = "KAUS;W1;V1;S3;T17;P" };
         Assert.Equal(RejectedGateCheck.Repeat, Check(Passed(Austin), Rejected(Austin), laterMetar));
+    }
+
+    [Fact]
+    public void AWindBandChange_AsksClaude() =>
+        Assert.Equal(RejectedGateCheck.NewWeather,
+            Check(Passed(Austin), Rejected(Austin), Evidence with { Metar = "KAUS;W3;V1;S2;T16;P" }));
+
+    [Fact]
+    public void AVisibilityBandChange_AsksClaude() =>
+        Assert.Equal(RejectedGateCheck.NewWeather,
+            Check(Passed(Austin), Rejected(Austin), Evidence with { Metar = "KAUS;W1;V0;S2;T16;P" }));
+
+    [Fact]
+    public void AnotherPrior_AsksClaude() =>
+        Assert.Equal(RejectedGateCheck.NewBaseline, Check(Passed(Austin), Rejected(Austin), prior: Prior + 1));
+
+    [Fact]
+    public void AStationBeginningWithP_StillComparesItsWeather()
+    {
+        // PHNL: the station code must not be read as the present-weather segment.
+        var state = new LocalityState();
+        var honolulu = new InputIdentity("PHNL;W1;V1;S2;T16;P", Evidence.Taf, Evidence.Gfs);
+        RejectedGateMemory.Record(state, Passed(Austin), honolulu, Prior, Now);
+        Assert.Equal(RejectedGateCheck.NewWeather,
+            Check(Passed(Austin), state, honolulu with { Metar = "PHNL;W1;V1;S3;T16;Pheavy,rain,thunderstorm" }));
+        Assert.Equal(RejectedGateCheck.Repeat, Check(Passed(Austin), state, honolulu));
     }
 
     [Fact]
@@ -129,6 +157,7 @@ public class RejectedGateMemoryTests
         Assert.Null(state.LastRejectedGateCriteria);
         Assert.Null(state.LastRejectedGateUtc);
         Assert.Null(state.LastRejectedInputHash);
+        Assert.Null(state.LastRejectedPriorSnapshotId);
         Assert.Equal(RejectedGateCheck.NoRecord, Check(Passed(Austin), state));
     }
 
@@ -159,16 +188,17 @@ public class RejectedGateMemoryTests
         Assert.Null(RejectedGateMemory.Serialize(tooLong));
 
         var state = new LocalityState();
-        RejectedGateMemory.Record(state, Passed([.. tooLong]), Evidence, Now);
+        RejectedGateMemory.Record(state, Passed([.. tooLong]), Evidence, Prior, Now);
         Assert.Null(state.LastRejectedGateCriteria);
         Assert.Null(state.LastRejectedGateUtc);
         Assert.Null(state.LastRejectedInputHash);
     }
 
     [Fact]
-    public void ObservedWeather_KeepsStationAndPresentWeather_OrTheWholeSignature()
+    public void ObservedEvidence_KeepsStationWindVisibilityAndWeather_OrTheWholeSignature()
     {
-        Assert.Equal("KAUS;Prain,ts", RejectedGateMemory.ObservedWeather("KAUS;W1;V1;S2;T16;Prain,ts"));
-        Assert.Equal("none", RejectedGateMemory.ObservedWeather("none"));
+        Assert.Equal("KAUS;W1;V1;Prain,ts", RejectedGateMemory.ObservedEvidence("KAUS;W1;V1;S2;T16;Prain,ts"));
+        Assert.Equal("none", RejectedGateMemory.ObservedEvidence("none"));
+        Assert.Equal("KAUS;W1", RejectedGateMemory.ObservedEvidence("KAUS;W1"));
     }
 }

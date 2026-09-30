@@ -76,10 +76,19 @@ public class LocalityState
     /// <summary>
     /// Serialised <c>InputIdentity</c> of the evidence Claude weighed when it rejected
     /// <see cref="LastRejectedGateCriteria"/>.  The repeat skip applies only while the same TAF
-    /// and GFS run are in hand and the METAR's present weather is unchanged; new guidance or new
-    /// observed weather asks Claude again.  <see langword="null"/> with the criteria.
+    /// and GFS run are in hand and the METAR's station, present weather, wind band and
+    /// visibility band are unchanged.  <see langword="null"/> with the criteria.
     /// </summary>
     public string? LastRejectedInputHash { get; set; }
+
+    /// <summary>
+    /// Id of the prior <c>ForecastSnapshot</c> the gate measured against when Claude answered
+    /// <see cref="LastRejectedGateCriteria"/>.  The prior can move without a delivery here (a
+    /// served recipient reassigned from another locality brings their latest snapshot), so the
+    /// skip applies only while the gate measures against the same prior.  <see langword="null"/>
+    /// with the criteria.
+    /// </summary>
+    public int? LastRejectedPriorSnapshotId { get; set; }
 
     /// <summary>
     /// ICAO of the METAR station behind the locality's most recent report.  Detects

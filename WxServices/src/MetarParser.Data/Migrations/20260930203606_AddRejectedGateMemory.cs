@@ -30,6 +30,12 @@ namespace MetarParser.Data.Migrations
                 type: "nvarchar(200)",
                 maxLength: 200,
                 nullable: true);
+
+            migrationBuilder.AddColumn<int>(
+                name: "LastRejectedPriorSnapshotId",
+                table: "LocalityStates",
+                type: "int",
+                nullable: true);
         }
 
         /// <inheritdoc />
@@ -45,6 +51,10 @@ namespace MetarParser.Data.Migrations
 
             migrationBuilder.DropColumn(
                 name: "LastRejectedInputHash",
+                table: "LocalityStates");
+
+            migrationBuilder.DropColumn(
+                name: "LastRejectedPriorSnapshotId",
                 table: "LocalityStates");
         }
     }

@@ -1214,11 +1214,11 @@ public sealed class ReportWorker : BackgroundService
 
                 Logger.Debug($"{label}: WX-114 significance gate passed ({gateMode}, {triggerType}) — fired: {string.Join(", ", passed.FiredCriteria)}.");
 
-                // WX-506 rework: the gate asks only what Claude already answered, on the same TAF,
-                // GFS run and observed weather, on a recent cycle whose update was then withheld as
-                // carrying no change. Asking again would pay for the same answer (Austin, 2026-09-29:
+                // WX-506 rework: the gate asks only what Claude already answered, against the same
+                // prior and on the same TAF, GFS run and observed weather, on a recent cycle that
+                // Claude answered without a send. Asking again would pay for the same answer (Austin, 2026-09-29:
                 // 18 times in a row). Honors enforce/shadow.
-                var check = RejectedGateMemory.Check(passed, state, inputIdentity, now, cfg.SignificanceGate.RejectedRepeatWindowHours);
+                var check = RejectedGateMemory.Check(passed, state, inputIdentity, priorSnapshot.Id, now, cfg.SignificanceGate.RejectedRepeatWindowHours);
                 if (check == RejectedGateCheck.Repeat)
                 {
                     bool enforce = gateMode == SignificanceGateMode.Enforce;
@@ -1226,7 +1226,7 @@ public sealed class ReportWorker : BackgroundService
                     var minutesAgo = (now - state.LastRejectedGateUtc!.Value).TotalMinutes;
                     if (enforce)
                     {
-                        Logger.Info($"{label}: WX-506 repeat skipped {triggerType} cycle — the gate fired only criteria Claude rejected {minutesAgo:F0} min ago, on the same TAF, GFS run and observed weather ({string.Join(", ", passed.FiredCriteria)}); Claude not called.");
+                        Logger.Info($"{label}: WX-506 repeat skipped {triggerType} cycle — the gate fired only criteria Claude rejected {minutesAgo:F0} min ago, against the same prior, TAF, GFS run and observed weather ({string.Join(", ", passed.FiredCriteria)}); Claude not called.");
                         await PersistUnsentCycleAsync(ctx, label, state, inputHash, ct);
                         return 0;
                     }
@@ -1275,8 +1275,8 @@ public sealed class ReportWorker : BackgroundService
             // WX-506 rework (Paul, 2026-09-30): Claude has weighed this gate result and called it
             // not news, so remember it exactly as for a withheld update; the next arrival on the
             // same evidence need not ask again.
-            if (passedGate is { } judgedNotNews)
-                RejectedGateMemory.Record(state, judgedNotNews, inputIdentity, now);
+            if (passedGate is { } judgedNotNews && priorSnapshot is not null)
+                RejectedGateMemory.Record(state, judgedNotNews, inputIdentity, priorSnapshot.Id, now);
             await PersistUnsentCycleAsync(ctx, label, state, inputHash, ct);
             Logger.Info($"{label}: Claude judged the {triggerType} arrival not news — no send. Trace: {notNews.ReasoningTrace}");
             return 0;
@@ -1386,7 +1386,7 @@ public sealed class ReportWorker : BackgroundService
                 // Remember what the gate fired, so the same question is not paid for on the next
                 // arrival. Not for the severe-flag hysteresis: that withholds a change Claude did make.
                 if (RejectedGateMemory.Records(suppression) && passedGate is { } weighed)
-                    RejectedGateMemory.Record(state, weighed, inputIdentity, now);
+                    RejectedGateMemory.Record(state, weighed, inputIdentity, priorSnapshot.Id, now);
                 await PersistUnsentCycleAsync(ctx, label, state, inputHash, ct);
                 Logger.Info($"{label}: {tag} suppressed {triggerType} send — {why}. Trace: {success.ReasoningTrace}");
                 return 0;

@@ -12,14 +12,16 @@
 // repeated that locality's previous not-news criteria within 6 hours), so it is recorded too
 // (Paul, 2026-09-30).
 //
-// So a withheld or not-news cycle records the criteria its gate fired and the evidence Claude weighed, and
-// a later cycle within the window skips the Claude call when it asks nothing new: the gate
-// fires only criteria on record, and no new TAF, GFS run or change in observed weather has
-// arrived since. The gate's forecast is built from the GFS run and the TAF alone, so with both
-// unchanged its criteria, and their size, are the ones Claude already weighed; only the METAR
-// has moved, and a METAR whose present weather is unchanged is what Claude already saw.
-// Anything else asks Claude again. A send clears the record, because the baseline the
-// criteria were measured against moves.
+// So a withheld or not-news cycle records the criteria its gate fired, the evidence Claude
+// weighed and the prior the gate measured against, and a later cycle within the window skips
+// the Claude call when it asks nothing new: the gate fires only criteria on record, against the
+// same prior, with the same TAF and GFS run in hand, and the METAR shows the same station,
+// present weather, wind band and visibility band. The gate's forecast is built from the GFS
+// run and the TAF, so with both unchanged its criteria cannot have grown. What the skip lets
+// pass is a METAR that moved only in sky cover or temperature band, which is most of the
+// hourly churn; that is a judgment, not a proof that Claude would answer the same, and the
+// window bounds it. Anything else asks Claude again. A delivery that moves the baseline clears
+// the record.
 
 using MetarParser.Data.Entities;
 
@@ -52,8 +54,11 @@ internal enum RejectedGateCheck
     /// <summary>A new TAF or GFS run has arrived since the rejection.</summary>
     NewGuidance,
 
-    /// <summary>The METAR station or its present weather has changed since the rejection.</summary>
+    /// <summary>The METAR station, its present weather, its wind band or its visibility band has changed since the rejection.</summary>
     NewWeather,
+
+    /// <summary>The gate is measuring against a different prior than the one Claude's rejection was made against.</summary>
+    NewBaseline,
 }
 
 /// <summary>
@@ -89,13 +94,14 @@ internal static class RejectedGateMemory
         suppression is ReportWorker.UnscheduledSuppression.Redundant
             or ReportWorker.UnscheduledSuppression.NoComputedChange;
 
-    /// <summary>Record the gate result whose reconciled update was just withheld, the evidence behind it, and <paramref name="nowUtc"/>.</summary>
-    internal static void Record(LocalityState state, SignificanceResult gate, InputIdentity input, DateTime nowUtc)
+    /// <summary>Record the gate result Claude has just answered without a send, the evidence and prior behind it, and <paramref name="nowUtc"/>.</summary>
+    internal static void Record(LocalityState state, SignificanceResult gate, InputIdentity input, int priorSnapshotId, DateTime nowUtc)
     {
         state.LastRejectedGateCriteria = Serialize(gate.FiredCriteria);
         bool recorded = state.LastRejectedGateCriteria is not null;
         state.LastRejectedGateUtc = recorded ? nowUtc : null;
         state.LastRejectedInputHash = recorded ? input.Serialize() : null;
+        state.LastRejectedPriorSnapshotId = recorded ? priorSnapshotId : null;
     }
 
     /// <summary>Forget any rejection on record: called whenever a delivery moves the locality's baseline.</summary>
@@ -104,22 +110,25 @@ internal static class RejectedGateMemory
         state.LastRejectedGateCriteria = null;
         state.LastRejectedGateUtc = null;
         state.LastRejectedInputHash = null;
+        state.LastRejectedPriorSnapshotId = null;
     }
 
     /// <summary>
     /// Whether this cycle's passing gate asks only what Claude has already answered, and if
     /// not, why. <see cref="RejectedGateCheck.Repeat"/> only when every fired criterion is on
-    /// record, the record is younger than <paramref name="windowHours"/>, the same TAF and GFS
-    /// run are in hand, the METAR station and its present weather are unchanged, and the
-    /// result is neither a severe onset nor a disjoint horizon. Anything in doubt asks Claude.
+    /// record, against the same prior, the record is younger than <paramref name="windowHours"/>,
+    /// the same TAF and GFS run are in hand, the METAR's station, present weather, wind band and
+    /// visibility band are unchanged, and the result is neither a severe onset nor a disjoint
+    /// horizon. Anything in doubt asks Claude.
     /// </summary>
     internal static RejectedGateCheck Check(
-        SignificanceResult gate, LocalityState state, InputIdentity input, DateTime nowUtc, double windowHours)
+        SignificanceResult gate, LocalityState state, InputIdentity input, int priorSnapshotId, DateTime nowUtc, double windowHours)
     {
         if (windowHours <= 0 || !gate.Significant
             || state.LastRejectedGateCriteria is not { } recorded
             || state.LastRejectedGateUtc is not { } recordedUtc
-            || state.LastRejectedInputHash is not { } recordedInput)
+            || state.LastRejectedInputHash is not { } recordedInput
+            || state.LastRejectedPriorSnapshotId is not { } recordedPrior)
             return RejectedGateCheck.NoRecord;
         if (gate.SevereEntered)
             return RejectedGateCheck.SevereOnset;
@@ -132,10 +141,13 @@ internal static class RejectedGateMemory
         if (age >= TimeSpan.FromHours(windowHours))
             return RejectedGateCheck.WindowExpired;
 
+        if (recordedPrior != priorSnapshotId)
+            return RejectedGateCheck.NewBaseline;
+
         var then = InputIdentity.Parse(recordedInput);
         if (then.Taf != input.Taf || then.Gfs != input.Gfs)
             return RejectedGateCheck.NewGuidance;
-        if (ObservedWeather(then.Metar) != ObservedWeather(input.Metar))
+        if (ObservedEvidence(then.Metar) != ObservedEvidence(input.Metar))
             return RejectedGateCheck.NewWeather;
 
         var known = recorded.Split('\n').ToHashSet(StringComparer.Ordinal);
@@ -145,15 +157,20 @@ internal static class RejectedGateMemory
     }
 
     /// <summary>
-    /// The part of a METAR material signature that says what weather is happening: the station
-    /// and its present-weather tokens. Wind, visibility, sky and temperature bands are left out:
-    /// they move hourly and are what Claude already weighed the forecast against. A signature
-    /// that does not have the expected shape is returned whole, so any change counts.
+    /// The part of a METAR material signature (<c>STATION;W..;V..;S..;T..;P..</c>) whose change
+    /// reopens a rejected question: the station, the wind band, the visibility band and the
+    /// present-weather tokens. The sky and temperature bands are left out; they move hourly. The
+    /// station is the first segment and is never read as a band, whatever letter it begins
+    /// with. A signature without all three bands is returned whole, so any change counts.
     /// </summary>
-    internal static string ObservedWeather(string metarSignature)
+    internal static string ObservedEvidence(string metarSignature)
     {
         var parts = metarSignature.Split(';');
-        var weather = parts.FirstOrDefault(p => p.StartsWith('P'));
-        return parts.Length > 1 && weather is not null ? $"{parts[0]};{weather}" : metarSignature;
+        if (parts.Length < 2)
+            return metarSignature;
+        string? Band(char key) => parts.Skip(1).FirstOrDefault(p => p.Length > 0 && p[0] == key);
+        return Band('W') is { } w && Band('V') is { } v && Band('P') is { } wx
+            ? $"{parts[0]};{w};{v};{wx}"
+            : metarSignature;
     }
 }

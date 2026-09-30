@@ -9,10 +9,16 @@ in between and no logged reason to ask again. v1.61.7 skips the Claude call in t
 repeat skipped"), so after the deploy there should be none.
 
 The code logs its reason to ask again ("WX-506 rejected-gate record not applied (<reason>)": a new
-TAF or GFS run, new observed weather, a severe onset, the window running out). Such a line
-restarts the pairing for that locality, as does a delivery ("report sent" or "welcome sent" for it).
-The window is shortened by --tolerance-minutes, because the code measures it between cycle start
-times and the log writes each line after the Claude call.
+TAF or GFS run, new observed weather, a new prior, a severe onset, the window running out). Such a
+line restarts the pairing for that locality, as does a weather report delivered to it ("report sent
+(locality ..."; not the startup diagnostic report, and not a welcome, which clears the service's
+record only on a cycle that also reconciled, a case this script cannot tell apart).
+Because the service logs WindowExpired itself, no time tolerance is needed after the deploy;
+--tolerance-minutes (default 0) exists only for reading logs from before it.
+
+A withheld cycle's criteria are the gate line logged for that locality within the previous
+10 minutes (the cycle's own gate line; a Claude call takes well under that). An older gate line
+belongs to another cycle and is not used.
 
 Reads one or more service logs, oldest first. For each locality it pairs a withheld update with the
 gate criteria logged on that cycle ("WX-114 significance gate passed ... fired: ...").
@@ -37,11 +43,12 @@ STAMP = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)")
 LOCALITY = re.compile(r"locality '([^']+)'")
 GATE = re.compile(r"WX-114 significance gate passed \([^)]*\) — fired: (.*)\.\s*$")
 WITHHELD = ("WX-506 suppressed", "WX-108 suppressed")
-REDUNDANT_ONLY = "redundant"            # of the WX-108 suppressions, only the redundant one is recorded
+REDUNDANT_ONLY = "(redundant re-send)"  # of the WX-108 suppressions, only the redundant one is recorded
 NOT_NEWS = re.compile(r"Claude judged the \S+ arrival not news")
 SKIPPED = "WX-506 repeat skipped"
 REASKED = "WX-506 rejected-gate record not applied"
-DELIVERED = re.compile(r"(?:report|welcome) sent \(locality '([^']+)'")
+DELIVERED = re.compile(r"(?<!\(diagnostic\) )report sent \(locality '([^']+)'")
+GATE_MAX_AGE = timedelta(minutes=10)
 CALL = "LogClaudeTokens"
 
 
@@ -54,7 +61,7 @@ def is_withheld(line: str) -> bool:
 
 def scan(lines, since: datetime, window: timedelta):
     """(withheld, repeat_skipped, b5 list, calls per date) for the lines at or after `since`."""
-    gate_by_loc: dict[str, frozenset[str]] = {}
+    gate_by_loc: dict[str, tuple[datetime, frozenset[str]]] = {}
     last_withheld: dict[str, tuple[datetime, frozenset[str]]] = {}
     withheld = skipped = 0
     b5: list[tuple[str, datetime, datetime, frozenset[str]]] = []
@@ -78,7 +85,7 @@ def scan(lines, since: datetime, window: timedelta):
             continue
         g = GATE.search(line)
         if g:
-            gate_by_loc[loc] = frozenset(c.strip() for c in g.group(1).split(","))
+            gate_by_loc[loc] = (at, frozenset(c.strip() for c in g.group(1).split(",")))
             continue
         if SKIPPED in line:
             skipped += 1
@@ -89,7 +96,8 @@ def scan(lines, since: datetime, window: timedelta):
             continue
         if is_withheld(line):
             withheld += 1
-            fired = gate_by_loc.pop(loc, frozenset())   # this cycle's gate line, used once
+            gate = gate_by_loc.pop(loc, None)   # this cycle's gate line, used once
+            fired = gate[1] if gate and at - gate[0] <= GATE_MAX_AGE else frozenset()
             prev = last_withheld.get(loc)
             if prev and fired and fired <= prev[1] and at - prev[0] < window:
                 b5.append((loc, prev[0], at, fired))
@@ -116,15 +124,16 @@ def selftest() -> int:
     skip = "INFO  [ReportWorker.cs::ProcessLocalityAsync:1230] locality 'Austin, TX' (Id=2): WX-506 repeat skipped metar cycle — criteria rejected 60 min ago; Claude not called."
     other = "DEBUG [ReportWorker.cs::ProcessLocalityAsync:1211] locality 'Spring, TX' (Id=3): WX-114 significance gate passed (Enforce, metar) — fired: {}."
     other_held = held.replace("'Austin, TX' (Id=2)", "'Spring, TX' (Id=3)")
-    redundant = "INFO  [ReportWorker.cs::ProcessLocalityAsync:1351] locality 'Austin, TX' (Id=2): WX-108 suppressed metar send — reconciled snapshot is materially identical to the last sent report (redundant re-send)."
-    flip = "INFO  [ReportWorker.cs::ProcessLocalityAsync:1351] locality 'Austin, TX' (Id=2): WX-108 suppressed metar send — severe-flag de-escalation on an observation-only advance."
+    redundant = "INFO  [ReportWorker.cs::ProcessLocalityAsync:1351] locality 'Austin, TX' (Id=2): WX-108 suppressed metar send — reconciled snapshot is materially identical to the last sent report (redundant re-send). Trace: x"
+    flip = "INFO  [ReportWorker.cs::ProcessLocalityAsync:1351] locality 'Austin, TX' (Id=2): WX-108 suppressed metar send — severe-flag de-escalation on an observation-only advance. Trace: this would be redundant"
+    diagnostic = "INFO  [ReportWorker.cs::SendStartupDiagnosticAsync:420] paul_en x@y (Paul): startup (diagnostic) report sent (locality 'Austin, TX' (Id=2))."
     reask = "DEBUG [ReportWorker.cs::ProcessLocalityAsync:1240] locality 'Austin, TX' (Id=2): WX-506 rejected-gate record not applied (NewGuidance) — calling Claude."
     sent = "INFO  [ReportWorker.cs::DeliverWeatherReportAsync:1726] paul_en x@y (Paul): report sent (locality 'Austin, TX' (Id=2))."
     welcome = "INFO  [ReportWorker.cs::SendWelcomeAsync:1845] new_en x@y (New): welcome sent (locality 'Austin, TX')."
     notnews = "INFO  [ReportWorker.cs::ProcessLocalityAsync:1246] locality 'Austin, TX' (Id=2): Claude judged the metar arrival not news — no send. Trace: x"
     A = "precip-remove@T1(10-01 11Z)"
     B = "precip-add@T1(10-02 05Z)"
-    w = timedelta(hours=6) - timedelta(minutes=15)
+    w = timedelta(hours=6)
     since = datetime(2026, 10, 1)
     cases = [
         ("same criteria 1 h apart is B5", [
@@ -165,17 +174,28 @@ def selftest() -> int:
             f"{t} 10:00:00.000 {gate.format(A)}", f"{t} 10:01:00.000 {held}",
             f"{t} 12:00:00.000 {sent}",
             f"{t} 13:00:00.000 {gate.format(A)}", f"{t} 13:01:00.000 {held}"], 0, 2, 0, 0),
-        ("a welcome sent in between restarts the pairing", [
+        ("a welcome sent in between does not restart the pairing", [
             f"{t} 10:00:00.000 {gate.format(A)}", f"{t} 10:01:00.000 {held}",
-            f"{t} 12:00:00.000 {welcome}",
-            f"{t} 13:00:00.000 {gate.format(A)}", f"{t} 13:01:00.000 {held}"], 0, 2, 0, 0),
+            f"{t} 10:30:00.000 {welcome}",
+            f"{t} 11:00:00.000 {gate.format(A)}", f"{t} 11:01:00.000 {held}"], 1, 2, 0, 0),
+        ("the startup diagnostic report does not restart the pairing", [
+            f"{t} 10:00:00.000 {gate.format(A)}", f"{t} 10:01:00.000 {held}",
+            f"{t} 10:30:00.000 {diagnostic}",
+            f"{t} 11:00:00.000 {gate.format(A)}", f"{t} 11:01:00.000 {held}"], 1, 2, 0, 0),
+        ("a severe flip whose trace says redundant is not a recorded withhold", [
+            f"{t} 10:00:00.000 {gate.format(A)}", f"{t} 10:01:00.000 {flip}",
+            f"{t} 11:00:00.000 {gate.format(A)}", f"{t} 11:01:00.000 {held}"], 0, 1, 0, 0),
+        ("a gate line older than 10 minutes is another cycle's", [
+            f"{t} 10:00:00.000 {gate.format(A)}", f"{t} 10:01:00.000 {held}",
+            f"{t} 10:40:00.000 {gate.format(A)}",
+            f"{t} 11:01:00.000 {held}"], 0, 2, 0, 0),
         ("a withhold with no gate line on its cycle does not borrow an old one", [
             f"{t} 10:00:00.000 {gate.format(A)}", f"{t} 10:01:00.000 {held}",
             f"{t} 11:01:00.000 {held}"], 0, 2, 0, 0),
-        ("just inside the window less the tolerance is B5, inside the tolerance is not", [
+        ("just inside the window is B5, at the window is not", [
             f"{t} 10:00:00.000 {gate.format(A)}", f"{t} 10:01:00.000 {held}",
-            f"{t} 15:45:00.000 {gate.format(A)}", f"{t} 15:45:30.000 {held}",
-            f"{t} 21:40:00.000 {gate.format(A)}", f"{t} 21:40:30.000 {held}"], 1, 3, 0, 0),
+            f"{t} 15:59:00.000 {gate.format(A)}", f"{t} 15:59:30.000 {held}",
+            f"{t} 21:59:00.000 {gate.format(A)}", f"{t} 22:00:00.000 {held}"], 1, 3, 0, 0),
         ("a not-news answer then a withheld update on the same criteria is B5", [
             f"{t} 10:00:00.000 {gate.format(A)}", f"{t} 10:01:00.000 {notnews}",
             f"{t} 11:00:00.000 {gate.format(A)}", f"{t} 11:01:00.000 {held}"], 1, 2, 0, 0),
@@ -202,8 +222,8 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--since", help="window start, 'YYYY-MM-DD HH:MM:SS' (UTC, as the log writes it)")
     ap.add_argument("--window-hours", type=float, default=6.0)
-    ap.add_argument("--tolerance-minutes", type=float, default=15.0,
-                    help="shortens the window: log times trail the code's cycle times")
+    ap.add_argument("--tolerance-minutes", type=float, default=0.0,
+                    help="shortens the window, for logs from before v1.61.7 only (log times trail the cycle's)")
     ap.add_argument("--log", action="append", default=[], help="a service log; repeat, oldest first")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args(argv)
