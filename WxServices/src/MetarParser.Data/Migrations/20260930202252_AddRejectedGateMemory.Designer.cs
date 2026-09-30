@@ -12,7 +12,7 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace MetarParser.Data.Migrations
 {
     [DbContext(typeof(WeatherDataContext))]
-    [Migration("20260930200915_AddRejectedGateMemory")]
+    [Migration("20260930202252_AddRejectedGateMemory")]
     partial class AddRejectedGateMemory
     {
         /// <inheritdoc />
@@ -405,6 +405,10 @@ namespace MetarParser.Data.Migrations
 
                     b.Property<DateTime?>("LastRejectedGateUtc")
                         .HasColumnType("datetime2");
+
+                    b.Property<string>("LastRejectedInputHash")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
 
                     b.Property<DateTime?>("LastScheduledSentUtc")
                         .HasColumnType("datetime2");

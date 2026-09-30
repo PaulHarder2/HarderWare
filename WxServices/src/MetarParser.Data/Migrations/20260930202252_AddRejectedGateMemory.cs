@@ -23,6 +23,13 @@ namespace MetarParser.Data.Migrations
                 table: "LocalityStates",
                 type: "datetime2",
                 nullable: true);
+
+            migrationBuilder.AddColumn<string>(
+                name: "LastRejectedInputHash",
+                table: "LocalityStates",
+                type: "nvarchar(200)",
+                maxLength: 200,
+                nullable: true);
         }
 
         /// <inheritdoc />
@@ -34,6 +41,10 @@ namespace MetarParser.Data.Migrations
 
             migrationBuilder.DropColumn(
                 name: "LastRejectedGateUtc",
+                table: "LocalityStates");
+
+            migrationBuilder.DropColumn(
+                name: "LastRejectedInputHash",
                 table: "LocalityStates");
         }
     }

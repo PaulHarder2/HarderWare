@@ -60,9 +60,10 @@ public class LocalityState
     /// by <c>RejectedGateMemory</c>.  The gate had judged the model's forecast materially
     /// different from the last sent report; Claude, weighing all the evidence, did not adopt
     /// the difference.  Until <see cref="LastRejectedGateUtc"/> is older than the configured
-    /// window, a later cycle whose gate fires only these criteria again skips the Claude
-    /// call, so the same question is not paid for on every arrival.  Cleared whenever a
-    /// report is sent.  <see langword="null"/> when there is no such rejection on record.
+    /// window, a later cycle whose gate fires only these criteria again, on the same evidence
+    /// (<see cref="LastRejectedInputHash"/>), skips the Claude call, so the same question is not
+    /// paid for on every arrival.  Cleared whenever a delivery moves the locality's baseline.
+    /// <see langword="null"/> when there is no such rejection on record.
     /// </summary>
     public string? LastRejectedGateCriteria { get; set; }
 
@@ -71,6 +72,14 @@ public class LocalityState
 
     /// <summary>UTC time <see cref="LastRejectedGateCriteria"/> was recorded; the repeat skip applies only within the configured window after it.  <see langword="null"/> with it.</summary>
     public DateTime? LastRejectedGateUtc { get; set; }
+
+    /// <summary>
+    /// Serialised <c>InputIdentity</c> of the evidence Claude weighed when it rejected
+    /// <see cref="LastRejectedGateCriteria"/>.  The repeat skip applies only while the same TAF
+    /// and GFS run are in hand and the METAR's present weather is unchanged; new guidance or new
+    /// observed weather asks Claude again.  <see langword="null"/> with the criteria.
+    /// </summary>
+    public string? LastRejectedInputHash { get; set; }
 
     /// <summary>
     /// ICAO of the METAR station behind the locality's most recent report.  Detects

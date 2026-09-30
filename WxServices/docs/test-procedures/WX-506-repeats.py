@@ -1,20 +1,28 @@
 #!/usr/bin/env python3
 """WX-506 rework (v1.61.7): find repeated rejections in the report service's log.
 
-A "repeated rejection" (class B5 in WX-506.md) is two unscheduled updates for the same locality,
-each withheld as carrying no computed change ("WX-506 suppressed"), whose significance gate fired
-the same criteria, less than the window apart. v1.61.7 skips the Claude call for the second one
-("WX-506 repeat skipped"), so after the deploy there should be none.
+A "repeated rejection" (class B5 in WX-506.md) is an unscheduled update withheld after Claude was
+asked a question it had already answered: an earlier update for the same locality was withheld
+("WX-506 suppressed" or "WX-108 suppressed ... redundant"), and a later one, less than the window
+apart, was withheld again although its gate fired only criteria from the earlier one, with no send
+in between and no logged reason to ask again. v1.61.7 skips the Claude call in that case ("WX-506
+repeat skipped"), so after the deploy there should be none.
 
-Reads one or more service logs, oldest first. For each locality it pairs a WX-506 suppression with
-the gate criteria logged just before it ("WX-114 significance gate passed ... fired: ...").
+The code logs its reason to ask again ("WX-506 rejected-gate record not applied (<reason>)": a new
+TAF or GFS run, new observed weather, a severe onset, the window running out). Such a line
+restarts the pairing for that locality, as does a delivery ("report sent" or "welcome sent" for it).
+The window is shortened by --tolerance-minutes, because the code measures it between cycle start
+times and the log writes each line after the Claude call.
+
+Reads one or more service logs, oldest first. For each locality it pairs a withheld update with the
+gate criteria logged on that cycle ("WX-114 significance gate passed ... fired: ...").
 Prints, from --since on:
   repeats: withheld=W  repeat_skipped=R  B5=N
   one "B5 <locality> <first time> -> <second time> <criteria>" line per repeated rejection
   one "calls <date> <n>" line per UTC date: Claude calls logged (LogClaudeTokens)
 
 Usage:
-  WX-506-repeats.py --since 'YYYY-MM-DD HH:MM:SS' [--window-hours 6] --log FILE [--log FILE ...]
+  WX-506-repeats.py --since 'YYYY-MM-DD HH:MM:SS' [--window-hours 6] [--tolerance-minutes 15] --log FILE [--log FILE ...]
   WX-506-repeats.py --selftest
 """
 from __future__ import annotations
@@ -28,9 +36,18 @@ from datetime import datetime, timedelta
 STAMP = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)")
 LOCALITY = re.compile(r"locality '([^']+)'")
 GATE = re.compile(r"WX-114 significance gate passed \([^)]*\) — fired: (.*)\.\s*$")
-WITHHELD = "WX-506 suppressed"
+WITHHELD = ("WX-506 suppressed", "WX-108 suppressed")
+REDUNDANT_ONLY = "redundant"            # of the WX-108 suppressions, only the redundant one is recorded
 SKIPPED = "WX-506 repeat skipped"
+REASKED = "WX-506 rejected-gate record not applied"
+DELIVERED = re.compile(r"(?:report|welcome) sent \(locality '([^']+)'")
 CALL = "LogClaudeTokens"
+
+
+def is_withheld(line: str) -> bool:
+    if WITHHELD[0] in line:
+        return True
+    return WITHHELD[1] in line and REDUNDANT_ONLY in line
 
 
 def scan(lines, since: datetime, window: timedelta):
@@ -51,6 +68,10 @@ def scan(lines, since: datetime, window: timedelta):
         loc = loc_m.group(1) if loc_m else None
         if CALL in line:
             calls[m.group(1)[:10]] += 1
+        d = DELIVERED.search(line)
+        if d:
+            last_withheld.pop(d.group(1), None)
+            continue
         if loc is None:
             continue
         g = GATE.search(line)
@@ -59,14 +80,19 @@ def scan(lines, since: datetime, window: timedelta):
             continue
         if SKIPPED in line:
             skipped += 1
+            gate_by_loc.pop(loc, None)
             continue
-        if WITHHELD in line:
+        if REASKED in line:
+            last_withheld.pop(loc, None)
+            continue
+        if is_withheld(line):
             withheld += 1
-            fired = gate_by_loc.get(loc, frozenset())
+            fired = gate_by_loc.pop(loc, frozenset())   # this cycle's gate line, used once
             prev = last_withheld.get(loc)
-            if prev and fired and prev[1] == fired and at - prev[0] < window:
+            if prev and fired and fired <= prev[1] and at - prev[0] < window:
                 b5.append((loc, prev[0], at, fired))
-            last_withheld[loc] = (at, fired)
+            if fired:
+                last_withheld[loc] = (at, fired)
     return withheld, skipped, b5, calls
 
 
@@ -88,9 +114,14 @@ def selftest() -> int:
     skip = "INFO  [ReportWorker.cs::ProcessLocalityAsync:1230] locality 'Austin, TX' (Id=2): WX-506 repeat skipped metar cycle — criteria rejected 60 min ago; Claude not called."
     other = "DEBUG [ReportWorker.cs::ProcessLocalityAsync:1211] locality 'Spring, TX' (Id=3): WX-114 significance gate passed (Enforce, metar) — fired: {}."
     other_held = held.replace("'Austin, TX' (Id=2)", "'Spring, TX' (Id=3)")
+    redundant = "INFO  [ReportWorker.cs::ProcessLocalityAsync:1351] locality 'Austin, TX' (Id=2): WX-108 suppressed metar send — reconciled snapshot is materially identical to the last sent report (redundant re-send)."
+    flip = "INFO  [ReportWorker.cs::ProcessLocalityAsync:1351] locality 'Austin, TX' (Id=2): WX-108 suppressed metar send — severe-flag de-escalation on an observation-only advance."
+    reask = "DEBUG [ReportWorker.cs::ProcessLocalityAsync:1240] locality 'Austin, TX' (Id=2): WX-506 rejected-gate record not applied (NewGuidance) — calling Claude."
+    sent = "INFO  [ReportWorker.cs::DeliverWeatherReportAsync:1726] paul_en x@y (Paul): report sent (locality 'Austin, TX' (Id=2))."
+    welcome = "INFO  [ReportWorker.cs::SendWelcomeAsync:1845] new_en x@y (New): welcome sent (locality 'Austin, TX')."
     A = "precip-remove@T1(10-01 11Z)"
     B = "precip-add@T1(10-02 05Z)"
-    w = timedelta(hours=6)
+    w = timedelta(hours=6) - timedelta(minutes=15)
     since = datetime(2026, 10, 1)
     cases = [
         ("same criteria 1 h apart is B5", [
@@ -115,6 +146,33 @@ def selftest() -> int:
         ("a skip is counted and is not a withheld update", [
             f"{t} 10:00:00.000 {gate.format(A)}", f"{t} 10:01:00.000 {held}",
             f"{t} 11:00:00.000 {gate.format(A)}", f"{t} 11:00:01.000 {skip}"], 0, 1, 1, 0),
+        ("a subset of the earlier criteria is B5", [
+            f"{t} 10:00:00.000 {gate.format(A + ', ' + B)}", f"{t} 10:01:00.000 {held}",
+            f"{t} 11:00:00.000 {gate.format(A)}", f"{t} 11:01:00.000 {held}"], 1, 2, 0, 0),
+        ("a WX-108 redundant withhold counts, a severe flip does not", [
+            f"{t} 10:00:00.000 {gate.format(A)}", f"{t} 10:01:00.000 {redundant}",
+            f"{t} 11:00:00.000 {gate.format(A)}", f"{t} 11:01:00.000 {flip}"], 0, 1, 0, 0),
+        ("a redundant withhold then a no-change withhold is B5", [
+            f"{t} 10:00:00.000 {gate.format(A)}", f"{t} 10:01:00.000 {redundant}",
+            f"{t} 11:00:00.000 {gate.format(A)}", f"{t} 11:01:00.000 {held}"], 1, 2, 0, 0),
+        ("a logged re-ask reason restarts the pairing", [
+            f"{t} 10:00:00.000 {gate.format(A)}", f"{t} 10:01:00.000 {held}",
+            f"{t} 11:00:00.000 {gate.format(A)}", f"{t} 11:00:00.500 {reask}", f"{t} 11:01:00.000 {held}"], 0, 2, 0, 0),
+        ("a report sent in between restarts the pairing", [
+            f"{t} 10:00:00.000 {gate.format(A)}", f"{t} 10:01:00.000 {held}",
+            f"{t} 12:00:00.000 {sent}",
+            f"{t} 13:00:00.000 {gate.format(A)}", f"{t} 13:01:00.000 {held}"], 0, 2, 0, 0),
+        ("a welcome sent in between restarts the pairing", [
+            f"{t} 10:00:00.000 {gate.format(A)}", f"{t} 10:01:00.000 {held}",
+            f"{t} 12:00:00.000 {welcome}",
+            f"{t} 13:00:00.000 {gate.format(A)}", f"{t} 13:01:00.000 {held}"], 0, 2, 0, 0),
+        ("a withhold with no gate line on its cycle does not borrow an old one", [
+            f"{t} 10:00:00.000 {gate.format(A)}", f"{t} 10:01:00.000 {held}",
+            f"{t} 11:01:00.000 {held}"], 0, 2, 0, 0),
+        ("just inside the window less the tolerance is B5, inside the tolerance is not", [
+            f"{t} 10:00:00.000 {gate.format(A)}", f"{t} 10:01:00.000 {held}",
+            f"{t} 15:45:00.000 {gate.format(A)}", f"{t} 15:45:30.000 {held}",
+            f"{t} 21:40:00.000 {gate.format(A)}", f"{t} 21:40:30.000 {held}"], 1, 3, 0, 0),
         ("lines before --since are ignored", [
             f"2026-09-30 23:00:00.000 {gate.format(A)}", f"2026-09-30 23:01:00.000 {held}",
             f"{t} 00:30:00.000 {gate.format(A)}", f"{t} 00:31:00.000 {held}"], 0, 1, 0, 0),
@@ -135,6 +193,8 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--since", help="window start, 'YYYY-MM-DD HH:MM:SS' (UTC, as the log writes it)")
     ap.add_argument("--window-hours", type=float, default=6.0)
+    ap.add_argument("--tolerance-minutes", type=float, default=15.0,
+                    help="shortens the window: log times trail the code's cycle times")
     ap.add_argument("--log", action="append", default=[], help="a service log; repeat, oldest first")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args(argv)
@@ -147,7 +207,8 @@ def main(argv=None) -> int:
     for path in args.log:
         with open(path, encoding="utf-8", errors="replace") as f:
             lines.extend(f)
-    for line in report(scan(lines, since, timedelta(hours=args.window_hours))):
+    window = timedelta(hours=args.window_hours) - timedelta(minutes=args.tolerance_minutes)
+    for line in report(scan(lines, since, window)):
         print(line)
     return 0
 

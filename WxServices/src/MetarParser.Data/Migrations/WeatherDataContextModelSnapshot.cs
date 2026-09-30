@@ -403,6 +403,10 @@ namespace MetarParser.Data.Migrations
                     b.Property<DateTime?>("LastRejectedGateUtc")
                         .HasColumnType("datetime2");
 
+                    b.Property<string>("LastRejectedInputHash")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
                     b.Property<DateTime?>("LastScheduledSentUtc")
                         .HasColumnType("datetime2");
 
