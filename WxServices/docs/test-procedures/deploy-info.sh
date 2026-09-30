@@ -50,7 +50,7 @@
 #
 # Shell: bash (WSL on the HarderWare PC; any bash with read access to the log
 # works). Lives beside the verify scripts it serves (docs/test-procedures/)
-# rather than in Code/tools: it is generic, but exists for the in-repo verify
+# rather than outside the repo: it is generic, but exists for the in-repo verify
 # scripts and travels with them -- the documented WORKFLOW.md §13 carve-out.
 
 set -uo pipefail
