@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """WX-506 rework (v1.61.7): find repeated rejections in the report service's log.
 
-A "repeated rejection" (class B5 in WX-506.md) is an unscheduled update withheld after Claude was
-asked a question it had already answered: an earlier update for the same locality was withheld
-("WX-506 suppressed" or "WX-108 suppressed ... redundant"), and a later one, less than the window
-apart, was withheld again although its gate fired only criteria from the earlier one, with no send
+A "repeated rejection" (class B5 in WX-506.md) is an unscheduled cycle on which Claude was asked a
+question it had already answered: an earlier cycle for the same locality was withheld ("WX-506
+suppressed" or "WX-108 suppressed ... redundant") or judged not news ("Claude judged the ... arrival
+not news"), and a later one, less than the window apart, ended the same way although its gate fired only criteria from the earlier one, with no send
 in between and no logged reason to ask again. v1.61.7 skips the Claude call in that case ("WX-506
 repeat skipped"), so after the deploy there should be none.
 
@@ -38,6 +38,7 @@ LOCALITY = re.compile(r"locality '([^']+)'")
 GATE = re.compile(r"WX-114 significance gate passed \([^)]*\) — fired: (.*)\.\s*$")
 WITHHELD = ("WX-506 suppressed", "WX-108 suppressed")
 REDUNDANT_ONLY = "redundant"            # of the WX-108 suppressions, only the redundant one is recorded
+NOT_NEWS = re.compile(r"Claude judged the \S+ arrival not news")
 SKIPPED = "WX-506 repeat skipped"
 REASKED = "WX-506 rejected-gate record not applied"
 DELIVERED = re.compile(r"(?:report|welcome) sent \(locality '([^']+)'")
@@ -45,7 +46,8 @@ CALL = "LogClaudeTokens"
 
 
 def is_withheld(line: str) -> bool:
-    if WITHHELD[0] in line:
+    """A cycle Claude answered without a send, which v1.61.7 records: withheld, or not news."""
+    if WITHHELD[0] in line or NOT_NEWS.search(line):
         return True
     return WITHHELD[1] in line and REDUNDANT_ONLY in line
 
@@ -119,6 +121,7 @@ def selftest() -> int:
     reask = "DEBUG [ReportWorker.cs::ProcessLocalityAsync:1240] locality 'Austin, TX' (Id=2): WX-506 rejected-gate record not applied (NewGuidance) — calling Claude."
     sent = "INFO  [ReportWorker.cs::DeliverWeatherReportAsync:1726] paul_en x@y (Paul): report sent (locality 'Austin, TX' (Id=2))."
     welcome = "INFO  [ReportWorker.cs::SendWelcomeAsync:1845] new_en x@y (New): welcome sent (locality 'Austin, TX')."
+    notnews = "INFO  [ReportWorker.cs::ProcessLocalityAsync:1246] locality 'Austin, TX' (Id=2): Claude judged the metar arrival not news — no send. Trace: x"
     A = "precip-remove@T1(10-01 11Z)"
     B = "precip-add@T1(10-02 05Z)"
     w = timedelta(hours=6) - timedelta(minutes=15)
@@ -173,6 +176,12 @@ def selftest() -> int:
             f"{t} 10:00:00.000 {gate.format(A)}", f"{t} 10:01:00.000 {held}",
             f"{t} 15:45:00.000 {gate.format(A)}", f"{t} 15:45:30.000 {held}",
             f"{t} 21:40:00.000 {gate.format(A)}", f"{t} 21:40:30.000 {held}"], 1, 3, 0, 0),
+        ("a not-news answer then a withheld update on the same criteria is B5", [
+            f"{t} 10:00:00.000 {gate.format(A)}", f"{t} 10:01:00.000 {notnews}",
+            f"{t} 11:00:00.000 {gate.format(A)}", f"{t} 11:01:00.000 {held}"], 1, 2, 0, 0),
+        ("two not-news answers on the same criteria are B5", [
+            f"{t} 10:00:00.000 {gate.format(A)}", f"{t} 10:01:00.000 {notnews}",
+            f"{t} 11:00:00.000 {gate.format(A)}", f"{t} 11:01:00.000 {notnews}"], 1, 2, 0, 0),
         ("lines before --since are ignored", [
             f"2026-09-30 23:00:00.000 {gate.format(A)}", f"2026-09-30 23:01:00.000 {held}",
             f"{t} 00:30:00.000 {gate.format(A)}", f"{t} 00:31:00.000 {held}"], 0, 1, 0, 0),

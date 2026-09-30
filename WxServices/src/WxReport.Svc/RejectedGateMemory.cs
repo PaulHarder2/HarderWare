@@ -8,7 +8,11 @@
 // `precip-remove@T1(09-30 11Z)` on 18 consecutive arrivals, each a full reconcile that was
 // then withheld (WX-506 comments 16508, 16510).
 //
-// So a withheld cycle records the criteria its gate fired and the evidence Claude weighed, and
+// Claude's cheaper "not news" answer repeats the same way (from 2026-09-15 to 2026-09-30, 38 of 60
+// repeated that locality's previous not-news criteria within 6 hours), so it is recorded too
+// (Paul, 2026-09-30).
+//
+// So a withheld or not-news cycle records the criteria its gate fired and the evidence Claude weighed, and
 // a later cycle within the window skips the Claude call when it asks nothing new: the gate
 // fires only criteria on record, and no new TAF, GFS run or change in observed weather has
 // arrived since. The gate's forecast is built from the GFS run and the TAF alone, so with both

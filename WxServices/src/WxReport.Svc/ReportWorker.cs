@@ -1272,6 +1272,11 @@ public sealed class ReportWorker : BackgroundService
             _claudeNotNews.Add(1);
             AddClaudeTokens(notNews.Tokens);
             LogClaudeTokens(label, notNews.Tokens, $"{triggerType}/not-news");
+            // WX-506 rework (Paul, 2026-09-30): Claude has weighed this gate result and called it
+            // not news, so remember it exactly as for a withheld update; the next arrival on the
+            // same evidence need not ask again.
+            if (passedGate is { } judgedNotNews)
+                RejectedGateMemory.Record(state, judgedNotNews, inputIdentity, now);
             await PersistUnsentCycleAsync(ctx, label, state, inputHash, ct);
             Logger.Info($"{label}: Claude judged the {triggerType} arrival not news — no send. Trace: {notNews.ReasoningTrace}");
             return 0;
