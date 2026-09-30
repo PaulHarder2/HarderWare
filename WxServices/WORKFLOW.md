@@ -92,7 +92,7 @@ For any change that bumps the version in `Directory.Build.props`, add a new row 
 - **MINOR** — new features with backwards-compatible behavior.
 - **MAJOR** — large changes; reserved for significant reshaping.
 
-The hash is filled in later (step 10) once the PR is finalized and CodeRabbit is clean.
+The hash is filled in later (step 10) once the PR is finalized and CodeRabbit is clean (§9 defines clean).
 
 Pure-tooling / pure-docs PRs (e.g. a `.coderabbit.yaml` config change, a WORKFLOW.md edit with no accompanying runtime change) do not bump the version. VERSIONS.md tracks runtime releases; a PR that produces byte-for-byte identical binaries should not announce a new version to email recipients or log files.
 
@@ -200,13 +200,14 @@ CodeRabbit's behavior is tuned via `.coderabbit.yaml` at the repo root (added in
 
 ### What "CodeRabbit is clean" means
 
-Every later step that says CodeRabbit is clean (§10's hash-fill, §11's merge) means all of the following, judged on the PR's **head commit**:
+**Do not hash-fill (§10), merge (§11), or report a PR as green until CodeRabbit is clean.** That applies to every PR, including a pure-docs one that skips §10. Clean means both of the following, judged on the **last commit CodeRabbit was asked to review**: the head commit, or, once the hash-fill commit exists, the commit before it (CodeRabbit posts nothing on a hash-fill; §10).
 
-1. **The latest CodeRabbit review there is a genuine review**, not a rate-limit skip. A skip posts no findings and can still leave the status check green.
-2. **Every finding in that review is addressed or declined in writing** — including the findings folded into its collapsed *outside diff range*, *duplicate* and *nitpick* sections, which a summary does not show.
-3. **An earlier-commit `CHANGES_REQUESTED` review that still blocks the merge is dismissed by its review id**, with the rationale, at merge time.
+1. **The latest CodeRabbit review on that commit is a genuine review**, not a rate-limit skip. A skip posts no findings and can still leave the status check green.
+2. **Every finding CodeRabbit has raised on the PR, in any of its reviews, is addressed or declined in writing** — including the findings folded into a review's collapsed *outside diff range*, *duplicate* and *nitpick* sections, which a summary does not show. CodeRabbit reviews incrementally, so the latest review covers only the newest commits; an unanswered finding from an earlier review still counts. A finding is *addressed* when CodeRabbit has appended its `✅ Addressed in commit <sha>` marker, or when the fix has been confirmed by reading the comment against the code. A finding re-posted on a newer commit may carry a refined ask; read its text before treating it as the one already answered.
 
-A green status check, a short summary or a script's verdict does not establish any of these. How the maintainer verifies them is part of the shared policy described at the top of this document.
+**A blocking review from an earlier commit.** Once its findings are addressed or declined, an earlier-commit `CHANGES_REQUESTED` review does not make the PR unclean, but GitHub goes on blocking the merge on it. Dismiss that review by its id, with the rationale, at merge time; do not dismiss it earlier, and never treat it as irrelevant without reading it.
+
+A green status check, a short summary or a script's verdict does not establish any of this. The commands the maintainer uses to verify it are kept with the maintainer's shared tooling, outside this repository.
 
 ## 10. Hash-fill commit
 
