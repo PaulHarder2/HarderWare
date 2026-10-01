@@ -1,3 +1,5 @@
+using MetarParser.Data.Entities;
+
 using WxInterp;
 
 using WxReport.Svc;
@@ -193,4 +195,44 @@ public class PendingDeliveryTests
             ReportKind.Unscheduled, generated, [(generated, generated.AddHours(1))], generated.AddHours(6), havana));
         Assert.Null(ex);
     }
+
+    [Fact]
+    public void AFirstDelivery_RecordsTheReportsClaudeCall_WhenNoNewerOneIsOnRecord()
+    {
+        var state = Before();
+        state.LastClaudeInputHash = state.LastSentInputHash;   // no Claude call recorded since the last delivery
+        PendingDelivery.ApplyResentState(state, ReportKind.Scheduled, firstDelivery: true, Generated.AddMinutes(40), "report-identity", "KAUS");
+        Assert.Equal("report-identity", state.LastClaudeInputHash);
+    }
+
+    // SevereOnsetSince: per block, against the 36-hour hazard horizon.
+    private static readonly TimeSpan Horizon = TimeSpan.FromHours(36);
+
+    private static ForecastSnapshotBody Severe(params double[] hoursAfterGenerated) => new()
+    {
+        Blocks = hoursAfterGenerated.Select(h => new ForecastSnapshotBlock
+        {
+            StartUtc = Generated.AddHours(h),
+            SkyState = SkyState.Clear,
+            Obscuration = Obscuration.None,
+            TemperatureCelsius = new(20, 30),
+            WindKt = new(0, 10),
+            PrecipExpectation = PrecipExpectation.Likely,
+            PrecipPhenomenon = PrecipPhenomenon.Thunderstorm,
+            SevereFlag = true,
+        }).ToList(),
+    };
+
+    [Fact]
+    public void ASecondSevereBlockEnteringTheHorizon_IsAnOnset_EvenWithAnotherAlreadyInRange() =>
+        // Block at +6 h was in range at generation; the one at +38 h enters it 2 h later.
+        Assert.True(PendingDelivery.SevereOnsetSince(Severe(6, 38), Generated, Generated.AddHours(2), Horizon));
+
+    [Fact]
+    public void ASevereBlockAlreadyInRange_IsNoOnset() =>
+        Assert.False(PendingDelivery.SevereOnsetSince(Severe(6), Generated, Generated.AddHours(2), Horizon));
+
+    [Fact]
+    public void ASevereBlockStillBeyondTheHorizon_IsNoOnset() =>
+        Assert.False(PendingDelivery.SevereOnsetSince(Severe(48), Generated, Generated.AddHours(2), Horizon));
 }

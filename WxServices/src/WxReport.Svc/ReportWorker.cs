@@ -56,7 +56,11 @@ public sealed class ReportWorker : BackgroundService
     private readonly Counter<long> _noComputedChangeSuppressed;
     private readonly Counter<long> _rejectedRepeatSuppressed;
     private readonly Counter<long> _pendingDelivery;
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<long, int> _pendingStaleNoticed = new();   // WX-527: locality -> the stale pending snapshot already logged
+    // WX-527, per locality: the stale pending report and reason already logged, and the last best-effort
+    // re-send. In memory only: a restart logs a stale report once more and allows one more retry.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<long, (int SnapshotId, PendingStale Reason)> _pendingStaleNoticed = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<long, (int SnapshotId, DateTime AtUtc)> _pendingRetryAt = new();
+    private static readonly TimeSpan PendingRetryInterval = TimeSpan.FromHours(1);
     private readonly Counter<long> _significanceGateSkips;
     private readonly Counter<long> _debounceSuppressed;
     private readonly Counter<long> _quietWindowSuppressed;
@@ -1054,11 +1058,13 @@ public sealed class ReportWorker : BackgroundService
             .ToHashSet(StringComparer.Ordinal);
 
         // WX-527: a report Claude already generated but email did not deliver is re-sent to the
-        // recipients still owed, before anything else, with no Claude call. A handled pending report
-        // ends the cycle even when the send fails again: reconciling would pay Claude for the same
-        // report (2026-09-06: 265 times in one day). A stale or absent one falls through.
+        // members still owed, before anything else, with no Claude call. When it reached nobody and every
+        // served member is owed (an outage), the cycle ends here even if the send fails again: reconciling
+        // would pay Claude for the same report (2026-09-06: 265 times in one day). After a partial
+        // delivery, or when only some addresses fail, the re-send is best-effort and returns null, so the
+        // normal cycle still runs. A stale or absent report also falls through.
         if (await TryResendPendingAsync(
-                ctx, emailer, locality, members, memberIds, state, snapshot, inputIdentity,
+                ctx, emailer, locality, members, memberIds, servedIds, state, snapshot, inputIdentity,
                 preferredIcaos, tz, langById, cfg, now, label, ct) is int resent)
             return resent;
 
@@ -1844,93 +1850,119 @@ public sealed class ReportWorker : BackgroundService
     }
 
     /// <summary>
-    /// WX-527: the locality's pending report.  The newest snapshot among the members' report rows written
-    /// since WX-527 (a kind recorded: welcomes and diagnostics carry none) is the only candidate, so a newer
-    /// delivered report, a degraded hazard alert included, supersedes an older unsent one.  It is pending
-    /// when it is younger than <see cref="PendingDelivery.MaxAge"/>, is a reconciled report (a degraded one
-    /// stores no structured report and is not re-sent), and has members still owed: one unsent row each,
-    /// for members with no sent row for it (a WX-182 cached re-send can write a second row for the same
-    /// snapshot).  <c>FirstDelivery</c> is true when none of its rows was sent before.
+    /// WX-527: the locality's pending report.  The most recently written report row among the members'
+    /// rows written since WX-527 (a kind recorded: welcomes and diagnostics carry none) names the only
+    /// candidate, so any later delivery supersedes an older unsent report: a degraded hazard alert, or a
+    /// WX-182 cached re-send of an older snapshot.  The candidate is that row's batch: the rows written by
+    /// the same send (same snapshot, kind and evidence), so a cached re-send's rows are never mixed with
+    /// the original report's.  It is pending when it is a reconciled report (a degraded one stores no
+    /// structured report and is not re-sent), its snapshot is younger than <see cref="PendingDelivery.MaxAge"/>,
+    /// and members are still owed: one unsent row each, for members with no sent row for that snapshot.
+    /// <c>FirstDelivery</c> is true when no row for the snapshot was sent before.
     /// </summary>
     internal static async Task<(ForecastSnapshot Snapshot, List<CommittedSend> Owed, bool FirstDelivery)?> FindPendingAsync(
         WeatherDataContext ctx, List<string> memberIds, DateTime now, CancellationToken ct)
     {
-        var newest = await ctx.CommittedSends
+        var latest = await ctx.CommittedSends
             .Where(cs => memberIds.Contains(cs.RecipientId) && !cs.IsDiagnostic && cs.ReportKind != null)
-            .Select(cs => cs.ForecastSnapshot)
-            .OrderByDescending(s => s.GeneratedAtUtc)
+            .OrderByDescending(cs => cs.CreatedAtUtc)
+            .ThenByDescending(cs => cs.Id)
             .FirstOrDefaultAsync(ct);
+        if (latest is null || latest.StructuredReport is null)
+            return null;   // nothing since WX-527, or a degraded hazard report: the next cycle reconciles
+        var snapshot = await ctx.ForecastSnapshots.FirstOrDefaultAsync(s => s.Id == latest.ForecastSnapshotId, ct);
         // Past the age limit a report is no longer pending at all: checked here, quietly, so a stale
         // one is not logged on every cycle until something replaces it.
-        if (newest is null || now - DateTime.SpecifyKind(newest.GeneratedAtUtc, DateTimeKind.Utc) >= PendingDelivery.MaxAge)
+        if (snapshot is null || now - DateTime.SpecifyKind(snapshot.GeneratedAtUtc, DateTimeKind.Utc) >= PendingDelivery.MaxAge)
             return null;
 
         var rows = await ctx.CommittedSends
-            .Where(cs => cs.ForecastSnapshotId == newest.Id && memberIds.Contains(cs.RecipientId)
+            .Where(cs => cs.ForecastSnapshotId == snapshot.Id && memberIds.Contains(cs.RecipientId)
                 && !cs.IsDiagnostic && cs.ReportKind != null)
             .OrderBy(cs => cs.Id)
             .ToListAsync(ct);
-        if (rows.Any(cs => cs.StructuredReport == null))
-            return null;   // a degraded hazard report: not re-sent, the next cycle reconciles
-
         var served = rows.Where(cs => cs.SentAtUtc != null).Select(cs => cs.RecipientId).ToHashSet(StringComparer.Ordinal);
         var owed = rows
-            .Where(cs => cs.SentAtUtc == null && cs.InputIdentity != null && !served.Contains(cs.RecipientId))
+            .Where(cs => cs.ReportKind == latest.ReportKind && cs.InputIdentity == latest.InputIdentity
+                && cs.InputIdentity != null && cs.StructuredReport != null
+                && cs.SentAtUtc == null && !served.Contains(cs.RecipientId))
             .GroupBy(cs => cs.RecipientId, StringComparer.Ordinal)
             .Select(g => g.First())
             .ToList();
-        return owed.Count == 0 ? null : (newest, owed, served.Count == 0);
+        return owed.Count == 0 ? null : (snapshot, owed, served.Count == 0);
     }
 
     /// <summary>
     /// WX-527: finds the locality's pending report (<see cref="FindPendingAsync"/>) and, unless
     /// <see cref="PendingDelivery"/> rules it stale, re-sends its stored email to the members still owed,
-    /// with no Claude call.  Returns the number delivered when the report had reached nobody before, so
-    /// this cycle is done with it: 0 when the re-send failed again, which ends the cycle without paying
-    /// Claude for the same report.  Returns <see langword="null"/> (the normal cycle runs) when there is no
-    /// pending report, when it is stale, after a best-effort re-send to members a partial delivery missed
-    /// (one undeliverable address must not hold the locality), and on any error.
+    /// with no Claude call.  When the report reached nobody and every served member is owed (the shape of
+    /// an outage), this cycle is done with it: the number delivered is returned, 0 when the re-send failed
+    /// again, so Claude is not paid for the same report.  Otherwise (a partial delivery, or only some
+    /// members' addresses failing) the re-send is best-effort, tried at most hourly so a bouncing address
+    /// is not hit every cycle, and <see langword="null"/> is returned so the normal cycle still runs for
+    /// everyone else.  <see langword="null"/> too when there is no pending report, when it is stale, and on
+    /// any error.
     /// </summary>
     private async Task<int?> TryResendPendingAsync(
         WeatherDataContext ctx, SmtpSender emailer, Locality locality, List<Recipient> members,
-        List<string> memberIds, LocalityState state, WeatherSnapshot snapshot, InputIdentity inputIdentity,
-        IReadOnlyList<string> preferredIcaos, TimeZoneInfo tz, IReadOnlyDictionary<long, Language> langById,
-        ReportConfig cfg, DateTime now, string label, CancellationToken ct)
+        List<string> memberIds, HashSet<string> servedIds, LocalityState state, WeatherSnapshot snapshot,
+        InputIdentity inputIdentity, IReadOnlyList<string> preferredIcaos, TimeZoneInfo tz,
+        IReadOnlyDictionary<long, Language> langById, ReportConfig cfg, DateTime now, string label, CancellationToken ct)
     {
         try
         {
             if (await FindPendingAsync(ctx, memberIds, now, ct) is not { } pending)
                 return null;
-            var (newest, owed, firstDelivery) = pending;
+            var (pendingSnapshot, owed, firstDelivery) = pending;
 
             var first = owed[0];
             if (!Enum.TryParse<ReportKind>(first.ReportKind, out var kind) || kind == ReportKind.Diagnostic)
                 return null;
 
-            var pendingBody = ForecastSnapshotBody.Deserialize(newest.Body);
+            var pendingBody = ForecastSnapshotBody.Deserialize(pendingSnapshot.Body);
             IReadOnlyList<(DateTime StartUtc, DateTime EndUtc)> windows = StructuredReportBody.Deserialize(first.StructuredReport!).Changes
                 .Select(c => (c.Window.StartUtc, c.Window.EndUtc)).ToList();
 
-            var generatedUtc = DateTime.SpecifyKind(newest.GeneratedAtUtc, DateTimeKind.Utc);
-            bool severeOnset = SevereBlocks.AnyActiveWithin(pendingBody, now, DegradeHazardHorizon)
-                && !SevereBlocks.AnyActiveWithin(pendingBody, generatedUtc, DegradeHazardHorizon);
+            var generatedUtc = DateTime.SpecifyKind(pendingSnapshot.GeneratedAtUtc, DateTimeKind.Utc);
+            bool severeOnset = PendingDelivery.SevereOnsetSince(pendingBody, generatedUtc, now, DegradeHazardHorizon);
+            // Its own comparison and log line: TafSameInSubstanceAsync writes WX-506's lines, which that
+            // ticket's production watch counts.
             var stale = await PendingDelivery.CheckAsync(
                 kind, generatedUtc, first.InputIdentity!, inputIdentity, windows, severeOnset, now, tz,
-                recordedTaf => TafSameInSubstanceAsync(ctx, snapshot, recordedTaf, pendingBody, now, label, ct));
+                async recordedTaf =>
+                {
+                    var (outcome, detail) = await CompareTafsAsync(ctx, snapshot, recordedTaf, pendingBody, now, ct);
+                    Logger.Debug($"{label}: WX-527 pending report TAF comparison {outcome} — {detail}.");
+                    return outcome == TafComparison.Same;
+                });
             if (stale != PendingStale.None)
             {
-                // Once per report: it stays the newest, and stale, on every cycle until something replaces it.
-                if (_pendingStaleNoticed.TryGetValue(locality.Id, out var noticed) && noticed == newest.Id)
+                // Once per report and reason: the report stays the newest, often stale for the same
+                // reason, on every cycle until something replaces it.
+                var notice = (pendingSnapshot.Id, stale);
+                if (_pendingStaleNoticed.TryGetValue(locality.Id, out var noticed) && noticed == notice)
                     return null;
-                _pendingStaleNoticed[locality.Id] = newest.Id;
+                _pendingStaleNoticed[locality.Id] = notice;
                 Logger.Info($"{label}: WX-527 pending {kind} report from {generatedUtc:u} not re-sent ({stale}) — the normal cycle decides.");
                 _pendingDelivery.Add(1, new KeyValuePair<string, object?>("outcome", "stale"), new KeyValuePair<string, object?>("reason", stale.ToString()));
                 return null;
             }
+            _pendingStaleNoticed.TryRemove(locality.Id, out _);
+
+            var owedIds = owed.Select(r => r.RecipientId).ToHashSet(StringComparer.Ordinal);
+            bool outageShape = firstDelivery
+                && members.Where(m => servedIds.Contains(m.RecipientId)).All(m => owedIds.Contains(m.RecipientId));
+            if (!outageShape)
+            {
+                if (_pendingRetryAt.TryGetValue(locality.Id, out var last) && last.SnapshotId == pendingSnapshot.Id
+                    && now - last.AtUtc < PendingRetryInterval)
+                    return null;
+                _pendingRetryAt[locality.Id] = (pendingSnapshot.Id, now);
+            }
 
             var minutesAgo = (now - generatedUtc).TotalMinutes;
             Logger.Info($"{label}: WX-527 re-sending the pending {kind} report generated {minutesAgo:F0} min ago to {owed.Count} recipient(s) still owed" +
-                $"{(firstDelivery ? "" : " after a partial delivery")} — no Claude call.");
+                $"{(outageShape ? "" : " (best effort; the normal cycle continues)")} — no Claude call.");
             var plotsDir = new WxPaths(_config["InstallRoot"]).PlotsDir;
             var byId = members.ToDictionary(m => m.RecipientId, StringComparer.Ordinal);
             var sent = 0;
@@ -1957,7 +1989,7 @@ public sealed class ReportWorker : BackgroundService
             _pendingDelivery.Add(1, new KeyValuePair<string, object?>("outcome", sent > 0 ? "resent" : "resend_failed"));
             if (sent > 0)
             {
-                PendingDelivery.ApplyResentState(state, kind, firstDelivery, now, first.InputIdentity!, newest.StationIcao);
+                PendingDelivery.ApplyResentState(state, kind, firstDelivery, now, first.InputIdentity!, pendingSnapshot.StationIcao);
                 try { await ctx.SaveChangesAsync(ct); }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
@@ -1968,9 +2000,9 @@ public sealed class ReportWorker : BackgroundService
             else
             {
                 Logger.Warn($"{label}: WX-527 re-send of the pending {kind} report delivered nothing; " +
-                    (firstDelivery ? "it stays pending, with no Claude call this cycle." : "the normal cycle continues."));
+                    (outageShape ? "it stays pending, with no Claude call this cycle." : "the normal cycle continues."));
             }
-            return firstDelivery ? sent : null;
+            return outageShape ? sent : null;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

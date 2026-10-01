@@ -10,9 +10,9 @@ using Xunit;
 
 namespace WxReport.Tests;
 
-// WX-527: which unsent rows make up the locality's pending report. The newest reconciled snapshot
-// among the members' weather rows is the only candidate; its unsent rows, written since WX-527,
-// are the recipients still owed — all of them after a total failure, some after a partial one.
+// WX-527: which unsent rows make up the locality's pending report. The batch of the members' most
+// recently written weather row is the only candidate; its unsent rows, written since WX-527, are
+// the recipients still owed — all of them after a total failure, some after a partial one.
 public sealed class PendingLookupTests : IDisposable
 {
     private readonly SqliteConnection _conn;
@@ -43,13 +43,13 @@ public sealed class PendingLookupTests : IDisposable
 
     private static CommittedSend Row(
         ForecastSnapshot s, string recipient, bool sent = false, string? report = Report,
-        bool diagnostic = false, string? kind = "Scheduled", string? evidence = Evidence) => new()
+        bool diagnostic = false, string? kind = "Scheduled", string? evidence = Evidence, DateTime? created = null) => new()
         {
             ForecastSnapshot = s,
             RecipientId = recipient,
             StructuredReport = report,
             EmailBody = "<html/>",
-            CreatedAtUtc = s.GeneratedAtUtc,
+            CreatedAtUtc = created ?? s.GeneratedAtUtc,
             SentAtUtc = sent ? s.GeneratedAtUtc.AddMinutes(1) : null,
             IsDiagnostic = diagnostic,
             ReportKind = kind,
@@ -167,6 +167,37 @@ public sealed class PendingLookupTests : IDisposable
     {
         Seed(seed);
         Assert.Null(await FindAsync());
+    }
+
+    [Fact]
+    public async Task ALaterCachedReSendOfAnOlderSnapshot_SupersedesAPendingReport()
+    {
+        // WX-182 serves the last good report (generated earlier) after the pending one failed; once
+        // delivered, the older pending report must not follow it.
+        Seed(ctx =>
+        {
+            var lastGood = Snapshot(ctx, 150);
+            var failed = Snapshot(ctx, 60);
+            ctx.CommittedSends.Add(Row(failed, "paul_en"));
+            ctx.CommittedSends.Add(Row(lastGood, "paul_en", sent: true, evidence: "M:stuck|T:none|G:none", created: Now.AddMinutes(-10)));
+        });
+        Assert.Null(await FindAsync());
+    }
+
+    [Fact]
+    public async Task OnlyTheLatestBatchIsOwed_NotAnEarlierSendOfTheSameSnapshot()
+    {
+        // The same snapshot sent twice: an update that missed alex, then a scheduled cached re-send that
+        // failed for steph. Only the latest batch's rows are owed, with that batch's kind.
+        Seed(ctx =>
+        {
+            var s = Snapshot(ctx, 60);
+            ctx.CommittedSends.AddRange(Row(s, "paul_en", sent: true, kind: "Unscheduled"), Row(s, "alex_en", kind: "Unscheduled"));
+            ctx.CommittedSends.Add(Row(s, "steph_en", kind: "Scheduled", evidence: "M:later|T:none|G:none", created: Now.AddMinutes(-5)));
+        });
+        var owed = (await FindAsync())!.Value.Owed;
+        Assert.Equal(["steph_en"], owed.Select(r => r.RecipientId));
+        Assert.Equal("Scheduled", owed[0].ReportKind);
     }
 
     [Fact]

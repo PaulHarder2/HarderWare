@@ -6,8 +6,8 @@
 // $35, 28% of the LLM bill for 2026-08-14..10-01 (WX-527).
 //
 // A failed send already leaves its CommittedSend rows unsent, carrying the rendered email. The
-// newest reconciled snapshot with unsent weather rows is the pending report, and those rows are the
-// recipients still owed (which also covers a partial delivery). It is re-sent to them, with no
+// latest-written reconciled report batch with unsent weather rows is the pending report, and those
+// rows are the recipients still owed (which also covers a partial delivery). It is re-sent to them, with no
 // Claude call, unless one of Paul's rules (2026-10-01, WX-527 comments 16577, 16579) says it is
 // stale and must be regenerated:
 //   - a severe block in it has come within the hazard horizon since it was generated;
@@ -129,6 +129,18 @@ internal static class PendingDelivery
         return changeWindows.Any(w => w.StartUtc < endedToUtc && endedFromUtc < w.EndUtc);
     }
 
+    /// <summary>
+    /// Whether any severe block in the report has come within <paramref name="horizon"/> since it was
+    /// generated: a block still active now, inside the horizon now, that was beyond it at generation.
+    /// Per block, so a second severe block arriving counts even when another was already in range.
+    /// </summary>
+    internal static bool SevereOnsetSince(ForecastSnapshotBody body, DateTime generatedUtc, DateTime nowUtc, TimeSpan horizon) =>
+        body.Blocks.Any(b =>
+        {
+            var start = DateTime.SpecifyKind(b.StartUtc, DateTimeKind.Utc);
+            return SevereBlocks.IsActive(b, nowUtc) && start <= nowUtc.Add(horizon) && start > generatedUtc.Add(horizon);
+        });
+
     private static DateTime DayPartStartLocal(DateTime utc, TimeZoneInfo tz)
     {
         var local = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(utc, DateTimeKind.Utc), tz);
@@ -151,16 +163,21 @@ internal static class PendingDelivery
     /// (<c>ReportWorker.ApplySentState</c>).  Only a report's <em>first</em> delivery
     /// (<paramref name="firstDelivery"/>: none of its rows was sent before) moves anything: the cadence
     /// stamp for its kind, the last-sent input identity to the report's own evidence, the METAR station
-    /// to the report's, and the WX-506 rejected-gate record, whose prior has moved.  A later re-send to
-    /// recipients a partial delivery missed changes nothing.  It never touches the last-Claude-call
-    /// identity (no Claude call was made, and a newer one may be on record) or the WX-182 degrade
-    /// breaker (a cached re-send keeps it armed on purpose).
+    /// to the report's, the last-Claude-call identity to the report's evidence unless a newer call is on
+    /// record, and the WX-506 rejected-gate record, whose prior has moved.  A later re-send to recipients
+    /// a partial delivery missed changes nothing.  It never touches the WX-182 degrade breaker (a cached
+    /// re-send keeps it armed on purpose).
     /// </summary>
     internal static void ApplyResentState(
         LocalityState state, ReportKind kind, bool firstDelivery, DateTime nowUtc, string reportIdentity, string reportStation)
     {
         if (!firstDelivery)
             return;
+        // The generating cycle called Claude on this evidence, but its failed send recorded nothing.
+        // Record it now, unless a Claude call since the last delivery is already on record (the two
+        // identities differ then), so the next cycle does not pay again for evidence this report covers.
+        if (state.LastClaudeInputHash == state.LastSentInputHash)
+            state.LastClaudeInputHash = reportIdentity;
         if (kind == ReportKind.Scheduled)
             state.LastScheduledSentUtc = nowUtc;
         else
