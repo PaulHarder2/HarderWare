@@ -56,8 +56,10 @@ public sealed class ReportWorker : BackgroundService
     private readonly Counter<long> _noComputedChangeSuppressed;
     private readonly Counter<long> _rejectedRepeatSuppressed;
     private readonly Counter<long> _pendingDelivery;
-    // WX-527, per locality: the stale pending report and reason already logged, and the last best-effort
-    // re-send. In memory only: a restart logs a stale report once more and allows one more retry.
+    // WX-527, per locality: the stale pending report and reason already logged (kept until a re-send of it
+    // delivers, so it also tells a re-send the normal cycle has run since), and the last best-effort re-send.
+    // In memory only: a restart logs a stale report once more, allows one more retry, and loses the
+    // normal-cycle signal, which then costs at most one more significance check (ApplyResentState).
     private readonly System.Collections.Concurrent.ConcurrentDictionary<long, (int SnapshotId, PendingStale Reason)> _pendingStaleNoticed = new();
     private readonly System.Collections.Concurrent.ConcurrentDictionary<long, (int SnapshotId, DateTime AtUtc)> _pendingRetryAt = new();
     private static readonly TimeSpan PendingRetryInterval = TimeSpan.FromHours(1);
@@ -1058,11 +1060,10 @@ public sealed class ReportWorker : BackgroundService
             .ToHashSet(StringComparer.Ordinal);
 
         // WX-527: a report Claude already generated but email did not deliver is re-sent to the
-        // members still owed, before anything else, with no Claude call. When it reached nobody and every
-        // served member is owed (an outage), the cycle ends here even if the send fails again: reconciling
-        // would pay Claude for the same report (2026-09-06: 265 times in one day). After a partial
-        // delivery, or when only some addresses fail, the re-send is best-effort and returns null, so the
-        // normal cycle still runs. A stale or absent report also falls through.
+        // members still owed, before anything else, with no Claude call. When it reached nobody (an outage),
+        // the cycle ends here even if the send fails again: reconciling would pay Claude for the same report
+        // (2026-09-06: 265 times in one day). After a partial delivery the re-send is best-effort and
+        // returns null, so the normal cycle still runs. A stale or absent report also falls through.
         if (await TryResendPendingAsync(
                 ctx, emailer, locality, members, memberIds, servedIds, state, snapshot, inputIdentity,
                 preferredIcaos, tz, langById, cfg, now, label, ct) is int resent)
@@ -1947,9 +1948,10 @@ public sealed class ReportWorker : BackgroundService
                 _pendingDelivery.Add(1, new KeyValuePair<string, object?>("outcome", "stale"), new KeyValuePair<string, object?>("reason", stale.ToString()));
                 return null;
             }
-            // A stale notice for this report means a cycle since it was generated ran the normal path.
-            bool normalCycleRanSince = _pendingStaleNoticed.TryRemove(locality.Id, out var cleared)
-                && cleared.SnapshotId == pendingSnapshot.Id;
+            // A stale notice for this report means a cycle since it was generated ran the normal path. It
+            // is cleared only when a re-send delivers, so a re-send that fails first does not lose it.
+            bool normalCycleRanSince = _pendingStaleNoticed.TryGetValue(locality.Id, out var noticedEarlier)
+                && noticedEarlier.SnapshotId == pendingSnapshot.Id;
 
             // The shape of an outage: the report reached nobody. (Not "every served member is owed": a
             // member the generating cycle skipped, for an incomplete language, would turn a real outage
@@ -1992,6 +1994,7 @@ public sealed class ReportWorker : BackgroundService
             _pendingDelivery.Add(1, new KeyValuePair<string, object?>("outcome", sent > 0 ? "resent" : "resend_failed"));
             if (sent > 0)
             {
+                _pendingStaleNoticed.TryRemove(locality.Id, out _);
                 PendingDelivery.ApplyResentState(state, kind, firstDelivery, normalCycleRanSince, now, first.InputIdentity!, pendingSnapshot.StationIcao);
                 try { await ctx.SaveChangesAsync(ct); }
                 catch (Exception ex) when (ex is not OperationCanceledException)
