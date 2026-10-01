@@ -257,11 +257,12 @@ Examined and consciously postponed. **Do not resurface before the named trigger 
 **Raised by:** [2026-07](#2026-07) finding 1; [2026-08](#2026-08) finding 2;
 [2026-09](#2026-09) finding 1; [2026-10](#2026-10) finding 3.
 
-**This deferral covers the Sonnet 5 family, not one model id.** As of 2026-10-01 that is
-`claude-sonnet-5` and `claude-sonnet-5-5`; the migration targets whichever Sonnet is current
-when it opens. **A newer Sonnet is not, on its own, a reason to raise this again** — only the
-triggers below are. *(Recorded 2026-10-01, when Paul upheld the deferral against a Sonnet 5.5
-finding.)*
+**This deferral covers exactly two model ids: `claude-sonnet-5` and `claude-sonnet-5-5`**
+(the second added 2026-10-01, when Paul upheld the deferral against a Sonnet 5.5 finding).
+**A Sonnet newer than these is not covered**: it is a new evaluation, and the scan should
+report it. **A finding that the migration's scope has grown** — a new restriction that breaks
+a `ClaudeClient.cs` call path — **is reportable as a scope correction even though no trigger
+below fires**; it corrects this entry and does not reopen the deferral, as 2026-10 finding 3 did.
 
 **Not adopted, and no ticket opened** — deliberately. Paul, 2026-08-01: *"nothing we
 really need to act on now… That will come later when Sonnet 4.6 sunsets."*
