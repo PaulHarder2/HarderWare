@@ -86,9 +86,9 @@ its scope corrected.** No ticket was opened against any finding. Decisions taken
 
 | Finding | Verdict | Entry |
 |---|---|---|
-| 1. Claude Opus 5.5 — Opus adoption trigger fires | **Already in place** — measured 2026-10-01, the running Claude Code session reports `claude-opus-5-5[1m]`. The scan said it could not tell, and said so, rather than asserting the old model: the WX-389 fix working | [Claude Code on Claude Opus 5.x](#opus-5-claude-code) |
-| 2. Claude Fable 5.1 — trigger check | **Checked, no change.** $10/$50 against Opus 5.5's $4/$20 — 2.5× — is decisive on its own, as it was for Fable 5 | [Claude Code on Claude Opus 5.x](#opus-5-claude-code) |
-| 3. Sonnet 5.5 rejects forced tool use as well as `temperature` | **Deferral upheld, scope corrected.** No trigger fired; the 2026-12-01 backstop is still the nearest. The finding is right that forced tool use now breaks too, but **undercounts it: all three call paths force a tool, not two** — the scan missed the reconciliation path, whose forced choice protects both guaranteed sends and the WX-80 skip gate | [Claude Sonnet 5.x for the WxServices runtime](#sonnet-5-runtime) |
+| 1. Claude Opus 5.5 — Opus adoption trigger fires | **Already in place** — see the entry. The scan said it could not tell, rather than asserting the old model: the WX-389 fix working | [Claude Code on Claude Opus 5.x](#opus-5-claude-code) |
+| 2. Claude Fable 5.1 — trigger check | **Checked, no change** — see the entry | [Claude Code on Claude Opus 5.x](#opus-5-claude-code) |
+| 3. Sonnet 5.5 rejects forced tool use as well as `temperature` | **Deferral upheld; the entry's scope corrected.** The finding is right but **undercounts the call paths** — see the entry | [Claude Sonnet 5.x for the WxServices runtime](#sonnet-5-runtime) |
 | 4. .NET 8.0.31 patch | **Already satisfied** — measured on PaulOmniBook 2026-10-01, `dotnet --list-runtimes` reports `Microsoft.NETCore.App 8.0.31`. The scan's recommended command was the discriminating one this time | — |
 
 ### 2026-09
@@ -178,8 +178,9 @@ Already in the stack. The scan must not recommend adopting these again, though a
 [2026-09](#2026-09) finding 2 (trigger check); [2026-10](#2026-10) findings 1 and 2.
 
 ✅ **2026-10-01 (WX-503): CLAUDE CODE IS ON OPUS 5.5.** `claude-opus-5-5` (released
-2026-09-22, $4/$20 per MTok, 1M context) fired the first trigger below; the running session
-reports `claude-opus-5-5[1m]`. When the CLI moved to it is not recorded here. **Fable 5.1 was
+2026-09-22, $4/$20 per MTok, 1M context) fired the first trigger below as it then read
+(superseding `claude-opus-5`); the running session reports `claude-opus-5-5[1m]`. When the
+CLI moved to it is not recorded here. **Fable 5.1 was
 checked against it and declined**: $10/$50, 2.5× the price, the same argument that declined
 Fable 5. The history below is Opus 5's; the triggers now name Opus 5.5.
 
@@ -260,9 +261,7 @@ Examined and consciously postponed. **Do not resurface before the named trigger 
 **This deferral covers exactly two model ids: `claude-sonnet-5` and `claude-sonnet-5-5`**
 (the second added 2026-10-01, when Paul upheld the deferral against a Sonnet 5.5 finding).
 **A Sonnet newer than these is not covered**: it is a new evaluation, and the scan should
-report it. **A finding that the migration's scope has grown** — a new restriction that breaks
-a `ClaudeClient.cs` call path — **is reportable as a scope correction even though no trigger
-below fires**; it corrects this entry and does not reopen the deferral, as 2026-10 finding 3 did.
+report it.
 
 **Not adopted, and no ticket opened** — deliberately. Paul, 2026-08-01: *"nothing we
 really need to act on now… That will come later when Sonnet 4.6 sunsets."*
