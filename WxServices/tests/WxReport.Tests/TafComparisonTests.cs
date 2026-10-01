@@ -100,11 +100,19 @@ public sealed class TafComparisonTests : IDisposable
         };
     }
 
+    private async Task<TafComparison> OutcomeAsync(WeatherSnapshot current, string recordedTaf)
+    {
+        await using var ctx = new WeatherDataContext(_db);
+        return (await ReportWorker.CompareTafsAsync(ctx, current, recordedTaf, Blocks(), Now, CancellationToken.None)).Outcome;
+    }
+
     private async Task<bool> SameAsync(WeatherSnapshot current, string recordedTaf)
     {
         await using var ctx = new WeatherDataContext(_db);
         return await ReportWorker.TafSameInSubstanceAsync(ctx, current, recordedTaf, Blocks(), Now, "test", CancellationToken.None);
     }
+
+    private static WeatherSnapshot NoTaf() => new() { TafStationIcao = null, TafIssuanceUtc = null, TafValidToUtc = null };
 
     [Fact]
     public async Task LoadTaf_FindsTheTafByStationAndIssuance()
@@ -119,36 +127,45 @@ public sealed class TafComparisonTests : IDisposable
     }
 
     [Fact]
-    public async Task AReissueSayingTheSameThing_IsTheSame() =>
+    public async Task AReissueSayingTheSameThing_IsSame()
+    {
+        Assert.Equal(TafComparison.Same, await OutcomeAsync(await CurrentAsync(Reissued), Earlier.ToString("O")));
         Assert.True(await SameAsync(await CurrentAsync(Reissued), Earlier.ToString("O")));
+    }
 
     [Fact]
     public async Task TheRecordedIssuanceMatches_WithOrWithoutAUtcMarker() =>
-        Assert.True(await SameAsync(await CurrentAsync(Reissued), DateTime.SpecifyKind(Earlier, DateTimeKind.Utc).ToString("O")));
+        Assert.Equal(TafComparison.Same,
+            await OutcomeAsync(await CurrentAsync(Reissued), DateTime.SpecifyKind(Earlier, DateTimeKind.Utc).ToString("O")));
 
     [Fact]
-    public async Task ShowersBecomingThunderstorms_IsDifferent() =>
-        Assert.False(await SameAsync(await CurrentAsync(Changed), Earlier.ToString("O")));
-
-    [Fact]
-    public async Task AnEarlierTafNoLongerStored_IsDifferent() =>
-        Assert.False(await SameAsync(await CurrentAsync(Reissued), Earlier.AddMinutes(-30).ToString("O")));
-
-    [Fact]
-    public async Task AnUnreadableRecordedIssuance_IsDifferent() =>
-        Assert.False(await SameAsync(await CurrentAsync(Reissued), "none"));
-
-    [Fact]
-    public async Task NoTafStation_IsDifferent()
+    public async Task ShowersBecomingThunderstorms_IsDifferent()
     {
-        var current = await CurrentAsync(Reissued);
-        var noStation = new WeatherSnapshot
-        {
-            TafStationIcao = null,
-            TafIssuanceUtc = current.TafIssuanceUtc,
-            TafValidToUtc = current.TafValidToUtc,
-            ForecastPeriods = current.ForecastPeriods,
-        };
-        Assert.False(await SameAsync(noStation, Earlier.ToString("O")));
+        Assert.Equal(TafComparison.Different, await OutcomeAsync(await CurrentAsync(Changed), Earlier.ToString("O")));
+        Assert.False(await SameAsync(await CurrentAsync(Changed), Earlier.ToString("O")));
+    }
+
+    [Fact]
+    public async Task AnEarlierTafNoLongerStored_Fails() =>
+        Assert.Equal(TafComparison.Failed, await OutcomeAsync(await CurrentAsync(Reissued), Earlier.AddMinutes(-30).ToString("O")));
+
+    [Fact]
+    public async Task AnUnreadableRecordedIssuance_Fails()
+    {
+        Assert.Equal(TafComparison.Failed, await OutcomeAsync(await CurrentAsync(Reissued), "not a time"));
+        Assert.False(await SameAsync(await CurrentAsync(Reissued), "not a time"));
+    }
+
+    [Fact]
+    public async Task NoTafAtTheRejection_CameOrWent() =>
+        // A part-time TAF station: no TAF when Claude answered, one now. A real difference, not a failure.
+        Assert.Equal(TafComparison.CameOrWent, await OutcomeAsync(await CurrentAsync(Reissued), "none"));
+
+    [Fact]
+    public async Task NoTafNow_CameOrWent()
+    {
+        // The TAF expired since the rejection. A real difference, not a failure.
+        Assert.Equal(TafComparison.CameOrWent, await OutcomeAsync(NoTaf(), Earlier.ToString("O")));
+        Assert.False(await SameAsync(NoTaf(), Earlier.ToString("O")));
     }
 }

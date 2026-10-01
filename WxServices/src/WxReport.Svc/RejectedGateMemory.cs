@@ -80,6 +80,22 @@ internal enum RejectedGateCheck
     NewBaseline,
 }
 
+/// <summary>The outcome of comparing the TAF Claude weighed at a rejection with the current one (WX-506).</summary>
+internal enum TafComparison
+{
+    /// <summary>Both TAFs forecast the same thing in substance for the blocks still ahead.</summary>
+    Same,
+
+    /// <summary>They differ in substance in at least one block still ahead.</summary>
+    Different,
+
+    /// <summary>One side had no TAF: it expired since the rejection, or appeared since.  A real difference.</summary>
+    CameOrWent,
+
+    /// <summary>The comparison could not be made: an unreadable recorded issuance, an earlier TAF no longer stored, or an error.</summary>
+    Failed,
+}
+
 /// <summary>
 /// The WX-506 repeat skip: records, on the locality's state, the gate criteria, the input
 /// identity and the prior behind an unscheduled cycle that Claude answered without a send
