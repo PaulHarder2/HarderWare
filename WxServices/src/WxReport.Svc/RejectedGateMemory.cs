@@ -25,7 +25,7 @@
 // TafBlockProjector.MaterialSignature, at the same instant. Measured 2026-10-01 in a slow,
 // unsettled pattern: KIAH's TAF was amended six times in six hours; all 7 re-asks that a new TAF
 // caused got the same answer and all 3 caused by a new GFS run sent, and a replay of the 7 found
-// one TAF that changed a block from dry to possible rain (WX-506 comments 16564, 16565; Paul's
+// two that changed in substance and five that did not (WX-506 comments 16564, 16565; Paul's
 // decision, 2026-10-01). The clock can also bring new criteria (a block crossing into a nearer
 // tier), and those are not on record, so Claude is asked. What the skip lets pass is a TAF
 // reissued with the same forecast in substance, and a METAR that moved only in sky cover or

@@ -112,10 +112,12 @@ internal static class TafBlockProjector
     /// as <see cref="Merge"/> derives them, the band of its peak wind (sustained or gust, on
     /// <see cref="WindScale"/>) and whether that peak is severe.  Groups are read only over
     /// the part of each block from <paramref name="nowUtc"/> on, so the hours already past
-    /// do not count.  Two TAFs with the same signature at the same instant forecast the
-    /// same thing for every block still ahead, however their wording or timing within a
-    /// block differs.  A TAF valid further ahead has more entries, so a routine reissue
-    /// that extends coverage reads as different.
+    /// do not count.  The blocks are the gate's own (6-hour local day-parts).  Two TAFs with
+    /// the same signature at the same instant agree, for every block still ahead, on
+    /// precipitation (whether, how likely, which kind) and on the wind band, however their
+    /// wording or timing within a block differs.  Visibility, ceiling, fog and mist, wind
+    /// direction and wind shifts are not compared.  A TAF valid further ahead has more
+    /// entries, so a routine reissue that extends coverage reads as different.
     /// </summary>
     /// <param name="tafPeriods">The parsed TAF change groups, in TAF order.</param>
     /// <param name="tafValidToUtc">End of the TAF's validity window.</param>

@@ -1219,13 +1219,16 @@ public sealed class ReportWorker : BackgroundService
                 // same observed weather, on a recent cycle that Claude answered without a send.
                 // Asking again would pay for the same answer (Austin, 2026-09-29: 18 times in a
                 // row). Honors enforce/shadow.
+                // The TAF comparison costs a query, so it runs only when every other test already
+                // says Repeat: Check first assumes the TAF the same, and only then is it compared.
+                var check = RejectedGateMemory.Check(passed, state, inputIdentity, priorSnapshot.Id, now, cfg.SignificanceGate.RejectedRepeatWindowHours, tafSameInSubstance: true);
                 var recordedTaf = state.LastRejectedInputHash is { } recordedInput
                     ? InputIdentity.Parse(recordedInput).Taf
                     : null;
                 bool tafAmended = recordedTaf is not null && recordedTaf != inputIdentity.Taf;
-                bool tafSameInSubstance = tafAmended
-                    && await TafSameInSubstanceAsync(ctx, snapshot, recordedTaf!, provisionalBody, now, label, ct);
-                var check = RejectedGateMemory.Check(passed, state, inputIdentity, priorSnapshot.Id, now, cfg.SignificanceGate.RejectedRepeatWindowHours, tafSameInSubstance);
+                if (check == RejectedGateCheck.Repeat && tafAmended
+                    && !await TafSameInSubstanceAsync(ctx, snapshot, recordedTaf!, provisionalBody, now, label, ct))
+                    check = RejectedGateCheck.NewTaf;
                 if (check == RejectedGateCheck.Repeat)
                 {
                     bool enforce = gateMode == SignificanceGateMode.Enforce;
@@ -1501,20 +1504,31 @@ public sealed class ReportWorker : BackgroundService
     /// that cannot be compared (no TAF station, an unreadable issuance, the earlier TAF no longer
     /// stored, an error) reads as different, so Claude is asked.
     /// </summary>
-    private static async Task<bool> TafSameInSubstanceAsync(
+    internal static async Task<bool> TafSameInSubstanceAsync(
         WeatherDataContext ctx, WeatherSnapshot snapshot, string recordedTaf,
         ForecastSnapshotBody provisionalBody, DateTime now, string label, CancellationToken ct)
     {
         if (snapshot.TafStationIcao is not { } station || snapshot.ForecastPeriods is null
             || !DateTime.TryParse(recordedTaf, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var issued))
+        {
+            Logger.Warn($"{label}: WX-506 could not compare the recorded TAF with the current one — no TAF station, or the recorded issuance '{recordedTaf}' cannot be read; asking Claude.");
             return false;
+        }
         try
         {
             if (await WxInterpreter.LoadTafAsync(ctx, station, issued, ct) is not { } then)
+            {
+                Logger.Warn($"{label}: WX-506 could not compare the recorded TAF with the current one — {station} issued {recordedTaf} is not stored; asking Claude.");
                 return false;
+            }
             var blockStarts = provisionalBody.Blocks.Select(b => b.StartUtc).ToList();
-            return TafBlockProjector.MaterialSignature(then.Periods, then.ValidToUtc, blockStarts, now)
-                == TafBlockProjector.MaterialSignature(snapshot.ForecastPeriods, snapshot.TafValidToUtc, blockStarts, now);
+            var before = TafBlockProjector.MaterialSignature(then.Periods, then.ValidToUtc, blockStarts, now);
+            var after = TafBlockProjector.MaterialSignature(snapshot.ForecastPeriods, snapshot.TafValidToUtc, blockStarts, now);
+            bool same = before == after;
+            // The production watch (WX-506.md step 6c) counts these lines: a comparison that
+            // never succeeds would otherwise look like a TAF that always changed.
+            Logger.Debug($"{label}: WX-506 TAF comparison {(same ? "same" : "different")} — {station} {recordedTaf} vs {snapshot.TafIssuanceUtc:O}: [{before}] vs [{after}].");
+            return same;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

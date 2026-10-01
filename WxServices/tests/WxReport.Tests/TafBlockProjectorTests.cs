@@ -270,7 +270,7 @@ public class TafBlockProjectorTests
 
     [Fact]
     public void MaterialSignature_ThunderMovedWithinTheSameBlock_IsEqual() =>
-        // Austin, 2026-10-01: TSRA FM15 became FM17, inside the same 12-18Z block.
+        // Thunderstorms starting at +1h or at +3h: both inside the block from Now to +6h.
         Assert.Equal(Signature(Now, DryThenThunderAt(1)), Signature(Now, DryThenThunderAt(3)));
 
     [Fact]
@@ -328,6 +328,32 @@ public class TafBlockProjectorTests
             Signature(Now,
                 Per(ForecastChangeType.Base, 0, 24, sustained: 10),
                 Per(ForecastChangeType.Probability30, 12, 18, precip: PrecipitationType.Rain)));
+
+    [Fact]
+    public void MaterialSignature_ATempoSpanningNow_CountsForTheRestOfItsBlock() =>
+        // A TEMPO from -1h to +2h is still ahead at Now, so the block reads possible rain.
+        Assert.NotEqual(
+            Signature(Now, Per(ForecastChangeType.Base, 0, 24, sustained: 10)),
+            Signature(Now,
+                Per(ForecastChangeType.Base, 0, 24, sustained: 10),
+                Per(ForecastChangeType.Temporary, -1, 2, precip: PrecipitationType.Rain)));
+
+    [Fact]
+    public void MaterialSignature_RainBecomingSnow_Differs() =>
+        Assert.NotEqual(
+            Signature(Now, Per(ForecastChangeType.Base, 0, 24, sustained: 10, precip: PrecipitationType.Rain)),
+            Signature(Now, Per(ForecastChangeType.Base, 0, 24, sustained: 10, precip: PrecipitationType.Snow)));
+
+    [Fact]
+    public void MaterialSignature_BlocksBeyondTheTafsEnd_AreLeftOut()
+    {
+        // Valid to +24h: the block starting at +24h is beyond it and has no entry; a TAF valid
+        // further ahead (a routine reissue) has one more, so it reads as different.
+        var taf = new[] { Per(ForecastChangeType.Base, 0, 30, sustained: 10) };
+        var toEnd = TafBlockProjector.MaterialSignature(taf, SigValidTo, SigBlocks, Now);
+        Assert.Equal(4, toEnd.Split(';').Length);
+        Assert.NotEqual(toEnd, TafBlockProjector.MaterialSignature(taf, Now.AddHours(30), SigBlocks, Now));
+    }
 
     [Fact]
     public void MaterialSignature_NoTaf_IsNone() =>
