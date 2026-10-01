@@ -168,4 +168,18 @@ public sealed class TafComparisonTests : IDisposable
         Assert.Equal(TafComparison.CameOrWent, await OutcomeAsync(NoTaf(), Earlier.ToString("O")));
         Assert.False(await SameAsync(NoTaf(), Earlier.ToString("O")));
     }
+
+    // The production watch greps these lines (WX-506.md step 6c): only a real failure may be a
+    // warning, and a TAF that came or went must read as a difference.
+    [Theory]
+    [InlineData(nameof(TafComparison.Same), false, "WX-506 TAF comparison same")]
+    [InlineData(nameof(TafComparison.Different), false, "WX-506 TAF comparison different")]
+    [InlineData(nameof(TafComparison.CameOrWent), false, "WX-506 TAF comparison different")]
+    [InlineData(nameof(TafComparison.Failed), true, "WX-506 could not compare the recorded TAF")]
+    public void EachOutcome_LogsTheLineTheWatchCounts(string outcome, bool warn, string prefix)
+    {
+        var (isWarn, line) = ReportWorker.TafComparisonLogLine(Enum.Parse<TafComparison>(outcome), "detail");
+        Assert.Equal(warn, isWarn);
+        Assert.StartsWith(prefix, line);
+    }
 }

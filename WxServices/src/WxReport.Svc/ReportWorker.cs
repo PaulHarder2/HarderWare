@@ -1509,23 +1509,26 @@ public sealed class ReportWorker : BackgroundService
         ForecastSnapshotBody provisionalBody, DateTime now, string label, CancellationToken ct)
     {
         var (outcome, detail) = await CompareTafsAsync(ctx, snapshot, recordedTaf, provisionalBody, now, ct);
-        // The production watch (WX-506.md step 6c) counts these lines: a comparison that never
-        // succeeds would otherwise look like a TAF that always changed.
-        switch (outcome)
-        {
-            case TafComparison.Same:
-                Logger.Debug($"{label}: WX-506 TAF comparison same — {detail}.");
-                break;
-            case TafComparison.Different:
-            case TafComparison.CameOrWent:
-                Logger.Debug($"{label}: WX-506 TAF comparison different — {detail}.");
-                break;
-            default:
-                Logger.Warn($"{label}: WX-506 could not compare the recorded TAF with the current one — {detail}; asking Claude.");
-                break;
-        }
+        var (warn, line) = TafComparisonLogLine(outcome, detail);
+        if (warn)
+            Logger.Warn($"{label}: {line}");
+        else
+            Logger.Debug($"{label}: {line}");
         return outcome == TafComparison.Same;
     }
+
+    /// <summary>
+    /// WX-506: the log line for a TAF comparison's outcome, and whether it is a warning.  The
+    /// production watch (WX-506.md step 6c) counts these lines: a comparison that never succeeds
+    /// would otherwise look like a TAF that always changed, so only a real failure is a warning,
+    /// and a TAF that came or went is logged as a difference.
+    /// </summary>
+    internal static (bool Warn, string Line) TafComparisonLogLine(TafComparison outcome, string detail) => outcome switch
+    {
+        TafComparison.Same => (false, $"WX-506 TAF comparison same — {detail}."),
+        TafComparison.Different or TafComparison.CameOrWent => (false, $"WX-506 TAF comparison different — {detail}."),
+        _ => (true, $"WX-506 could not compare the recorded TAF with the current one — {detail}; asking Claude."),
+    };
 
     /// <summary>
     /// WX-506: compares the TAF Claude weighed at the recorded rejection with this cycle's, read at
