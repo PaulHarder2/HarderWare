@@ -1219,16 +1219,9 @@ public sealed class ReportWorker : BackgroundService
                 // same observed weather, on a recent cycle that Claude answered without a send.
                 // Asking again would pay for the same answer (Austin, 2026-09-29: 18 times in a
                 // row). Honors enforce/shadow.
-                // The TAF comparison costs a query, so it runs only when every other test already
-                // says Repeat: Check first assumes the TAF the same, and only then is it compared.
-                var check = RejectedGateMemory.Check(passed, state, inputIdentity, priorSnapshot.Id, now, cfg.SignificanceGate.RejectedRepeatWindowHours, tafSameInSubstance: true);
-                var recordedTaf = state.LastRejectedInputHash is { } recordedInput
-                    ? InputIdentity.Parse(recordedInput).Taf
-                    : null;
-                bool tafAmended = recordedTaf is not null && recordedTaf != inputIdentity.Taf;
-                if (check == RejectedGateCheck.Repeat && tafAmended
-                    && !await TafSameInSubstanceAsync(ctx, snapshot, recordedTaf!, provisionalBody, now, label, ct))
-                    check = RejectedGateCheck.NewTaf;
+                var (check, tafAmended) = await RejectedGateMemory.CheckAsync(
+                    passed, state, inputIdentity, priorSnapshot.Id, now, cfg.SignificanceGate.RejectedRepeatWindowHours,
+                    recordedTaf => TafSameInSubstanceAsync(ctx, snapshot, recordedTaf, provisionalBody, now, label, ct));
                 if (check == RejectedGateCheck.Repeat)
                 {
                     bool enforce = gateMode == SignificanceGateMode.Enforce;

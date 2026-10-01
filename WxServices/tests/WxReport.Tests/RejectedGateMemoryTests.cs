@@ -108,6 +108,52 @@ public class RejectedGateMemoryTests
     public void NewTaf_DifferentInSubstance_AsksClaude() =>
         Assert.Equal(RejectedGateCheck.NewTaf, Check(Passed(Austin), Rejected(Austin), AmendedTaf, tafSame: false));
 
+    // CheckAsync: the production decision, with the TAF comparison as a delegate.
+    private static async Task<(RejectedGateCheck Check, bool Amended, List<string> Asked)> DecideAsync(
+        InputIdentity input, bool same, LocalityState? state = null, params string[] fired)
+    {
+        var asked = new List<string>();
+        var (check, amended) = await RejectedGateMemory.CheckAsync(
+            Passed(fired.Length > 0 ? fired : [Austin]), state ?? Rejected(Austin), input, Prior, Now.AddHours(1), Window,
+            recorded => { asked.Add(recorded); return Task.FromResult(same); });
+        return (check, amended, asked);
+    }
+
+    [Fact]
+    public async Task Decide_AmendedTafSameInSubstance_IsARepeat()
+    {
+        var (check, amended, asked) = await DecideAsync(AmendedTaf, same: true);
+        Assert.Equal(RejectedGateCheck.Repeat, check);
+        Assert.True(amended);
+        Assert.Equal([Evidence.Taf], asked);   // compared against the TAF on record
+    }
+
+    [Fact]
+    public async Task Decide_AmendedTafDifferent_AsksClaude()
+    {
+        var (check, amended, _) = await DecideAsync(AmendedTaf, same: false);
+        Assert.Equal(RejectedGateCheck.NewTaf, check);
+        Assert.True(amended);
+    }
+
+    [Fact]
+    public async Task Decide_SameTaf_IsNotCompared()
+    {
+        var (check, amended, asked) = await DecideAsync(Evidence, same: false);
+        Assert.Equal(RejectedGateCheck.Repeat, check);
+        Assert.False(amended);
+        Assert.Empty(asked);
+    }
+
+    [Fact]
+    public async Task Decide_AnotherReasonToAsk_IsNotCompared()
+    {
+        // A new criterion already asks Claude; the query is not spent.
+        var (check, _, asked) = await DecideAsync(AmendedTaf, same: true, fired: "precip-add@T1(10-01 05Z)");
+        Assert.Equal(RejectedGateCheck.NewCriterion, check);
+        Assert.Empty(asked);
+    }
+
     [Fact]
     public void SameTaf_IsNotComparedAtAll() =>
         // The comparison's answer is irrelevant when the issuance has not changed.

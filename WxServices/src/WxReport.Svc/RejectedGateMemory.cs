@@ -197,6 +197,28 @@ internal static class RejectedGateMemory
     }
 
     /// <summary>
+    /// The production entry to <see cref="Check"/>: decides with the TAF compared only when it
+    /// matters.  The comparison costs a query, so <see cref="Check"/> first runs with the TAF
+    /// assumed the same; only a result of <see cref="RejectedGateCheck.Repeat"/> with an amended TAF
+    /// (a different issuance from the one on record) calls <paramref name="tafSameInSubstance"/>
+    /// with the recorded issuance, and a TAF that is not the same turns the Repeat into
+    /// <see cref="RejectedGateCheck.NewTaf"/>.  Also returns whether the TAF was amended, for the
+    /// skip's log line.
+    /// </summary>
+    internal static async Task<(RejectedGateCheck Check, bool TafAmended)> CheckAsync(
+        SignificanceResult gate, LocalityState state, InputIdentity input, int priorSnapshotId, DateTime nowUtc, double windowHours,
+        Func<string, Task<bool>> tafSameInSubstance)
+    {
+        var check = Check(gate, state, input, priorSnapshotId, nowUtc, windowHours, tafSameInSubstance: true);
+        if (check != RejectedGateCheck.Repeat)
+            return (check, false);
+        var recordedTaf = InputIdentity.Parse(state.LastRejectedInputHash).Taf;
+        if (recordedTaf == input.Taf)
+            return (RejectedGateCheck.Repeat, false);
+        return (await tafSameInSubstance(recordedTaf) ? RejectedGateCheck.Repeat : RejectedGateCheck.NewTaf, true);
+    }
+
+    /// <summary>
     /// The part of a METAR material signature (<c>STATION;W..;V..;S..;T..;P..</c>) whose change
     /// reopens a rejected question: the station, the wind band, the visibility band and the
     /// present-weather tokens. The sky and temperature bands are left out; they move hourly. The
