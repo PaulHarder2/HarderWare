@@ -351,8 +351,19 @@ public class TafBlockProjectorTests
         // further ahead (a routine reissue) has one more, so it reads as different.
         var taf = new[] { Per(ForecastChangeType.Base, 0, 30, sustained: 10) };
         var toEnd = TafBlockProjector.MaterialSignature(taf, SigValidTo, SigBlocks, Now);
-        Assert.Equal(4, toEnd.Split(';').Length);
+        Assert.Equal(4, toEnd.Split('|')[1].Split(';').Length);
         Assert.NotEqual(toEnd, TafBlockProjector.MaterialSignature(taf, Now.AddHours(30), SigBlocks, Now));
+    }
+
+    [Fact]
+    public void MaterialSignature_AnEndMovedInsideABlock_Differs()
+    {
+        // CodeRabbit, PR #241: the same conditions, ending at +20h and at +22h, both inside the
+        // block from +18h. The later end covers more of it, so the TAFs are not the same.
+        var taf = new[] { Per(ForecastChangeType.Base, 0, 30, sustained: 10) };
+        Assert.NotEqual(
+            TafBlockProjector.MaterialSignature(taf, Now.AddHours(20), SigBlocks, Now),
+            TafBlockProjector.MaterialSignature(taf, Now.AddHours(22), SigBlocks, Now));
     }
 
     [Fact]

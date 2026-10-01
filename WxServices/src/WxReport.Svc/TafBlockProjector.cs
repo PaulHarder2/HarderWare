@@ -116,8 +116,9 @@ internal static class TafBlockProjector
     /// the same signature at the same instant agree, for every block still ahead, on
     /// precipitation (whether, how likely, which kind) and on the wind band, however their
     /// wording or timing within a block differs.  Visibility, ceiling, fog and mist, wind
-    /// direction and wind shifts are not compared.  A TAF valid further ahead has more
-    /// entries, so a routine reissue that extends coverage reads as different.
+    /// direction and wind shifts are not compared.  The signature leads with the TAF's validity
+    /// end (<c>until=</c>), so a TAF whose end moved, even inside one block, reads as different, and
+    /// a routine reissue that extends coverage always does.
     /// </summary>
     /// <param name="tafPeriods">The parsed TAF change groups, in TAF order.</param>
     /// <param name="tafValidToUtc">End of the TAF's validity window.</param>
@@ -166,7 +167,11 @@ internal static class TafBlockProjector
             bool severe = peak >= WxThresholds.SevereWindKt;
             entries.Add($"{start:yyyyMMddHH}={expectation}/{phenomenon?.ToString() ?? "-"}/W{WindScale.Band(peak)}{(severe ? "/severe" : "")}");
         }
-        return string.Join(';', entries);
+        // The validity end leads the signature: a TAF that covers more of a block than another
+        // (its end moved inside that block) differs even when the block's conditions read the
+        // same (CodeRabbit, PR #241).
+        var until = tafValidToUtc is { } v ? v.ToString("yyyyMMddHHmm") : "open";
+        return $"until={until}|{string.Join(';', entries)}";
     }
 
     /// <summary>Build one merged block from a GFS block and the TAF groups that cover it.</summary>
