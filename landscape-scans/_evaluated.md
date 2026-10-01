@@ -178,11 +178,12 @@ Already in the stack. The scan must not recommend adopting these again, though a
 [2026-09](#2026-09) finding 2 (trigger check); [2026-10](#2026-10) findings 1 and 2.
 
 ✅ **2026-10-01 (WX-503): CLAUDE CODE IS ON OPUS 5.5.** `claude-opus-5-5` (released
-2026-09-22, $4/$20 per MTok, 1M context) fired the first trigger below as it then read, on
-its second clause: Anthropic now recommends it for most workloads, at a lower price than
-`claude-opus-5`. The running session reports `claude-opus-5-5[1m]`; when the CLI moved to
-it is not recorded here. **Fable 5.1 was checked against it and declined**: $10/$50, 2.5×
-the price, the same argument that declined Fable 5. The history below is Opus 5's; the triggers now name Opus 5.5.
+2026-09-22, $4/$20 per MTok, 1M context) fired two triggers below: the first, as it then
+read (a model the entry had not evaluated, now Anthropic's recommended Opus-tier model), and
+the third (a price change for this tier, $5/$25 to $4/$20). The running session reports
+`claude-opus-5-5[1m]`; when the CLI moved to it is not recorded here. **Fable 5.1 was
+checked against it and declined**: $10/$50, 2.5× the price, the same argument that declined
+Fable 5. The history below is Opus 5's; the triggers now name Opus 5.5.
 
 `claude-opus-5` became Claude Code's default Opus model in v2.1.219 (2026-07-24) at
 unchanged pricing — $5/$25 per MTok, 1M context. Verified in use 2026-08-01: the running
@@ -245,6 +246,8 @@ actioned here; a candidate to discuss, not a filed ticket.**
   shipping at the same price with `claude-opus-5-5` still Active fires nothing, and the
   scan is barred from raising the very upgrade this entry records us having made.
 - A later Opus release **changes** the price or context window for this tier.
+  ✅ **FIRED 2026-10-01 by Opus 5.5** ($5/$25 to $4/$20) **and answered: adopted.** It now
+  applies to releases after Opus 5.5.
 - Anthropic **announces** deprecation of `claude-opus-5-5`.
 
 ### Deferred
@@ -363,15 +366,17 @@ exactly once:
   2. This trigger is SPENT and cannot fire again.** The three triggers above it are
   unfired and unchanged, and the 2026-12-01 backstop still stands.
 
-✅ **TRIGGER CHECK, 2026-10-01 (WX-503): none fired, deferral upheld.** The 2026-10 scan
-reports no trigger fired and the 2026-12-01 backstop as the nearest; it read the
-deprecation page, which carries the primary trigger. Its forced-tool-use finding corrected
-reason 3's scope and fired nothing.
 *(A fifth trigger stood here — "token spend grows enough that a percentage difference
 becomes material" — and was removed. It named no threshold and no observer, so nobody
 could ever determine whether it had fired, which makes it indistinguishable from having
 no trigger at all. The 2026-12-01 backstop already forces a deliberate revisit. Add a
 figure and it can come back.)*
+
+✅ **TRIGGER CHECK, 2026-10-01 (WX-503): none fired, deferral upheld.** Measured first-hand
+that day on the model deprecations page: `claude-sonnet-4-6` is **Active**, tentative
+retirement *"Not sooner than February 17, 2027"*, so the primary trigger has not fired; the
+2026-12-01 backstop is the nearest. The 2026-10 scan's forced-tool-use finding corrected
+reason 3's scope and fired nothing.
 
 **Do not re-raise this as a cost saving.** ⚠️ **The REASON changed on 2026-09-01 and the
 INSTRUCTION did not.** The saving no longer inverts — at the headline tokenizer ratio it
