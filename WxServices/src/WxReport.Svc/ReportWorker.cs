@@ -60,7 +60,7 @@ public sealed class ReportWorker : BackgroundService
     // delivers, so it also tells a re-send the normal cycle has run since), and the last best-effort re-send.
     // In memory only: a restart logs a stale report once more, allows one more retry, and loses the
     // normal-cycle signal, which then costs at most one more significance check (ApplyResentState).
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<long, (int SnapshotId, PendingStale Reason)> _pendingStaleNoticed = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<long, (int SnapshotId, int ReasonsLogged)> _pendingStaleNoticed = new();
     private readonly System.Collections.Concurrent.ConcurrentDictionary<long, (int SnapshotId, DateTime AtUtc)> _pendingRetryAt = new();
     private static readonly TimeSpan PendingRetryInterval = TimeSpan.FromHours(1);
     private readonly Counter<long> _significanceGateSkips;
@@ -114,7 +114,7 @@ public sealed class ReportWorker : BackgroundService
         _severeFlipSuppressed = _meter.CreateCounter<long>("wxreport.suppressed.severe_flip.total", description: "WX-108: unscheduled sends suppressed because the only change was a severe-flag flip on an observation-only advance with no newer GFS run or TAF.");
         _noComputedChangeSuppressed = _meter.CreateCounter<long>("wxreport.suppressed.no_computed_change.total", description: "WX-506: unscheduled sends suppressed because the reconciled report carried no computed change, so it would have had no \"Why this update\" band.");
         _rejectedRepeatSuppressed = _meter.CreateCounter<long>("wxreport.suppressed.rejected_repeat.total", description: "WX-506 rework: significant unscheduled cycles whose gate fired only criteria Claude had already rejected within the window, tagged by mode (enforce = Claude call skipped; shadow = would-skip but Claude still called).");
-        _pendingDelivery = _meter.CreateCounter<long>("wxreport.pending_delivery.total", description: "WX-527: cycles that found a report Claude generated but email did not deliver, tagged by outcome (resent = re-sent to members still owed, no Claude call; resend_failed = re-sent and delivered nothing; stale = ruled stale, counted once per report, with the reason, the normal cycle then deciding whether to regenerate).");
+        _pendingDelivery = _meter.CreateCounter<long>("wxreport.pending_delivery.total", description: "WX-527: cycles that found a report Claude generated but email did not deliver, tagged by outcome (resent = re-sent to members still owed, no Claude call; resend_failed = re-sent and delivered nothing; stale = ruled stale, counted once per report and reason, with the reason, the normal cycle then deciding whether to regenerate).");
         _significanceGateSkips = _meter.CreateCounter<long>("wxreport.suppressed.significance_gate.total", description: "WX-114: cycles the deterministic significance gate found unchanged since the last sent report, tagged by mode (enforce = Claude call skipped; shadow = would-skip but Claude still called).");
         _debounceSuppressed = _meter.CreateCounter<long>("wxreport.suppressed.debounce.total", description: "WX-181: significant unscheduled cycles suppressed by the day-banded debounce (the change's day-band min-gap had not elapsed since the last unscheduled send), tagged by mode (enforce = Claude call skipped; shadow = would-skip but Claude still called).");
         _quietWindowSuppressed = _meter.CreateCounter<long>("wxreport.suppressed.quietwindow.total", description: "WX-157: significant unscheduled cycles suppressed by the day-banded pre-scheduled quiet window (the next scheduled slot fell within the change's day-band quiet window; content rides the scheduled report), tagged by mode (enforce = Claude call skipped; shadow = would-skip but Claude still called).");
@@ -1939,11 +1939,14 @@ public sealed class ReportWorker : BackgroundService
             if (stale != PendingStale.None)
             {
                 // Once per report and reason: the report stays the newest, often stale for the same
-                // reason, on every cycle until something replaces it.
-                var notice = (pendingSnapshot.Id, stale);
-                if (_pendingStaleNoticed.TryGetValue(locality.Id, out var noticed) && noticed == notice)
+                // reason, on every cycle until something replaces it. A bit per reason, so reasons that
+                // alternate (showery METARs, an amended TAF) are each logged and counted once.
+                int bit = 1 << (int)stale;
+                int logged = _pendingStaleNoticed.TryGetValue(locality.Id, out var noticed) && noticed.SnapshotId == pendingSnapshot.Id
+                    ? noticed.ReasonsLogged : 0;
+                if ((logged & bit) != 0)
                     return null;
-                _pendingStaleNoticed[locality.Id] = notice;
+                _pendingStaleNoticed[locality.Id] = (pendingSnapshot.Id, logged | bit);
                 Logger.Info($"{label}: WX-527 pending {kind} report from {generatedUtc:u} not re-sent ({stale}) — the normal cycle decides.");
                 _pendingDelivery.Add(1, new KeyValuePair<string, object?>("outcome", "stale"), new KeyValuePair<string, object?>("reason", stale.ToString()));
                 return null;
