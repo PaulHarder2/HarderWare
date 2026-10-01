@@ -27,10 +27,11 @@ public class CommittedSendTests
     }
 
     [Fact]
-    public void Schema_version_constant_is_three()
+    public void Schema_version_constant_is_four()
     {
-        // v2 added the StructuredReport column (WX-128); v3 added IsDiagnostic (WX-130).
-        Assert.Equal(3, CommittedSend.SchemaVersionCurrent);
+        // v2 added the StructuredReport column (WX-128); v3 added IsDiagnostic (WX-130);
+        // v4 added ReportKind and InputIdentity (WX-527).
+        Assert.Equal(4, CommittedSend.SchemaVersionCurrent);
     }
 
     [Fact]

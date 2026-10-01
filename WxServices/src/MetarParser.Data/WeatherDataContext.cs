@@ -614,6 +614,8 @@ public sealed class WeatherDataContext : DbContext
             e.Property(x => x.ReasoningTrace).HasColumnType("nvarchar(max)");
             e.Property(x => x.EmailBody).HasColumnType("nvarchar(max)");
             e.Property(x => x.CreatedAtUtc).IsRequired();
+            e.Property(x => x.ReportKind).HasMaxLength(16);
+            e.Property(x => x.InputIdentity).HasMaxLength(200);
             e.Property(x => x.SchemaVersion)
              .IsRequired()
              .HasDefaultValue(CommittedSend.SchemaVersionCurrent);

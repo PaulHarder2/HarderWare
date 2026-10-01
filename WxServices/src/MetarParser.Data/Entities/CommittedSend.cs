@@ -16,8 +16,8 @@ namespace MetarParser.Data.Entities;
 /// </summary>
 public sealed class CommittedSend
 {
-    /// <summary>Current schema version for the column shape on this row.  v2 added <see cref="StructuredReport"/> (WX-128); v3 added <see cref="IsDiagnostic"/> (WX-130).</summary>
-    public const int SchemaVersionCurrent = 3;
+    /// <summary>Current schema version for the column shape on this row.  v2 added <see cref="StructuredReport"/> (WX-128); v3 added <see cref="IsDiagnostic"/> (WX-130); v4 added <see cref="ReportKind"/> and <see cref="InputIdentity"/> (WX-527).</summary>
+    public const int SchemaVersionCurrent = 4;
 
     /// <summary>Primary key, auto-incremented by the database.</summary>
     public int Id { get; set; }
@@ -78,6 +78,21 @@ public sealed class CommittedSend
     /// the WX-133 shared-schedule invariant exists to prevent.
     /// </summary>
     public bool IsDiagnostic { get; set; }
+
+    /// <summary>
+    /// WX-527: the kind of report this row carries (<c>Scheduled</c>, <c>Unscheduled</c>, or
+    /// <c>Diagnostic</c>), so an unsent row can be re-sent as what it was.  <see langword="null"/>
+    /// on rows written before WX-527, which are never re-sent.
+    /// </summary>
+    public string? ReportKind { get; set; }
+
+    /// <summary>
+    /// WX-527: the serialised input identity (METAR material signature, TAF issuance, GFS run) of
+    /// the evidence the report was built from.  A pending, unsent report is re-sent only while
+    /// the evidence has not moved on in substance.  <see langword="null"/> on rows written before
+    /// WX-527, which are never re-sent.
+    /// </summary>
+    public string? InputIdentity { get; set; }
 
     /// <summary>Schema version of the column shape on this row.  Defaults to <see cref="SchemaVersionCurrent"/>.</summary>
     public int SchemaVersion { get; set; } = SchemaVersionCurrent;
