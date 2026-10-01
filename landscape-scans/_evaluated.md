@@ -178,11 +178,11 @@ Already in the stack. The scan must not recommend adopting these again, though a
 [2026-09](#2026-09) finding 2 (trigger check); [2026-10](#2026-10) findings 1 and 2.
 
 ✅ **2026-10-01 (WX-503): CLAUDE CODE IS ON OPUS 5.5.** `claude-opus-5-5` (released
-2026-09-22, $4/$20 per MTok, 1M context) fired the first trigger below as it then read
-(superseding `claude-opus-5`); the running session reports `claude-opus-5-5[1m]`. When the
-CLI moved to it is not recorded here. **Fable 5.1 was
-checked against it and declined**: $10/$50, 2.5× the price, the same argument that declined
-Fable 5. The history below is Opus 5's; the triggers now name Opus 5.5.
+2026-09-22, $4/$20 per MTok, 1M context) fired the first trigger below as it then read, on
+its second clause: Anthropic now recommends it for most workloads, at a lower price than
+`claude-opus-5`. The running session reports `claude-opus-5-5[1m]`; when the CLI moved to
+it is not recorded here. **Fable 5.1 was checked against it and declined**: $10/$50, 2.5×
+the price, the same argument that declined Fable 5. The history below is Opus 5's; the triggers now name Opus 5.5.
 
 `claude-opus-5` became Claude Code's default Opus model in v2.1.219 (2026-07-24) at
 unchanged pricing — $5/$25 per MTok, 1M context. Verified in use 2026-08-01: the running
@@ -327,6 +327,8 @@ really need to act on now… That will come later when Sonnet 4.6 sunsets."*
    > tool at all. **A third decision, beside the two in reason 4**; settle it when the
    > migration opens, not before. *(Whether this applies to Sonnet 5 too, or only to 5.5, is
    > the scan's claim — "was NOT broken on Sonnet 5" — and unverified here. Check it then.)*
+   > **Read it as platform direction, like `temperature`:** the same report lists forced
+   > `tool_choice` among Opus 5.5's breaking changes too.
 4. **Losing the sampling temperature is two decisions, not one.** It is a *variance*
    control, not a *reasoning* control, so "a better model compensates" does not apply
    evenly. The reconciler's 0.5 guards against explanatory overreach — a reasoning
@@ -360,6 +362,11 @@ exactly once:
   ✅ **FIRED 2026-09-01 AND ANSWERED — deferral upheld; see the block under reason
   2. This trigger is SPENT and cannot fire again.** The three triggers above it are
   unfired and unchanged, and the 2026-12-01 backstop still stands.
+
+✅ **TRIGGER CHECK, 2026-10-01 (WX-503): none fired, deferral upheld.** The 2026-10 scan
+reports no trigger fired and the 2026-12-01 backstop as the nearest; it read the
+deprecation page, which carries the primary trigger. Its forced-tool-use finding corrected
+reason 3's scope and fired nothing.
 *(A fifth trigger stood here — "token spend grows enough that a percentage difference
 becomes material" — and was removed. It named no threshold and no observer, so nobody
 could ever determine whether it had fired, which makes it indistinguishable from having
