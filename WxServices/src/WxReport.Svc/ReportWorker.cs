@@ -1895,10 +1895,10 @@ public sealed class ReportWorker : BackgroundService
     /// <summary>
     /// WX-527: finds the locality's pending report (<see cref="FindPendingAsync"/>) and, unless
     /// <see cref="PendingDelivery"/> rules it stale, re-sends its stored email to the members still owed,
-    /// with no Claude call.  When the report reached nobody and every served member is owed (the shape of
-    /// an outage), this cycle is done with it: the number delivered is returned, 0 when the re-send failed
-    /// again, so Claude is not paid for the same report.  Otherwise (a partial delivery, or only some
-    /// members' addresses failing) the re-send is best-effort, tried at most hourly so a bouncing address
+    /// with no Claude call.  When the report reached nobody (the shape of an outage), this cycle is done
+    /// with it: the number delivered is returned, 0 when the re-send failed
+    /// again, so Claude is not paid for the same report.  Otherwise (a partial delivery) the re-send to the
+    /// members missed is best-effort, tried at most hourly so a bouncing address
     /// is not hit every cycle, and <see langword="null"/> is returned so the normal cycle still runs for
     /// everyone else.  <see langword="null"/> too when there is no pending report, when it is stale, and on
     /// any error.
@@ -1947,11 +1947,14 @@ public sealed class ReportWorker : BackgroundService
                 _pendingDelivery.Add(1, new KeyValuePair<string, object?>("outcome", "stale"), new KeyValuePair<string, object?>("reason", stale.ToString()));
                 return null;
             }
-            _pendingStaleNoticed.TryRemove(locality.Id, out _);
+            // A stale notice for this report means a cycle since it was generated ran the normal path.
+            bool normalCycleRanSince = _pendingStaleNoticed.TryRemove(locality.Id, out var cleared)
+                && cleared.SnapshotId == pendingSnapshot.Id;
 
-            var owedIds = owed.Select(r => r.RecipientId).ToHashSet(StringComparer.Ordinal);
-            bool outageShape = firstDelivery
-                && members.Where(m => servedIds.Contains(m.RecipientId)).All(m => owedIds.Contains(m.RecipientId));
+            // The shape of an outage: the report reached nobody. (Not "every served member is owed": a
+            // member the generating cycle skipped, for an incomplete language, would turn a real outage
+            // back into a Claude call every cycle.)
+            bool outageShape = firstDelivery;
             if (!outageShape)
             {
                 if (_pendingRetryAt.TryGetValue(locality.Id, out var last) && last.SnapshotId == pendingSnapshot.Id
@@ -1989,7 +1992,7 @@ public sealed class ReportWorker : BackgroundService
             _pendingDelivery.Add(1, new KeyValuePair<string, object?>("outcome", sent > 0 ? "resent" : "resend_failed"));
             if (sent > 0)
             {
-                PendingDelivery.ApplyResentState(state, kind, firstDelivery, now, first.InputIdentity!, pendingSnapshot.StationIcao);
+                PendingDelivery.ApplyResentState(state, kind, firstDelivery, normalCycleRanSince, now, first.InputIdentity!, pendingSnapshot.StationIcao);
                 try { await ctx.SaveChangesAsync(ct); }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {

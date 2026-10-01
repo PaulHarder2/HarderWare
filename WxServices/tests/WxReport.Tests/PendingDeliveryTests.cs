@@ -153,11 +153,11 @@ public class PendingDeliveryTests
     };
 
     [Fact]
-    public void AFirstDelivery_MovesTheCadenceAndTheSentIdentityOnly()
+    public void AFirstDelivery_AfterTheNormalCycleRan_MovesTheCadenceAndTheSentIdentityOnly()
     {
         var state = Before();
         var now = Generated.AddMinutes(40);
-        PendingDelivery.ApplyResentState(state, ReportKind.Scheduled, firstDelivery: true, now, "report-identity", "KAUS");
+        PendingDelivery.ApplyResentState(state, ReportKind.Scheduled, firstDelivery: true, normalCycleRanSince: true, now, "report-identity", "KAUS");
         Assert.Equal(now, state.LastScheduledSentUtc);
         Assert.Equal(Generated.AddHours(-5), state.LastUnscheduledSentUtc);
         Assert.Equal("report-identity", state.LastSentInputHash);
@@ -172,7 +172,7 @@ public class PendingDeliveryTests
     {
         var state = Before();
         var now = Generated.AddMinutes(40);
-        PendingDelivery.ApplyResentState(state, ReportKind.Unscheduled, firstDelivery: true, now, "report-identity", "KAUS");
+        PendingDelivery.ApplyResentState(state, ReportKind.Unscheduled, firstDelivery: true, normalCycleRanSince: false, now, "report-identity", "KAUS");
         Assert.Equal(now, state.LastUnscheduledSentUtc);
         Assert.Equal(Generated.AddHours(-6), state.LastScheduledSentUtc);
     }
@@ -181,7 +181,7 @@ public class PendingDeliveryTests
     public void AReSendAfterAPartialDelivery_ChangesNothing()
     {
         var state = Before();
-        PendingDelivery.ApplyResentState(state, ReportKind.Unscheduled, firstDelivery: false, Generated.AddMinutes(40), "report-identity", "KAUS");
+        PendingDelivery.ApplyResentState(state, ReportKind.Unscheduled, firstDelivery: false, normalCycleRanSince: false, Generated.AddMinutes(40), "report-identity", "KAUS");
         Assert.Equivalent(Before(), state);
     }
 
@@ -197,11 +197,12 @@ public class PendingDeliveryTests
     }
 
     [Fact]
-    public void AFirstDelivery_RecordsTheReportsClaudeCall_WhenNoNewerOneIsOnRecord()
+    public void AFirstDelivery_RecordsTheReportsClaudeCall_EvenAfterANotNewsAnswerBeforeIt()
     {
+        // Before() has a not-news answer on record (LastClaudeInputHash differs from LastSentInputHash), the
+        // normal state between reports; it predates the report, so the report's own call is the newer one.
         var state = Before();
-        state.LastClaudeInputHash = state.LastSentInputHash;   // no Claude call recorded since the last delivery
-        PendingDelivery.ApplyResentState(state, ReportKind.Scheduled, firstDelivery: true, Generated.AddMinutes(40), "report-identity", "KAUS");
+        PendingDelivery.ApplyResentState(state, ReportKind.Scheduled, firstDelivery: true, normalCycleRanSince: false, Generated.AddMinutes(40), "report-identity", "KAUS");
         Assert.Equal("report-identity", state.LastClaudeInputHash);
     }
 

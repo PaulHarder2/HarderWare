@@ -163,20 +163,23 @@ internal static class PendingDelivery
     /// (<c>ReportWorker.ApplySentState</c>).  Only a report's <em>first</em> delivery
     /// (<paramref name="firstDelivery"/>: none of its rows was sent before) moves anything: the cadence
     /// stamp for its kind, the last-sent input identity to the report's own evidence, the METAR station
-    /// to the report's, the last-Claude-call identity to the report's evidence unless a newer call is on
-    /// record, and the WX-506 rejected-gate record, whose prior has moved.  A later re-send to recipients
+    /// to the report's, the last-Claude-call identity to the report's evidence unless
+    /// <paramref name="normalCycleRanSince"/> (a cycle since generation ran the normal path, which may have
+    /// called Claude on newer evidence), and the WX-506 rejected-gate record, whose prior has moved.  A later re-send to recipients
     /// a partial delivery missed changes nothing.  It never touches the WX-182 degrade breaker (a cached
     /// re-send keeps it armed on purpose).
     /// </summary>
     internal static void ApplyResentState(
-        LocalityState state, ReportKind kind, bool firstDelivery, DateTime nowUtc, string reportIdentity, string reportStation)
+        LocalityState state, ReportKind kind, bool firstDelivery, bool normalCycleRanSince, DateTime nowUtc,
+        string reportIdentity, string reportStation)
     {
         if (!firstDelivery)
             return;
         // The generating cycle called Claude on this evidence, but its failed send recorded nothing.
-        // Record it now, unless a Claude call since the last delivery is already on record (the two
-        // identities differ then), so the next cycle does not pay again for evidence this report covers.
-        if (state.LastClaudeInputHash == state.LastSentInputHash)
+        // Record it now, so the next cycle does not pay again for evidence this report covers. Not when
+        // the normal cycle has run since: its record may be newer. (Comparing it with LastSentInputHash
+        // cannot tell: a not-news answer before generation leaves the two different too.)
+        if (!normalCycleRanSince)
             state.LastClaudeInputHash = reportIdentity;
         if (kind == ReportKind.Scheduled)
             state.LastScheduledSentUtc = nowUtc;
