@@ -1215,7 +1215,7 @@ public sealed class ReportWorker : BackgroundService
                 Logger.Debug($"{label}: WX-114 significance gate passed ({gateMode}, {triggerType}) — fired: {string.Join(", ", passed.FiredCriteria)}.");
 
                 // WX-506 rework: the gate asks only what Claude already answered, against the same
-                // prior and on the same TAF, GFS run and observed weather, on a recent cycle that
+                // prior and on the same GFS run and observed weather, on a recent cycle that
                 // Claude answered without a send. Asking again would pay for the same answer (Austin, 2026-09-29:
                 // 18 times in a row). Honors enforce/shadow.
                 var check = RejectedGateMemory.Check(passed, state, inputIdentity, priorSnapshot.Id, now, cfg.SignificanceGate.RejectedRepeatWindowHours);
@@ -1226,7 +1226,7 @@ public sealed class ReportWorker : BackgroundService
                     var minutesAgo = (now - state.LastRejectedGateUtc!.Value).TotalMinutes;
                     if (enforce)
                     {
-                        Logger.Info($"{label}: WX-506 repeat skipped {triggerType} cycle — the gate fired only criteria Claude rejected {minutesAgo:F0} min ago, against the same prior, TAF, GFS run and observed weather ({string.Join(", ", passed.FiredCriteria)}); Claude not called.");
+                        Logger.Info($"{label}: WX-506 repeat skipped {triggerType} cycle — the gate fired only criteria Claude rejected {minutesAgo:F0} min ago, against the same prior, GFS run and observed weather ({string.Join(", ", passed.FiredCriteria)}); Claude not called.");
                         await PersistUnsentCycleAsync(ctx, label, state, inputHash, ct);
                         return 0;
                     }

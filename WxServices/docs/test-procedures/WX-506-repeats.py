@@ -9,7 +9,8 @@ in between and no logged reason to ask again. v1.61.7 skips the Claude call in t
 repeat skipped"), so after the deploy there should be none.
 
 The code logs its reason to ask again ("WX-506 rejected-gate record not applied (<reason>)": a new
-TAF or GFS run, new observed weather, a new prior, a severe onset, the window running out). Such a
+GFS run, a new criterion, new observed weather, a new prior, a severe onset, the window running out;
+from v1.61.8 a new TAF alone is not a reason, and logs before it show "NewGuidance"). Such a
 line, logged within 10 minutes before a withheld cycle, makes that cycle's question a fair one: it
 is not counted, and it replaces the earlier record, as the service's own record is replaced. A
 reason line on a cycle that ends some other way changes nothing, because the service keeps its
@@ -132,7 +133,7 @@ def selftest() -> int:
     redundant = "INFO  [ReportWorker.cs::ProcessLocalityAsync:1351] locality 'Austin, TX' (Id=2): WX-108 suppressed metar send — reconciled snapshot is materially identical to the last sent report (redundant re-send). Trace: x"
     flip = "INFO  [ReportWorker.cs::ProcessLocalityAsync:1351] locality 'Austin, TX' (Id=2): WX-108 suppressed metar send — severe-flag de-escalation on an observation-only advance. Trace: this would be redundant"
     diagnostic = "INFO  [ReportWorker.cs::SendStartupDiagnosticAsync:420] paul_en x@y (Paul): startup (diagnostic) report sent (locality 'Austin, TX' (Id=2))."
-    reask = "DEBUG [ReportWorker.cs::ProcessLocalityAsync:1240] locality 'Austin, TX' (Id=2): WX-506 rejected-gate record not applied (NewGuidance) — calling Claude."
+    reask = "DEBUG [ReportWorker.cs::ProcessLocalityAsync:1240] locality 'Austin, TX' (Id=2): WX-506 rejected-gate record not applied (NewGfsRun) — calling Claude."
     sent = "INFO  [ReportWorker.cs::DeliverWeatherReportAsync:1726] paul_en x@y (Paul): report sent (locality 'Austin, TX' (Id=2))."
     welcome = "INFO  [ReportWorker.cs::SendWelcomeAsync:1845] new_en x@y (New): welcome sent (locality 'Austin, TX')."
     notnews = "INFO  [ReportWorker.cs::ProcessLocalityAsync:1246] locality 'Austin, TX' (Id=2): Claude judged the metar arrival not news — no send. Trace: x"

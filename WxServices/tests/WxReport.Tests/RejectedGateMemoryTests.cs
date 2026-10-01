@@ -96,14 +96,22 @@ public class RejectedGateMemoryTests
     public void NewCriterion_AsksClaude() =>
         Assert.Equal(RejectedGateCheck.NewCriterion, Check(Passed(Austin, "precip-add@T1(10-01 05Z)"), Rejected(Austin)));
 
+    // Paul, 2026-10-01: a TAF amendment reopens the question only through the gate. The gate
+    // merges the TAF into its forecast, so an amendment that matters fires a criterion not on
+    // record (NewCriterion) or moves the prior (NewBaseline); one that changes neither is a repeat.
     [Fact]
-    public void NewTaf_AsksClaude() =>
-        Assert.Equal(RejectedGateCheck.NewGuidance,
+    public void NewTaf_AloneIsARepeat() =>
+        Assert.Equal(RejectedGateCheck.Repeat,
             Check(Passed(Austin), Rejected(Austin), Evidence with { Taf = "2026-09-29T15:00:00.0000000Z" }));
 
     [Fact]
+    public void NewTaf_ThatFiresANewCriterion_AsksClaude() =>
+        Assert.Equal(RejectedGateCheck.NewCriterion,
+            Check(Passed(Austin, "precip-add@T1(10-01 05Z)"), Rejected(Austin), Evidence with { Taf = "2026-09-29T15:00:00.0000000Z" }));
+
+    [Fact]
     public void NewGfsRun_AsksClaude() =>
-        Assert.Equal(RejectedGateCheck.NewGuidance,
+        Assert.Equal(RejectedGateCheck.NewGfsRun,
             Check(Passed(Austin), Rejected(Austin), Evidence with { Gfs = "2026-09-29T12:00:00.0000000Z" }));
 
     [Fact]
@@ -121,7 +129,7 @@ public class RejectedGateMemoryTests
     {
         var state = Rejected(Austin);
         state.LastRejectedInputHash = "not an identity";
-        Assert.Equal(RejectedGateCheck.NewGuidance, Check(Passed(Austin), state));
+        Assert.Equal(RejectedGateCheck.NewGfsRun, Check(Passed(Austin), state));
     }
 
     [Fact]
