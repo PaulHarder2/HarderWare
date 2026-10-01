@@ -15,14 +15,26 @@
 // So a withheld or not-news cycle records the criteria its gate fired, the evidence Claude
 // weighed and the prior the gate measured against, and a later cycle within the window skips
 // the Claude call when it asks nothing new: the gate fires only criteria on record, against the
-// same prior, with the same TAF and GFS run in hand, and the METAR shows the same station,
-// present weather, wind band and visibility band. The gate's forecast is built from the GFS
-// run and the TAF; with both unchanged, the clock can still bring new criteria (a block
-// crossing into a nearer tier), and those are not on record, so Claude is asked. What the skip lets
-// pass is a METAR that moved only in sky cover or temperature band, which is most of the
-// hourly churn; that is a judgment, not a proof that Claude would answer the same, and the
-// window bounds it. Anything else asks Claude again. A delivered weather report clears the
-// record; a prior that moved any other way turns it away.
+// same prior, with the same GFS run in hand, a TAF that forecasts the same thing in substance,
+// and a METAR showing the same station, present weather, wind band and visibility band. A new
+// GFS run always asks Claude again. A new TAF asks again only when, for the blocks still ahead,
+// it forecasts something different in substance: rain or not, possible or likely, thunder or
+// frozen precipitation, the band of the peak wind or gust, or severe wind. A TAF valid further
+// ahead than the one Claude weighed reads as different, so a routine 6-hourly reissue always
+// asks; what can be skipped is an amendment to the same TAF period that says the same thing. The gate alone cannot
+// judge that (its criteria do not fire on rain becoming a thunderstorm, on possible becoming
+// likely, or on gusts below 50 kt), so the two TAFs are compared directly, by
+// TafBlockProjector.MaterialSignature, at the same instant. Measured 2026-10-01 in a slow,
+// unsettled pattern: KIAH's TAF was amended six times in six hours; all 7 re-asks that a new TAF
+// caused got the same answer and all 3 caused by a new GFS run sent, and a replay of the 7 found
+// two that changed in substance and five that did not (WX-506 comments 16564, 16565; Paul's
+// decision, 2026-10-01). The clock can also bring new criteria (a block crossing into a nearer
+// tier), and those are not on record, so Claude is asked. What the skip lets pass is a TAF
+// reissued with the same forecast in substance, and a METAR that moved only in sky cover or
+// temperature band; that is a judgment, not a proof that Claude would answer the same, and the
+// window bounds it. Anything else, including a record or TAF that cannot be read, asks Claude
+// again. A delivered weather report clears the record; a prior that moved any other way turns
+// it away.
 
 using MetarParser.Data.Entities;
 
@@ -52,14 +64,36 @@ internal enum RejectedGateCheck
     /// <summary>The clock is behind the record's time.</summary>
     ClockBehind,
 
-    /// <summary>A new TAF or GFS run has arrived since the rejection.</summary>
-    NewGuidance,
+    /// <summary>A new GFS run has arrived since the rejection.</summary>
+    NewGfsRun,
+
+    /// <summary>A new TAF forecasts something different, in substance, for the blocks still ahead (or could not be compared).</summary>
+    NewTaf,
+
+    /// <summary>The recorded evidence cannot be read back; ask rather than trust it.</summary>
+    UnreadableRecord,
 
     /// <summary>The METAR station, its present weather, its wind band or its visibility band has changed since the rejection.</summary>
     NewWeather,
 
     /// <summary>The gate is measuring against a different prior than the one Claude's rejection was made against.</summary>
     NewBaseline,
+}
+
+/// <summary>The outcome of comparing the TAF Claude weighed at a rejection with the current one (WX-506).</summary>
+internal enum TafComparison
+{
+    /// <summary>Both TAFs forecast the same thing in substance for the blocks still ahead.</summary>
+    Same,
+
+    /// <summary>They differ in substance in at least one block still ahead.</summary>
+    Different,
+
+    /// <summary>One side had no TAF: it expired since the rejection, or appeared since.  A real difference.</summary>
+    CameOrWent,
+
+    /// <summary>The comparison could not be made: an unreadable recorded issuance, an earlier TAF no longer stored, or an error.</summary>
+    Failed,
 }
 
 /// <summary>
@@ -118,12 +152,13 @@ internal static class RejectedGateMemory
     /// Whether this cycle's passing gate asks only what Claude has already answered, and if
     /// not, why. <see cref="RejectedGateCheck.Repeat"/> only when every fired criterion is on
     /// record, against the same prior, the record is younger than <paramref name="windowHours"/>,
-    /// the same TAF and GFS run are in hand, the METAR's station, present weather, wind band and
+    /// the same GFS run is in hand, any new TAF forecasts the same thing in substance (<paramref name="tafSameInSubstance"/>), the METAR's station, present weather, wind band and
     /// visibility band are unchanged, and the result is neither a severe onset nor a disjoint
     /// horizon. Anything in doubt asks Claude.
     /// </summary>
     internal static RejectedGateCheck Check(
-        SignificanceResult gate, LocalityState state, InputIdentity input, int priorSnapshotId, DateTime nowUtc, double windowHours)
+        SignificanceResult gate, LocalityState state, InputIdentity input, int priorSnapshotId, DateTime nowUtc, double windowHours,
+        bool tafSameInSubstance)
     {
         if (windowHours <= 0 || !gate.Significant
             || state.LastRejectedGateCriteria is not { } recorded
@@ -146,8 +181,12 @@ internal static class RejectedGateMemory
             return RejectedGateCheck.NewBaseline;
 
         var then = InputIdentity.Parse(recordedInput);
-        if (then.Taf != input.Taf || then.Gfs != input.Gfs)
-            return RejectedGateCheck.NewGuidance;
+        if (then.Serialize() != recordedInput)
+            return RejectedGateCheck.UnreadableRecord;
+        if (then.Gfs != input.Gfs)
+            return RejectedGateCheck.NewGfsRun;
+        if (then.Taf != input.Taf && !tafSameInSubstance)
+            return RejectedGateCheck.NewTaf;
         if (ObservedEvidence(then.Metar) != ObservedEvidence(input.Metar))
             return RejectedGateCheck.NewWeather;
 
@@ -155,6 +194,28 @@ internal static class RejectedGateMemory
         return gate.FiredCriteria.Count > 0 && gate.FiredCriteria.All(known.Contains)
             ? RejectedGateCheck.Repeat
             : RejectedGateCheck.NewCriterion;
+    }
+
+    /// <summary>
+    /// The production entry to <see cref="Check"/>: decides with the TAF compared only when it
+    /// matters.  The comparison costs a query, so <see cref="Check"/> first runs with the TAF
+    /// assumed the same; only a result of <see cref="RejectedGateCheck.Repeat"/> with an amended TAF
+    /// (a different issuance from the one on record) calls <paramref name="tafSameInSubstance"/>
+    /// with the recorded issuance, and a TAF that is not the same turns the Repeat into
+    /// <see cref="RejectedGateCheck.NewTaf"/>.  Also returns whether the TAF was amended, for the
+    /// skip's log line.
+    /// </summary>
+    internal static async Task<(RejectedGateCheck Check, bool TafAmended)> CheckAsync(
+        SignificanceResult gate, LocalityState state, InputIdentity input, int priorSnapshotId, DateTime nowUtc, double windowHours,
+        Func<string, Task<bool>> tafSameInSubstance)
+    {
+        var check = Check(gate, state, input, priorSnapshotId, nowUtc, windowHours, tafSameInSubstance: true);
+        if (check != RejectedGateCheck.Repeat)
+            return (check, false);
+        var recordedTaf = InputIdentity.Parse(state.LastRejectedInputHash).Taf;
+        if (recordedTaf == input.Taf)
+            return (RejectedGateCheck.Repeat, false);
+        return (await tafSameInSubstance(recordedTaf) ? RejectedGateCheck.Repeat : RejectedGateCheck.NewTaf, true);
     }
 
     /// <summary>

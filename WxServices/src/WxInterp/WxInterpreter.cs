@@ -480,6 +480,32 @@ public static class WxInterpreter
         Other = ParseOther(w.OtherPhenomenon),
     };
 
+    /// <summary>
+    /// WX-506: loads one stored TAF, identified by station and issuance time, as the parsed
+    /// change groups and validity end a <see cref="WeatherSnapshot"/> carries.  The report
+    /// service uses it to compare the TAF Claude weighed at an earlier cycle with the current
+    /// one.  <see langword="null"/> when no such TAF is stored.
+    /// </summary>
+    /// <param name="ctx">An open database context.</param>
+    /// <param name="stationIcao">The TAF station.</param>
+    /// <param name="issuanceUtc">The TAF's issuance time, as <see cref="WeatherSnapshot.TafIssuanceUtc"/> carried it.</param>
+    /// <param name="ct">Cancellation token.</param>
+    public static async Task<(IReadOnlyList<ForecastPeriod> Periods, DateTime ValidToUtc)?> LoadTafAsync(
+        WeatherDataContext ctx, string stationIcao, DateTime issuanceUtc, CancellationToken ct = default)
+    {
+        var taf = await ctx.Tafs
+            .Include(t => t.ChangePeriods)
+                .ThenInclude(p => p.SkyConditions)
+            .Include(t => t.ChangePeriods)
+                .ThenInclude(p => p.WeatherPhenomena)
+            .Where(t => t.StationIcao == stationIcao && t.IssuanceUtc == issuanceUtc)
+            .OrderByDescending(t => t.Id)
+            .FirstOrDefaultAsync(ct);
+        if (taf is null)
+            return null;
+        return (taf.ChangePeriods.OrderBy(p => p.SortOrder).Select(MapForecastPeriod).ToList(), taf.ValidToUtc);
+    }
+
     /// <summary>Maps a <see cref="TafChangePeriodRecord"/> database entity to a <see cref="ForecastPeriod"/> snapshot value.</summary>
     /// <param name="p">The TAF change period entity to map.</param>
     /// <returns>A new <see cref="ForecastPeriod"/> with change type, validity window, wind, visibility, sky, and weather populated.</returns>

@@ -37,8 +37,8 @@ public class RejectedGateMemoryTests
         return state;
     }
 
-    private static RejectedGateCheck Check(SignificanceResult gate, LocalityState state, InputIdentity? input = null, double hoursLater = 1, double window = Window, int prior = Prior) =>
-        RejectedGateMemory.Check(gate, state, input ?? Evidence, prior, Now.AddHours(hoursLater), window);
+    private static RejectedGateCheck Check(SignificanceResult gate, LocalityState state, InputIdentity? input = null, double hoursLater = 1, double window = Window, int prior = Prior, bool tafSame = false) =>
+        RejectedGateMemory.Check(gate, state, input ?? Evidence, prior, Now.AddHours(hoursLater), window, tafSame);
 
     [Fact]
     public void SameCriteriaAndEvidence_WithinWindow_IsRepeat() =>
@@ -96,14 +96,72 @@ public class RejectedGateMemoryTests
     public void NewCriterion_AsksClaude() =>
         Assert.Equal(RejectedGateCheck.NewCriterion, Check(Passed(Austin, "precip-add@T1(10-01 05Z)"), Rejected(Austin)));
 
+    // Paul, 2026-10-01: a new TAF reopens the question only when it forecasts something
+    // different in substance (TafBlockProjector.MaterialSignature, compared by the caller).
+    private static readonly InputIdentity AmendedTaf = Evidence with { Taf = "2026-09-29T15:00:00.0000000Z" };
+
     [Fact]
-    public void NewTaf_AsksClaude() =>
-        Assert.Equal(RejectedGateCheck.NewGuidance,
-            Check(Passed(Austin), Rejected(Austin), Evidence with { Taf = "2026-09-29T15:00:00.0000000Z" }));
+    public void NewTaf_SameInSubstance_IsRepeat() =>
+        Assert.Equal(RejectedGateCheck.Repeat, Check(Passed(Austin), Rejected(Austin), AmendedTaf, tafSame: true));
+
+    [Fact]
+    public void NewTaf_DifferentInSubstance_AsksClaude() =>
+        Assert.Equal(RejectedGateCheck.NewTaf, Check(Passed(Austin), Rejected(Austin), AmendedTaf, tafSame: false));
+
+    // CheckAsync: the production decision, with the TAF comparison as a delegate.
+    private static async Task<(RejectedGateCheck Check, bool Amended, List<string> Asked)> DecideAsync(
+        InputIdentity input, bool same, LocalityState? state = null, params string[] fired)
+    {
+        var asked = new List<string>();
+        var (check, amended) = await RejectedGateMemory.CheckAsync(
+            Passed(fired.Length > 0 ? fired : [Austin]), state ?? Rejected(Austin), input, Prior, Now.AddHours(1), Window,
+            recorded => { asked.Add(recorded); return Task.FromResult(same); });
+        return (check, amended, asked);
+    }
+
+    [Fact]
+    public async Task Decide_AmendedTafSameInSubstance_IsARepeat()
+    {
+        var (check, amended, asked) = await DecideAsync(AmendedTaf, same: true);
+        Assert.Equal(RejectedGateCheck.Repeat, check);
+        Assert.True(amended);
+        Assert.Equal([Evidence.Taf], asked);   // compared against the TAF on record
+    }
+
+    [Fact]
+    public async Task Decide_AmendedTafDifferent_AsksClaude()
+    {
+        var (check, amended, _) = await DecideAsync(AmendedTaf, same: false);
+        Assert.Equal(RejectedGateCheck.NewTaf, check);
+        Assert.True(amended);
+    }
+
+    [Fact]
+    public async Task Decide_SameTaf_IsNotCompared()
+    {
+        var (check, amended, asked) = await DecideAsync(Evidence, same: false);
+        Assert.Equal(RejectedGateCheck.Repeat, check);
+        Assert.False(amended);
+        Assert.Empty(asked);
+    }
+
+    [Fact]
+    public async Task Decide_AnotherReasonToAsk_IsNotCompared()
+    {
+        // A new criterion already asks Claude; the query is not spent.
+        var (check, _, asked) = await DecideAsync(AmendedTaf, same: true, fired: "precip-add@T1(10-01 05Z)");
+        Assert.Equal(RejectedGateCheck.NewCriterion, check);
+        Assert.Empty(asked);
+    }
+
+    [Fact]
+    public void SameTaf_IsNotComparedAtAll() =>
+        // The comparison's answer is irrelevant when the issuance has not changed.
+        Assert.Equal(RejectedGateCheck.Repeat, Check(Passed(Austin), Rejected(Austin), Evidence, tafSame: false));
 
     [Fact]
     public void NewGfsRun_AsksClaude() =>
-        Assert.Equal(RejectedGateCheck.NewGuidance,
+        Assert.Equal(RejectedGateCheck.NewGfsRun,
             Check(Passed(Austin), Rejected(Austin), Evidence with { Gfs = "2026-09-29T12:00:00.0000000Z" }));
 
     [Fact]
@@ -121,7 +179,18 @@ public class RejectedGateMemoryTests
     {
         var state = Rejected(Austin);
         state.LastRejectedInputHash = "not an identity";
-        Assert.Equal(RejectedGateCheck.NewGuidance, Check(Passed(Austin), state));
+        Assert.Equal(RejectedGateCheck.UnreadableRecord, Check(Passed(Austin), state));
+    }
+
+    [Fact]
+    public void AnUnreadableRecord_AsksClaude_EvenWhenNoGfsOrObservationIsInHand()
+    {
+        // A corrupt record parses to all-"none"; a cycle with no GFS run, no TAF and no
+        // observation would then match it field by field. It must still ask.
+        var state = Rejected(Austin);
+        state.LastRejectedInputHash = "garbage";
+        var nothing = new InputIdentity("none", "none", "none");
+        Assert.Equal(RejectedGateCheck.UnreadableRecord, Check(Passed(Austin), state, nothing, tafSame: true));
     }
 
     [Fact]

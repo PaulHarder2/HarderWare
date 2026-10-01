@@ -105,6 +105,75 @@ internal static class TafBlockProjector
         return new ForecastSnapshotBody { Blocks = mergedBlocks };
     }
 
+    /// <summary>
+    /// WX-506: what a TAF forecasts, in substance, for the time still ahead, one entry per
+    /// block from <paramref name="nowUtc"/> to the TAF's validity end.  Each entry is the
+    /// block's precipitation expectation (none / possible / likely) and phenomenon, derived
+    /// as <see cref="Merge"/> derives them, the band of its peak wind (sustained or gust, on
+    /// <see cref="WindScale"/>) and whether that peak is severe.  Groups are read only over
+    /// the part of each block from <paramref name="nowUtc"/> on, so the hours already past
+    /// do not count.  The blocks are the gate's own (6-hour local day-parts).  Two TAFs with
+    /// the same signature at the same instant agree, for every block still ahead, on
+    /// precipitation (whether, how likely, which kind) and on the wind band, however their
+    /// wording or timing within a block differs.  Visibility, ceiling, fog and mist, wind
+    /// direction and wind shifts are not compared.  The signature leads with the TAF's validity
+    /// end (<c>until=</c>), so a TAF whose end moved, even inside one block, reads as different, and
+    /// a routine reissue that extends coverage always does.
+    /// </summary>
+    /// <param name="tafPeriods">The parsed TAF change groups, in TAF order.</param>
+    /// <param name="tafValidToUtc">End of the TAF's validity window.</param>
+    /// <param name="blockStartsUtc">The forecast blocks' start times, as the gate's body has them.</param>
+    /// <param name="nowUtc">The instant to read from.</param>
+    internal static string MaterialSignature(
+        IReadOnlyList<ForecastPeriod> tafPeriods, DateTime? tafValidToUtc,
+        IEnumerable<DateTime> blockStartsUtc, DateTime nowUtc)
+    {
+        ArgumentNullException.ThrowIfNull(blockStartsUtc);
+        if (tafPeriods is null || tafPeriods.Count == 0)
+            return "none";
+
+        var validTo = tafValidToUtc ?? DateTime.MaxValue;
+        var prevailing = BuildPrevailingTimeline(tafPeriods, validTo);
+        var overlays = tafPeriods
+            .Where(p => IsOverlay(p.ChangeType) && p.ValidFromUtc.HasValue && p.ValidToUtc.HasValue)
+            .ToList();
+
+        var entries = new List<string>();
+        foreach (var start in blockStartsUtc.OrderBy(s => s))
+        {
+            var end = start.AddHours(GfsSnapshotBuilder.BlockHours);
+            var from = start > nowUtc ? start : nowUtc;
+            if (end <= from || from >= validTo)
+                continue;
+
+            var cover = new List<ForecastPeriod>();
+            foreach (var (period, pFrom, pTo) in prevailing)
+                if (Overlaps(pFrom, pTo, from, end))
+                    cover.Add(period);
+            foreach (var ov in overlays)
+                if (Overlaps(ov.ValidFromUtc!.Value, ov.ValidToUtc!.Value, from, end))
+                    cover.Add(ov);
+
+            if (cover.Count == 0)
+            {
+                entries.Add($"{start:yyyyMMddHH}=-");
+                continue;
+            }
+
+            var (expectation, phenomenon) = DerivePrecip(cover);
+            int peak = 0;
+            foreach (var p in cover)
+                peak = Math.Max(peak, Math.Max(p.WindSpeedKt ?? 0, p.WindGustKt ?? 0));
+            bool severe = peak >= WxThresholds.SevereWindKt;
+            entries.Add($"{start:yyyyMMddHH}={expectation}/{phenomenon?.ToString() ?? "-"}/W{WindScale.Band(peak)}{(severe ? "/severe" : "")}");
+        }
+        // The validity end leads the signature: a TAF that covers more of a block than another
+        // (its end moved inside that block) differs even when the block's conditions read the
+        // same (CodeRabbit, PR #241).
+        var until = tafValidToUtc is { } v ? v.ToString("yyyyMMddHHmm") : "open";
+        return $"until={until}|{string.Join(';', entries)}";
+    }
+
     /// <summary>Build one merged block from a GFS block and the TAF groups that cover it.</summary>
     private static ForecastSnapshotBlock MergeBlock(ForecastSnapshotBlock gfs, List<ForecastPeriod> cover)
     {

@@ -1215,10 +1215,13 @@ public sealed class ReportWorker : BackgroundService
                 Logger.Debug($"{label}: WX-114 significance gate passed ({gateMode}, {triggerType}) — fired: {string.Join(", ", passed.FiredCriteria)}.");
 
                 // WX-506 rework: the gate asks only what Claude already answered, against the same
-                // prior and on the same TAF, GFS run and observed weather, on a recent cycle that
-                // Claude answered without a send. Asking again would pay for the same answer (Austin, 2026-09-29:
-                // 18 times in a row). Honors enforce/shadow.
-                var check = RejectedGateMemory.Check(passed, state, inputIdentity, priorSnapshot.Id, now, cfg.SignificanceGate.RejectedRepeatWindowHours);
+                // prior, on the same GFS run, a TAF forecasting the same thing in substance and the
+                // same observed weather, on a recent cycle that Claude answered without a send.
+                // Asking again would pay for the same answer (Austin, 2026-09-29: 18 times in a
+                // row). Honors enforce/shadow.
+                var (check, tafAmended) = await RejectedGateMemory.CheckAsync(
+                    passed, state, inputIdentity, priorSnapshot.Id, now, cfg.SignificanceGate.RejectedRepeatWindowHours,
+                    recordedTaf => TafSameInSubstanceAsync(ctx, snapshot, recordedTaf, provisionalBody, now, label, ct));
                 if (check == RejectedGateCheck.Repeat)
                 {
                     bool enforce = gateMode == SignificanceGateMode.Enforce;
@@ -1226,7 +1229,8 @@ public sealed class ReportWorker : BackgroundService
                     var minutesAgo = (now - state.LastRejectedGateUtc!.Value).TotalMinutes;
                     if (enforce)
                     {
-                        Logger.Info($"{label}: WX-506 repeat skipped {triggerType} cycle — the gate fired only criteria Claude rejected {minutesAgo:F0} min ago, against the same prior, TAF, GFS run and observed weather ({string.Join(", ", passed.FiredCriteria)}); Claude not called.");
+                        var tafNote = tafAmended ? "; TAF amended since, same forecast in substance" : "";
+                        Logger.Info($"{label}: WX-506 repeat skipped {triggerType} cycle — the gate fired only criteria Claude rejected {minutesAgo:F0} min ago, against the same prior, GFS run and observed weather ({string.Join(", ", passed.FiredCriteria)}){tafNote}; Claude not called.");
                         await PersistUnsentCycleAsync(ctx, label, state, inputHash, ct);
                         return 0;
                     }
@@ -1482,6 +1486,74 @@ public sealed class ReportWorker : BackgroundService
         {
             _statePersistFailures.Add(1);
             Logger.Error($"{label}: failed to save locality state after sends — baseline did not advance; next cycle may resend.", ex);
+        }
+    }
+
+    /// <summary>
+    /// WX-506: whether the TAF Claude weighed at the recorded rejection
+    /// (<paramref name="recordedTaf"/>, its issuance time as <see cref="InputIdentity"/> stores it)
+    /// and this cycle's TAF forecast the same thing in substance for the blocks still ahead
+    /// (<see cref="CompareTafsAsync"/>).  Logs the outcome once: DEBUG "TAF comparison same" or
+    /// "different" (a TAF that came or went counts as different), WARN "could not compare" for a
+    /// real failure.  Only <see cref="TafComparison.Same"/> returns true; anything else asks Claude.
+    /// </summary>
+    internal static async Task<bool> TafSameInSubstanceAsync(
+        WeatherDataContext ctx, WeatherSnapshot snapshot, string recordedTaf,
+        ForecastSnapshotBody provisionalBody, DateTime now, string label, CancellationToken ct)
+    {
+        var (outcome, detail) = await CompareTafsAsync(ctx, snapshot, recordedTaf, provisionalBody, now, ct);
+        var (warn, line) = TafComparisonLogLine(outcome, detail);
+        if (warn)
+            Logger.Warn($"{label}: {line}");
+        else
+            Logger.Debug($"{label}: {line}");
+        return outcome == TafComparison.Same;
+    }
+
+    /// <summary>
+    /// WX-506: the log line for a TAF comparison's outcome, and whether it is a warning.  The
+    /// production watch (WX-506.md step 6c) counts these lines: a comparison that never succeeds
+    /// would otherwise look like a TAF that always changed, so only a real failure is a warning,
+    /// and a TAF that came or went is logged as a difference.
+    /// </summary>
+    internal static (bool Warn, string Line) TafComparisonLogLine(TafComparison outcome, string detail) => outcome switch
+    {
+        TafComparison.Same => (false, $"WX-506 TAF comparison same — {detail}."),
+        TafComparison.Different or TafComparison.CameOrWent => (false, $"WX-506 TAF comparison different — {detail}."),
+        _ => (true, $"WX-506 could not compare the recorded TAF with the current one — {detail}; asking Claude."),
+    };
+
+    /// <summary>
+    /// WX-506: compares the TAF Claude weighed at the recorded rejection with this cycle's, read at
+    /// the same instant over the gate's blocks (<see cref="TafBlockProjector.MaterialSignature"/>).
+    /// A TAF that expired since the rejection, or one that appeared since (a part-time station), is
+    /// <see cref="TafComparison.CameOrWent"/>: a real difference.  An unreadable recorded issuance,
+    /// an earlier TAF no longer stored, or an error is <see cref="TafComparison.Failed"/>.  The detail
+    /// names the TAFs and, for a comparison, prints both signatures.  Does not log.
+    /// </summary>
+    internal static async Task<(TafComparison Outcome, string Detail)> CompareTafsAsync(
+        WeatherDataContext ctx, WeatherSnapshot snapshot, string recordedTaf,
+        ForecastSnapshotBody provisionalBody, DateTime now, CancellationToken ct)
+    {
+        if (recordedTaf == "none")
+            return (TafComparison.CameOrWent, "no TAF at the rejection, one now");
+        if (snapshot.TafStationIcao is not { } station || snapshot.ForecastPeriods is null)
+            return (TafComparison.CameOrWent, "a TAF at the rejection, none now");
+        if (!DateTime.TryParse(recordedTaf, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var issued))
+            return (TafComparison.Failed, $"the recorded issuance '{recordedTaf}' cannot be read");
+        try
+        {
+            if (await WxInterpreter.LoadTafAsync(ctx, station, issued, ct) is not { } then)
+                return (TafComparison.Failed, $"{station} issued {recordedTaf} is not stored");
+            var blockStarts = provisionalBody.Blocks.Select(b => b.StartUtc).ToList();
+            var before = TafBlockProjector.MaterialSignature(then.Periods, then.ValidToUtc, blockStarts, now);
+            var after = TafBlockProjector.MaterialSignature(snapshot.ForecastPeriods, snapshot.TafValidToUtc, blockStarts, now);
+            return (before == after ? TafComparison.Same : TafComparison.Different,
+                $"{station} {recordedTaf} vs {snapshot.TafIssuanceUtc:O}: [{before}] vs [{after}]");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return (TafComparison.Failed, $"error: {ex.Message}");
         }
     }
 

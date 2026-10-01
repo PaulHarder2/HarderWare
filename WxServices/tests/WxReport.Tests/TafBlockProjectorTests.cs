@@ -246,4 +246,127 @@ public class TafBlockProjectorTests
         var merged = TafBlockProjector.Merge(gfs, taf, TafValidTo);
         Assert.Equal(28, merged.Blocks[1].WindKt.Max);   // +6h block inherits the BECMG's new prevailing state
     }
+    // ── WX-506: MaterialSignature, the "same forecast in substance" test for a new TAF ──
+    // The gate's criteria do not fire on rain becoming a thunderstorm, on possible becoming
+    // likely, or on gusts below 50 kt, so a TAF amendment is judged by comparing the two TAFs'
+    // signatures directly (Paul, 2026-10-01).
+
+    private static readonly DateTime SigValidTo = Now.AddHours(24);
+    private static readonly DateTime[] SigBlocks = [Now, Now.AddHours(6), Now.AddHours(12), Now.AddHours(18), Now.AddHours(24)];
+
+    private static string Signature(DateTime at, params ForecastPeriod[] taf) =>
+        TafBlockProjector.MaterialSignature(taf, SigValidTo, SigBlocks, at);
+
+    private static ForecastPeriod[] DryThenThunderAt(double fromH) =>
+    [
+        Per(ForecastChangeType.Base, 0, 24, sustained: 10),
+        Per(ForecastChangeType.From, fromH, 24, sustained: 12, precip: PrecipitationType.Rain, descriptor: WeatherDescriptor.Thunderstorm),
+        Per(ForecastChangeType.From, 6, 24, sustained: 8),
+    ];
+
+    [Fact]
+    public void MaterialSignature_SameTaf_IsEqual() =>
+        Assert.Equal(Signature(Now, DryThenThunderAt(1)), Signature(Now, DryThenThunderAt(1)));
+
+    [Fact]
+    public void MaterialSignature_ThunderMovedWithinTheSameBlock_IsEqual() =>
+        // Thunderstorms starting at +1h or at +3h: both inside the block from Now to +6h.
+        Assert.Equal(Signature(Now, DryThenThunderAt(1)), Signature(Now, DryThenThunderAt(3)));
+
+    [Fact]
+    public void MaterialSignature_ShowersBecomeThunderstorms_Differs() =>
+        Assert.NotEqual(
+            Signature(Now,
+                Per(ForecastChangeType.Base, 0, 24, sustained: 10),
+                Per(ForecastChangeType.Temporary, 2, 5, precip: PrecipitationType.Rain, descriptor: WeatherDescriptor.Showers)),
+            Signature(Now,
+                Per(ForecastChangeType.Base, 0, 24, sustained: 10),
+                Per(ForecastChangeType.Temporary, 2, 5, precip: PrecipitationType.Rain, descriptor: WeatherDescriptor.Thunderstorm)));
+
+    [Fact]
+    public void MaterialSignature_PossibleBecomesLikely_Differs() =>
+        Assert.NotEqual(
+            Signature(Now,
+                Per(ForecastChangeType.Base, 0, 24, sustained: 10),
+                Per(ForecastChangeType.Temporary, 2, 5, precip: PrecipitationType.Rain)),
+            Signature(Now,
+                Per(ForecastChangeType.Base, 0, 24, sustained: 10),
+                Per(ForecastChangeType.From, 2, 24, sustained: 10, precip: PrecipitationType.Rain)));
+
+    [Fact]
+    public void MaterialSignature_GustsRiseIntoAHigherBand_Differs() =>
+        // 25 kt and 40 kt gusts: well below the 50-kt severe rule, so no gate criterion fires.
+        Assert.NotEqual(
+            Signature(Now, Per(ForecastChangeType.Base, 0, 24, sustained: 12, gust: 25)),
+            Signature(Now, Per(ForecastChangeType.Base, 0, 24, sustained: 12, gust: 40)));
+
+    [Fact]
+    public void MaterialSignature_GustsWithinOneBand_IsEqual() =>
+        Assert.Equal(
+            Signature(Now, Per(ForecastChangeType.Base, 0, 24, sustained: 12, gust: 20)),
+            Signature(Now, Per(ForecastChangeType.Base, 0, 24, sustained: 12, gust: 28)));
+
+    [Fact]
+    public void MaterialSignature_HoursAlreadyPast_DoNotCount()
+    {
+        // The earlier TAF had a shower group that has already run out; the amendment drops it.
+        var earlier = new[]
+        {
+            Per(ForecastChangeType.Base, 0, 24, sustained: 10),
+            Per(ForecastChangeType.Temporary, 0, 1, precip: PrecipitationType.Rain),
+        };
+        var amended = new[] { Per(ForecastChangeType.Base, 0, 24, sustained: 10) };
+        Assert.Equal(Signature(Now.AddHours(2), earlier), Signature(Now.AddHours(2), amended));
+        Assert.NotEqual(Signature(Now, earlier), Signature(Now, amended));   // positive control: the group counts while ahead
+    }
+
+    [Fact]
+    public void MaterialSignature_DryBecomesPossibleRain_Differs() =>
+        // Spring, 2026-10-01 15:35Z: KIAH's amendment turned a dry block into possible rain.
+        Assert.NotEqual(
+            Signature(Now, Per(ForecastChangeType.Base, 0, 24, sustained: 10)),
+            Signature(Now,
+                Per(ForecastChangeType.Base, 0, 24, sustained: 10),
+                Per(ForecastChangeType.Probability30, 12, 18, precip: PrecipitationType.Rain)));
+
+    [Fact]
+    public void MaterialSignature_ATempoSpanningNow_CountsForTheRestOfItsBlock() =>
+        // A TEMPO from -1h to +2h is still ahead at Now, so the block reads possible rain.
+        Assert.NotEqual(
+            Signature(Now, Per(ForecastChangeType.Base, 0, 24, sustained: 10)),
+            Signature(Now,
+                Per(ForecastChangeType.Base, 0, 24, sustained: 10),
+                Per(ForecastChangeType.Temporary, -1, 2, precip: PrecipitationType.Rain)));
+
+    [Fact]
+    public void MaterialSignature_RainBecomingSnow_Differs() =>
+        Assert.NotEqual(
+            Signature(Now, Per(ForecastChangeType.Base, 0, 24, sustained: 10, precip: PrecipitationType.Rain)),
+            Signature(Now, Per(ForecastChangeType.Base, 0, 24, sustained: 10, precip: PrecipitationType.Snow)));
+
+    [Fact]
+    public void MaterialSignature_BlocksBeyondTheTafsEnd_AreLeftOut()
+    {
+        // Valid to +24h: the block starting at +24h is beyond it and has no entry; a TAF valid
+        // further ahead (a routine reissue) has one more, so it reads as different.
+        var taf = new[] { Per(ForecastChangeType.Base, 0, 30, sustained: 10) };
+        var toEnd = TafBlockProjector.MaterialSignature(taf, SigValidTo, SigBlocks, Now);
+        Assert.Equal(4, toEnd.Split('|')[1].Split(';').Length);
+        Assert.NotEqual(toEnd, TafBlockProjector.MaterialSignature(taf, Now.AddHours(30), SigBlocks, Now));
+    }
+
+    [Fact]
+    public void MaterialSignature_AnEndMovedInsideABlock_Differs()
+    {
+        // CodeRabbit, PR #241: the same conditions, ending at +20h and at +22h, both inside the
+        // block from +18h. The later end covers more of it, so the TAFs are not the same.
+        var taf = new[] { Per(ForecastChangeType.Base, 0, 30, sustained: 10) };
+        Assert.NotEqual(
+            TafBlockProjector.MaterialSignature(taf, Now.AddHours(20), SigBlocks, Now),
+            TafBlockProjector.MaterialSignature(taf, Now.AddHours(22), SigBlocks, Now));
+    }
+
+    [Fact]
+    public void MaterialSignature_NoTaf_IsNone() =>
+        Assert.Equal("none", TafBlockProjector.MaterialSignature([], SigValidTo, SigBlocks, Now));
 }
