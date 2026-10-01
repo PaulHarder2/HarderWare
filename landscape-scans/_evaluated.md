@@ -88,7 +88,7 @@ its scope corrected.** No ticket was opened against any finding. Decisions taken
 |---|---|---|
 | 1. Claude Opus 5.5 — Opus adoption trigger fires | **Already in place** — measured 2026-10-01, the running Claude Code session reports `claude-opus-5-5[1m]`. The scan said it could not tell, and said so, rather than asserting the old model: the WX-389 fix working | [Claude Code on Claude Opus 5.x](#opus-5-claude-code) |
 | 2. Claude Fable 5.1 — trigger check | **Checked, no change.** $10/$50 against Opus 5.5's $4/$20 — 2.5× — is decisive on its own, as it was for Fable 5 | [Claude Code on Claude Opus 5.x](#opus-5-claude-code) |
-| 3. Sonnet 5.5 rejects forced tool use as well as `temperature` | **Deferral upheld, scope corrected.** No trigger fired; the 2026-12-01 backstop is still the nearest. The finding is right that forced tool use now breaks too, but **undercounts it: there are three forced-`tool_choice` sites, not two** — the scan missed the `any` choice on arrival-triggered cycles | [Claude Sonnet 5 for the WxServices runtime](#sonnet-5-runtime) |
+| 3. Sonnet 5.5 rejects forced tool use as well as `temperature` | **Deferral upheld, scope corrected.** No trigger fired; the 2026-12-01 backstop is still the nearest. The finding is right that forced tool use now breaks too, but **undercounts it: all three call paths force a tool, not two** — the scan missed the reconciliation path, whose forced choice protects both guaranteed sends and the WX-80 skip gate | [Claude Sonnet 5.x for the WxServices runtime](#sonnet-5-runtime) |
 | 4. .NET 8.0.31 patch | **Already satisfied** — measured on PaulOmniBook 2026-10-01, `dotnet --list-runtimes` reports `Microsoft.NETCore.App 8.0.31`. The scan's recommended command was the discriminating one this time | — |
 
 ### 2026-09
@@ -100,8 +100,8 @@ Paul on 2026-09-01; recorded under WX-492.
 
 | Finding | Verdict | Entry |
 |---|---|---|
-| 1. Sonnet 5 deferral trigger fired — pricing case reversed | **Deferral upheld.** The trigger genuinely fired: $2/$10 is now the permanent standard price, so Sonnet 5 is ~13% cheaper effective rather than ~30% dearer. That reverses **reason 2 of four** and touches none of the others. **Cost stopped being an argument AGAINST migrating; it did not become an argument FOR migrating now** | [Claude Sonnet 5 for the WxServices runtime](#sonnet-5-runtime) |
-| 2. Claude Fable 5 — Opus 5 adoption trigger check | **Checked, no change.** Opus 5 retained for Claude Code; 2× the price is decisive on its own | [Claude Code on Claude Opus 5](#opus-5-claude-code) |
+| 1. Sonnet 5 deferral trigger fired — pricing case reversed | **Deferral upheld.** The trigger genuinely fired: $2/$10 is now the permanent standard price, so Sonnet 5 is ~13% cheaper effective rather than ~30% dearer. That reverses **reason 2 of four** and touches none of the others. **Cost stopped being an argument AGAINST migrating; it did not become an argument FOR migrating now** | [Claude Sonnet 5.x for the WxServices runtime](#sonnet-5-runtime) |
+| 2. Claude Fable 5 — Opus 5 adoption trigger check | **Checked, no change.** Opus 5 retained for Claude Code; 2× the price is decisive on its own | [Claude Code on Claude Opus 5.x](#opus-5-claude-code) |
 | 3. .NET 8.0.30 patch | **Already satisfied** — measured on PaulOmniBook 2026-09-01, `dotnet --list-runtimes` reports `Microsoft.NETCore.App 8.0.30`. The scan predicted this from the 8.0.29 pattern and predicted right; **the measurement is what settles it, not the prediction** | — |
 
 ### 2026-08
@@ -113,8 +113,8 @@ error classes that let the scan report finished work as open are being fixed in 
 
 | Finding | Verdict | Entry |
 |---|---|---|
-| 1. Claude Opus 5 for Claude Code | **Already in place** when the scan ran — see the entry for why the scan did not know that | [Claude Code on Claude Opus 5](#opus-5-claude-code) |
-| 2. Sonnet 5 + sampling-temperature removal | **Deferred** — see the entry | [Claude Sonnet 5 for the WxServices runtime](#sonnet-5-runtime) |
+| 1. Claude Opus 5 for Claude Code | **Already in place** when the scan ran — see the entry for why the scan did not know that | [Claude Code on Claude Opus 5.x](#opus-5-claude-code) |
+| 2. Sonnet 5 + sampling-temperature removal | **Deferred** — see the entry | [Claude Sonnet 5.x for the WxServices runtime](#sonnet-5-runtime) |
 | 3. CodeRabbit Post-Merge Actions | **Declined** — see the entry | [CodeRabbit Post-Merge Actions](#coderabbit-post-merge-actions) |
 | 4. .NET 8.0.29 patch | **Already satisfied** — 8.0.25 *and* 8.0.29 both installed, target framework `net8.0` confirmed. The scan's own check (`dotnet --version`) reports the **SDK** and cannot answer the question it was posed against; `dotnet --list-runtimes` can. **Do not re-raise without running the discriminating check first** | — |
 | Note: `claude-opus-4-1` retirement (Aug 5) | **Confirmed clear** — no source or config file references it: `grep -rn "claude-opus-4-1" WxServices/ --exclude='*.md' --exclude-dir=bin --exclude-dir=obj` returns zero. ⚠️ **EXCLUDE documentation; do not allowlist extensions.** Unscoped, the grep matches our own prose about the retirement — a self-falsifying check. But an allowlist (`--include=*.cs --include=*.json`) silently misses `*.config`, `*.props` and anything we adopt later. Excluding docs covers every file type, now and in future | — |
@@ -127,9 +127,9 @@ together with the 2026-08 repeat.
 
 | Finding | Verdict | Entry |
 |---|---|---|
-| 1. Sonnet 5 migration — promo window + breaking code change | **Superseded by the 2026-08 deferral.** This report is the source of the facts the entry rests on — quote the entry, not this row | [Claude Sonnet 5 for the WxServices runtime](#sonnet-5-runtime) |
+| 1. Sonnet 5 migration — promo window + breaking code change | **Superseded by the 2026-08 deferral.** This report is the source of the facts the entry rests on — quote the entry, not this row | [Claude Sonnet 5.x for the WxServices runtime](#sonnet-5-runtime) |
 | 2. Deprecation check | **Confirmed clear** | — |
-| Note: Claude Code default → Sonnet 5, and the June recommendation to move to Opus 4.8 *"still applies"* | **Opus tier retained** for long-horizon multi-file work — Sonnet 5 not taken as the Claude Code default. The outstanding June→Opus-4.8 recommendation this note carried was **overtaken** by the move to Opus 5 | [Claude Code on Claude Opus 5](#opus-5-claude-code) |
+| Note: Claude Code default → Sonnet 5, and the June recommendation to move to Opus 4.8 *"still applies"* | **Opus tier retained** for long-horizon multi-file work — Sonnet 5 not taken as the Claude Code default. The outstanding June→Opus-4.8 recommendation this note carried was **overtaken** by the move to Opus 5 | [Claude Code on Claude Opus 5.x](#opus-5-claude-code) |
 
 ### Scans before 2026-07
 
@@ -241,7 +241,7 @@ actioned here; a candidate to discuss, not a filed ticket.**
   *(Finding: CodeRabbit, PR #231. The date-versus-set correction is mine, on re-reading my
   own fix before committing it.)* This is the trigger that
   matters, and it is the one the first draft of this entry lacked: without it, an Opus 6
-  shipping at the same price with `claude-opus-5` still Active fires nothing, and the
+  shipping at the same price with `claude-opus-5-5` still Active fires nothing, and the
   scan is barred from raising the very upgrade this entry records us having made.
 - A later Opus release **changes** the price or context window for this tier.
 - Anthropic **announces** deprecation of `claude-opus-5-5`.
@@ -252,10 +252,16 @@ Examined and consciously postponed. **Do not resurface before the named trigger 
 
 <a id="sonnet-5-runtime"></a>
 
-#### Claude Sonnet 5 for the WxServices runtime — deferred 2026-08-01, upheld 2026-09-01 and 2026-10-01
+#### Claude Sonnet 5.x for the WxServices runtime — deferred 2026-08-01, upheld 2026-09-01 and 2026-10-01
 
 **Raised by:** [2026-07](#2026-07) finding 1; [2026-08](#2026-08) finding 2;
 [2026-09](#2026-09) finding 1; [2026-10](#2026-10) finding 3.
+
+**This deferral covers the Sonnet 5 family, not one model id.** As of 2026-10-01 that is
+`claude-sonnet-5` and `claude-sonnet-5-5`; the migration targets whichever Sonnet is current
+when it opens. **A newer Sonnet is not, on its own, a reason to raise this again** — only the
+triggers below are. *(Recorded 2026-10-01, when Paul upheld the deferral against a Sonnet 5.5
+finding.)*
 
 **Not adopted, and no ticket opened** — deliberately. Paul, 2026-08-01: *"nothing we
 really need to act on now… That will come later when Sonnet 4.6 sunsets."*
@@ -307,19 +313,20 @@ really need to act on now… That will come later when Sonnet 4.6 sunsets."*
    `ReconcilerTemperature = 0.5` and `TranslatorTemperature = 0.2`, used in
    `InvokeReconciliationAsync`, `InvokeChangeSummaryAsync` and `InvokeTranslationAsync`.
    They must be removed before the model id can move.
+   **Read this as a platform direction**: any future model is likely to carry the same
+   constraint, so "wait for a model that restores it" is probably not a strategy.
 
    > 🔴 **2026-10-01: SONNET 5.5 ALSO REJECTS FORCED TOOL USE** (`tool_choice` of `any` or
    > `tool`; 2026-10 scan, quoting the model page). **All three call paths force a tool**:
    > `InvokeChangeSummaryAsync` and `InvokeTranslationAsync` force a named tool, and
-   > `InvokeReconciliationAsync` forces the submit tool on scheduled cycles and offers `any`
-   > (submit or skip) on arrival-triggered ones. The scan found the two named-tool sites and
-   > **missed the `any` one** — and that one carries the WX-80 skip-send gate, so replacing it
-   > with `auto` changes whether Claude may reply with no tool at all. **A third decision,
-   > beside the two in reason 4**; settle it when the migration opens, not before. *(Whether
-   > this applies to the Sonnet 5 we deferred, or only to 5.5, is the scan's claim — "was NOT
-   > broken on Sonnet 5" — and unverified here. Check it then.)*
-   **Read this as a platform direction**: any future model is likely to carry the same
-   constraint, so "wait for a model that restores it" is probably not a strategy.
+   > `InvokeReconciliationAsync` forces `submit_reconciled_report` on scheduled cycles and
+   > offers `any` (submit or the WX-80 `skip_send`) on arrival-triggered ones. **The scan
+   > found the two named-tool sites and missed `InvokeReconciliationAsync` entirely** — the
+   > one where `auto` breaks the most: on scheduled cycles it gives up the guarantee that a
+   > send can never be skipped, and on arrival-triggered ones it lets Claude reply with no
+   > tool at all. **A third decision, beside the two in reason 4**; settle it when the
+   > migration opens, not before. *(Whether this applies to Sonnet 5 too, or only to 5.5, is
+   > the scan's claim — "was NOT broken on Sonnet 5" — and unverified here. Check it then.)*
 4. **Losing the sampling temperature is two decisions, not one.** It is a *variance*
    control, not a *reasoning* control, so "a better model compensates" does not apply
    evenly. The reconciler's 0.5 guards against explanatory overreach — a reasoning
