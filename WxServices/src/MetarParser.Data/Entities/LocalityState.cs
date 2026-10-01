@@ -78,8 +78,9 @@ public class LocalityState
     /// <summary>
     /// Serialised <c>InputIdentity</c> of the evidence Claude weighed when it rejected
     /// <see cref="LastRejectedGateCriteria"/>.  The repeat skip applies only while the same GFS
-    /// run is in hand and the METAR's station, present weather, wind band and visibility band
-    /// are unchanged; a new TAF counts only through the gate criteria it fires.  <see langword="null"/> with the criteria.
+    /// run is in hand, any newer TAF forecasts the same thing in substance (its issuance time,
+    /// stored here, finds the earlier TAF to compare), and the METAR's station, present weather,
+    /// wind band and visibility band are unchanged.  <see langword="null"/> with the criteria.
     /// </summary>
     public string? LastRejectedInputHash { get; set; }
 

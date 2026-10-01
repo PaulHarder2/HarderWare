@@ -1215,10 +1215,17 @@ public sealed class ReportWorker : BackgroundService
                 Logger.Debug($"{label}: WX-114 significance gate passed ({gateMode}, {triggerType}) — fired: {string.Join(", ", passed.FiredCriteria)}.");
 
                 // WX-506 rework: the gate asks only what Claude already answered, against the same
-                // prior and on the same GFS run and observed weather, on a recent cycle that
-                // Claude answered without a send. Asking again would pay for the same answer (Austin, 2026-09-29:
-                // 18 times in a row). Honors enforce/shadow.
-                var check = RejectedGateMemory.Check(passed, state, inputIdentity, priorSnapshot.Id, now, cfg.SignificanceGate.RejectedRepeatWindowHours);
+                // prior, on the same GFS run, a TAF forecasting the same thing in substance and the
+                // same observed weather, on a recent cycle that Claude answered without a send.
+                // Asking again would pay for the same answer (Austin, 2026-09-29: 18 times in a
+                // row). Honors enforce/shadow.
+                var recordedTaf = state.LastRejectedInputHash is { } recordedInput
+                    ? InputIdentity.Parse(recordedInput).Taf
+                    : null;
+                bool tafAmended = recordedTaf is not null && recordedTaf != inputIdentity.Taf;
+                bool tafSameInSubstance = tafAmended
+                    && await TafSameInSubstanceAsync(ctx, snapshot, recordedTaf!, provisionalBody, now, label, ct);
+                var check = RejectedGateMemory.Check(passed, state, inputIdentity, priorSnapshot.Id, now, cfg.SignificanceGate.RejectedRepeatWindowHours, tafSameInSubstance);
                 if (check == RejectedGateCheck.Repeat)
                 {
                     bool enforce = gateMode == SignificanceGateMode.Enforce;
@@ -1226,7 +1233,8 @@ public sealed class ReportWorker : BackgroundService
                     var minutesAgo = (now - state.LastRejectedGateUtc!.Value).TotalMinutes;
                     if (enforce)
                     {
-                        Logger.Info($"{label}: WX-506 repeat skipped {triggerType} cycle — the gate fired only criteria Claude rejected {minutesAgo:F0} min ago, against the same prior, GFS run and observed weather ({string.Join(", ", passed.FiredCriteria)}); Claude not called.");
+                        var tafNote = tafAmended ? "; TAF amended since, same forecast in substance" : "";
+                        Logger.Info($"{label}: WX-506 repeat skipped {triggerType} cycle — the gate fired only criteria Claude rejected {minutesAgo:F0} min ago, against the same prior, GFS run and observed weather ({string.Join(", ", passed.FiredCriteria)}){tafNote}; Claude not called.");
                         await PersistUnsentCycleAsync(ctx, label, state, inputHash, ct);
                         return 0;
                     }
@@ -1482,6 +1490,36 @@ public sealed class ReportWorker : BackgroundService
         {
             _statePersistFailures.Add(1);
             Logger.Error($"{label}: failed to save locality state after sends — baseline did not advance; next cycle may resend.", ex);
+        }
+    }
+
+    /// <summary>
+    /// WX-506: whether the TAF Claude weighed at the recorded rejection
+    /// (<paramref name="recordedTaf"/>, its issuance time as <see cref="InputIdentity"/> stores it)
+    /// and this cycle's TAF forecast the same thing in substance for the blocks still ahead,
+    /// read at the same instant (<see cref="TafBlockProjector.MaterialSignature"/>).  Anything
+    /// that cannot be compared (no TAF station, an unreadable issuance, the earlier TAF no longer
+    /// stored, an error) reads as different, so Claude is asked.
+    /// </summary>
+    private static async Task<bool> TafSameInSubstanceAsync(
+        WeatherDataContext ctx, WeatherSnapshot snapshot, string recordedTaf,
+        ForecastSnapshotBody provisionalBody, DateTime now, string label, CancellationToken ct)
+    {
+        if (snapshot.TafStationIcao is not { } station || snapshot.ForecastPeriods is null
+            || !DateTime.TryParse(recordedTaf, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var issued))
+            return false;
+        try
+        {
+            if (await WxInterpreter.LoadTafAsync(ctx, station, issued, ct) is not { } then)
+                return false;
+            var blockStarts = provisionalBody.Blocks.Select(b => b.StartUtc).ToList();
+            return TafBlockProjector.MaterialSignature(then.Periods, then.ValidToUtc, blockStarts, now)
+                == TafBlockProjector.MaterialSignature(snapshot.ForecastPeriods, snapshot.TafValidToUtc, blockStarts, now);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Logger.Warn($"{label}: WX-506 could not compare the recorded TAF with the current one — asking Claude. ({ex.Message})");
+            return false;
         }
     }
 

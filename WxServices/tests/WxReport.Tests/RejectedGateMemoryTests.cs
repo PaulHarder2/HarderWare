@@ -37,8 +37,8 @@ public class RejectedGateMemoryTests
         return state;
     }
 
-    private static RejectedGateCheck Check(SignificanceResult gate, LocalityState state, InputIdentity? input = null, double hoursLater = 1, double window = Window, int prior = Prior) =>
-        RejectedGateMemory.Check(gate, state, input ?? Evidence, prior, Now.AddHours(hoursLater), window);
+    private static RejectedGateCheck Check(SignificanceResult gate, LocalityState state, InputIdentity? input = null, double hoursLater = 1, double window = Window, int prior = Prior, bool tafSame = false) =>
+        RejectedGateMemory.Check(gate, state, input ?? Evidence, prior, Now.AddHours(hoursLater), window, tafSame);
 
     [Fact]
     public void SameCriteriaAndEvidence_WithinWindow_IsRepeat() =>
@@ -96,18 +96,22 @@ public class RejectedGateMemoryTests
     public void NewCriterion_AsksClaude() =>
         Assert.Equal(RejectedGateCheck.NewCriterion, Check(Passed(Austin, "precip-add@T1(10-01 05Z)"), Rejected(Austin)));
 
-    // Paul, 2026-10-01: a TAF amendment reopens the question only through the gate. The gate
-    // merges the TAF into its forecast, so an amendment that matters fires a criterion not on
-    // record (NewCriterion) or moves the prior (NewBaseline); one that changes neither is a repeat.
-    [Fact]
-    public void NewTaf_AloneIsARepeat() =>
-        Assert.Equal(RejectedGateCheck.Repeat,
-            Check(Passed(Austin), Rejected(Austin), Evidence with { Taf = "2026-09-29T15:00:00.0000000Z" }));
+    // Paul, 2026-10-01: a new TAF reopens the question only when it forecasts something
+    // different in substance (TafBlockProjector.MaterialSignature, compared by the caller).
+    private static readonly InputIdentity AmendedTaf = Evidence with { Taf = "2026-09-29T15:00:00.0000000Z" };
 
     [Fact]
-    public void NewTaf_ThatFiresANewCriterion_AsksClaude() =>
-        Assert.Equal(RejectedGateCheck.NewCriterion,
-            Check(Passed(Austin, "precip-add@T1(10-01 05Z)"), Rejected(Austin), Evidence with { Taf = "2026-09-29T15:00:00.0000000Z" }));
+    public void NewTaf_SameInSubstance_IsRepeat() =>
+        Assert.Equal(RejectedGateCheck.Repeat, Check(Passed(Austin), Rejected(Austin), AmendedTaf, tafSame: true));
+
+    [Fact]
+    public void NewTaf_DifferentInSubstance_AsksClaude() =>
+        Assert.Equal(RejectedGateCheck.NewTaf, Check(Passed(Austin), Rejected(Austin), AmendedTaf, tafSame: false));
+
+    [Fact]
+    public void SameTaf_IsNotComparedAtAll() =>
+        // The comparison's answer is irrelevant when the issuance has not changed.
+        Assert.Equal(RejectedGateCheck.Repeat, Check(Passed(Austin), Rejected(Austin), Evidence, tafSame: false));
 
     [Fact]
     public void NewGfsRun_AsksClaude() =>
@@ -129,7 +133,18 @@ public class RejectedGateMemoryTests
     {
         var state = Rejected(Austin);
         state.LastRejectedInputHash = "not an identity";
-        Assert.Equal(RejectedGateCheck.NewGfsRun, Check(Passed(Austin), state));
+        Assert.Equal(RejectedGateCheck.UnreadableRecord, Check(Passed(Austin), state));
+    }
+
+    [Fact]
+    public void AnUnreadableRecord_AsksClaude_EvenWhenNoGfsOrObservationIsInHand()
+    {
+        // A corrupt record parses to all-"none"; a cycle with no GFS run, no TAF and no
+        // observation would then match it field by field. It must still ask.
+        var state = Rejected(Austin);
+        state.LastRejectedInputHash = "garbage";
+        var nothing = new InputIdentity("none", "none", "none");
+        Assert.Equal(RejectedGateCheck.UnreadableRecord, Check(Passed(Austin), state, nothing, tafSame: true));
     }
 
     [Fact]

@@ -9,8 +9,9 @@ in between and no logged reason to ask again. v1.61.7 skips the Claude call in t
 repeat skipped"), so after the deploy there should be none.
 
 The code logs its reason to ask again ("WX-506 rejected-gate record not applied (<reason>)": a new
-GFS run, a new criterion, new observed weather, a new prior, a severe onset, the window running out;
-from v1.61.8 a new TAF alone is not a reason, and logs before it show "NewGuidance"). Such a
+GFS run, a TAF that forecasts something different, a new criterion, new observed weather, a new prior,
+a severe onset, the window running out, an unreadable record; logs before v1.61.8 show "NewGuidance" for
+any new TAF or GFS run). Such a
 line, logged within 10 minutes before a withheld cycle, makes that cycle's question a fair one: it
 is not counted, and it replaces the earlier record, as the service's own record is replaced. A
 reason line on a cycle that ends some other way changes nothing, because the service keeps its
