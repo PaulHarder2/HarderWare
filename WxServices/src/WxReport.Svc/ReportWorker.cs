@@ -1508,10 +1508,16 @@ public sealed class ReportWorker : BackgroundService
         WeatherDataContext ctx, WeatherSnapshot snapshot, string recordedTaf,
         ForecastSnapshotBody provisionalBody, DateTime now, string label, CancellationToken ct)
     {
-        if (snapshot.TafStationIcao is not { } station || snapshot.ForecastPeriods is null
-            || !DateTime.TryParse(recordedTaf, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var issued))
+        // A TAF that expired since the rejection, or one that has appeared since (a part-time
+        // station), is a real difference, not a failure to compare: logged as "different".
+        if (snapshot.TafStationIcao is not { } station || snapshot.ForecastPeriods is null || recordedTaf == "none")
         {
-            Logger.Warn($"{label}: WX-506 could not compare the recorded TAF with the current one — no TAF station, or the recorded issuance '{recordedTaf}' cannot be read; asking Claude.");
+            Logger.Debug($"{label}: WX-506 TAF comparison different — {(recordedTaf == "none" ? "no TAF at the rejection, one now" : "a TAF at the rejection, none now")}.");
+            return false;
+        }
+        if (!DateTime.TryParse(recordedTaf, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var issued))
+        {
+            Logger.Warn($"{label}: WX-506 could not compare the recorded TAF with the current one — the recorded issuance '{recordedTaf}' cannot be read; asking Claude.");
             return false;
         }
         try

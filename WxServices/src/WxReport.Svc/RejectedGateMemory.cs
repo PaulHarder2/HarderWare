@@ -19,7 +19,9 @@
 // and a METAR showing the same station, present weather, wind band and visibility band. A new
 // GFS run always asks Claude again. A new TAF asks again only when, for the blocks still ahead,
 // it forecasts something different in substance: rain or not, possible or likely, thunder or
-// frozen precipitation, the band of the peak wind or gust, or severe wind. The gate alone cannot
+// frozen precipitation, the band of the peak wind or gust, or severe wind. A TAF valid further
+// ahead than the one Claude weighed reads as different, so a routine 6-hourly reissue always
+// asks; what can be skipped is an amendment to the same TAF period that says the same thing. The gate alone cannot
 // judge that (its criteria do not fire on rain becoming a thunderstorm, on possible becoming
 // likely, or on gusts below 50 kt), so the two TAFs are compared directly, by
 // TafBlockProjector.MaterialSignature, at the same instant. Measured 2026-10-01 in a slow,
