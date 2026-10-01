@@ -56,7 +56,7 @@ public sealed class PendingLookupTests : IDisposable
             InputIdentity = evidence,
         };
 
-    private async Task<(ForecastSnapshot Snapshot, List<CommittedSend> Owed)?> FindAsync(DateTime? now = null)
+    private async Task<(ForecastSnapshot Snapshot, List<CommittedSend> Owed, bool FirstDelivery)?> FindAsync(DateTime? now = null)
     {
         await using var ctx = new WeatherDataContext(_db);
         return await ReportWorker.FindPendingAsync(ctx, Members, now ?? Now, CancellationToken.None);
@@ -80,6 +80,7 @@ public sealed class PendingLookupTests : IDisposable
         var pending = await FindAsync();
         Assert.NotNull(pending);
         Assert.Equal(["paul_en", "alex_en", "steph_en"], pending.Value.Owed.Select(r => r.RecipientId));
+        Assert.True(pending.Value.FirstDelivery);
     }
 
     [Fact]
@@ -90,7 +91,9 @@ public sealed class PendingLookupTests : IDisposable
             var s = Snapshot(ctx, 30);
             ctx.CommittedSends.AddRange(Row(s, "paul_en", sent: true), Row(s, "alex_en"), Row(s, "steph_en"));
         });
-        Assert.Equal(["alex_en", "steph_en"], (await FindAsync())!.Value.Owed.Select(r => r.RecipientId));
+        var pending = (await FindAsync())!.Value;
+        Assert.Equal(["alex_en", "steph_en"], pending.Owed.Select(r => r.RecipientId));
+        Assert.False(pending.FirstDelivery);
     }
 
     [Fact]
@@ -123,9 +126,70 @@ public sealed class PendingLookupTests : IDisposable
         Seed(ctx =>
         {
             var s = Snapshot(ctx, 30);
-            ctx.CommittedSends.AddRange(Row(s, "paul_en", report: null), Row(s, "alex_en", diagnostic: true));
+            ctx.CommittedSends.AddRange(Row(s, "paul_en", report: null, kind: null), Row(s, "alex_en", diagnostic: true));
         });
         Assert.Null(await FindAsync());
+    }
+
+    [Fact]
+    public async Task ANewerWelcome_DoesNotHideAPendingReport()
+    {
+        Seed(ctx =>
+        {
+            var s = Snapshot(ctx, 30);
+            ctx.CommittedSends.Add(Row(s, "paul_en"));
+            var w = Snapshot(ctx, 10);
+            ctx.CommittedSends.Add(Row(w, "alex_en", sent: true, report: null, kind: null, evidence: null));
+        });
+        Assert.Equal(["paul_en"], (await FindAsync())!.Value.Owed.Select(r => r.RecipientId));
+    }
+
+    [Fact]
+    public async Task ANewerHazardAlert_SupersedesAPendingReport()
+    {
+        // A degraded hazard report delivered after the failed one must not be followed by the older report.
+        Seed(ctx =>
+        {
+            var s = Snapshot(ctx, 60);
+            ctx.CommittedSends.Add(Row(s, "paul_en"));
+            var hazard = Snapshot(ctx, 10);
+            ctx.CommittedSends.Add(Row(hazard, "paul_en", sent: true, report: null, kind: "Unscheduled"));
+        });
+        Assert.Null(await FindAsync());
+    }
+
+    [Fact]
+    public async Task AnUnsentHazardAlert_IsNotPending() =>
+        // It stores no structured report; the next cycle reconciles it.
+        await AssertNullAfter(ctx => ctx.CommittedSends.Add(Row(Snapshot(ctx, 30), "paul_en", report: null, kind: "Unscheduled")));
+
+    private async Task AssertNullAfter(Action<WeatherDataContext> seed)
+    {
+        Seed(seed);
+        Assert.Null(await FindAsync());
+    }
+
+    [Fact]
+    public async Task TwoUnsentRowsForOneRecipient_AreOwedOnce()
+    {
+        Seed(ctx =>
+        {
+            var s = Snapshot(ctx, 30);
+            ctx.CommittedSends.AddRange(Row(s, "paul_en"), Row(s, "paul_en"));
+        });
+        Assert.Equal(["paul_en"], (await FindAsync())!.Value.Owed.Select(r => r.RecipientId));
+    }
+
+    [Fact]
+    public async Task ARecipientAlreadyServedByAnotherRow_IsNotOwed()
+    {
+        // A WX-182 cached re-send can write a second row for the same snapshot and deliver it.
+        Seed(ctx =>
+        {
+            var s = Snapshot(ctx, 30);
+            ctx.CommittedSends.AddRange(Row(s, "paul_en"), Row(s, "paul_en", sent: true), Row(s, "alex_en"));
+        });
+        Assert.Equal(["alex_en"], (await FindAsync())!.Value.Owed.Select(r => r.RecipientId));
     }
 
     [Fact]

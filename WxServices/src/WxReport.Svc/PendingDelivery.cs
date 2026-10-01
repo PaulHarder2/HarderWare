@@ -135,6 +135,39 @@ internal static class PendingDelivery
         return local.Date.AddHours(local.Hour / DayPartHours * DayPartHours);
     }
 
-    private static DateTime ToUtc(DateTime local, TimeZoneInfo tz) =>
-        TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(local, DateTimeKind.Unspecified), tz);
+    private static DateTime ToUtc(DateTime local, TimeZoneInfo tz)
+    {
+        var wall = DateTime.SpecifyKind(local, DateTimeKind.Unspecified);
+        // WX-185 guard, as in NearTermCutoffUtc: in a zone that changes clocks at midnight, local
+        // midnight on a spring-forward day does not exist and ConvertTimeToUtc would throw. Roll
+        // forward an hour; it only shifts the edge of the ended day-part by that hour.
+        if (tz.IsInvalidTime(wall))
+            wall = wall.AddHours(1);
+        return TimeZoneInfo.ConvertTimeToUtc(wall, tz);
+    }
+
+    /// <summary>
+    /// The locality-state changes a WX-527 re-send makes, narrower than a fresh delivery's
+    /// (<c>ReportWorker.ApplySentState</c>).  Only a report's <em>first</em> delivery
+    /// (<paramref name="firstDelivery"/>: none of its rows was sent before) moves anything: the cadence
+    /// stamp for its kind, the last-sent input identity to the report's own evidence, the METAR station
+    /// to the report's, and the WX-506 rejected-gate record, whose prior has moved.  A later re-send to
+    /// recipients a partial delivery missed changes nothing.  It never touches the last-Claude-call
+    /// identity (no Claude call was made, and a newer one may be on record) or the WX-182 degrade
+    /// breaker (a cached re-send keeps it armed on purpose).
+    /// </summary>
+    internal static void ApplyResentState(
+        LocalityState state, ReportKind kind, bool firstDelivery, DateTime nowUtc, string reportIdentity, string reportStation)
+    {
+        if (!firstDelivery)
+            return;
+        if (kind == ReportKind.Scheduled)
+            state.LastScheduledSentUtc = nowUtc;
+        else
+            state.LastUnscheduledSentUtc = nowUtc;
+        state.LastSentInputHash = reportIdentity;
+        if (!string.IsNullOrEmpty(reportStation))
+            state.LastMetarIcao = reportStation;
+        RejectedGateMemory.Clear(state);
+    }
 }

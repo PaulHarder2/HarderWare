@@ -136,4 +136,61 @@ public class PendingDeliveryTests
         Assert.Equal(PendingStale.NewGfsRun, stale);
         Assert.Empty(asked);
     }
+
+    // ApplyResentState: a re-send moves the locality's state only on the report's first delivery, and
+    // never the last-Claude-call identity or the WX-182 degrade breaker.
+    private static MetarParser.Data.Entities.LocalityState Before() => new()
+    {
+        LastScheduledSentUtc = Generated.AddHours(-6),
+        LastUnscheduledSentUtc = Generated.AddHours(-5),
+        LastClaudeInputHash = "newer-claude-identity",
+        LastSentInputHash = "older-sent-identity",
+        LastDegradedInputHash = "stuck",
+        LastMetarIcao = "KEDC",
+        LastRejectedGateCriteria = "precip-remove@T1(09-06 18Z)",
+    };
+
+    [Fact]
+    public void AFirstDelivery_MovesTheCadenceAndTheSentIdentityOnly()
+    {
+        var state = Before();
+        var now = Generated.AddMinutes(40);
+        PendingDelivery.ApplyResentState(state, ReportKind.Scheduled, firstDelivery: true, now, "report-identity", "KAUS");
+        Assert.Equal(now, state.LastScheduledSentUtc);
+        Assert.Equal(Generated.AddHours(-5), state.LastUnscheduledSentUtc);
+        Assert.Equal("report-identity", state.LastSentInputHash);
+        Assert.Equal("newer-claude-identity", state.LastClaudeInputHash);
+        Assert.Equal("stuck", state.LastDegradedInputHash);
+        Assert.Equal("KAUS", state.LastMetarIcao);
+        Assert.Null(state.LastRejectedGateCriteria);
+    }
+
+    [Fact]
+    public void AnUpdatesFirstDelivery_MovesTheUnscheduledStamp()
+    {
+        var state = Before();
+        var now = Generated.AddMinutes(40);
+        PendingDelivery.ApplyResentState(state, ReportKind.Unscheduled, firstDelivery: true, now, "report-identity", "KAUS");
+        Assert.Equal(now, state.LastUnscheduledSentUtc);
+        Assert.Equal(Generated.AddHours(-6), state.LastScheduledSentUtc);
+    }
+
+    [Fact]
+    public void AReSendAfterAPartialDelivery_ChangesNothing()
+    {
+        var state = Before();
+        PendingDelivery.ApplyResentState(state, ReportKind.Unscheduled, firstDelivery: false, Generated.AddMinutes(40), "report-identity", "KAUS");
+        Assert.Equivalent(Before(), state);
+    }
+
+    [Fact]
+    public void TheDayPartEdgeOnASpringForwardMidnight_DoesNotThrow()
+    {
+        // Havana changes clocks at midnight (Cuba: 00:00 -> 01:00 on the second Sunday of March).
+        var havana = TimeZoneInfo.FindSystemTimeZoneById(OperatingSystem.IsWindows() ? "Cuba Standard Time" : "America/Havana");
+        var generated = new DateTime(2026, 3, 8, 5, 30, 0, DateTimeKind.Utc);   // 01:30 local (UTC-4), just after the midnight jump: the 00-06 part, whose 00:00 does not exist
+        var ex = Record.Exception(() => PendingDelivery.DayPartCrossed(
+            ReportKind.Unscheduled, generated, [(generated, generated.AddHours(1))], generated.AddHours(6), havana));
+        Assert.Null(ex);
+    }
 }
