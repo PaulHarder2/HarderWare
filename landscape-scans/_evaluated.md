@@ -95,6 +95,7 @@ its scope corrected.** No ticket was opened against any finding. Decisions taken
 | 2. Claude Fable 5.1 — trigger check | **Checked, no change** — see the entry | [Claude Code on Claude Opus 5.x](#opus-5-claude-code) |
 | 3. Sonnet 5.5 rejects forced tool use as well as `temperature` | **Deferral upheld; the entry's scope corrected.** The finding is right but **undercounts the call paths** — see the entry | [Claude Sonnet 5.x for the WxServices runtime](#sonnet-5-runtime) |
 | 4. .NET 8.0.31 patch | **Already satisfied** — measured on PaulOmniBook 2026-10-01, `dotnet --list-runtimes` reports `Microsoft.NETCore.App 8.0.31`. The scan's recommended command was the discriminating one this time | — |
+| Note: `claude-mythos-5-1`, not raised by the scan | **Not applicable**, Paul's ruling 2026-10-02 — see the entry | [Claude Mythos models](#mythos-restricted) |
 
 ### 2026-09
 
@@ -379,8 +380,12 @@ really need to act on now… That will come later when Sonnet 4.6 sunsets."*
    > assistant turn from the `tool_use` block alone. Sonnet 5.5 can return `thinking` blocks
    > (progress notes, even under `between_tools`), and the migration guide says to pass them
    > back unchanged with the rest of the turn. So the replay must carry the turn's full
-   > content, not a rebuilt `tool_use`. What the API does with a replay that omits them is
-   > unverified. Settle it when the migration opens.
+   > content, not a rebuilt `tool_use`. **A replay that drops them fails**: the API errors
+   > page (platform.claude.com/docs/en/api/errors, "Thinking blocks cannot be modified",
+   > read 2026-10-02) says `thinking` blocks in the latest assistant message that were
+   > filtered out or reconstructed get HTTP 400 `invalid_request_error`, and that with tool
+   > use every one must be passed back exactly as received. So the retry would fail on its
+   > first replay until it keeps the full turn (and `ContentBlock` gains the thinking fields).
 4. **Losing the sampling temperature is two decisions, not one.** It is a *variance*
    control, not a *reasoning* control, so "a better model compensates" does not apply
    evenly. The reconciler's 0.5 guards against explanatory overreach — a reasoning
@@ -512,6 +517,27 @@ singled out as the one worth watching.
 tracker trace unless one of us hand-files it.** That is a gap in *our* process, not a
 missing vendor feature, and it should be tracked as its own ticket rather than parked
 behind a disposition that bars the scan from mentioning it.
+
+<a id="mythos-restricted"></a>
+
+#### Claude Mythos models — declined 2026-10-02: not applicable
+
+**Raised by:** not by a scan. The [2026-10](#2026-10) scan did not mention
+`claude-mythos-5-1`; Paul ruled on it directly (WX-503, 2026-10-02).
+
+**This entry covers every Claude Mythos model that is available only through an access
+programme**, `claude-mythos-5-1` and its predecessors among them. A Mythos model in that
+state is within this decline, not a new evaluation.
+
+**Reason. Paul's decision, 2026-10-02:** *"Mythos 5.1 is not applicable to us."* The Mythos
+models are offered only through Project Glasswing, a restricted access programme, so
+neither WxServices nor Claude Code can use one. The scan's own filter already drops an
+enterprise-only capability with no solo-developer route.
+
+**Re-evaluate if this trigger fires:**
+
+- **A Claude Mythos model becomes available on the Claude API to an ordinary account,
+  outside any access programme.**
 
 <a id="sentry-seer"></a>
 
