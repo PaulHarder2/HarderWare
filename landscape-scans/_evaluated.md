@@ -84,10 +84,11 @@ property a tool-indexed list cannot have.
 
 ### 2026-10
 
-Report: [`2026-10.md`](2026-10.md) · scanned 2026-10-01 · 4 findings + 1 note.
+Report: [`2026-10.md`](2026-10.md) · scanned 2026-10-01 · 4 findings.
 **Two were already done, one trigger-check changed nothing, and one deferral was upheld with
 its scope corrected.** No ticket was opened against any finding. Decisions taken by Paul on
-2026-10-01, and on the note 2026-10-02; recorded under WX-503.
+2026-10-01; recorded under WX-503. **Plus 1 note not raised by the scan**, decided
+2026-10-02.
 
 | Finding | Verdict | Entry |
 |---|---|---|
@@ -95,7 +96,7 @@ its scope corrected.** No ticket was opened against any finding. Decisions taken
 | 2. Claude Fable 5.1 — trigger check | **Checked, no change** — see the entry | [Claude Code on Claude Opus 5.x](#opus-5-claude-code) |
 | 3. Sonnet 5.5 rejects forced tool use as well as `temperature` | **Deferral upheld; the entry's scope corrected.** The finding is right but **undercounts the call paths** — see the entry | [Claude Sonnet 5.x for the WxServices runtime](#sonnet-5-runtime) |
 | 4. .NET 8.0.31 patch | **Already satisfied** — measured on PaulOmniBook 2026-10-01, `dotnet --list-runtimes` reports `Microsoft.NETCore.App 8.0.31`. The scan's recommended command was the discriminating one this time | — |
-| Note: `claude-mythos-5-1`, not raised by the scan | **Not applicable** — see the entry | [Claude Mythos models](#mythos-restricted) |
+| Note: `claude-mythos-5-1`, not raised by the scan | **Not applicable** — see the entry | [Claude Mythos 5 and 5.1](#mythos-restricted) |
 
 ### 2026-09
 
@@ -522,7 +523,7 @@ behind a disposition that bars the scan from mentioning it.
 
 <a id="mythos-restricted"></a>
 
-#### Claude Mythos models — declined 2026-10-02: not applicable
+#### Claude Mythos 5 and 5.1 — declined 2026-10-02: not applicable
 
 **Raised by:** not by a scan. The [2026-10](#2026-10) scan did not mention
 `claude-mythos-5-1`; Paul ruled on it directly (WX-503, 2026-10-02).
