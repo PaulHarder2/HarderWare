@@ -19,7 +19,8 @@ a deferred or declined item unless that entry's named re-evaluate trigger has fi
 still report a CORRECTION to such an entry (a fact the entry does not record, or records
 wrongly), without recommending that it be reopened. A fact that satisfies a named trigger
 it reports as that trigger firing; one that would change the verdict but matches no
-trigger, as a question for Paul whether to reopen the entry. The register informs it: it reads the most recent scans' rows so it does not re-raise in
+trigger, as a question for Paul whether to reopen the entry. A newly released model id is
+never a correction; it reports it as a new evaluation. The register informs it: it reads the most recent scans' rows so it does not re-raise in
 different words something already judged *already done* or *not credible* — verdicts
 that carry no disposition entry and would otherwise be invisible to it.
 
@@ -170,14 +171,17 @@ raised at all — and the guard then suppresses precisely the kind of finding th
 the entry. Every Adopted entry needs a "something supersedes this" trigger.
 
 ⚠️ **Correcting an entry is not reopening it.** An entry's **facts and scope** may be
-corrected at any time, with no trigger fired. That covers which ids it covers, which call
-paths it touches, a figure it rests on, and a constraint newly published. Record each
-correction under a ticket. Its **verdict** (Adopted, Deferred, Declined) changes only when a
-named re-evaluate trigger fires. **If a new fact satisfies a named trigger, it is a trigger
+corrected at any time, with no trigger fired. That covers which call paths it touches, a
+figure it rests on, a constraint newly published, and an id Paul has already judged under
+it. **A newly released id is never a correction**: it is a new evaluation, which the scan
+reports and Paul decides. Record each correction under a ticket. Its **verdict** (Adopted,
+Deferred, Declined) changes only when a named re-evaluate trigger fires, or when Paul
+reopens it on a question raised under this rule. **If a new fact satisfies a named trigger, it is a trigger
 firing, not a correction**, even when the verdict will stand: record it as the trigger
 firing and put the trigger question to Paul. **And if a new fact would change the verdict
 but matches no named trigger, it is not a correction either**: put it to Paul as a question
-whether to reopen the entry. If he does, add the trigger it revealed, then record it firing.
+whether to reopen the entry. Reopening on that question is his decision in the moment; it
+adds no trigger.
 
 ### Adopted
 
@@ -274,9 +278,10 @@ Examined and consciously postponed. **Do not resurface before the named trigger 
 
 **Raised by:** [2026-07](#2026-07) finding 1; [2026-08](#2026-08) finding 2;
 [2026-09](#2026-09) finding 1; [2026-10](#2026-10) finding 3.
-**Corrected:** 2026-10-01 (reason 3 re-scoped to all three call paths, at the 2026-10
-finding 3 decision) and 2026-10-02 (the thinking default; WX-503 comment 16613), each with no
-trigger fired.
+**Corrected:** 2026-10-01 (forced tool use added to reason 3 at all three call paths, where
+the scan found two; WX-503 comment 16561) and 2026-10-02 (the thinking default; WX-503
+comment 16613), each with no trigger fired. **Also on 2026-10-01:** `claude-sonnet-5-5`
+added to the covered ids. That was Paul's decision on a new id, not a correction.
 
 **This deferral covers exactly two model ids: `claude-sonnet-5` and `claude-sonnet-5-5`**
 (the second added 2026-10-01, when Paul upheld the deferral against a Sonnet 5.5 finding).
