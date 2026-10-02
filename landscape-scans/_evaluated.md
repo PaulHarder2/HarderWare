@@ -84,10 +84,10 @@ property a tool-indexed list cannot have.
 
 ### 2026-10
 
-Report: [`2026-10.md`](2026-10.md) · scanned 2026-10-01 · 4 findings.
+Report: [`2026-10.md`](2026-10.md) · scanned 2026-10-01 · 4 findings + 1 note.
 **Two were already done, one trigger-check changed nothing, and one deferral was upheld with
 its scope corrected.** No ticket was opened against any finding. Decisions taken by Paul on
-2026-10-01; recorded under WX-503.
+2026-10-01, and on the note 2026-10-02; recorded under WX-503.
 
 | Finding | Verdict | Entry |
 |---|---|---|
@@ -95,7 +95,7 @@ its scope corrected.** No ticket was opened against any finding. Decisions taken
 | 2. Claude Fable 5.1 — trigger check | **Checked, no change** — see the entry | [Claude Code on Claude Opus 5.x](#opus-5-claude-code) |
 | 3. Sonnet 5.5 rejects forced tool use as well as `temperature` | **Deferral upheld; the entry's scope corrected.** The finding is right but **undercounts the call paths** — see the entry | [Claude Sonnet 5.x for the WxServices runtime](#sonnet-5-runtime) |
 | 4. .NET 8.0.31 patch | **Already satisfied** — measured on PaulOmniBook 2026-10-01, `dotnet --list-runtimes` reports `Microsoft.NETCore.App 8.0.31`. The scan's recommended command was the discriminating one this time | — |
-| Note: `claude-mythos-5-1`, not raised by the scan | **Not applicable**, Paul's ruling 2026-10-02 — see the entry | [Claude Mythos models](#mythos-restricted) |
+| Note: `claude-mythos-5-1`, not raised by the scan | **Not applicable** — see the entry | [Claude Mythos models](#mythos-restricted) |
 
 ### 2026-09
 
@@ -250,6 +250,8 @@ actioned here; a candidate to discuss, not a filed ticket.**
       claude-fable-5     evaluated 2026-09-01, DECLINED - see the trigger check above
       claude-opus-5-5    evaluated 2026-10-01, ADOPTED (in place) - see the top of this entry
       claude-fable-5-1   evaluated 2026-10-01, DECLINED - 2.5x Opus 5.5's price
+      claude-mythos-5    evaluated 2026-10-02, DECLINED - not applicable, see #mythos-restricted
+      claude-mythos-5-1  evaluated 2026-10-02, DECLINED - not applicable, see #mythos-restricted
 
   🔴 **THE EXCLUSION IS LOAD-BEARING: UNBOUNDED, `claude-fable-5` SATISFIES THIS CLAUSE
   FOREVER.** It was evaluated and declined, so an unbounded trigger lets every future scan
@@ -258,7 +260,7 @@ actioned here; a candidate to discuss, not a filed ticket.**
   ⚠️ **ADD TO THE SET when a model is evaluated and declined here — do NOT convert this to a
   RELEASE-DATE bound.** A date was written first and is the wrong shape: it would also
   excuse a model released *before* the date that nobody ever evaluated — `claude-mythos-5`
-  is exactly that case today, released and never assessed here. **An enumerated set can
+  was that case until 2026-10-02. **An enumerated set can
   only exclude what someone actually looked at; a date excludes by accident of timing.**
   *(Finding: CodeRabbit, PR #231. The date-versus-set correction is mine, on re-reading my
   own fix before committing it.)* This is the trigger that
@@ -525,9 +527,10 @@ behind a disposition that bars the scan from mentioning it.
 **Raised by:** not by a scan. The [2026-10](#2026-10) scan did not mention
 `claude-mythos-5-1`; Paul ruled on it directly (WX-503, 2026-10-02).
 
-**This entry covers every Claude Mythos model that is available only through an access
-programme**, `claude-mythos-5-1` and its predecessors among them. A Mythos model in that
-state is within this decline, not a new evaluation.
+**This entry covers exactly two model ids: `claude-mythos-5` and `claude-mythos-5-1`.** A
+newer Mythos model is not covered: it is a new evaluation, and the scan should report it.
+Both ids are also in the Opus entry's evaluated set, so its supersede trigger cannot
+re-raise them.
 
 **Reason. Paul's decision, 2026-10-02:** *"Mythos 5.1 is not applicable to us."* The Mythos
 models are offered only through Project Glasswing, a restricted access programme, so
@@ -536,8 +539,8 @@ enterprise-only capability with no solo-developer route.
 
 **Re-evaluate if this trigger fires:**
 
-- **A Claude Mythos model becomes available on the Claude API to an ordinary account,
-  outside any access programme.**
+- **Either id becomes available on the Claude API to an ordinary account, outside any
+  access programme.**
 
 <a id="sentry-seer"></a>
 
