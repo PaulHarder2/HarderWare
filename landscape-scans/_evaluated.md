@@ -17,8 +17,9 @@ What we decided about every monthly landscape scan, and where each tool stands t
 bind it: it will not recommend adopting what is already adopted, and will not resurface
 a deferred or declined item unless that entry's named re-evaluate trigger has fired. It may
 still report a CORRECTION to such an entry (a fact the entry does not record, or records
-wrongly), without recommending that it be reopened; a fact that satisfies a named trigger
-it reports as that trigger firing. The register informs it: it reads the most recent scans' rows so it does not re-raise in
+wrongly), without recommending that it be reopened. A fact that satisfies a named trigger
+it reports as that trigger firing; one that would change the verdict but matches no
+trigger, as a question for Paul whether to reopen the entry. The register informs it: it reads the most recent scans' rows so it does not re-raise in
 different words something already judged *already done* or *not credible* — verdicts
 that carry no disposition entry and would otherwise be invisible to it.
 
@@ -174,8 +175,9 @@ paths it touches, a figure it rests on, and a constraint newly published. Record
 correction under a ticket. Its **verdict** (Adopted, Deferred, Declined) changes only when a
 named re-evaluate trigger fires. **If a new fact satisfies a named trigger, it is a trigger
 firing, not a correction**, even when the verdict will stand: record it as the trigger
-firing and put the trigger question to Paul. **And if a correction would change the verdict,
-it is not a correction either**: put it to Paul as a trigger question.
+firing and put the trigger question to Paul. **And if a new fact would change the verdict
+but matches no named trigger, it is not a correction either**: put it to Paul as a question
+whether to reopen the entry. If he does, add the trigger it revealed, then record it firing.
 
 ### Adopted
 
@@ -272,7 +274,9 @@ Examined and consciously postponed. **Do not resurface before the named trigger 
 
 **Raised by:** [2026-07](#2026-07) finding 1; [2026-08](#2026-08) finding 2;
 [2026-09](#2026-09) finding 1; [2026-10](#2026-10) finding 3.
-**Corrected:** 2026-10-02 (WX-503 comment 16613), with no trigger fired.
+**Corrected:** 2026-10-01 (reason 3 re-scoped to all three call paths, at the 2026-10
+finding 3 decision) and 2026-10-02 (the thinking default; WX-503 comment 16613), each with no
+trigger fired.
 
 **This deferral covers exactly two model ids: `claude-sonnet-5` and `claude-sonnet-5-5`**
 (the second added 2026-10-01, when Paul upheld the deferral against a Sonnet 5.5 finding).
@@ -362,6 +366,14 @@ really need to act on now… That will come later when Sonnet 4.6 sunsets."*
    > a retry or fallback that re-sends the request elsewhere must drop it. (Anthropic's email of
    > 2026-10-01; the Sonnet 5.5 migration guide.) **A fourth decision**: start like-for-like,
    > and try thinking at low effort only after cost and quality hold.
+   >
+   > ⚠️ **"Like-for-like" is not inert for our validation retry (WX-148).** That retry
+   > replays the rejected attempt to Claude. `BuildMessages` in `ClaudeClient.cs` rebuilds the
+   > assistant turn from the `tool_use` block alone. Sonnet 5.5 can return `thinking` blocks
+   > (progress notes, even under `between_tools`), and the migration guide says to pass them
+   > back unchanged with the rest of the turn. So the replay must carry the turn's full
+   > content, not a rebuilt `tool_use`. What the API does with a replay that omits them is
+   > unverified. Settle it when the migration opens.
 4. **Losing the sampling temperature is two decisions, not one.** It is a *variance*
    control, not a *reasoning* control, so "a better model compensates" does not apply
    evenly. The reconciler's 0.5 guards against explanatory overreach — a reasoning
