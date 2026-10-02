@@ -16,8 +16,9 @@ What we decided about every monthly landscape scan, and where each tool stands t
 **The monthly scan routine reads BOTH halves, with different force.** The dispositions
 bind it: it will not recommend adopting what is already adopted, and will not resurface
 a deferred or declined item unless that entry's named re-evaluate trigger has fired. It may
-still report a CORRECTION to such an entry (a fact the entry does not record), without
-recommending that it be reopened. The register informs it: it reads the most recent scans' rows so it does not re-raise in
+still report a CORRECTION to such an entry (a fact the entry does not record, or records
+wrongly), without recommending that it be reopened; a fact that satisfies a named trigger
+it reports as that trigger firing. The register informs it: it reads the most recent scans' rows so it does not re-raise in
 different words something already judged *already done* or *not credible* — verdicts
 that carry no disposition entry and would otherwise be invisible to it.
 
@@ -171,8 +172,10 @@ the entry. Every Adopted entry needs a "something supersedes this" trigger.
 corrected at any time, with no trigger fired. That covers which ids it covers, which call
 paths it touches, a figure it rests on, and a constraint newly published. Record each
 correction under a ticket. Its **verdict** (Adopted, Deferred, Declined) changes only when a
-named re-evaluate trigger fires. **If a correction would change the verdict, it is not a
-correction**: put it to Paul as a trigger question.
+named re-evaluate trigger fires. **If a new fact satisfies a named trigger, it is a trigger
+firing, not a correction**, even when the verdict will stand: record it as the trigger
+firing and put the trigger question to Paul. **And if a correction would change the verdict,
+it is not a correction either**: put it to Paul as a trigger question.
 
 ### Adopted
 
@@ -268,8 +271,8 @@ Examined and consciously postponed. **Do not resurface before the named trigger 
 #### Claude Sonnet 5.x for the WxServices runtime — deferred 2026-08-01, upheld 2026-09-01 and 2026-10-01
 
 **Raised by:** [2026-07](#2026-07) finding 1; [2026-08](#2026-08) finding 2;
-[2026-09](#2026-09) finding 1; [2026-10](#2026-10) finding 3; corrected 2026-10-02 (WX-503
-comment 16613) with no trigger fired.
+[2026-09](#2026-09) finding 1; [2026-10](#2026-10) finding 3.
+**Corrected:** 2026-10-02 (WX-503 comment 16613), with no trigger fired.
 
 **This deferral covers exactly two model ids: `claude-sonnet-5` and `claude-sonnet-5-5`**
 (the second added 2026-10-01, when Paul upheld the deferral against a Sonnet 5.5 finding).
@@ -343,14 +346,22 @@ really need to act on now… That will come later when Sonnet 4.6 sunsets."*
    > **Read it as platform direction, like `temperature`:** the same report lists forced
    > `tool_choice` among Opus 5.5's breaking changes too.
 
-   > 🔴 **2026-10-02: ON SONNET 5.5, LEAVING OUT `thinking` NOW MEANS ADAPTIVE THINKING**,
-   > and `thinking: {type: "disabled"}` returns an error (Anthropic's email of 2026-10-01;
-   > WX-503 comment 16613). **We send no `thinking` setting today**, so a bare model-id swap
-   > would turn thinking on. Thinking is billed as output tokens, and output is the largest
-   > share of our LLM spend, so it would eat into the price gap in reason 2. The like-for-like
-   > setting is `thinking: {type: "between_tools"}`; each of our requests is one tool call, so
-   > it means no thinking at all. **A fourth decision**: start like-for-like, and try thinking
-   > at low effort only after cost and quality hold.
+   > 🔴 **2026-10-02: ON BOTH DEFERRED IDS, LEAVING OUT `thinking` MEANS ADAPTIVE THINKING.**
+   > **We send no `thinking` setting today** (Sonnet 4.6 runs without thinking unless asked),
+   > so a bare model-id swap to either one turns thinking on. Thinking is billed as output
+   > tokens. Output was ~47% of our LLM spend in the 2026-10-01 baseline (48 days of reports;
+   > WX-503 comment 16613), so thinking would eat into the price gap in reason 2. **The
+   > like-for-like setting differs by model:**
+   >
+   >     claude-sonnet-5     thinking: {type: "disabled"}       accepted
+   >     claude-sonnet-5-5   thinking: {type: "between_tools"}  "disabled" returns 400 here
+   >
+   > `between_tools` is Sonnet 5.5's lowest setting: no extended thinking at all, whatever the
+   > number of tool calls. It also adds short progress notes between tool calls, returned as
+   > `thinking` blocks. It is rejected at effort `xhigh` or `max`, and by every other model, so
+   > a retry or fallback that re-sends the request elsewhere must drop it. (Anthropic's email of
+   > 2026-10-01; the Sonnet 5.5 migration guide.) **A fourth decision**: start like-for-like,
+   > and try thinking at low effort only after cost and quality hold.
 4. **Losing the sampling temperature is two decisions, not one.** It is a *variance*
    control, not a *reasoning* control, so "a better model compensates" does not apply
    evenly. The reconciler's 0.5 guards against explanatory overreach — a reasoning
