@@ -15,14 +15,19 @@ What we decided about every monthly landscape scan, and where each tool stands t
 
 **The monthly scan routine reads BOTH halves, with different force.** The dispositions
 bind it: it will not recommend adopting what is already adopted, and will not resurface
-a deferred or declined item unless that entry's named re-evaluate trigger has fired. The
-register informs it: it reads the most recent scans' rows so it does not re-raise in
+a deferred or declined item unless that entry's named re-evaluate trigger has fired, except
+as below. It may still report a CORRECTION to such an entry (a fact the entry does not record, or records
+wrongly), without recommending that it be reopened. A fact that satisfies a named trigger
+it reports as that trigger firing; one that would change the verdict but matches no
+trigger, as a question for Paul whether to reopen the entry. A newly released model id is
+never a correction; it reports it as a new evaluation. The register informs it: it reads the most recent scans' rows so it does not re-raise in
 different words something already judged *already done* or *not credible* — verdicts
 that carry no disposition entry and would otherwise be invisible to it.
 
 ⚠️ **That behaviour lives in the routine's prompt, which is cloud-hosted and NOT in this
-repository.** The prompt granting it was updated under **WX-389**, alongside this file;
-the routine's identifier is recorded there rather than here (see the scope note). If the
+repository.** The prompt granting it was updated under **WX-389**, alongside this file,
+and its correction clause under **WX-503** (2026-10-02); the routine's identifier is
+recorded on WX-389 rather than here (see the scope note). If the
 two ever drift, the paragraph above is a claim about a system nobody reading this repo
 can see — check the routine before trusting it.
 
@@ -82,7 +87,8 @@ property a tool-indexed list cannot have.
 Report: [`2026-10.md`](2026-10.md) · scanned 2026-10-01 · 4 findings.
 **Two were already done, one trigger-check changed nothing, and one deferral was upheld with
 its scope corrected.** No ticket was opened against any finding. Decisions taken by Paul on
-2026-10-01; recorded under WX-503.
+2026-10-01; recorded under WX-503. **Plus 1 note not raised by the scan**, decided
+2026-10-02.
 
 | Finding | Verdict | Entry |
 |---|---|---|
@@ -90,6 +96,7 @@ its scope corrected.** No ticket was opened against any finding. Decisions taken
 | 2. Claude Fable 5.1 — trigger check | **Checked, no change** — see the entry | [Claude Code on Claude Opus 5.x](#opus-5-claude-code) |
 | 3. Sonnet 5.5 rejects forced tool use as well as `temperature` | **Deferral upheld; the entry's scope corrected.** The finding is right but **undercounts the call paths** — see the entry | [Claude Sonnet 5.x for the WxServices runtime](#sonnet-5-runtime) |
 | 4. .NET 8.0.31 patch | **Already satisfied** — measured on PaulOmniBook 2026-10-01, `dotnet --list-runtimes` reports `Microsoft.NETCore.App 8.0.31`. The scan's recommended command was the discriminating one this time | — |
+| Note: `claude-mythos-5-1`, not raised by the scan | **Not applicable** — see the entry | [Claude Mythos 5 and 5.1](#mythos-restricted) |
 
 ### 2026-09
 
@@ -165,6 +172,20 @@ triggers cover only changes to *that* item, a newer product that supersedes it c
 raised at all — and the guard then suppresses precisely the kind of finding that created
 the entry. Every Adopted entry needs a "something supersedes this" trigger.
 
+⚠️ **Correcting an entry is not reopening it.** An entry's **facts and scope** may be
+corrected at any time, with no trigger fired. That covers which call paths it touches, a
+figure it rests on, a constraint newly published, and an id Paul has already judged under
+it. **A newly released id is never a correction**: it is a new evaluation, which the scan
+reports and Paul decides. Where it also satisfies a named trigger (an Adopted entry's
+"something supersedes this"), record it as that trigger firing when it is dispositioned. Record each correction under a ticket. Its **verdict** (Adopted,
+Deferred, Declined) changes only when a named re-evaluate trigger fires, or when Paul
+reopens it. **If a new fact satisfies a named trigger, it is a trigger
+firing, not a correction**, even when the verdict will stand: record it as the trigger
+firing and put the trigger question to Paul. **And if a new fact would change the verdict
+but matches no named trigger, it is not a correction either**: put it to Paul as a question
+whether to reopen the entry. Reopening on that question is his decision in the moment; it
+adds no trigger.
+
 ### Adopted
 
 Already in the stack. The scan must not recommend adopting these again, though a
@@ -230,6 +251,8 @@ actioned here; a candidate to discuss, not a filed ticket.**
       claude-fable-5     evaluated 2026-09-01, DECLINED - see the trigger check above
       claude-opus-5-5    evaluated 2026-10-01, ADOPTED (in place) - see the top of this entry
       claude-fable-5-1   evaluated 2026-10-01, DECLINED - 2.5x Opus 5.5's price
+      claude-mythos-5    evaluated 2026-10-02, DECLINED - not applicable, see #mythos-restricted
+      claude-mythos-5-1  evaluated 2026-10-02, DECLINED - not applicable, see #mythos-restricted
 
   🔴 **THE EXCLUSION IS LOAD-BEARING: UNBOUNDED, `claude-fable-5` SATISFIES THIS CLAUSE
   FOREVER.** It was evaluated and declined, so an unbounded trigger lets every future scan
@@ -238,7 +261,7 @@ actioned here; a candidate to discuss, not a filed ticket.**
   ⚠️ **ADD TO THE SET when a model is evaluated and declined here — do NOT convert this to a
   RELEASE-DATE bound.** A date was written first and is the wrong shape: it would also
   excuse a model released *before* the date that nobody ever evaluated — `claude-mythos-5`
-  is exactly that case today, released and never assessed here. **An enumerated set can
+  was that case until 2026-10-02. **An enumerated set can
   only exclude what someone actually looked at; a date excludes by accident of timing.**
   *(Finding: CodeRabbit, PR #231. The date-versus-set correction is mine, on re-reading my
   own fix before committing it.)* This is the trigger that
@@ -252,7 +275,8 @@ actioned here; a candidate to discuss, not a filed ticket.**
 
 ### Deferred
 
-Examined and consciously postponed. **Do not resurface before the named trigger fires.**
+Examined and consciously postponed. **Do not resurface before the named trigger fires**,
+except as a correction or a reopen question under *Correcting an entry is not reopening it*.
 
 <a id="sonnet-5-runtime"></a>
 
@@ -260,6 +284,10 @@ Examined and consciously postponed. **Do not resurface before the named trigger 
 
 **Raised by:** [2026-07](#2026-07) finding 1; [2026-08](#2026-08) finding 2;
 [2026-09](#2026-09) finding 1; [2026-10](#2026-10) finding 3.
+**Corrected:** 2026-10-01 (forced tool use added to reason 3 at all three call paths, where
+the scan found two; WX-503 comment 16561) and 2026-10-02 (the thinking default; WX-503
+comment 16613), each with no trigger fired. **Also on 2026-10-01:** `claude-sonnet-5-5`
+added to the covered ids. That was Paul's decision on a new id, not a correction.
 
 **This deferral covers exactly two model ids: `claude-sonnet-5` and `claude-sonnet-5-5`**
 (the second added 2026-10-01, when Paul upheld the deferral against a Sonnet 5.5 finding).
@@ -332,6 +360,35 @@ really need to act on now… That will come later when Sonnet 4.6 sunsets."*
    > the scan's claim — "was NOT broken on Sonnet 5" — and unverified here. Check it then.)*
    > **Read it as platform direction, like `temperature`:** the same report lists forced
    > `tool_choice` among Opus 5.5's breaking changes too.
+
+   > 🔴 **2026-10-02: ON BOTH DEFERRED IDS, LEAVING OUT `thinking` MEANS ADAPTIVE THINKING.**
+   > **We send no `thinking` setting today** (Sonnet 4.6 runs without thinking unless asked),
+   > so a bare model-id swap to either one turns thinking on. Thinking is billed as output
+   > tokens. Output was ~47% of our LLM spend in the 2026-10-01 baseline (48 days of reports;
+   > WX-503 comment 16613), so thinking would eat into the price gap in reason 2. **The
+   > like-for-like setting differs by model:**
+   >
+   >     claude-sonnet-5     thinking: {type: "disabled"}       accepted
+   >     claude-sonnet-5-5   thinking: {type: "between_tools"}  "disabled" returns 400 here
+   >
+   > `between_tools` is Sonnet 5.5's lowest setting: no extended thinking at all, whatever the
+   > number of tool calls. It also adds short progress notes between tool calls, returned as
+   > `thinking` blocks. It is rejected at effort `xhigh` or `max`, and by every other model, so
+   > a retry or fallback that re-sends the request elsewhere must drop it. (Anthropic's email of
+   > 2026-10-01; the Sonnet 5.5 migration guide.) **A fourth decision**: start like-for-like,
+   > and try thinking at low effort only after cost and quality hold.
+   >
+   > ⚠️ **"Like-for-like" is not inert for our validation retry (WX-148).** That retry
+   > replays the rejected attempt to Claude. `BuildMessages` in `ClaudeClient.cs` rebuilds the
+   > assistant turn from the `tool_use` block alone. Sonnet 5.5 can return `thinking` blocks
+   > (progress notes, even under `between_tools`), and the migration guide says to pass them
+   > back unchanged with the rest of the turn. So the replay must carry the turn's full
+   > content, not a rebuilt `tool_use`. **A replay that drops them fails**: the API errors
+   > page (platform.claude.com/docs/en/api/errors, "Thinking blocks cannot be modified",
+   > read 2026-10-02) says `thinking` blocks in the latest assistant message that were
+   > filtered out or reconstructed get HTTP 400 `invalid_request_error`, and that with tool
+   > use every one must be passed back exactly as received. So the retry would fail on its
+   > first replay until it keeps the full turn (and `ContentBlock` gains the thinking fields).
 4. **Losing the sampling temperature is two decisions, not one.** It is a *variance*
    control, not a *reasoning* control, so "a better model compensates" does not apply
    evenly. The reconciler's 0.5 guards against explanatory overreach — a reasoning
@@ -386,7 +443,8 @@ reason to open this work; the retirement clock and the 2026-12-01 backstop are.*
 
 ### Declined
 
-Evaluated and rejected. **Do not resurface before the named trigger fires.**
+Evaluated and rejected. **Do not resurface before the named trigger fires**, except as a
+correction or a reopen question under *Correcting an entry is not reopening it*.
 
 <a id="coderabbit-post-merge-actions"></a>
 
@@ -462,6 +520,28 @@ singled out as the one worth watching.
 tracker trace unless one of us hand-files it.** That is a gap in *our* process, not a
 missing vendor feature, and it should be tracked as its own ticket rather than parked
 behind a disposition that bars the scan from mentioning it.
+
+<a id="mythos-restricted"></a>
+
+#### Claude Mythos 5 and 5.1 — declined 2026-10-02: not applicable
+
+**Raised by:** not by a scan. The [2026-10](#2026-10) scan did not mention
+`claude-mythos-5-1`; Paul ruled on it directly (WX-503, 2026-10-02).
+
+**This entry covers exactly two model ids: `claude-mythos-5` and `claude-mythos-5-1`.** A
+newer Mythos model is not covered: it is a new evaluation, and the scan should report it.
+Both ids are also in the Opus entry's evaluated set, so its supersede trigger cannot
+re-raise them.
+
+**Reason. Paul's decision, 2026-10-02:** *"Mythos 5.1 is not applicable to us."* The Mythos
+models are offered only through Project Glasswing, a restricted access programme, so
+neither WxServices nor Claude Code can use one. The scan's own filter already drops an
+enterprise-only capability with no solo-developer route.
+
+**Re-evaluate if this trigger fires:**
+
+- **Either id becomes available on the Claude API to an ordinary account, outside any
+  access programme.**
 
 <a id="sentry-seer"></a>
 
