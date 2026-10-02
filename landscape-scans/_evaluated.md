@@ -15,8 +15,8 @@ What we decided about every monthly landscape scan, and where each tool stands t
 
 **The monthly scan routine reads BOTH halves, with different force.** The dispositions
 bind it: it will not recommend adopting what is already adopted, and will not resurface
-a deferred or declined item unless that entry's named re-evaluate trigger has fired. It may
-still report a CORRECTION to such an entry (a fact the entry does not record, or records
+a deferred or declined item unless that entry's named re-evaluate trigger has fired, except
+as below. It may still report a CORRECTION to such an entry (a fact the entry does not record, or records
 wrongly), without recommending that it be reopened. A fact that satisfies a named trigger
 it reports as that trigger firing; one that would change the verdict but matches no
 trigger, as a question for Paul whether to reopen the entry. A newly released model id is
@@ -174,9 +174,10 @@ the entry. Every Adopted entry needs a "something supersedes this" trigger.
 corrected at any time, with no trigger fired. That covers which call paths it touches, a
 figure it rests on, a constraint newly published, and an id Paul has already judged under
 it. **A newly released id is never a correction**: it is a new evaluation, which the scan
-reports and Paul decides. Record each correction under a ticket. Its **verdict** (Adopted,
+reports and Paul decides. Where it also satisfies a named trigger (an Adopted entry's
+"something supersedes this"), record it as that trigger firing when it is dispositioned. Record each correction under a ticket. Its **verdict** (Adopted,
 Deferred, Declined) changes only when a named re-evaluate trigger fires, or when Paul
-reopens it on a question raised under this rule. **If a new fact satisfies a named trigger, it is a trigger
+reopens it. **If a new fact satisfies a named trigger, it is a trigger
 firing, not a correction**, even when the verdict will stand: record it as the trigger
 firing and put the trigger question to Paul. **And if a new fact would change the verdict
 but matches no named trigger, it is not a correction either**: put it to Paul as a question
@@ -270,7 +271,8 @@ actioned here; a candidate to discuss, not a filed ticket.**
 
 ### Deferred
 
-Examined and consciously postponed. **Do not resurface before the named trigger fires.**
+Examined and consciously postponed. **Do not resurface before the named trigger fires**,
+except as a correction or a reopen question under *Correcting an entry is not reopening it*.
 
 <a id="sonnet-5-runtime"></a>
 
@@ -433,7 +435,8 @@ reason to open this work; the retirement clock and the 2026-12-01 backstop are.*
 
 ### Declined
 
-Evaluated and rejected. **Do not resurface before the named trigger fires.**
+Evaluated and rejected. **Do not resurface before the named trigger fires**, except as a
+correction or a reopen question under *Correcting an entry is not reopening it*.
 
 <a id="coderabbit-post-merge-actions"></a>
 
