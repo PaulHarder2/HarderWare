@@ -1,5 +1,7 @@
 # Prior evaluations and scan decisions
 
+**This file is history, and no scan reads it any more. Add nothing here.** The landscape scan moved to the private `ResearchScans` repository under WX-573 on 2026-11-02, and it writes no more reports here. Current decisions are in that repository, in `scans/landscape/evaluated.md`, including those on this folder's `2026-11.md`, so 2026-11 has no section below although that report says it would. The text below is as it stood on that date. Where it says "today", describes the routine, or says the dated reports are excluded from CodeRabbit, it is out of date. Some entries in the new file point back here for their reasoning.
+
 What we decided about every monthly landscape scan, and where each tool stands today.
 
 **Read this file two ways.**
